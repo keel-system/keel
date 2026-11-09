@@ -321,7 +321,7 @@ borra lo que no conoce: RC-5) y `relay-no-wake` (RC-7).
 | 5 | Lo mismo en keel-dotnet | `cs-check`, `db-check`, `doc-check`, `harness-check` |
 | 6 | Lo mismo en keel-go | `go-check`, `db-check`, `doc-check`, `harness-check` |
 | 7 | **Hecho (2026-11-08)** en los cuatro; ver las notas de abajo. **Migrar las purgas** (las cuatro tablas) al modo clúster, en los cuatro | `store-check` en keel-spring y `db-check`/`doc-check` en los otros tres, con un sabotaje nuevo `timer-every-replica` (la purga vuelve a correr en todas: la sonda de dos réplicas la ve dos veces) |
-| 8 | **Migrar el `schedule` de las operaciones** al modo clúster, con el drenaje, en los cuatro. Incluye `fireTimer(kind)` en el arnés de los cuatro (los flujos de rescate y reconciliación dejan de esperar un tick del cron), el rescate, la reconciliación, los pagos y la guarda del correo, que van montados en él | `claim-check` en keel-spring, `db-check`/`doc-check`, `harness-check` (el rescate y `ageForReconciliation` sobre el cronómetro) y `stub-check` (reconciliación de pagos); el gate de idempotencia con el registro nuevo, falsado |
+| 8 | **Hecho (2026-11-08)** en los cuatro; ver las notas de abajo. **Migrar el `schedule` de las operaciones** al modo clúster, con el drenaje, en los cuatro. Incluye `fireTimer(kind)` en el arnés de los cuatro (los flujos de rescate y reconciliación dejan de esperar un tick del cron), el rescate, la reconciliación, los pagos y la guarda del correo, que van montados en él | `claim-check` en keel-spring, `db-check`/`doc-check`, `harness-check` (el rescate y `ageForReconciliation` sobre el cronómetro) y `stub-check` (reconciliación de pagos); el gate de idempotencia con el registro nuevo, falsado |
 | 9 | **Migrar el relay del outbox** al modo por réplica, con despertar al confirmar, en los cuatro, conservando la pausa del arnés con la misma API (en keel-spring ya no puede depender de `ScheduledAnnotationBeanPostProcessor`, y la purga del outbox sale del bean del relay) | `broker-check` contra los tres brokers en los cuatro generadores (el relay es lo que más redes toca), con un sabotaje `relay-no-wake` (sin despertar, la latencia vuelve al sondeo y la sonda de latencia lo ve). Y `clock-load.js`: en reposo, menos de 10 transacciones/min por réplica (hoy 122), y la salida de un evento en milisegundos (hoy media 0,5 s, p95 0,94 s) |
 | 10 | ~~Evolución~~: pasa al **2b** (§ Incremento 0: lo medido, punto 4) | — |
 | 11 | Telemetría del cronómetro (vencidos sin reclamar, aparcados, duración del tick) y su entrada en el panel y las alertas | `telemetry-check` en los cuatro |
@@ -545,6 +545,129 @@ sabotaje `timer-every-replica` actúa en el almacén: asegura el recurrente con 
 cada sujeto con purgas, y en `TestTimer_R1_` en el par `verification-codes`, que solo tiene el recurrente de la purga de
 `keel_timer`. En MySQL, `db-check --database=mysql` da 87/87, y con el sabotaje cae en los mismos casos de los mismos
 14 sujetos (47/47).
+
+**Lo que dejó el incremento 8, en lo neutral y en keel-spring.** `keel-core/gen/timer-plan.js` gana los `schedule` como
+recurrentes en modo clúster: kind `schedule:<operación>` y el cron de `scheduleCron`, con el segundo repartido
+(`generatorSchedules`, `timerSchedules`, `scheduledByTimer`). Y gana el drenaje: `claimDrains` (qué reclamo generado
+avisa del lote lleno), `batchFull`, `drainBudgetMs`, la referencia `drainReference` y los casos DR-1 a DR-3.
+`timer.drain-budget-ms` (60000, menor que el arriendo) entra en `TIMER_PARAMETERS`. Se añaden además `fireTimerScript`
+en `mongo-probes.js`, `agingSweeps` en `aging-targets.js` y la fila `timer-schedule` en el catálogo de mecanismos.
+
+En una sola réplica por tick, un barrido rinde lo de una réplica. Por eso el tick repite la pasada mientras el lote salga
+lleno, y para al llegar el siguiente tick o al agotar el presupuesto. Sigue siendo al menos una vez, así que el reclamo
+no se quita.
+
+Dos hallazgos, los dos en lo neutral:
+
+- **RC-8.** Un recurrente que fallaba `max-attempts` veces quedaba APARCADO para siempre. Bastaba una base caída unos
+  minutos para dejar la purga o el barrido sin reloj, porque asegurar al arrancar no toca una fila con el mismo spec.
+  Ahora un tick que falla se rearma para su siguiente tick (`recurringTick` con `onError`).
+- **`reset-db.sh` vaciaba `keel_timer` entera.** Tras el primer reset de la suite ningún barrido volvía a dispararse,
+  porque la app solo asegura sus recurrentes al arrancar. Ahora el reset conserva los recurrentes (`entity_id` nulo) y
+  borra los plazos, en PostgreSQL, MySQL y MongoDB (`cliResetCmd` de `infra-catalog.js`).
+
+En keel-spring, cada operación tiene un `<Operación>ScheduleTimer` que llama al método del `<Servicio>Scheduler`, ya sin
+`@Scheduled`. Drena con `SweepPass`, la señal que dan los reclamos generados, el de la cola, el del rescate y el de la
+reconciliación. El agente la da cuando reclama él, como en el barrido de pagos. `SchedulingConfig` y `@EnableScheduling`
+cuentan solo lo que sigue en `@Scheduled`.
+
+El arnés gana `fireTimer(kind)`, y lo llaman `stallInFlight`, `putInFlight` y `ageForReconciliation`, así que un flujo
+de barrido no espera al cron. El gate de idempotencia busca el disparador por el despacho y añade el registro en el
+cronómetro (`<Op>ScheduleTimer · registro en el cronómetro`), falsado.
+
+Redes de keel-spring:
+
+| Red | Resultado |
+|---|---|
+| `claim-check` | 14/14 en PostgreSQL y MySQL, 12/12 en MongoDB, con DR-1 a DR-3 |
+| `store-check` | 27/27, 27/27 y 21/21, con el schedule en la sonda de dos réplicas |
+| `compile-check` | verde en los cinco sujetos |
+
+Sabotajes:
+
+| Sabotaje | Casos que cae |
+|---|---|
+| `drain-no-signal` | DR-1 |
+| `drain-no-budget` | DR-3 |
+| `timer-every-replica-schedule` | R1 y RC-1 |
+
+**Lo que dejó el incremento 8 en keel-nest.** Cada `schedule` es un `<Operación>ScheduleTimer` que llama al método del
+`<Grupo>Scheduler`, ya sin registrarse en el reloj. Drena con `SweepPass`, sobre `AsyncLocalStorage`, y la señal la dan
+los reclamos generados de las dos ramas. `fireSchedule`/`fireAgedSweeps` solo se emiten si alguien los llama, por
+`noUnusedLocals`.
+
+El reset nuevo lo mide la sonda FL-PROBE-001-C de `harness-check`, con la app en marcha, y lo falsa
+`--sabotage=reset-timer`.
+
+| Red | Resultado |
+|---|---|
+| suite | 989/989 |
+| `ts-check` | 13/13 |
+| `harness-check` | 27/27 |
+| `stub-check` | 27/27 |
+| `db-check` | 116/116 |
+| `doc-check` | 21/21 |
+
+Los sabotajes caen en exactamente sus casos.
+
+**Lo que dejó el incremento 8 en keel-dotnet.** Cada `schedule` es un
+`<Operación>ScheduleTimer(<Grupo>Scheduler, TimerSettings) : IRecurringTimerHandler`, con el bucle del drenaje medido con
+`Stopwatch` y `TimerSettings.DrainBudgetMs`. `SweepPass` vive en `Application/Support`, sobre `AsyncLocal`. `Tasks()` del
+scheduler ya no da al reloj lo que dispara el cronómetro, y la prueba emitida `SchedulingTests` fija el kind y el cron de
+cada recurrente. El sondeador atrapa el fallo del tick de un recurrente (`LogTickFailed`) y lo rearma.
+
+En `db-check` y `doc-check`, los casos DR los ejecuta un `DrainProbeMediator`: cada despacho del scheduler llama al
+reclamo real. El schedule entra en el bloque de dos réplicas envuelto en `PurgeTimerCount`. `harness-check` gana la sonda
+FL-PROBE-001-F, que espera a que el recurrente adelantado quede en el futuro según la hora de la BASE. La primera versión
+comparaba con el valor leído justo después de adelantarlo y tenía una carrera con el sondeador.
+
+| Red | Resultado |
+|---|---|
+| `cs-check --fixtures` | 360 ensamblados sin warnings y 9367 pruebas emitidas |
+| `db-check` | 79/79 en PostgreSQL y MySQL |
+| `doc-check` | 26/26 |
+| `harness-check` | 46/46 |
+
+| Sabotaje | Casos que cae |
+|---|---|
+| `drain-no-signal` | DR-1 |
+| `drain-no-budget` | DR-3 |
+| `timer-every-replica-schedule` | R-1, RC-1 y R-2, en los tres motores |
+| `reset-timer` | la sonda del cronómetro y las dos puntuaciones que arrastra |
+
+**Lo que dejó el incremento 8 en keel-go.** No hay un tipo por operación. `<Grupo>Tasks` sigue siendo la única fuente del
+cron, y el arranque envuelve cada tarea en `timer.NewSchedule(task.Name, task.Cron, task.Run, timerSettings)`, que monta
+el recurrente con kind `schedule:<operación>` y drena. Las tareas ya no van al reloj del scheduler. La señal es
+`application.SweepClaimed(ctx, reclamadas, lote)`, un valor en el contexto que abre `application.RunSweepPass` en el tick.
+La llaman los reclamos generados de las dos ramas y el de la reconciliación; el agente la llama cuando reclama él, como
+en el barrido de pagos.
+
+El sondeador rearma el recurrente cuyo tick falla (RC-8, `runTick` con el `recover`). El arnés gana `FireTimer`, y
+`fireSchedule`/`fireAgedSweeps` solo se emiten si alguien los llama, por staticcheck. El sujeto del gate se llama como en
+los otros tres (`<Op>ScheduleTimer · registro en el cronómetro`), aunque en Go el registro esté en `cmd/server/main.go`.
+Está falsado en `test/idempotency-check.test.js`.
+
+Los dos sabotajes del drenaje dejan lo emitido compilando. `drain-no-signal` avisa con cero reclamadas y `drain-no-budget`
+añade una condición que no se cumple nunca: quitar la línea dejaría un import o una variable sin usar. La sonda de dos
+réplicas solo entra por `timer.NewSchedule` donde hay schedules. La primera corrida de `db-check` no compilaba en los
+sujetos sin ellos.
+
+| Red | Resultado |
+|---|---|
+| suite | 1434/1434 |
+| `go-check --fixtures` | 110/110 |
+| `go-check` | 245/245 |
+| `db-check` | 87/87 en PostgreSQL y en MySQL |
+| `doc-check` | 23/23 |
+| `harness-check` | 30/30, con FL-PROBE-001-G |
+| `stub-check` | 12/12 |
+
+| Sabotaje | Casos que cae |
+|---|---|
+| `drain-no-signal` | DR-1, en los tres motores |
+| `drain-no-budget` | DR-3, en los tres motores |
+| `timer-every-replica-schedule` | R1, RC1 y R2, en los tres motores |
+| `reset-timer` | exactamente sus 5 pasos |
 
 El orden va del menor al mayor riesgo. Los incrementos 3-6 añaden un mecanismo sin tocar nada medido. Después se migra
 lo que menos redes toca (las purgas) y al final el relay, que toca los tres brokers en los cuatro generadores. Cada
