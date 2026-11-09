@@ -89,10 +89,14 @@ export interface ClaimedOutboxEvent {
   readonly payload: string;
 }
 
-/** El desenlace de un fallo: cuántos intentos lleva la fila y si se rindió. */
+/**
+ * El desenlace de un fallo: cuántos intentos lleva la fila, si se rindió y, si no, cuándo vuelve a ser elegible
+ * (milisegundos de la época, null si se rindió): el relay lo recuerda para no esperar al sondeo de respaldo.
+ */
 export interface MarkFailedOutcome {
   readonly attempts: number;
   readonly deadLettered: boolean;
+  readonly nextAttemptAtMs: number | null;
 }
 
 /**
@@ -161,13 +165,13 @@ export class OutboxRelayStore {
       { returnDocument: 'after' }
     );
     // El documento desapareció entre el reclamo y el desenlace: se da por agotado.
-    if (row == null) return { attempts: maxAttempts, deadLettered: true };
+    if (row == null) return { attempts: maxAttempts, deadLettered: true, nextAttemptAtMs: null };
     const attempts = Number(row.attempts);
     const deadLettered = outboxDeadLettered(attempts, maxAttempts);
-    if (!deadLettered) {
-      await this.outbox.updateOne({ _id: toUuid(id) }, { $set: { next_attempt_at: new Date(Date.now() + outboxBackoffMs(attempts, backoffInitialMs, backoffMaxMs)) } });
-    }
-    return { attempts, deadLettered };
+    if (deadLettered) return { attempts, deadLettered, nextAttemptAtMs: null };
+    const nextAttemptAt = new Date(Date.now() + outboxBackoffMs(attempts, backoffInitialMs, backoffMaxMs));
+    await this.outbox.updateOne({ _id: toUuid(id) }, { $set: { next_attempt_at: nextAttemptAt } });
+    return { attempts, deadLettered, nextAttemptAtMs: nextAttemptAt.getTime() };
   }
 
   /** Cuántos se rindieron: agotaron los reintentos y siguen sin publicar. */

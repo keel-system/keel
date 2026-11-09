@@ -111,6 +111,33 @@ export const MECHANISMS = {
       }
     }
   },
+  'timer-relay': {
+    emitter: 'src/scaffold/messaging-stores.js (OutboxRelay por réplica y OutboxAppendedSignal) · src/scaffold/messaging.js (el bridge avisa tras el commit) · src/scaffold/document-stores.js',
+    why: 'Un relay que no despierta con el commit sigue entregando, solo que al sondeo de respaldo: nada falla, y la salida de cada evento pasa de milisegundos a decenas de segundos. Y uno que olvida el reintento de una fila que falló la deja esperando al respaldo en vez de a su backoff.',
+    parity: {
+      pair: 'notification-mailer',
+      markers: {
+        relational: ['class OutboxAppendedSignal', 'this.appended.notify()', 'nextRun(full: boolean, retryAtMs: number, passStartMs: number)'],
+        document: ['class OutboxAppendedSignal', 'this.appended.notify()', 'nextRun(full: boolean, retryAtMs: number, passStartMs: number)']
+      }
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'notification-mailer: el OutboxRelay emitido arrancado con el sondeo de respaldo a 600 s y el bridge emitido escribiendo la fila en la transacción (RW-1 a RW-3, scripts/lib/relay-wake-probes.js). Falsado: relay-no-wake cae en RW-1 y relay-no-retry en RW-3. Los casos de keel-spring'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'notification-mailer-mongo: los mismos tres casos sobre el relay documental, con los mismos sabotajes'
+      }
+    }
+  },
   deadline: {
     emitter: 'src/scaffold/timer.js (lateGuardBlock, adapterArming) · src/scaffold/entities.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js',
     why: 'Un rechazo tardío con < en vez de <= o un armado fuera de la transacción compilan igual de bien, y ningún escenario de un solo instante los ve: el precio es confirmar lo que el negocio daba por caducado, o un temporizador huérfano de una alta que revirtió.',

@@ -28,7 +28,8 @@ import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempoten
 import { RECONCILIATION_CLAIM, reconciliationClaims } from '@keel-system/keel-core/gen/reconciliation-stores';
 import { classPath, DIRS } from '../../src/scaffold/render.js';
 import { repositoryRoots, adapterClass, emitsDomainEvents } from '../../src/scaffold/repositories.js';
-import { usesNestOutbox, usesProcessedEvents, bridgeClass, bridgePath, MESSAGING_SETTINGS_TS, OUTBOX_RELAY_STORE_TS, IDEMPOTENCY_GUARD_TS } from '../../src/scaffold/messaging.js';
+import { usesNestOutbox, usesProcessedEvents, bridgeClass, bridgePath, MESSAGING_SETTINGS_TS, OUTBOX_RELAY_STORE_TS, OUTBOX_RELAY_TS, OUTBOX_APPENDED_TS, IDEMPOTENCY_GUARD_TS } from '../../src/scaffold/messaging.js';
+import { relayWakeBlock } from './relay-wake-probes.js';
 import { usesRequestIdempotency, IDEMPOTENCY_STORE_IMPL_TS, IDEMPOTENCY_CONFLICT_TS } from '../../src/scaffold/request-idempotency.js';
 import { RECONCILIATION_CLAIM_STORE_TS } from '../../src/scaffold/reconciliation-claim.js';
 import { TABLE_PURGES_TS, tablePurges } from '../../src/scaffold/purge.js';
@@ -123,7 +124,8 @@ try {
   const { ${event.className}: DomainEventClass } = await import('${distOf(classPath(DIRS.events, event.className))}');
   const { messagingSettings } = await import('${distOf(MESSAGING_SETTINGS_TS)}');
   const messaging = messagingSettings({ get: () => undefined });
-  const bridge = new Bridge(tx, messaging);
+  // La señal del relay (DSL 2.26): aquí no hay relay escuchando, el despertar lo mide el bloque RW.
+  const bridge = new Bridge(tx, messaging, { notify() {} });
   const kept = DomainEventClass.of(${args.join(', ')});
   await tx.inTransaction(() => bridge.publish([kept]));
   const written = (await outbox.find({}).toArray()).find((candidate) => JSON.parse(candidate.payload).metadata.eventId === kept.metadata.eventId);
@@ -186,6 +188,12 @@ ${shapeCheck(OUTBOX_EVENT, 'written')}
   await outbox.updateOne({ _id: new UUID(ids[1]) }, { $set: { next_attempt_at: null } });
   const remaining = await store.claimBatch(2, 10, 60_000);
   check('relay: ni la publicada ni la rendida vuelven a reclamarse', same(remaining.map((r) => r.id), [ids[1], ids[3]]), JSON.stringify(remaining.map((r) => r.id)));
+${relayWakeBlock({
+  paths: { relay: distOf(OUTBOX_RELAY_TS), signal: distOf(OUTBOX_APPENDED_TS), store: distOf(OUTBOX_RELAY_STORE_TS) },
+  handle: 'client',
+  clear: 'await outbox.deleteMany({});',
+  newEvent: `DomainEventClass.of(${args.join(', ')})`
+})}
 } catch (error) {
   check('outbox: el bloque corre sin un error inesperado', false, String(error?.stack ?? error).slice(0, 400));
 }`;

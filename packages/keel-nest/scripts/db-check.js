@@ -34,6 +34,7 @@ import fs from 'node:fs';
 import { CONDITIONAL_WRITE_DESIGNS } from '../../keel-core/test/helpers/conditional-write-designs.js';
 import { conditionalWriteBlock } from './lib/conditional-probes.js';
 import { DRAIN_SABOTAGES, drainSabotageVerdict, isDrainSabotage } from './lib/timer-probes.js';
+import { RELAY_WAKE_SABOTAGES, isRelayWakeSabotage, relayWakeBlock, relayWakeSabotageVerdict } from './lib/relay-wake-probes.js';
 import { scheduleTimerClass, scheduleTimerPath } from '../src/scaffold/timer.js';
 import { claimDrains, timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
 import { PURGE_TIMER_SABOTAGES, TIMER_ADAPTER_ARGS, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSabotage, purgeTimerBlock, purgeTimerSabotageVerdict, timerBlock, timerPreamble, timerProbePatch, timerSabotage, timerSabotageVerdict } from './lib/timer-probes.js';
@@ -79,6 +80,8 @@ import {
   OUTBOX_ORM_TS,
   PROCESSED_EVENT_ORM_TS,
   OUTBOX_RELAY_STORE_TS,
+  OUTBOX_RELAY_TS,
+  OUTBOX_APPENDED_TS,
   IDEMPOTENCY_GUARD_TS
 } from '../src/scaffold/messaging.js';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
@@ -118,7 +121,9 @@ const SABOTAGES = {
   // Las purgas en modo clúster (DSL 2.26, inc. 7): con --subject=notification-mailer, caen R1 y RC-1 del bloque de purgas.
   ...Object.fromEntries(Object.entries(PURGE_TIMER_SABOTAGES).map(([id, { spec }]) => [id, spec])),
   // El drenaje del schedule (DSL 2.26, inc. 8): con --subject=job-dispatch, caen DR-1 o DR-3 del bloque del reclamo.
-  ...Object.fromEntries(Object.entries(DRAIN_SABOTAGES).map(([id, { spec }]) => [id, spec]))
+  ...Object.fromEntries(Object.entries(DRAIN_SABOTAGES).map(([id, { spec }]) => [id, spec])),
+  // El relay por réplica (DSL 2.26, inc. 9): con --subject=notification-mailer, caen RW-1 o RW-3 del bloque del outbox.
+  ...Object.fromEntries(Object.entries(RELAY_WAKE_SABOTAGES).map(([id, { spec }]) => [id, spec]))
 };
 const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -705,7 +710,8 @@ function messagingBlock(model, engine, ctx) {
   const { ${event.className}: DomainEventClass } = await import('${distOf(classPath(DIRS.events, event.className))}');
   const { messagingSettings } = await import('${distOf(MESSAGING_SETTINGS_TS)}');
   const messaging = messagingSettings({ get: () => undefined });
-  const bridge = new Bridge(tx, messaging);
+  // La señal del relay (DSL 2.26): aquí no hay relay escuchando, el despertar lo mide el bloque RW.
+  const bridge = new Bridge(tx, messaging, { notify() {} });
   const kept = DomainEventClass.of(${args.join(', ')});
   await tx.inTransaction(() => bridge.publish([kept]));
   const rows = await dataSource.getRepository(OutboxEventOrm).find();
@@ -766,7 +772,13 @@ function messagingBlock(model, engine, ctx) {
   check('relay: countDeadLettered la cuenta', (await store.countDeadLettered(2)) === 1);
   await dataSource.getRepository(OutboxEventOrm).update({ id: ids[1] }, { nextAttemptAt: null });
   const remaining = await store.claimBatch(2, 10, 60_000);
-  check('relay: ni la publicada ni la rendida vuelven a reclamarse', JSON.stringify(remaining.map((r) => r.id).sort()) === JSON.stringify([ids[1], ids[3]].sort()), JSON.stringify(remaining.map((r) => r.id)));`
+  check('relay: ni la publicada ni la rendida vuelven a reclamarse', JSON.stringify(remaining.map((r) => r.id).sort()) === JSON.stringify([ids[1], ids[3]].sort()), JSON.stringify(remaining.map((r) => r.id)));
+${relayWakeBlock({
+  paths: { relay: distOf(OUTBOX_RELAY_TS), signal: distOf(OUTBOX_APPENDED_TS), store: distOf(OUTBOX_RELAY_STORE_TS) },
+  handle: 'dataSource',
+  clear: 'await dataSource.getRepository(OutboxEventOrm).clear();',
+  newEvent: `DomainEventClass.of(${model.events[0].fields.map((field) => (field.list ? '[]' : sampleValue(model, field, ctx, 'ev') ?? 'null')).join(', ')})`
+})}`
     : '';
   const guard = processed
     ? `
@@ -1581,6 +1593,11 @@ for (const engine of ENGINES) {
         continue;
       }
       // El del drenaje (inc. 8), igual: verde si caen EXACTAMENTE sus casos DR, donde la cola corre sobre el cronómetro.
+      if (isRelayWakeSabotage(sabotage) && checks.some((check) => /^RW-\d+:/.test(check.name))) {
+        const verdict = relayWakeSabotageVerdict(checks, sabotage);
+        step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+        continue;
+      }
       if (isDrainSabotage(sabotage) && checks.some((check) => /^DR-\d+:/.test(check.name))) {
         const verdict = drainSabotageVerdict(checks, sabotage);
         step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);

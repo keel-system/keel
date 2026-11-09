@@ -40,6 +40,7 @@ import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { callsPaymentGateway } from '@keel-system/keel-core/gen/payments-model';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
 import { OUTBOX_RELAY } from '@keel-system/keel-core/gen/messaging-stores';
+import { TIMER_SWITCH } from '@keel-system/keel-core/gen/timer-store';
 import { usesMessaging, usesBridge, usesProcessedEvents, usesRabbitMq, usesKafka, usesSnsSqs } from '@keel-system/keel-core/gen/features';
 export { usesMessaging, usesBridge, usesProcessedEvents, usesRabbitMq, usesKafka, usesSnsSqs };
 
@@ -86,6 +87,9 @@ export const OUTBOX_DISPATCHER_FALLBACK_TS = classPath(OUTBOX_DIR, 'OutboxDispat
 export const OUTBOX_RELAY_STORE_TS = classPath(OUTBOX_DIR, 'OutboxRelayStore');
 export const OUTBOX_RELAY_TS = classPath(OUTBOX_DIR, 'OutboxRelay');
 export const OUTBOX_BACKOFF_TS = classPath(OUTBOX_DIR, 'OutboxBackoff');
+export const OUTBOX_APPENDED_TS = classPath(OUTBOX_DIR, 'OutboxAppendedSignal');
+/** La línea con la que el bridge avisa al relay tras escribir la fila (el sabotaje `relay-no-wake` la quita). */
+export const OUTBOX_WAKE_LINE = 'await this.transactions.afterCommit(() => this.appended.notify());';
 export const IDEMPOTENCY_GUARD_TS = classPath(IDEMPOTENCY_DIR, 'IdempotencyGuard');
 export const RABBIT_TOPOLOGY_TS = `src/${MESSAGING_DIR}/rabbitmq/rabbit-topology.ts`;
 export const RABBIT_CONNECTION_TS = `src/${MESSAGING_DIR}/rabbitmq/rabbit-connection.ts`;
@@ -381,12 +385,14 @@ function bridgeFile(model) {
       // Sobre documentos, la fila es un documento de outbox_event con su uuid binario (keel-core/gen/document.js).
       ...(document
         ? [{ symbol: 'UUID', from: 'mongodb' }, { symbol: 'StoredDocument', from: 'src/infrastructure/persistence/bson-values.ts', type: true }]
-        : [{ symbol: 'OutboxEventOrm', from: OUTBOX_ORM_TS }])
+        : [{ symbol: 'OutboxEventOrm', from: OUTBOX_ORM_TS }]),
+      { symbol: 'OutboxAppendedSignal', from: OUTBOX_APPENDED_TS }
     );
   }
   const ctor = [
     '    @Inject(TransactionContext) private readonly transactions: TransactionContext',
-    '    @Inject(MESSAGING_SETTINGS) private readonly settings: MessagingSettings'
+    '    @Inject(MESSAGING_SETTINGS) private readonly settings: MessagingSettings',
+    ...(outbox ? ['    @Inject(OutboxAppendedSignal) private readonly appended: OutboxAppendedSignal'] : [])
   ];
   for (const event of model.events) {
     imports.push({ symbol: event.className, from: classPath(DIRS.events, event.className) });
@@ -428,7 +434,10 @@ ${document ? documentAppend() : `    await this.transactions.manager().insert(Ou
       nextAttemptAt: null,
       lastError: null
     });
-`}  }`
+`}    // Despierta al relay de ESTA réplica tras el commit (DSL 2.26, inc. 9): el evento sale ya, sin esperar al sondeo
+    // de respaldo. Si la transacción revierte, el aviso no llega a nadie.
+    ${OUTBOX_WAKE_LINE}
+  }`
     : '';
   const body = `/**
  * ${bridgeClass(model)} — traduce cada evento de dominio a su evento de integración y lo entrega ${
@@ -765,9 +774,10 @@ function settingsFile(model) {
   const events = model.events ?? [];
   const subscriptions = model.subscriptions ?? [];
   const relay = outbox
-    ? Object.entries(OUTBOX_RELAY)
-        .map(([name, parameter]) => `      ${name}: positive(configuration, ${tsString(parameter.key)}, ${parameter.default})`)
-        .join(',\n')
+    ? [
+        `      enabled: flag(configuration, ${tsString(TIMER_SWITCH.key)}, ${TIMER_SWITCH.default})`,
+        ...Object.entries(OUTBOX_RELAY).map(([name, parameter]) => `      ${name}: positive(configuration, ${tsString(parameter.key)}, ${parameter.default})`)
+      ].join(',\n')
     : '';
   const body = `/** Token de la configuración de mensajería ya resuelta. */
 export const MESSAGING_SETTINGS = Symbol('MESSAGING_SETTINGS');
@@ -782,7 +792,10 @@ export interface SubscriptionSettings {
 }
 
 export interface OutboxRelaySettings {
-  readonly fixedDelayMs: number;
+  /** ¿Relaya esta réplica? \`scheduling.enabled\`, el interruptor del cronómetro: apagado en el perfil test. */
+  readonly enabled: boolean;
+  /** El sondeo de RESPALDO: al relay lo despierta el commit que escribe en el outbox (DSL 2.26). */
+  readonly pollMs: number;
   readonly batchSize: number;
   readonly maxAttempts: number;
   readonly backoffInitialMs: number;
@@ -839,7 +852,12 @@ function positive(configuration: Configuration, key: string, fallback: number): 
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(\`\${key} tiene que ser un entero positivo: '\${String(value)}'\`);
   return parsed;
-}`;
+}${outbox ? `
+
+function flag(configuration: Configuration, key: string, fallback: boolean): boolean {
+  const value = configuration.get(key);
+  return value == null || String(value).trim() === '' ? fallback : String(value).trim().toLowerCase() === 'true';
+}` : ''}`;
   return tsModule(MESSAGING_SETTINGS_TS, [{ symbol: 'Configuration', from: CONFIG_TS, type: true }], body);
 }
 
@@ -918,10 +936,12 @@ function moduleFile(model) {
       { symbol: 'OutboxDispatcher', from: OUTBOX_DISPATCHER_TS },
       { symbol: 'outboxDispatcherFallback', from: OUTBOX_DISPATCHER_FALLBACK_TS },
       { symbol: 'OutboxRelayStore', from: OUTBOX_RELAY_STORE_TS },
-      { symbol: 'OutboxRelay', from: OUTBOX_RELAY_TS }
+      { symbol: 'OutboxRelay', from: OUTBOX_RELAY_TS },
+      { symbol: 'OutboxAppendedSignal', from: OUTBOX_APPENDED_TS }
     );
     providers.push(
       '{ provide: OutboxDispatcher, useFactory: () => outboxDispatcherFallback(configuration.profiles) }',
+      'OutboxAppendedSignal',
       'OutboxRelayStore',
       'OutboxRelay'
     );

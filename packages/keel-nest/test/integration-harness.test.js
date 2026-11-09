@@ -65,7 +65,8 @@ test('el reset respeta la tabla de historial que declara el DataSource', () => {
   assert.equal(NEST_INFRA.historyTable, MIGRATIONS_TABLE);
   // El comando va entre comillas simples de bash: la del literal SQL sale escapada.
   const quoted = String.raw`'\''` + MIGRATIONS_TABLE + String.raw`'\''`;
-  assert.ok(files['infra/reset-db.sh'].includes(`tablename <> ${quoted}`), 'el reset excluye la tabla de historial');
+  // Con el cronómetro, junto a keel_timer (cuyos recurrentes conserva el reset desde el DSL 2.26).
+  assert.ok(files['infra/reset-db.sh'].includes(`tablename NOT IN (${quoted}`), 'el reset excluye la tabla de historial');
   assert.doesNotMatch(files['infra/reset-db.sh'], /flyway|\{history\}/i);
 });
 

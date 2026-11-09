@@ -15,8 +15,8 @@
 //     filas que nunca salieron;
 //   · el registro de procesados en su PROPIA transacción, y la carrera arbitrada por la clave primaria.
 //
-// El relay es un bucle de retardo FIJO propio, no una tarea del reloj (scheduling.js): su cadencia es un
-// retardo entre pasadas, no un cron. Las purgas de outbox_event y processed_event sí van por el reloj (purge.js).
+// El relay es un bucle propio POR RÉPLICA (DSL 2.26, inc. 9), no una tarea del reloj ni un recurrente del cronómetro:
+// lo despierta el commit que escribe en el outbox, y sondea de respaldo. Las purgas van por el cronómetro (timer.js).
 
 import {
   OUTBOX_EVENT,
@@ -33,6 +33,7 @@ import { OUTBOX_DEAD_LETTERED } from '@keel-system/keel-core/gen/telemetry-vocab
 import {
   IDEMPOTENCY_GUARD_TS,
   MESSAGING_SETTINGS_TS,
+  OUTBOX_APPENDED_TS,
   OUTBOX_BACKOFF_TS,
   OUTBOX_DISPATCHER_FALLBACK_TS,
   OUTBOX_DISPATCHER_TS,
@@ -57,7 +58,8 @@ export function generate(model) {
       { path: OUTBOX_DISPATCHER_FALLBACK_TS, content: dispatcherFallback() },
       { path: OUTBOX_BACKOFF_TS, content: backoffFile() },
       { path: OUTBOX_RELAY_STORE_TS, content: document ? documentRelayStore() : relayStore(model) },
-      { path: OUTBOX_RELAY_TS, content: relay(model) }
+      { path: OUTBOX_RELAY_TS, content: relay(model) },
+      { path: OUTBOX_APPENDED_TS, content: appendedSignal() }
     );
   }
   if (usesProcessedEvents(model)) {
@@ -247,10 +249,14 @@ export interface ClaimedOutboxEvent {
   readonly payload: string;
 }
 
-/** El desenlace de un fallo: cuántos intentos lleva la fila y si se rindió. */
+/**
+ * El desenlace de un fallo: cuántos intentos lleva la fila, si se rindió y, si no, cuándo vuelve a ser elegible
+ * (milisegundos de la época, null si se rindió): el relay lo recuerda para no esperar al sondeo de respaldo.
+ */
 export interface MarkFailedOutcome {
   readonly attempts: number;
   readonly deadLettered: boolean;
+  readonly nextAttemptAtMs: number | null;
 }
 
 /**
@@ -308,17 +314,16 @@ export class OutboxRelayStore {
       const row = await manager.findOne(OutboxEventOrm, { where: { id }, lock: { mode: 'pessimistic_write' } });
       // La fila desapareció entre el reclamo y el desenlace: nada que actualizar, y se da por agotada para
       // no reintentar sobre un id que ya no está.
-      if (row == null) return { attempts: maxAttempts, deadLettered: true };
+      if (row == null) return { attempts: maxAttempts, deadLettered: true, nextAttemptAtMs: null };
       const attempts = row.attempts + 1;
       const deadLettered = outboxDeadLettered(attempts, maxAttempts);
-      await manager.update(
-        OutboxEventOrm,
-        { id },
-        deadLettered
-          ? { attempts, lastError: error }
-          : { attempts, lastError: error, nextAttemptAt: new Date(Date.now() + outboxBackoffMs(attempts, backoffInitialMs, backoffMaxMs)) }
-      );
-      return { attempts, deadLettered };
+      if (deadLettered) {
+        await manager.update(OutboxEventOrm, { id }, { attempts, lastError: error });
+        return { attempts, deadLettered, nextAttemptAtMs: null };
+      }
+      const nextAttemptAt = new Date(Date.now() + outboxBackoffMs(attempts, backoffInitialMs, backoffMaxMs));
+      await manager.update(OutboxEventOrm, { id }, { attempts, lastError: error, nextAttemptAt });
+      return { attempts, deadLettered, nextAttemptAtMs: nextAttemptAt.getTime() };
     });
   }
 
@@ -331,6 +336,31 @@ export class OutboxRelayStore {
       (manager) => manager.count(OutboxEventOrm, { where: { publishedAt: IsNull(), attempts: MoreThanOrEqual(maxAttempts) } }),
       { readOnly: true }
     );
+  }
+}`
+  );
+}
+
+/**
+ * La señal de una fila nueva en el outbox (DSL 2.26, inc. 9): la da el bridge tras el commit de la transacción que la
+ * escribió, y la oye el relay de esta réplica. Es lo que hace que el evento salga en milisegundos en vez de esperar al
+ * sondeo de respaldo. Si la transacción revierte, el bridge no avisa.
+ */
+function appendedSignal() {
+  return tsModule(
+    OUTBOX_APPENDED_TS,
+    [],
+    `/** Una fila nueva confirmada en el outbox de esta réplica: el relay se despierta. */
+export class OutboxAppendedSignal {
+  readonly #listeners = new Set<() => void>();
+
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  notify(): void {
+    for (const listener of this.#listeners) listener();
   }
 }`
   );
@@ -355,6 +385,7 @@ function relay(model) {
       { symbol: 'OutboxRelaySettings', from: MESSAGING_SETTINGS_TS, type: true },
       { symbol: 'OutboxDispatcher', from: OUTBOX_DISPATCHER_TS },
       { symbol: 'OutboxRelayStore', from: OUTBOX_RELAY_STORE_TS },
+      { symbol: 'OutboxAppendedSignal', from: OUTBOX_APPENDED_TS },
       { symbol: 'truncateError', from: OUTBOX_BACKOFF_TS },
       ...(telemetry
         ? [
@@ -372,8 +403,10 @@ function relay(model) {
  * reintenta tras su backoff (entrega at-least-once: el consumidor deduplica por metadata.eventId). La
  * que agota max-attempts se rinde: deja de reclamarse y se reporta a ERROR, sin borrarse.
  *
- * Corre con un retardo FIJO entre pasadas (outbox.relay.fixed-delay-ms) desde que la aplicación arranca,
- * y para antes del apagado esperando a la pasada en vuelo. Sin base de datos (el perfil test) no corre.
+ * Corre POR RÉPLICA (DSL 2.26): lo despierta el commit que escribe en el outbox (OutboxAppendedSignal), y la pasada
+ * siguiente va en el acto con el lote lleno, al reintento más próximo que programó o al sondeo de respaldo
+ * (outbox.relay.poll-ms), lo que llegue antes: relayNextRunMs de keel-core/gen/timer-plan.js. Para antes del apagado
+ * esperando a la pasada en vuelo. Sin base de datos o con scheduling.enabled apagado (el perfil test) no corre.
  */
 @Injectable()
 export class OutboxRelay implements OnApplicationBootstrap, BeforeApplicationShutdown {
@@ -383,33 +416,51 @@ export class OutboxRelay implements OnApplicationBootstrap, BeforeApplicationShu
   private inFlight: Promise<void> | null = null;
   private stopped = false;
   private paused = false;
+  private started = false;
+  /** Un despertar llegado durante una pasada: la siguiente va sin dormir. */
+  private woken = false;
+  /** El reintento más próximo que esta réplica programó y aún no ha llegado (MAX_SAFE_INTEGER: ninguno). */
+  private pendingRetryMs = Number.MAX_SAFE_INTEGER;
+  /** Cuándo toca la pasada siguiente, según la última. */
+  private nextRunMs = 0;
+  private passCount = 0;
+  private unsubscribe: (() => void) | null = null;
 
   constructor(
     @Inject(OutboxRelayStore) private readonly store: OutboxRelayStore,
     @Inject(OutboxDispatcher) private readonly dispatcher: OutboxDispatcher,
     @Inject(MESSAGING_SETTINGS) messaging: MessagingSettings,
-    @Inject(DATA_SOURCE) private readonly dataSource: ${handle.symbol} | null
+    @Inject(DATA_SOURCE) private readonly dataSource: ${handle.symbol} | null,
+    @Inject(OutboxAppendedSignal) private readonly appended: OutboxAppendedSignal
   ) {
     if (messaging.outboxRelay == null) throw new Error('OutboxRelay sin outbox.relay en la configuración de mensajería');
     this.settings = messaging.outboxRelay;
   }
 
   onApplicationBootstrap(): void {
-    if (this.dataSource == null) return;${telemetry ? `
+    if (this.dataSource == null || !this.settings.enabled) return;${telemetry ? `
     // La señal de que el outbox perdió algo, en cada scrape: lo que lee la alerta de eventos rendidos.
     Telemetry.current()?.gauge('${OUTBOX_DEAD_LETTERED}', 'Eventos del outbox que agotaron sus reintentos y siguen sin entregarse', () => this.countDeadLettered());` : ''}
-    this.schedule();
+    this.started = true;
+    this.unsubscribe = this.appended.subscribe(() => this.wake());
+    this.kick();
   }
 
   async beforeApplicationShutdown(): Promise<void> {
     this.stopped = true;
+    this.unsubscribe?.();
     if (this.timer != null) clearTimeout(this.timer);
     await this.inFlight;
   }
 
-  /** Una pasada: reclama, publica y registra el desenlace de cada fila. Devuelve cuántas reclamó. */
+  /**
+   * Una pasada: reclama, publica y registra el desenlace de cada fila. Devuelve cuántas reclamó, y deja en
+   * nextRunMs cuándo toca la siguiente.
+   */
   async relayOnce(): Promise<number> {
     const { maxAttempts, batchSize, claimTimeoutMs, backoffInitialMs, backoffMaxMs } = this.settings;
+    const passStartMs = Date.now();
+    let retryAtMs = Number.MAX_SAFE_INTEGER;
     const claimed = await this.store.claimBatch(maxAttempts, batchSize, claimTimeoutMs);
     for (const row of claimed) {
       // Apagándose, no se empieza otra publicación: las filas que quedan conservan su lease y otra pasada
@@ -427,11 +478,41 @@ export class OutboxRelay implements OnApplicationBootstrap, BeforeApplicationShu
           // La rendición: queda parada para inspección, sin borrarse ni bloquear al resto.
           this.logger.error(\`Outbox: \${row.id} agotó \${maxAttempts} reintentos y queda como dead-letter: \${reason}\`);
         } else {
+          // +1: un temporizador de Node puede dispararse un milisegundo antes, y la fila aún no sería elegible.
+          if (outcome.nextAttemptAtMs != null) retryAtMs = Math.min(retryAtMs, outcome.nextAttemptAtMs + 1);
           this.logger.warn(\`Outbox: fallo entregando \${row.id} (intento \${outcome.attempts}): \${reason}\`);
         }
       }
     }
+    this.nextRunMs = this.nextRun(claimed.length >= batchSize, retryAtMs, passStartMs);
     return claimed.length;
+  }
+
+  /**
+   * Cuándo corre la pasada siguiente (relayNextRunMs de keel-core/gen/timer-plan.js): en el acto con el lote lleno; si
+   * no, al primero del reintento más próximo que esta réplica programó y del sondeo de respaldo. Un reintento ya
+   * vencido al empezar la pasada lo reclamó ella, así que se olvida.
+   */
+  nextRun(full: boolean, retryAtMs: number, passStartMs: number): number {
+    const remembered = this.pendingRetryMs > passStartMs ? this.pendingRetryMs : Number.MAX_SAFE_INTEGER;
+    this.pendingRetryMs = Math.min(remembered, retryAtMs);
+    const now = Date.now();
+    if (full) return now;
+    return Math.min(this.pendingRetryMs, now + this.settings.pollMs);
+  }
+
+  /** Una fila nueva confirmada en ESTA réplica: el relay sale ya. Durante una pasada, la siguiente va sin dormir. */
+  wake(): void {
+    if (this.inFlight != null) {
+      this.woken = true;
+      return;
+    }
+    this.kick();
+  }
+
+  /** Cuántas pasadas lleva el relay de esta réplica: en reposo, una por sondeo de respaldo. */
+  passes(): number {
+    return this.passCount;
   }
 
 ${telemetry ? `  /**
@@ -450,12 +531,17 @@ ${telemetry ? `  /**
    */
   async pause(): Promise<void> {
     this.paused = true;
+    if (this.timer != null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
     await this.inFlight;
   }
 
-  /** Reanuda las pasadas suspendidas con pause(). */
+  /** Reanuda las pasadas suspendidas con pause(), con una en el acto: lo escrito durante la pausa no despertó a nadie. */
   resume(): void {
     this.paused = false;
+    this.kick();
   }
 
   /** Las filas rendidas ahora mismo: la señal de que el outbox perdió algo (la mide el arnés). */
@@ -463,24 +549,39 @@ ${telemetry ? `  /**
     return this.store.countDeadLettered(this.settings.maxAttempts);
   }
 
-  private schedule(): void {
-    if (this.stopped) return;
+  /** Una pasada YA, salvo apagándose, en pausa, sin arrancar o con otra en vuelo (que entonces la encadena). */
+  private kick(): void {
+    if (this.stopped || this.paused || !this.started) return;
+    if (this.inFlight != null) {
+      this.woken = true;
+      return;
+    }
+    if (this.timer != null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.woken = false;
+    this.passCount += 1;
+    this.inFlight = this.relayOnce()
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        // Una pasada que falla entera (la base caída) no para el relay: lo intenta al sondeo de respaldo.
+        this.nextRunMs = Date.now() + this.settings.pollMs;
+        this.logger.error(\`Outbox: la pasada del relay falló: \${error instanceof Error ? error.message : String(error)}\`);
+      })
+      .finally(() => {
+        this.inFlight = null;
+        if (this.woken) this.kick();
+        else this.plan(this.nextRunMs);
+      });
+  }
+
+  private plan(atMs: number): void {
+    if (this.stopped || this.paused) return;
     this.timer = setTimeout(() => {
-      if (this.paused) {
-        this.schedule();
-        return;
-      }
-      this.inFlight = this.relayOnce()
-        .then(() => undefined)
-        .catch((error: unknown) => {
-          // Una pasada que falla entera (la base caída) no para el relay: lo intenta en la siguiente.
-          this.logger.error(\`Outbox: la pasada del relay falló: \${error instanceof Error ? error.message : String(error)}\`);
-        })
-        .finally(() => {
-          this.inFlight = null;
-          this.schedule();
-        });
-    }, this.settings.fixedDelayMs);
+      this.timer = null;
+      this.kick();
+    }, Math.max(0, atMs - Date.now()));
   }
 }${telemetry ? `
 
