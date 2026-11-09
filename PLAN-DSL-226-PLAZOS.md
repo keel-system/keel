@@ -13,7 +13,8 @@ cambia el DSL, pero sí el servidor generado de cualquier diseño con persistenc
 hechas el mismo día, la D (incremento 3, keel-spring) el 2026-11-08 y, de la fase E, la fase E entera ese mismo día
 (incrementos 4, 5 y 6: keel-nest, keel-dotnet y keel-go). De la fase F, el incremento 7 (las purgas) está hecho ese
 mismo día en los cuatro, y el 8 y el 9 el 2026-11-08 y el 2026-11-09. De la fase G, el 10 lo absorbió el 2b y el 11 (la
-telemetría del cronómetro) está hecho el 2026-11-09; siguen el 12 (la fixture) y el 13 (las corridas de control). **Lo
+telemetría del cronómetro) está hecho el 2026-11-09. De la fase H, el 12 (la fixture) está hecho el 2026-11-09; queda el 13
+(las corridas de control), que lanza el usuario. **Lo
 que queda se termina sin subagentes, todo desde `main` y en secuencia** (§ Cómo se ejecuta).
 
 ## Por qué
@@ -326,7 +327,7 @@ borra lo que no conoce: RC-5) y `relay-no-wake` (RC-7).
 | 9 | **Hecho (2026-11-09)** en los cuatro; ver las notas de abajo y § La carga de partida. **Migrar el relay del outbox** al modo por réplica, con despertar al confirmar, en los cuatro, conservando la pausa del arnés con la misma API (en keel-spring ya no puede depender de `ScheduledAnnotationBeanPostProcessor`, y la purga del outbox sale del bean del relay) | `broker-check` contra los tres brokers en los cuatro generadores (el relay es lo que más redes toca), con un sabotaje `relay-no-wake` (sin despertar, la latencia vuelve al sondeo y la sonda de latencia lo ve). Y `clock-load.js`: en reposo, menos de 10 transacciones/min por réplica (hoy 122), y la salida de un evento en milisegundos (hoy media 0,5 s, p95 0,94 s) |
 | 10 | ~~Evolución~~: pasa al **2b** (§ Incremento 0: lo medido, punto 4) | — |
 | 11 | **Hecho (2026-11-09)** en los cuatro; ver las notas de abajo. Telemetría del cronómetro (vencidos sin reclamar, aparcados, duración del tick) y su entrada en el panel y las alertas | `telemetry-check` en los cuatro |
-| 12 | Fixture `stock-reservation` con el plazo (versión nueva, escenarios con `ageForDeadline`) y su gemela documental si la hay | `--ready` en verde y las redes que la tienen de sujeto |
+| 12 | **Hecho (2026-11-09)**; ver la nota de abajo. Fixture `stock-reservation` con el plazo (versión nueva, escenarios con `ageForDeadline`) y su gemela documental si la hay | `--ready` en verde y las redes que la tienen de sujeto |
 | 13 | Corrida de control en los cuatro sobre `stock-reservation` **y** repetición de la serie de `catalog-extended` (outbox, purgas, barridos y reconciliación, todo sobre el cronómetro) | Mismo resultado en los cuatro, el guard tardío en el dominio, y la serie de `catalog-extended` igual que la de 2.25 (55/55) |
 
 **Lo que dejó el incremento 2.** `gen/deadlines.js` (los plazos del modelo, la duración, `isDeadlineDue` con D3, `lateGuards`, `CLOCK_PORT`, las dos notas del handler, los casos DL y los sabotajes), `gen/timer-store.js` (`KEEL_TIMER` con la valla `claim_token` y el uuid nulo de los recurrentes, `TIMER_PARAMETERS`, los `kind`, las sentencias de PostgreSQL y MySQL con `bindNamed`/`expandList`, la forma documental y `CRON_UTC_CASES`, verificados contra la librería `cron`), `gen/timer-poller.js` (la referencia ejecutable: almacén en memoria con la semántica de las sentencias, `pollOnce`, `deadlineTick`, `recurringTick`) y la puerta `DEADLINE` de `entry-gates.js`, que no entra en el enum porque `by` es `internal`. Las pruebas: `test/timer-poller.test.js` (RC-1 a RC-6 y DL-5 a DL-10 con dos réplicas), `test/timer-store.test.js` y la red nueva `npm run timer-sql-check`, verde en los dos motores y falsada con tres sabotajes (`no-skip-locked`, `no-fence` y `park-order`, este solo en MySQL). Esa red destapó un defecto antes de que llegara a ningún generador: en MySQL, el upsert del recurrente con el alias de fila `new` dejaba `spec` ambigua (ERROR 1052). **Pasan al incremento 3**, porque dependen de cómo escribe cada generador: las filas del gate de la operación `by` (son patrones de cada lenguaje), los helpers documentales del arnés (scripts de `mongo-probes.js`) y la fila `timer` de `mechanisms.js`.
@@ -809,6 +810,32 @@ Lo que destapó:
 - **El detector neutral de series no conocía `min_over_time`**, y la habría dado por una serie que nadie publica.
 - **La prueba de paridad de keel-go no sabía de filas con `stack`**. Ahora genera el árbol por fixture y por stack, como
   keel-nest.
+
+**Lo que dejó el incremento 12.** `stock-reservation` v1.2.0: una reserva que nadie confirma caduca a los
+`reservationHoldMinutes` (15, `service.parameters`) desde `createdAt`. `lifecycle.deadlines.pending` la lleva a
+`expired` con `expireReservation` (interna, sin `schedule`), y `confirmReservation` declara `410 RESERVATION_EXPIRED`.
+`createdAt` vale como `since` porque la reserva nace en `pending` y ninguna arista vuelve a él (`REV-DOMAIN-DEADLINE-SINCE`
+en `review.yaml`). Los escenarios nuevos son `FL-EXP-001` (confirmar tarde es 410, o 409 si el cronómetro se adelantó: una
+disyunción cerrada; caduca, no se encarga nada y la reserva sin envejecer sigue confirmable) y `FL-EXP-001-B` (ya
+caducada: 409 `INVALID_STATE_TRANSITION`). Revisión, huecos, careo (una pasada limpia) y decisiones rehechos para la
+v1.2.0; `--ready` en verde. No hay gemela documental: `stock-reservation-events` es una variante de mensajería, no el
+mismo diseño en otro modelo.
+
+Era el primer sujeto de las sondas de plazos con un `since` de auditoría, con clave natural y con barridos, y eso destapó
+**un defecto por generador en las sondas, ninguno en lo emitido**:
+
+| Generador | Lo que la sonda no sabía | Medido después |
+|---|---|---|
+| keel-spring | `timer-check`: daba `UUID.values()[0]` a un uuid y 0 a un `min: 1`, y el `createdAt` que pisa la auditoría dejaba el temporizador a ahora + plazo (6/13). Ahora coloca `since` y rearma por el almacén, como `ageForDeadline`. `store-check`: el `@DataJpaTest` de la reconciliación no importaba el cronómetro (`adapterTimerBeans` en `timer.js`) | `timer-check` 13/13 en PostgreSQL y MySQL, y `verification-codes` y su gemela Mongo siguen 13/13; `dl-no-guard` cae en DL-2. `store-check` 42/42 en PostgreSQL y MySQL |
+| keel-nest | `db-check`: el adaptador se construía sin barridos ni reconciliación (el almacén del cronómetro llegaba en el sitio de otro), cada fila repetía `orderId`, y los sabotajes nombraban `verification-code.ts` | 179/179 en los dos motores; `dl-no-guard` y `dl-no-revalidate` en exactamente sus casos sobre los dos sujetos |
+| keel-dotnet | `db-check`: la clave natural repetida, y el mediator de la sonda del plazo lanzaba ante el comando del `schedule`, así que la sonda de las purgas no contaba su tick (RC-1 y R2) | 11/11 en los dos motores, `verification-codes` 6/6, `dl-no-guard` → DL-2 |
+| keel-go | `db-check`: exigía que el adaptador recibiera solo la transacción y los plazos | 7/7 en los dos motores, `verification-codes` 7/7, `dl-no-guard` lo ve |
+
+Lo demás, en verde a la primera: `compile-check` de keel-spring (tres brokers y MySQL), `ts-check` de keel-nest (13/13),
+`go-check --fixtures` (110 pasos), `cs-check --fixtures` (360 ensamblados, 9397 pruebas emitidas) y los tres `stub-check`.
+`broker-check` no se repitió: el plazo no toca la mensajería. En las suites hubo que ajustar cinco pruebas: dos usaban
+`stock-reservation` sobre MariaDB como sujeto sin cronómetro (ahora `catalog-extended`) y tres fijaban firmas que ganan
+argumentos. Las líneas base golden de keel-spring y keel-nest se regeneraron: venían desfasadas desde el incremento 3.
 
 El orden va del menor al mayor riesgo. Los incrementos 3-6 añaden un mecanismo sin tocar nada medido. Después se migra
 lo que menos redes toca (las purgas) y al final el relay, que toca los tres brokers en los cuatro generadores. Cada
