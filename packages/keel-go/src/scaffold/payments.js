@@ -32,6 +32,7 @@ import { componentType, contractOf, messageComponents, messageType, operations, 
 import { usesDependencies } from './use-cases.js';
 import { portName, repositoryParam } from './repositories.js';
 import { repositoryRoots } from '@keel-system/keel-core/gen/features';
+import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import * as stripe from './payment-gateways/stripe.js';
 import * as mercadopago from './payment-gateways/mercadopago.js';
 
@@ -676,7 +677,15 @@ type PaymentReconciliationSettings struct {
 //
 // Lo que no hace es elegir los candidatos ni reclamarlos: eso es del handler del barrido. Los candidatos son los cobros en
 // ${p.awaitingStates.join(', ')} cuyo ${p.record.awaitingSince} es anterior a StaleBefore; y el handler reclama cada uno
-// volviendo a estampar ${p.record.awaitingSince} ANTES de llamar aquí, para que otra réplica no lo consulte en la misma pasada.
+// volviendo a estampar ${p.record.awaitingSince} ANTES de llamar aquí, para que otra réplica no lo consulte en la misma pasada.${
+      scheduledByTimer(model, p.reconciliation.sweep)
+        ? `
+//
+// El barrido lo dispara el cronómetro en una réplica por tick, y el tick DRENA: si el handler reclamó un lote lleno
+// (BatchSize() cobros), que lo avise con SweepClaimed(ctx, reclamados, BatchSize()) —application.SweepClaimed desde el
+// adaptador, donde va el reclamo— y el tick repetirá la pasada.`
+        : ''
+    }
 type PaymentReconciliation struct {
 	gateway  domain.PaymentGateway
 	outcomes *PaymentOutcomeApplier

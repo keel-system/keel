@@ -66,8 +66,10 @@ escenario que ya estaba en verde.
      con `Save`, reproducir la respuesta sin re-ejecutar). No escribas otro registro ni toques `UseCases` o el
      endpoint para esto.
    - **Las operaciones por reloj** (`schedule`): la tarea (`internal/infrastructure/scheduler/<grupo>_tasks.go`), su
-     cron con el segundo repartido y el reloj son de build. Tú escribes el handler como cualquier otro, con su nota:
-     corre en TODAS las réplicas a la vez, y si dice SIN TRANSACCIÓN ABARCADORA (la despacha con
+     cron con el segundo repartido y el reloj son de build; con persistencia, el arranque monta esa tarea en el
+     cronómetro (`timer.NewSchedule`): cada tick lo ejecuta UNA réplica, al menos una vez, y el tick repite la pasada
+     mientras el lote salga lleno. Tú escribes el handler como cualquier otro, con su nota (no proceses más de un lote
+     por pasada; si reclamas tú el lote, avisa del lote lleno con `SweepClaimed`), y si dice SIN TRANSACCIÓN ABARCADORA (la despacha con
      `application.WithoutTransaction(ctx)`) cada escritura del repositorio confirma la suya. No toques el cron ni el
      despacho para «arreglar» un flujo. Si el barrido mueve estados, **el reclamo de su lote ya está generado** en el
      puerto y el adaptador de la raíz (`Claim<…>(ctx)`, con SKIP LOCKED, la cota de `sweep.<clave>.batch-size` y su

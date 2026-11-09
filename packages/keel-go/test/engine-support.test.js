@@ -8,7 +8,7 @@ import { MODELS } from '@keel-system/keel-core/gen/mechanisms';
 import { MECHANISMS, MECHANISM_CATALOG, STATES, NETS, RELATIONAL_ENGINES, cells, pending, unfalsified, unverified } from '../src/lib/engine-support.js';
 import { DB_SABOTAGES } from './helpers/db-sabotages.js';
 import { DOC_SABOTAGES } from './helpers/doc-sabotages.js';
-import { PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES } from '../scripts/lib/timer-probes.js';
+import { DRAIN_SABOTAGES, PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES } from '../scripts/lib/timer-probes.js';
 
 test('una fila por cada mecanismo del catálogo neutral, y ninguna inventada', () => {
   assert.deepEqual(Object.keys(MECHANISMS).sort(), Object.keys(MECHANISM_CATALOG).sort());
@@ -79,11 +79,13 @@ const FALSIFIED_BY = {
   'timer/relational': ['dl-no-lease', 'dl-no-revalidate'],
   'timer/document': ['dl-no-lease', 'dl-no-revalidate'],
   'timer-purge/relational': ['timer-every-replica'],
-  'timer-purge/document': ['timer-every-replica']
+  'timer-purge/document': ['timer-every-replica'],
+  'timer-schedule/relational': ['drain-no-signal', 'drain-no-budget', 'timer-every-replica-schedule'],
+  'timer-schedule/document': ['drain-no-signal', 'drain-no-budget', 'timer-every-replica-schedule']
 };
 
 test('el sabotaje con que se falsa cada celda de db-check o doc-check existe de verdad', () => {
-  const known = { 'db-check': { ...DB_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES }, 'doc-check': { ...DOC_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES } };
+  const known = { 'db-check': { ...DB_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES }, 'doc-check': { ...DOC_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES } };
   for (const { id, branch, cell } of cells()) {
     if (!known[cell.net]) continue;
     const named = FALSIFIED_BY[`${id}/${branch}`];

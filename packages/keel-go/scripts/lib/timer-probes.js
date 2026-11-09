@@ -26,8 +26,8 @@ import { isOptional } from '../../src/scaffold/render.js';
 import { repositoryArgs } from '../../src/scaffold/repositories.js';
 import { messageComponents, messageType } from '../../src/scaffold/services.js';
 import { parametersType } from '../../src/scaffold/service-parameters.js';
-import { deadlineAccessor, deadlineHandlerType, deadlinesReadParameters, deadlinesType, kindConstant, purgeKindConstant, usesDeadlines } from '../../src/scaffold/timer.js';
-import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
+import { deadlineAccessor, deadlineHandlerType, deadlinesReadParameters, deadlinesType, kindConstant, purgeKindConstant, scheduleKindConstant, usesDeadlines } from '../../src/scaffold/timer.js';
+import { DRAIN_CASES, timerPurges, timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
 
 /** El sujeto: el primer plazo con rechazo tardío del diseño, con todo lo que la sonda nombra. */
 export function timerSubject(model) {
@@ -587,21 +587,117 @@ export const PURGE_TIMER_SABOTAGES = Object.freeze({
     to: (match) => (match.startsWith('"entityId"') ? '"entityId": uuid.New(), "spec": spec' : match.replace('timerID(kind, timer.NilEntityID)', 'timerID(kind, uuid.NewString())')),
     breaks: ['R-1', 'RC-1'],
     expect: PURGE_EXPECT
+  },
+  // El schedule (inc. 8): cada réplica monta su recurrente con un kind propio, así que ninguna fila es la que reclama ni la
+  // que cuenta la sonda. Demuestra que el bloque mide el schedule y no solo las purgas; cae también R-2, que cuenta los
+  // ticks por el mismo kind. La marca de tiempo es para que siga compilando: schedules.go ya importa time.
+  'timer-every-replica-schedule': {
+    files: /^internal\/infrastructure\/timer\/schedules\.go$/,
+    from: 'NewRecurring(ScheduleKindPrefix+operation, spec,',
+    to: 'NewRecurring(ScheduleKindPrefix+operation+"@"+time.Now().String(), spec,',
+    breaks: ['R-1', 'RC-1', 'R-2'],
+    expect: /^TestPurgeTimer_(R1|RC1|R2)_/
   }
 });
 
 export const isPurgeTimerSabotage = (id) => Boolean(id && PURGE_TIMER_SABOTAGES[id]);
 
-/** ¿Cayeron los dos casos del sabotaje? (las pruebas en rojo, por su nombre `TestPurgeTimer_<id>_…`). */
-export function purgeTimerBreaksCovered(failed) {
+/** ¿Cayeron todos los casos del sabotaje? (las pruebas en rojo, por su nombre `TestPurgeTimer_<id>_…`). */
+export function purgeTimerBreaksCovered(failed, id = 'timer-every-replica') {
   const seen = new Set(failed.map((test) => /^TestPurgeTimer_(RC|R)(\d+)_/.exec(test)).filter(Boolean).map((m) => `${m[1]}-${m[2]}`));
-  return ['R-1', 'RC-1'].filter((caseId) => !seen.has(caseId));
+  return PURGE_TIMER_SABOTAGES[id].breaks.filter((caseId) => !seen.has(caseId));
 }
 
-/** `purge_timer_probe_test.go` en el paquete del motor, o null si el diseño no monta purgas en el cronómetro. */
+/**
+ * Los sabotajes del DRENAJE (inc. 8), los de los otros tres: el reclamo que no avisa del lote lleno (cae DR-1) y el tick
+ * sin tope de tiempo (cae DR-3). Los dos dejan lo emitido compilando: el aviso dice cero reclamadas y el tope no se cumple
+ * nunca. Los casos (`TestDrain_DR<n>_…`) los escriben claim-probes y doc-probes junto al reclamo de la cola.
+ */
+export const DRAIN_SABOTAGES = Object.freeze({
+  'drain-no-signal': {
+    files: /^internal\/infrastructure\/(?:postgres|mysql|mongo)\/\w+_repository\.go$/,
+    from: /application\.SweepClaimed\(ctx, len\((?:ids|claimed)\), batch\)/g,
+    to: 'application.SweepClaimed(ctx, 0, batch)',
+    breaks: ['DR-1'],
+    expect: /^TestDrain_DR1_/
+  },
+  'drain-no-budget': {
+    files: /^internal\/infrastructure\/timer\/schedules\.go$/,
+    from: 'time.Since(start) >= budget',
+    to: 'time.Since(start) >= budget && budget < 0',
+    breaks: ['DR-3'],
+    expect: /^TestDrain_DR3_/
+  }
+});
+
+export const isDrainSabotage = (id) => Boolean(id && DRAIN_SABOTAGES[id]);
+
+/** ¿Cayeron todos los casos del sabotaje del drenaje? */
+export function drainBreaksCovered(failed, id) {
+  const seen = new Set(failed.map((test) => /^TestDrain_DR(\d+)_/.exec(test)).filter(Boolean).map((m) => `DR-${m[1]}`));
+  return DRAIN_SABOTAGES[id].breaks.filter((caseId) => !seen.has(caseId));
+}
+
+/**
+ * Los casos DR-1 a DR-3 en Go, sobre el reclamo real de la cola: un tick de `timer.NewSchedule` (el de producción) cuya
+ * pasada llama al reclamo. Con lotes de dos: cinco candidatos son tres pasadas; uno, una; y seis sin presupuesto, una que
+ * deja cuatro. `seed(n)` es la expresión que siembra n candidatos y da sus ids; `left(ids)`, la que cuenta los que siguen
+ * sin reclamar; `reset`, las sentencias que dejan la tabla sin otros candidatos.
+ */
+export function drainProbes({ method, call, seed, left, reset }) {
+  const [dr1, dr2, dr3] = DRAIN_CASES;
+  return `// drain${method} ejecuta UN tick de un schedule que drena (timer.NewSchedule, el de producción) cuya pasada es el
+// reclamo real, y devuelve cuántas pasadas hizo. Con un cron anual, el siguiente tick no recorta el presupuesto.
+func drain${method}(t *testing.T, budget time.Duration) int {
+	t.Helper()
+	passes := 0
+	schedule, err := timer.NewSchedule("probe", "0 0 0 1 1 *", func(ctx context.Context) error {
+		passes++
+		_, err := ${call}
+		return err
+	}, timer.Settings{DrainBudget: budget})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schedule.Tick(t.Context()); err != nil {
+		t.Fatalf("el tick: %v", err)
+	}
+	return passes
+}
+
+func TestDrain_DR1_${method}_UnTickDrenaTodoEnVariasPasadas(t *testing.T) {
+	// ${dr1.id}: ${dr1.what}.
+${reset}
+	ids := ${seed(5)}
+	if passes, rest := drain${method}(t, time.Minute), ${left('ids')}; passes != 3 || rest != 0 {
+		t.Errorf("cinco candidatos con lotes de dos: %d pasadas y %d sin reclamar; quiero 3 y 0", passes, rest)
+	}
+}
+
+func TestDrain_DR2_${method}_ConElLoteAMediasElTickHaceUnaPasada(t *testing.T) {
+	// ${dr2.id}: ${dr2.what}.
+${reset}
+	ids := ${seed(1)}
+	if passes, rest := drain${method}(t, time.Minute), ${left('ids')}; passes != 1 || rest != 0 {
+		t.Errorf("un candidato: %d pasadas y %d sin reclamar; quiero 1 y 0", passes, rest)
+	}
+}
+
+func TestDrain_DR3_${method}_AgotadoElPresupuestoElTickPara(t *testing.T) {
+	// ${dr3.id}: ${dr3.what}.
+${reset}
+	ids := ${seed(6)}
+	if passes, rest := drain${method}(t, 0), ${left('ids')}; passes != 1 || rest != 4 {
+		t.Errorf("seis candidatos sin presupuesto: %d pasadas y %d sin reclamar; quiero 1 y 4 (lo demás, al siguiente tick)", passes, rest)
+	}
+}`;
+}
+
+/** `purge_timer_probe_test.go` en el paquete del motor, o null si el diseño no monta purgas ni schedule en el cronómetro. */
 export function purgeTimerProbeFile(model) {
   const purges = timerPurges(model);
-  if (purges.length === 0) return null;
+  const schedules = timerSchedules(model);
+  if (purges.length === 0 && schedules.length === 0) return null;
   const document = usesDocument(model);
   const store = document
     ? {
@@ -649,14 +745,24 @@ func purgeTimerRun(t *testing.T, statement string, values map[string]any) {
 	}
 }
 `;
-  const kinds = purges.map((purge) => `timer.${purgeKindConstant(purge.table)}`).join(', ');
-  const crons = purges.map((purge) => `	timer.${purgeKindConstant(purge.table)}: ${goString(purge.cron.default)},`).join('\n');
+  // Los schedule (inc. 8) entran por timer.NewSchedule, el de producción: el kind lo pone él.
+  const kinds = [...purges.map((purge) => `timer.${purgeKindConstant(purge.table)}`), ...schedules.map((schedule) => `timer.${scheduleKindConstant(schedule.operation)}`)].join(', ');
+  const crons = [
+    ...purges.map((purge) => `	timer.${purgeKindConstant(purge.table)}: ${goString(purge.cron.default)},`),
+    ...schedules.map((schedule) => `	timer.${scheduleKindConstant(schedule.operation)}: ${goString(schedule.cron)},`)
+  ].join('\n');
+  const scheduleOps = schedules.map((schedule) => `	timer.${scheduleKindConstant(schedule.operation)}: ${goString(schedule.operation)},`).join('\n');
   const body = `
 // La sonda de las purgas en el cronómetro (scripts/lib/timer-probes.js de keel-go): ${purges.map((purge) => purge.table).join(', ')}. No es
 // parte del proyecto generado.
 
-// purgeTimerKinds son los recurrentes de las purgas del diseño.
+// purgeTimerKinds son los recurrentes de las purgas del diseño y de los schedule de sus operaciones.
 var purgeTimerKinds = []string{${kinds}}
+
+// purgeTimerSchedules es la operación de cada recurrente que es un schedule.
+var purgeTimerSchedules = map[string]string{
+${scheduleOps}
+}
 
 // purgeTimerCrons es el cron de cada uno, el default de keel-core.
 var purgeTimerCrons = map[string]string{
@@ -674,15 +780,24 @@ func purgeTimerReplica(t *testing.T) *timer.Poller {
 	t.Helper()
 	store := NewTimerStore(probeTx)
 	var recurrings []timer.Recurring
+	settings := timer.Settings{Enabled: true, MaxSleep: 30 * time.Second, BatchSize: 50, Lease: time.Minute, MaxAttempts: 10, DrainBudget: 50 * time.Second, RetentionDays: 7, PurgeCron: "0 30 5 * * *"}
 	for _, kind := range purgeTimerKinds {
-		recurrings = append(recurrings, must(timer.NewRecurring(kind, purgeTimerCrons[kind], func(context.Context) error {
+		tick := func(context.Context) error {
 			purgeTimerMu.Lock()
 			defer purgeTimerMu.Unlock()
 			purgeTimerTicks[kind]++
 			return nil
-		})))
+		}
+${
+  schedules.length > 0
+    ? `		if operation, ok := purgeTimerSchedules[kind]; ok {
+			recurrings = append(recurrings, must(timer.NewSchedule(operation, purgeTimerCrons[kind], tick, settings)))
+			continue
+		}
+`
+    : ''
+}		recurrings = append(recurrings, must(timer.NewRecurring(kind, purgeTimerCrons[kind], tick)))
 	}
-	settings := timer.Settings{Enabled: true, MaxSleep: 30 * time.Second, BatchSize: 50, Lease: time.Minute, MaxAttempts: 10, RetentionDays: 7, PurgeCron: "0 30 5 * * *"}
 	return must(timer.NewPoller(store, nil, recurrings, settings, slog.New(slog.DiscardHandler)))
 }
 

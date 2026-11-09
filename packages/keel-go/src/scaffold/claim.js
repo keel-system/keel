@@ -33,6 +33,7 @@ import { layout, packageFile } from './render.js';
 import { parameterAccessor, parametersType } from './service-parameters.js';
 import { usesDependencies } from './use-cases.js';
 import { usesReconciliationClaims } from './reconciliation-claim.js';
+import { sweepPassSignal } from './timer.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -271,7 +272,7 @@ function describe(claim, entityName) {
       : `sweep.${claim.stalled.configKey}.stalled-after-seconds`;
     return (
       `rescata hasta el lote de ${entityName} ATASCADOS en ${claim.stalled.state}: los devuelve SIGUIENDO en ${claim.stalled.state}, con ${claim.stalled.stampField} renovado, para que el handler los pase a ${claim.to}. ` +
-      'Reclama, no lee: corre en TODAS las réplicas, y solo devuelve lo que ESTA se llevó (un UPDATE condicional que solo casa si la fila sigue atascada, y que renueva el reloj). ' +
+      'Reclama, no lee: puede correr a la vez en varias réplicas (en todas con el reloj; con el cronómetro, cuando un tick se repite al vencer su arriendo), y solo devuelve lo que ESTA se llevó (un UPDATE condicional que solo casa si la fila sigue atascada, y que renueva el reloj). ' +
       `No cambia el estado, lo ARRIENDA: la transición a ${claim.to} es del dominio, que fija los campos que ese estado exige; si el ciclo muere entre el reclamo y la transición, la fila sigue en ${claim.stalled.state} con el reloj renovado y otro rescate la recoge pasado el plazo. ` +
       `Solo se lleva lo ABANDONADO: ${claim.stalled.stampField} más viejo que ${deadline}. Lo que devuelve es trabajo que alguien dejó a medias: si el ciclo que murió ya produjo un efecto irreversible, repetirlo lo duplica.${stamp}${own}`
     );
@@ -279,7 +280,7 @@ function describe(claim, entityName) {
   const due = claim.due ? ` Solo los que ya vencieron (${claim.due.field} <= ahora).` : '';
   return (
     `reclama hasta el lote de ${entityName} en ${claim.from.join(' o ')} y los pasa a ${claim.to}.${due} ` +
-    `Reclama, no lee: corre en TODAS las réplicas a la vez, y lo que devuelve son SOLO las filas que ESTA se llevó (el paso a ${claim.to} va en un UPDATE condicional). Leer el lote con un finder y marcarlo después se lo daría entero a todas. Actúa sobre lo que devuelve FUERA de su transacción.${stamp}${own}`
+    `Reclama, no lee: puede correr a la vez en varias réplicas (en todas con el reloj; con el cronómetro, cuando un tick se repite al vencer su arriendo), y lo que devuelve son SOLO las filas que ESTA se llevó (el paso a ${claim.to} va en un UPDATE condicional). Leer el lote con un finder y marcarlo después se lo daría entero a todas. Actúa sobre lo que devuelve FUERA de su transacción.${stamp}${own}`
   );
 }
 
@@ -415,7 +416,7 @@ ${setup.join('\n')}
 			}
 			claimed = append(claimed, found...)
 		}
-		return nil
+${sweepPassSignal(model, claim, 'len(ids)', 'batch', '		')}		return nil
 	})
 	if err != nil {
 		return nil, err

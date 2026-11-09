@@ -78,7 +78,8 @@ test('el reset respeta la tabla de historial de goose, que el adaptador no renom
   for (const [file, content] of store) assert.doesNotMatch(content, /SetTableName|WithTableName/, file);
   // El comando va entre comillas simples de bash: la del literal SQL sale escapada.
   const quoted = String.raw`'\''` + MIGRATIONS_TABLE + String.raw`'\''`;
-  assert.ok(files['infra/reset-db.sh'].includes(`tablename <> ${quoted}`), 'el reset excluye la tabla de historial');
+  // Y keel_timer (DSL 2.26, inc. 8): sus recurrentes sobreviven al reset, sus plazos no.
+  assert.ok(files['infra/reset-db.sh'].includes(`tablename NOT IN (${quoted}, `), 'el reset excluye la tabla de historial');
   assert.doesNotMatch(files['infra/reset-db.sh'], /flyway|typeorm|ef_migrations|\{history\}/i);
 });
 

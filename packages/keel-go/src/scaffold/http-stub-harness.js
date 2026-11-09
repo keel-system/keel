@@ -11,6 +11,7 @@ import { snakeCase } from '@keel-system/keel-core/gen';
 import { usesHttpStub } from '@keel-system/keel-core/gen/features';
 import { relationalAgingTargets } from '@keel-system/keel-core/gen/aging-targets';
 import { alignRows, goString } from '../lib/go-source.js';
+import { fireAgedCall, fireAgedMember } from './timer.js';
 import { usesRelational } from '@keel-system/keel-core/gen/features';
 export { usesHttpStub };
 
@@ -384,7 +385,8 @@ ${table('reconciliationAging', entry.staleTimestamp)}
 func (s *Scenario) AgeForReconciliation(activation, id string) {
 	s.Helper()
 	s.reconciliationClock(reconciliationAging, activation, id)
-}`
+${fireAgedCall(model, 'activation')}}`,
+    ...fireAgedMember(model)
   ];
   if (entry.heldTimestamp) {
     members.push(String.raw`// reconciliationHolding son las sentencias que dejan la marca de espera de cada barrido en el FUTURO.

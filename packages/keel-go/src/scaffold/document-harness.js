@@ -12,7 +12,7 @@
 
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { usesDocument } from '@keel-system/keel-core/gen/features';
-import { documentDeadlineAgingMembers } from './timer.js';
+import { documentDeadlineAgingMembers, fireAgedCall, fireAgedMember, fireScheduleCall, fireScheduleMember } from './timer.js';
 import { CLOCK, OUTBOX, PRINT_WRAPPER, abandonOutboxScript, ageClockScript, clearAbandonedScript, holdClockScript, missingClockCountScript, setStateScript } from '@keel-system/keel-core/gen/mongo-probes';
 import { documentAgingTargets } from '@keel-system/keel-core/gen/aging-targets';
 import { rescueProbes } from '@keel-system/keel-core/gen/scheduling';
@@ -97,7 +97,9 @@ func (s *Scenario) MongoEval(script string) string {
 }`
   ];
   members.push(...rescueMembers(model));
+  members.push(...fireScheduleMember(model, rescueProbes(model).map((probe) => probe.operation)));
   members.push(...agingMembers(model));
+  members.push(...fireAgedMember(model));
   // El plazo de negocio (DSL 2.26): AgeForDeadline envejece el since y el temporizador a la vez.
   members.push(...documentDeadlineAgingMembers(model));
   // Quien mete un id en un script: el rescate y la reconciliación. Sin ninguno, sería una función sin usar.
@@ -149,13 +151,18 @@ ${rows.join('\n')}
 }
 
 // StallInFlight deja el documento id EN VUELO con el reloj infinitamente rancio: el estado exacto en el que queda una
-// réplica que murió con él en la mano, que es lo que el rescate busca. No dispara el barrido —lo dispara su cron, como en
-// producción— y no siembra el documento: mueve uno creado por la API.
+// réplica que murió con él en la mano, que es lo que el rescate busca. ${
+      fireScheduleMember(model, probes.map((probe) => probe.operation)).length > 0
+        ? `Adelanta además el barrido en el cronómetro
+// (FireTimer): vence ya y lo ejecuta UNA réplica en su próxima pasada`
+        : `No dispara el barrido —lo dispara su cron, como en
+// producción—`
+    }, y no siembra el documento: mueve uno creado por la API.
 func (s *Scenario) StallInFlight(operation, id string) {
 	s.Helper()
 	script := s.rescueOf(operation).stall
 	s.MongoEval(script.prefix + s.documentID(id) + script.suffix)
-}
+${fireScheduleCall(model, probes.map((probe) => probe.operation), 'operation')}}
 
 // PutInFlight es lo mismo con el reloj a AHORA: acaba de entrar en vuelo y hay alguien trabajando en él. Un rescate sin
 // cota temporal pasa el escenario del rescate y falla aquí.
@@ -163,7 +170,7 @@ func (s *Scenario) PutInFlight(operation, id string) {
 	s.Helper()
 	script := s.rescueOf(operation).put
 	s.MongoEval(script.prefix + s.documentID(id) + script.suffix)
-}
+${fireScheduleCall(model, probes.map((probe) => probe.operation), 'operation')}}
 
 // InFlightWithoutClock es cuántos documentos quedaron EN VUELO sin reloj. Tiene que valer cero siempre. Vacío NO es
 // cero: es un fallo del transporte, y se dice.
@@ -218,7 +225,7 @@ ${table('reconciliationAging', ageClockScript)}
 func (s *Scenario) AgeForReconciliation(activation, id string) {
 	s.Helper()
 	s.reconciliationClock(reconciliationAging, activation, id)
-}
+${fireAgedCall(model, 'activation')}}
 
 // reconciliationHolding son los scripts que dejan la marca de espera de cada barrido en el FUTURO.
 ${table('reconciliationHolding', holdClockScript)}

@@ -36,6 +36,7 @@ import { callMethod, clientParam, usesGoHttpClients } from './http-clients.js';
 import { projectionNotes, replicaNote } from './projections.js';
 import { mailNote } from './mail.js';
 import { deadlineNotes } from './timer.js';
+import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { cacheHandlerNote } from './cache.js';
 import { uploadHandlerNotes } from './storage.js';
 import { EXPECTED_VERSIONS, carriesExpectedVersions, conditionalHandlerNote, returnsVersioned, versionedType } from './conditional-writes.js';
@@ -496,9 +497,19 @@ function scheduleNotes(model, operation) {
   const mode = scheduleDispatch(model, operation);
   const service = model.services.find((candidate) => candidate.operations.includes(operation));
   const where = `${layout(model).scheduler.dir}/${goFileName(`${service.className.replace(/Service$/, '')}Tasks`)}.go`;
+  // Con el cronómetro (inc. 8 del plan 2.26) la dispara el recurrente de su tarea en UNA réplica por tick, al menos una
+  // vez; y si el reclamo lo escribe el agente, es él quien avisa del lote lleno para que el tick drene.
+  const agentClaims = (operation.claim ?? []).length === 0 && !(operation.reconciles ?? []).some((reconcile) => reconcile.claim);
   return [
-    `Por reloj (cron ${operation.schedule.cron}): la dispara ${where} en TODAS las réplicas a la vez. Lo que ` +
-      'actúa sobre lo que encuentra tiene que RECLAMARLO (marcar la fila y quedarse con las que esta réplica se llevó), no solo leerlo.',
+    scheduledByTimer(model, operation.name)
+      ? `Por reloj (cron ${operation.schedule.cron}): la dispara el cronómetro (su tarea de ${where}, montada con timer.NewSchedule) en UNA réplica por tick, pero AL MENOS UNA VEZ: si la réplica muere a mitad de la pasada, otra la repite al vencer el arriendo. Lo que ` +
+        'actúa sobre lo que encuentra tiene que RECLAMARLO (marcar la fila y quedarse con las que esta réplica se llevó), no solo leerlo. ' +
+        'El tick DRENA: repite la pasada mientras el lote salga lleno, así que no proceses más de un lote por pasada.' +
+        (agentClaims && operation.sweep
+          ? ' Si el lote lo reclamas tú, AVISA del lote lleno con SweepClaimed(ctx, reclamadas, lote) (internal/application; application.SweepClaimed desde el adaptador) justo después de reclamar; sin el aviso el tick hace una sola pasada.'
+          : '')
+      : `Por reloj (cron ${operation.schedule.cron}): la dispara ${where} en TODAS las réplicas a la vez. Lo que ` +
+        'actúa sobre lo que encuentra tiene que RECLAMARLO (marcar la fila y quedarse con las que esta réplica se llevó), no solo leerlo.',
     mode.withoutTransaction
       ? 'SIN TRANSACCIÓN ABARCADORA: la tarea la despacha con application.WithoutTransaction(ctx), así que cada llamada al ' +
         'repositorio confirma la SUYA. El orden es el de los commits: reclamar y confirmar, actuar fuera de toda transacción, ' +
@@ -543,7 +554,7 @@ function reconciliationNotes(model, operation) {
       const call = `h.${repositoryParam({ name: claim.entity })}.${goExported(claim.method)}(ctx)`;
       return (
         head +
-        `EL RECLAMO YA ESTÁ GENERADO: toma el lote con ${call}. Devuelve SOLO los candidatos que ESTA réplica se llevó —el barrido corre en todas a la vez— y ya trae dentro el umbral que declara el diseño, la cota del lote y la caducidad de la marca (config/parameters/<perfil>/reconciliation.yaml). NO escribas otro reclamo (ni un finder por estado, ni un lock, ni una marca propia en ${claim.entity}): un segundo mecanismo en paralelo al generado no reclama nada, solo reparte peor. ` +
+        `EL RECLAMO YA ESTÁ GENERADO: toma el lote con ${call}. Devuelve SOLO los candidatos que ESTA réplica se llevó —${scheduledByTimer(model, operation.name) ? 'el tick del cronómetro es al menos una vez y puede repetirse en otra réplica' : 'el barrido corre en todas a la vez'}— y ya trae dentro el umbral que declara el diseño, la cota del lote y la caducidad de la marca (config/parameters/<perfil>/reconciliation.yaml). NO escribas otro reclamo (ni un finder por estado, ni un lock, ni una marca propia en ${claim.entity}): un segundo mecanismo en paralelo al generado no reclama nada, solo reparte peor. ` +
         decide +
         reconciliationOrder(operation, activation, true) +
         'El reclamo no sustituye a la idempotencia saliente: lo que absorbe una llamada repetida al proveedor —tras una caducidad o un reintento— es solo esa. ' +

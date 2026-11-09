@@ -29,7 +29,7 @@ import { docComment, goFileName, isOptional, layout, localName, packageFile } fr
 import { declaredAuthorship, usesDeclaredAuthorship } from './audit-actor.js';
 import { emitsEvents, usesGoOutbox } from './messaging.js';
 import { claimDependencies, claimMethod, storedState } from './claim.js';
-import { deadlineDependencies, documentArming } from './timer.js';
+import { deadlineDependencies, documentArming, sweepPassSignal } from './timer.js';
 import { documentReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
 import { credentialFinders, keyFinders, naturalKeyBatchFinder, portName, rankedEnums } from './repositories.js';
 import { BSON, MONGO_DRIVER, MONGO_OPTIONS } from './document-persistence.js';
@@ -50,6 +50,7 @@ const ADAPTER_IMPORTS = [
   MONGO_DRIVER,
   BSON,
   MONGO_OPTIONS,
+  'internal/application',
   'internal/domain',
   'internal/platform/textfold',
   'internal/platform/wire',
@@ -788,7 +789,7 @@ ${setup.join('\n')}
 		}
 		claimed = append(claimed, aggregate)
 	}
-	return claimed, nil
+${sweepPassSignal(model, claim, 'len(claimed)', 'batch')}	return claimed, nil
 }`;
   });
 }

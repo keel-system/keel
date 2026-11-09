@@ -63,6 +63,44 @@ export const MECHANISMS = {
       }
     }
   },
+  'timer-schedule': {
+    parity: {
+      pair: 'job-dispatch',
+      markers: {
+        relational: [
+          'file:internal/infrastructure/timer/schedules.go',
+          'internal/infrastructure/timer/schedules.go::func NewSchedule(',
+          `${PG}/job_repository.go::application.SweepClaimed(ctx, len(ids), batch)`,
+          'file:internal/application/sweep_pass.go',
+          'cmd/server/main.go::timer.NewSchedule(task.Name, task.Cron, task.Run, timerSettings)'
+        ],
+        document: [
+          'file:internal/infrastructure/timer/schedules.go',
+          'internal/infrastructure/timer/schedules.go::func NewSchedule(',
+          `${MONGO}/job_repository.go::application.SweepClaimed(ctx, len(claimed), batch)`,
+          'file:internal/application/sweep_pass.go',
+          'cmd/server/main.go::timer.NewSchedule(task.Name, task.Cron, task.Run, timerSettings)'
+        ]
+      }
+    },
+    emitter: 'src/scaffold/timer.js (timer.NewSchedule, que drena, y application.SweepClaimed) · src/scaffold/server.js (las tareas de los schedule ya no van al reloj) · src/scaffold/claim.js · src/scaffold/reconciliation-claim.js · src/scaffold/document-repositories.js',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'job-dispatch: un tick de timer.NewSchedule drena con el reclamo real contra el motor (DR-1 a DR-3), falsado con drain-no-signal (DR-1) y drain-no-budget (DR-3); todo sujeto con schedule: dos réplicas aseguran y sondean el schedule y cada tick lo ejecuta una (R1, RC-1, R2), falsado con timer-every-replica-schedule. Los casos de keel-spring'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'job-dispatch-mongo: los mismos casos sobre el almacén documental y el FindOneAndUpdate del reclamo, con los mismos sabotajes'
+      }
+    }
+  },
   deadline: {
     parity: {
       pair: 'verification-codes',

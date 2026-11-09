@@ -21,6 +21,8 @@ import { goString } from '../../src/lib/go-source.js';
 import { sqlDialect } from '../../src/lib/relational-engine.js';
 import { claimMethod, claimStatements, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { parametersType, usesServiceParameters } from '../../src/scaffold/service-parameters.js';
+import { claimDrains } from '@keel-system/keel-core/gen/timer-plan';
+import { drainProbes } from './timer-probes.js';
 
 const CLAIM_SAMPLES = 300;
 
@@ -259,6 +261,29 @@ func ids${name}(claimed []*domain.${name}) []${idType} {
 		t.Errorf("la tercera pasada = %v, %v; quiero nada", ids${name}(third), err)
 	}
 }`);
+    // El drenaje (inc. 8 del plan 2.26): un tick del schedule repite la pasada mientras el reclamo avise del lote lleno.
+    if (!claim.stalled && claimDrains(model, claim)) {
+      parts.push(`// left${method} son las muestras que siguen en ${claim.from[0]}, sin reclamar.
+func left${method}(t *testing.T, ids []${idType}) int {
+	t.Helper()
+	n := 0
+	for _, id := range ids {
+		if stateOf${name}(t, id) == ${goString(stored(claim.from[0]))} {
+			n++
+		}
+	}
+	return n
+}`);
+      parts.push(
+        drainProbes({
+          method,
+          call: `${repo}.${method}(ctx)`,
+          seed: (count) => seed(take(count)),
+          left: (ids) => `left${method}(t, ${ids})`,
+          reset: `\tclaimExec(t, ${goString(parkSql(claim.from))})`
+        })
+      );
+    }
     const race = take(4);
     parts.push(`func TestClaim_${method}_TwoReplicasShareTheRowsWithoutRepeating(t *testing.T) {
 	claimExec(t, ${goString(parkSql(claim.from))})

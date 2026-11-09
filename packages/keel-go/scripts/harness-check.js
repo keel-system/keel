@@ -79,6 +79,14 @@ const SABOTAGES = {
     to: '',
     expect: ['la evidencia es la del PRIMER fallo']
   },
+  // El reset vuelve a vaciar keel_timer entera, como antes del inc. 8 del plan 2.26: sin recurrentes, FireTimer no tiene
+  // qué adelantar y ningún barrido volvería a dispararse en la suite. Cae la sonda del cronómetro y lo que la arrastra.
+  'reset-timer': {
+    file: 'infra/reset-db.sh',
+    from: /, (?:'\\''|")keel_timer(?:'\\''|")\)/,
+    to: ')',
+    expect: ['score: un escenario en verde sale OK', 'el reset conserva los recurrentes del cronómetro', 'score: un id FL-* que el documento no declara', 'score: un flujo que no arranca y ningún FALLO', 'score: todo en verde sale con 0']
+  },
   // El servidor deja de contar: un Then de coste pasaría siempre.
   statements: {
     file: 'internal/platform/statements/statements.go',
@@ -131,6 +139,9 @@ function go(projectDir, args) {
 }
 
 const engine = process.argv.find((arg) => arg.startsWith('--database='))?.split('=')[1] ?? 'postgresql';
+// Un plazo de una entidad que no existe, para la sonda del cronómetro: el reset tiene que llevárselo.
+const uuidLiteral = (id) => (engine === 'mysql' ? `UUID_TO_BIN('${id}')` : `'${id}'`);
+const timerProbeInsert = `INSERT INTO keel_timer (id, kind, entity_id, due_at, attempts) VALUES (${uuidLiteral('11111111-1111-4111-8111-111111111111')}, 'deadline:Probe.pending', ${uuidLiteral('22222222-2222-4222-8222-222222222222')}, ${engine === 'mysql' ? 'UTC_TIMESTAMP(6)' : 'current_timestamp'}, 0)`;
 const workspace = makeWorkspace('keel-go-harness-');
 mountDesign(workspace, GO_READY_DESIGN.name, GO_READY_DESIGN);
 const projectDir = path.join(workspace, 'services', `${GO_READY_DESIGN.name}-go`);
@@ -159,7 +170,7 @@ const module = /^module\s+(\S+)/m.exec(fs.readFileSync(path.join(projectDir, 'go
 if (sabotage) {
   const target = path.join(projectDir, sabotage.file);
   const text = fs.readFileSync(target, 'utf8');
-  if (!text.includes(sabotage.from)) {
+  if (typeof sabotage.from === 'string' ? !text.includes(sabotage.from) : !sabotage.from.test(text)) {
     console.error(`El sabotaje ${sabotageId} no se aplica a lo emitido hoy: ${sabotage.file} ya no contiene lo que busca.`);
     process.exit(2);
   }
@@ -299,6 +310,27 @@ func TestProbeOk(t *testing.T) {
 			s.Error("una petición que lee de la base no contó ninguna lectura")
 		}
 	})
+	// El cronómetro (DSL 2.26, inc. 8): el reset conserva sus RECURRENTES —el reloj de la app, que solo los asegura al
+	// arrancar: sin ellos ningún barrido volvería a dispararse en la suite— y borra sus plazos; y FireTimer adelanta un
+	// recurrente que el sondeador de la app (otro proceso) recoge y rearma. product-catalog tiene cronómetro por sus purgas.
+	f.Scenario("FL-PROBE-001-G: el reset conserva los recurrentes del cronómetro y FireTimer despierta al sondeador de la app", func(s *Scenario) {
+		count := func(where string) string {
+			return strings.TrimSpace(s.Db("SELECT count(*) FROM keel_timer WHERE " + where))
+		}
+		s.Eventually(func() bool { return count("kind = 'purge:keel_timer'") == "1" }, 20*time.Second, "la app no aseguró su recurrente al arrancar")
+		s.Db(${JSON.stringify(timerProbeInsert)})
+		s.ResetState()
+		if got := count("kind = 'purge:keel_timer'"); got != "1" {
+			s.Fatalf("tras el reset quedan %s recurrentes de la purga de keel_timer, quiero 1", got)
+		}
+		if got := count("kind = 'deadline:Probe.pending'"); got != "0" {
+			s.Errorf("tras el reset quedan %s plazos, quiero 0", got)
+		}
+		s.FireTimer("purge:keel_timer")
+		// El sondeador duerme como mucho timer.max-sleep-ms (30 s en local): lo recoge, lo ejecuta y lo rearma para su cron, en
+		// el futuro. Se compara con la hora de la base, no con el valor de después de adelantarlo: no depende de quién llegue antes.
+		s.Eventually(func() bool { return count("kind = 'purge:keel_timer' AND due_at > "+${JSON.stringify(engine === 'mysql' ? 'UTC_TIMESTAMP(6)' : 'current_timestamp')}) == "1" }, 45*time.Second, "el sondeador de la app no recogió el recurrente adelantado")
+	})
 	f.Scenario("FL-PROBE-001-E: la réplica arranca, responde y se para sin tocar el servidor del flujo", func(s *Scenario) {
 		replicaURL := s.StartReplica()
 		defer s.StopReplica()
@@ -420,13 +452,14 @@ func TestProbeEarlyPanic(t *testing.T) {
   const run1 = bash(projectDir, 'infra/score-scenarios.sh');
   const lines = run1.output;
   const has = (pattern) => pattern.test(lines);
-  step('score: un escenario en verde sale OK', has(/OK\s+FL-PROBE-001-A/) && has(/OK\s+FL-PROBE-001-B/) && has(/OK\s+FL-PROBE-001-C/) && has(/OK\s+FL-PROBE-001-D/) && has(/OK\s+FL-PROBE-001-E/) && has(/OK\s+FL-PROBE-001-F/), has(/OK\s+FL-PROBE-001-E/) && has(/OK\s+FL-PROBE-001-F/) ? '' : lines.slice(-2500));
+  step('score: un escenario en verde sale OK', has(/OK\s+FL-PROBE-001-A/) && has(/OK\s+FL-PROBE-001-B/) && has(/OK\s+FL-PROBE-001-C/) && has(/OK\s+FL-PROBE-001-D/) && has(/OK\s+FL-PROBE-001-E/) && has(/OK\s+FL-PROBE-001-F/) && has(/OK\s+FL-PROBE-001-G/), has(/OK\s+FL-PROBE-001-E/) && has(/OK\s+FL-PROBE-001-F/) ? '' : lines.slice(-2500));
+  step('el reset conserva los recurrentes del cronómetro y FireTimer despierta al sondeador de la app (FL-PROBE-001-G)', has(/OK\s+FL-PROBE-001-G/), has(/FL-PROBE-001-G/) ? '' : 'sin fila FL-PROBE-001-G');
   step('score: los escenarios de un flujo corren en el orden escrito', has(/OK\s+FL-PROBE-005-B/), has(/FL-PROBE-005-B/) ? '' : 'sin fila FL-PROBE-005-B');
   step('score: el que falla sale FALLO con la ruta de su evidencia', has(/FALLO\s+FL-PROBE-002-A\s+\S+\s+build\/keel-failures\/FL-PROBE-002-A\.json/));
   step('score: un pánico es el FALLO de su escenario y la suite sigue', has(/FALLO\s+FL-PROBE-006-A/) && has(/OK\s+FL-PROBE-005-A/));
   step('score: el flujo que no arranca deja sus casos OMITIDOS', has(/OMITIDO\s+FL-PROBE-003-A/), has(/OMITIDO/) ? '' : 'sin fila OMITIDO');
   step('score: y lo nombra como arnés roto, con su causa', has(/ARNÉS/) && has(/TestProbeInit\s+\(arranque del flujo\)/) && has(/keel_tabla_que_no_existe/));
-  step('score: un id FL-* que el documento no declara sale AJENO y no puntúa', has(/AJENO\s+FL-PROBE-099-A/) && !has(/^\s+OK\s+FL-PROBE-099-A/m) && /RESULTADO: KO — 9 OK/.test(lines), lines.match(/RESULTADO:.*/)?.[0] ?? '');
+  step('score: un id FL-* que el documento no declara sale AJENO y no puntúa', has(/AJENO\s+FL-PROBE-099-A/) && !has(/^\s+OK\s+FL-PROBE-099-A/m) && /RESULTADO: KO — 10 OK/.test(lines), lines.match(/RESULTADO:.*/)?.[0] ?? '');
   step('score: un flujo del documento sin prueba sale NO_EJERC', has(/NO_EJERC\s+FL-PROBE-004/) && !has(/NO_EJERC\s+FL-PROBE-00[12356]/));
   step('score: con algo que arbitrar sale con 1', run1.status === 1, `código ${run1.status}`);
   const readJson = (name) => {

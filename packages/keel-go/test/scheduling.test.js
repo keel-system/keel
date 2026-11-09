@@ -35,7 +35,22 @@ const content = (files, suffix) => files.find((file) => file.path.endsWith(suffi
 /** Del Scheduler de keel-spring: método → { cron, withoutTransaction }. */
 function springSchedule(files) {
   const out = new Map();
-  for (const file of files.filter((candidate) => /\/infrastructure\/scheduling\/\w+Scheduler\.java$/.test(candidate.path))) {
+  const schedulers = files.filter((candidate) => /\/infrastructure\/scheduling\/\w+Scheduler\.java$/.test(candidate.path));
+  // Desde el inc. 8 del plan 2.26 el cron vive en el <Operación>ScheduleTimer del cronómetro y el despacho en el método
+  // del Scheduler; sin cronómetro, en su @Scheduled.
+  const bodyOf = (name) => {
+    for (const file of schedulers) {
+      const match = new RegExp(`public void ${name}\\(\\) \\{([\\s\\S]*?)\\n    \\}`).exec(file.content);
+      if (match) return match[1];
+    }
+    return '';
+  };
+  for (const file of files.filter((candidate) => /\/infrastructure\/timer\/\w+ScheduleTimer\.java$/.test(candidate.path))) {
+    const cron = /public String spec\(\) \{\s+return "([^"]+)";/.exec(file.content)[1];
+    const name = /\w+Scheduler\.(\w+)\(\);/.exec(file.content)[1];
+    out.set(name, { cron, withoutTransaction: bodyOf(name).includes('dispatchWithoutTransaction(') });
+  }
+  for (const file of schedulers) {
     for (const [, cron, name, body] of file.content.matchAll(/@Scheduled\(cron = "([^"]+)"\)\s+public void (\w+)\(\) \{([\s\S]*?)\n    \}/g)) {
       out.set(name, { cron, withoutTransaction: body.includes('dispatchWithoutTransaction(') });
     }
@@ -85,7 +100,8 @@ test('un barrido con reclamo va sin transacción abarcadora; un cierre sin recla
   assert.equal(schedule.get('sendPayouts').withoutTransaction, true);
   assert.equal(schedule.get('closePayoutRuns').withoutTransaction, false);
   const handler = content(files, 'internal/application/send_payouts_command_handler.go');
-  assert.match(handler, /internal\/infrastructure\/scheduler\/payout_tasks\.go en TODAS/);
+  // Con el cronómetro (inc. 8 del plan 2.26): su tarea, montada con timer.NewSchedule, en UNA réplica por tick.
+  assert.match(handler.replace(/\n\s*\/\/\s+/g, ' '), /la dispara el cronómetro \(su tarea de internal\/infrastructure\/scheduler\/payout_tasks\.go, montada con timer\.NewSchedule\) en UNA réplica por tick/);
   assert.match(handler, /SIN TRANSACCIÓN ABARCADORA/);
   assert.match(content(files, 'internal/application/close_payout_runs_command_handler.go'), /Corre en UNA transacción/);
 });
@@ -223,7 +239,12 @@ test('el reloj va en el errgroup del arranque, después de los casos de uso, y t
   assert.ok(main.includes('timer.NewRecurring(timer.KindPurgeOutboxEvent, purges.Outbox.Cron, scheduler.PurgeTask("outbox_event", purges.Outbox, postgres.NewOutboxPurge(transactions), logger).Run)'));
   assert.ok(main.indexOf('timer.NewRecurring(') > main.indexOf('scheduler.PurgeSettingsFrom(cfg)'), 'la configuración de las purgas se lee antes');
   assert.match(content(files, 'go.mod'), /\tgithub\.com\/robfig\/cron\/v3 v3\.0\.1\n/);
-  assert.match(content(plan('payout-runs').files, 'cmd/server/main.go'), /tasks = append\(tasks, scheduler\.PayoutTasks\(useCases\)\.\.\.\)/);
+  // Y los schedule tampoco (inc. 8): las tareas del grupo son recurrentes del cronómetro, con drenaje.
+  const payout = content(plan('payout-runs').files, 'cmd/server/main.go');
+  assert.doesNotMatch(payout, /tasks = append\(tasks, scheduler\.PayoutTasks\(useCases\)\.\.\.\)/);
+  assert.ok(payout.includes('for _, group := range [][]scheduler.Task{scheduler.PayoutTasks(useCases)} {'));
+  assert.ok(payout.includes('timer.NewSchedule(task.Name, task.Cron, task.Run, timerSettings)'));
+  assert.ok(payout.includes('append([]timer.Recurring{timerPurge'), 'los schedule van al sondeador con los demás recurrentes');
 });
 
 test('sin la capa api (metering-digest) el arranque cablea igual la base, el broker, los listeners y el reloj; HTTP solo sirve las sondas', () => {

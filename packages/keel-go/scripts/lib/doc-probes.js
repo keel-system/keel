@@ -34,6 +34,8 @@ import { sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
 import { parametersType, usesServiceParameters } from '../../src/scaffold/service-parameters.js';
 import { PROBE_HELPERS, concurrencyCode, dumpFunction, dumpValueObject, ensureFunction, patternTables, rootProbes, sampleFunction, usedValueObjects } from './db-probes.js';
 import { repositoryArgs } from '../../src/scaffold/repositories.js';
+import { claimDrains } from '@keel-system/keel-core/gen/timer-plan';
+import { drainProbes } from './timer-probes.js';
 
 const IMPORTS = [
   'context',
@@ -57,6 +59,7 @@ const IMPORTS = [
   'go.mongodb.org/mongo-driver/v2/mongo/options',
   'internal/application',
   'internal/infrastructure/messaging',
+  'internal/infrastructure/timer',
   'internal/domain',
   'internal/platform/correlation',
   'internal/platform/security',
@@ -698,6 +701,53 @@ function claimProbes(model, root) {
     if (claim.stalled) set.push(`{Key: ${goString(snakeCase(claim.stalled.stampField))}, Value: instantValue(clock)}`);
     if (claim.due) set.push(`{Key: ${goString(snakeCase(claim.due.field))}, Value: instantValue(time.Now().UTC().Add(-time.Minute))}`);
     const other = claim.stalled ? 'time.Now().UTC()' : null;
+    // El drenaje (inc. 8 del plan 2.26): un tick del schedule repite la pasada mientras el reclamo avise del lote lleno.
+    const drain =
+      !claim.stalled && claimDrains(model, claim)
+        ? `
+
+// drainSeed${method} deja count documentos en ${from}, listos para el reclamo, y da sus ids.
+func drainSeed${method}(t *testing.T, first, count int) []uuid.UUID {
+	t.Helper()
+	documents := probeDB.Collection(${collection})
+	ids := make([]uuid.UUID, 0, count)
+	for i := range count {
+		state := sample${root.name}(t, first+i)
+		if _, err := ${repo}.Save(t.Context(), domain.Rehydrate${root.name}(state)); err != nil {
+			t.Fatalf("Save: %v", err)
+		}
+		if _, err := documents.UpdateOne(t.Context(), bson.D{{Key: "_id", Value: uuidValue(state.${id})}}, bson.D{{Key: "$set", Value: bson.D{${set.join(', ')}}}}); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, state.${id})
+	}
+	return ids
+}
+
+// drainLeft${method} son los documentos de ids que siguen en ${from}, sin reclamar.
+func drainLeft${method}(t *testing.T, ids []uuid.UUID) int {
+	t.Helper()
+	in := bson.A{}
+	for _, id := range ids {
+		in = append(in, uuidValue(id))
+	}
+	n, err := probeDB.Collection(${collection}).CountDocuments(t.Context(), bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: in}}}, {Key: ${goString(stateKey)}, Value: ${goString(storedState(model, root, from))}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return int(n)
+}
+
+${drainProbes({
+  method,
+  call: `${repo}.${method}(ctx)`,
+  seed: (count) => `drainSeed${method}(t, ${170 + count * 10}, ${count})`,
+  left: (ids) => `drainLeft${method}(t, ${ids})`,
+  reset: `	if _, err := probeDB.Collection(${collection}).DeleteMany(t.Context(), bson.D{}); err != nil {
+		t.Fatal(err)
+	}`
+})}`
+        : '';
     return `// Test${root.name}_${method}TakesEachDocumentOnce: el reclamo se lleva lo que está en su estado de partida${claim.stalled ? ' y ATASCADO (no lo que acaba de entrar en vuelo)' : ''}, uno por documento hasta el lote, y la pasada siguiente no vuelve a llevárselo: dos réplicas no actúan sobre el mismo. Dentro de una transacción abierta se niega.
 func Test${root.name}_${method}TakesEachDocumentOnce(t *testing.T) {
 	ctx := t.Context()
@@ -744,6 +794,6 @@ func Test${root.name}_${method}TakesEachDocumentOnce(t *testing.T) {
 	if err == nil {
 		t.Error("${method} dentro de una transacción abierta no es un error")
 	}
-}`;
+}${drain}`;
   });
 }

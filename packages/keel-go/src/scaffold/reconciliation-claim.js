@@ -33,6 +33,7 @@ import { sqlDialect } from '../lib/relational-engine.js';
 import { layout, packageFile } from './render.js';
 import { usesDependencies } from './use-cases.js';
 import { BSON, MONGO_DRIVER, MONGO_OPTIONS } from './document-persistence.js';
+import { sweepPassSignal } from './timer.js';
 
 /** ¿Hay barridos de reconciliación que leer? Los hay aunque build no pueda generar el reclamo (lo escribe el agente). */
 export function usesReconciliationSettings(model) {
@@ -396,7 +397,7 @@ func (r *${type}) ${method}(ctx context.Context) ([]*domain.${entity.name}, erro
 			claimed = append(claimed, candidate)
 		}
 	}
-	return claimed, nil
+${sweepPassSignal(model, claim, 'len(candidates)', 'window.BatchSize')}	return claimed, nil
 }`;
   });
 }
@@ -408,7 +409,7 @@ const claimsFor = (model, entityName) => (usesReconciliationClaims(model) ? reco
 function describe(claim) {
   return (
     `reclama los ${claim.entity} que encargaron trabajo a ${claim.dependency}.${claim.activation} y llevan demasiado tiempo sin desenlace (${claim.awaitingField} más viejo que el umbral que declara el diseño). ` +
-    'Reclama, no lee: corre en TODAS las réplicas a la vez, y la lista son SOLO los candidatos que ESTA se llevó. La marca va en reconciliation_claim, confirmada antes de volver, así que las demás réplicas dejan de verlos; y CADUCA (claim-timeout-ms), porque sobrevive también a la réplica que muera con el candidato en vuelo. ' +
+    'Reclama, no lee: puede correr a la vez en varias réplicas (con el cronómetro, cuando un tick se repite al vencer su arriendo), y la lista son SOLO los candidatos que ESTA se llevó. La marca va en reconciliation_claim, confirmada antes de volver, así que las demás réplicas dejan de verlos; y CADUCA (claim-timeout-ms), porque sobrevive también a la réplica que muera con el candidato en vuelo. ' +
     'No recibe el lote: los tres números —umbral, caducidad y cota— salen de config/parameters/<perfil>/reconciliation.yaml y los lee el adaptador. No cambia el estado. Actúa sobre lo que devuelve FUERA de esta llamada. ' +
     'Confirma en SU PROPIA transacción, así que no corre dentro de otra: la tarea del reloj despacha su operación con application.WithoutTransaction, y llamarlo con una transacción abierta devuelve un error en vez de unirse a ella.'
   );
@@ -508,7 +509,7 @@ func (r *${type}) ${method}(ctx context.Context) ([]*domain.${entity.name}, erro
 			}
 			claimed = append(claimed, found...)
 		}
-		return nil
+${sweepPassSignal(model, claim, 'len(ids)', 'window.BatchSize', '		')}		return nil
 	})
 	if err != nil {
 		return nil, err

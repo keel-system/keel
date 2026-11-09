@@ -28,6 +28,7 @@ import { enumConstant, goExported } from '../lib/go-projection.js';
 import { goFileName } from './render.js';
 import { handlerType } from './services.js';
 import { claimMethod } from './claim.js';
+import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { callMethod, clientParam, usesGoHttpClients } from './http-clients.js';
 import { messageStruct, usesGoMessaging, usesGoOutbox, usesGoProcessedEvents } from './messaging.js';
 import { naturalKeyFinder, occupantFinders } from './repositories.js';
@@ -289,7 +290,7 @@ function sweepClaimChecks(model) {
         // Leer el estado de partida con un finder es EXACTAMENTE el fallo: la misma página en todas las réplicas.
         forbid: stateReadingFinder(model, claims.map((claim) => claim.entity)),
         why:
-          `el barrido corre en TODAS las réplicas: RECLAMA su lote con ${claims.map((claim) => `${claimMethod(claim)}()`).join(' / ')}, ` +
+          `el barrido puede correr a la vez en varias réplicas: RECLAMA su lote con ${claims.map((claim) => `${claimMethod(claim)}()`).join(' / ')}, ` +
           'que build generó en el puerto, no lo lee con un finder'
       };
     }
@@ -304,7 +305,7 @@ function sweepClaimChecks(model) {
       deny: generated.join('|'),
       exclude: '(^$)',
       why:
-        `el barrido corre en TODAS las réplicas, así que su trabajo se RECLAMA con una escritura condicional sobre ` +
+        `el barrido puede correr a la vez en varias réplicas, así que su trabajo se RECLAMA con una escritura condicional sobre ` +
         `${entities.join(', ')} —no se lee con un finder—, y no aparece ninguna. build NO pudo generarla (su aviso dice por qué), ` +
         `así que la escribes tú CON SU COTA TEMPORAL, en el adaptador de ${entities.join(', ')}`
     };
@@ -387,7 +388,7 @@ function reconciliationChecks(model) {
         // La lectura por estado es EXACTAMENTE el patrón que el reclamo evita.
         forbid: stateReadingFinder(model, [claim.entity]),
         why:
-          `el barrido corre en TODAS las réplicas: toma su lote con ${goExported(claim.method)}(), que build generó en domain.${claim.entity}Repository ` +
+          `el barrido puede correr a la vez en varias réplicas: toma su lote con ${goExported(claim.method)}(), que build generó en domain.${claim.entity}Repository ` +
           '—una marca persistida que caduca, y solo lo que esta réplica se llevó—, no con un finder ni con un reclamo aparte'
       });
     }
@@ -407,7 +408,9 @@ function reconciliationChecks(model) {
   }
   if (pending.length > 0) {
     // Los archivos que build genera con el patrón: encontrarlos probaría lo que build hizo.
-    const exclude = '/(reconciliation|claims|sweep|outbox|processed_events|idempotency_store|purges)[.]go';
+    // Y lo del cronómetro (incs. 7 y 8 del plan 2.26): el reclamo de keel_timer lleva su LIMIT y su BatchSize, y la señal
+    // del drenaje nombra el lote; los dos son de build y satisfarían el check por su cuenta.
+    const exclude = '/(reconciliation|claims|sweep|outbox|processed_events|idempotency_store|purges|timers|timer|poller|schedules|sweep_pass)[.]go';
     const deny = [...generated, '[)] Save[(]', 'func write[A-Z]', 'interface[[:space:]]*[{]'].join('|');
     checks.push(
       {
@@ -421,7 +424,7 @@ function reconciliationChecks(model) {
         exclude,
         why:
           'ninguna escritura reclama candidatos con una MARCA PERSISTIDA (claimReconciliation sobre reconciliation_claim, o un UPDATE condicional): ' +
-          'el barrido corre en TODAS las réplicas, y un lock solo aísla mientras dura su transacción, con la llamada al proveedor en medio'
+          'el barrido puede correr a la vez en varias réplicas, y un lock solo aísla mientras dura su transacción, con la llamada al proveedor en medio'
       },
       {
         group: 'reconciliation',
@@ -461,6 +464,21 @@ function reconciliationChecks(model) {
       forbid: ['TODO'],
       why: `el disparador de ${operations.map((operation) => operation.name).join(', ')}: la tarea del reloj despacha su mensaje`
     });
+    // Y el REGISTRO en el cronómetro (inc. 8 del plan 2.26): el arranque monta cada tarea del grupo como recurrente de
+    // keel_timer (timer.NewSchedule, kind schedule:<operación>). Lo escribe build; sin él, la reconciliación no se dispara
+    // nunca y nada lo dice.
+    // El sujeto se llama como el <Operación>ScheduleTimer de los otros tres, aunque en Go sea el arranque.
+    for (const operation of operations.filter((candidate) => scheduledByTimer(model, candidate.name))) {
+      checks.push({
+        group: 'reconciliation',
+        subject: `${goExported(operation.name)}ScheduleTimer · registro en el cronómetro`,
+        class: 'main',
+        require: ['timer[.]NewSchedule[(]task[.]Name', `scheduler[.]${owner}Tasks[(]useCases[)]`],
+        why:
+          `el barrido ${operation.name} lo dispara el cronómetro: el arranque monta las tareas de ${owner}Tasks como recurrentes ` +
+          `de keel_timer (timer.NewSchedule, kind schedule:${operation.name}). Sin ese registro, el barrido no se dispara nunca y nada lo dice`
+      });
+    }
   }
   return checks;
 }

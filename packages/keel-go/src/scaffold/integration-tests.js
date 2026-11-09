@@ -40,7 +40,8 @@ import { layout, packageFile } from './render.js';
 import { CREDENTIALS_FILE, CREDENTIALS_IMPORTS, closingCredentialExpression, credentialsBody, smokeCredentialsCase } from './identity-harness.js';
 import { MESSAGING_HARNESS_FILE, messagingHarnessBody, messagingHarnessImports, messagingSmokeCase, usesMessagingHarness } from './messaging-harness.js';
 import { PAYMENT_HARNESS_FILE, PAYMENT_HARNESS_IMPORTS, paymentHarnessBody } from './payment-harness.js';
-import { relationalDeadlineAgingMembers } from './timer.js';
+import { fireScheduleCall, fireScheduleMember, fireTimerMember, relationalDeadlineAgingMembers } from './timer.js';
+import { fireTimerScript } from '@keel-system/keel-core/gen/mongo-probes';
 import { HTTP_STUB_HARNESS_FILE, HTTP_STUB_HARNESS_IMPORTS, httpStubHarnessBody, httpStubSmokeCase, reconciliationAgingMembers, usesHttpStub } from './http-stub-harness.js';
 import { usesClusterScenarios } from '@keel-system/keel-core/gen/cluster-scenarios';
 import { statementCountLaunch, statementCountMembers, statementCountSmokeCase } from './statement-count.js';
@@ -134,7 +135,10 @@ export function rescueMembers(model) {
     }))
   );
   const known = probes.map((probe) => probe.operation).join(', ');
+  const operations = probes.map((probe) => probe.operation);
+  const fires = fireScheduleMember(model, operations).length > 0;
   return [
+    ...fireScheduleMember(model, operations),
     String.raw`// rescue son las sentencias del rescate de un barrido: atascar una fila, ponerla en vuelo ahora y contar las que
 // quedaron en vuelo sin reloj. Las dos primeras acaban en «WHERE id = »: el id lo pone idLiteral.
 type rescue struct {
@@ -147,12 +151,13 @@ ${rows.join('\n')}
 }
 
 // StallInFlight deja la fila id EN VUELO con el reloj infinitamente rancio: el estado exacto en el que queda una réplica
-// que murió con ella en la mano, que es lo que el rescate busca. No dispara el barrido —lo dispara su cron, como en
-// producción— y no siembra la fila: mueve una creada por la API.
+// que murió con ella en la mano, que es lo que el rescate busca. ${fires ? `Adelanta además el barrido en el cronómetro
+// (FireTimer): vence ya y lo ejecuta UNA réplica en su próxima pasada` : `No dispara el barrido —lo dispara su cron, como en
+// producción—`}, y no siembra la fila: mueve una creada por la API.
 func (s *Scenario) StallInFlight(operation, id string) {
 	s.Helper()
 	s.Db(s.rescueOf(operation).stall + idLiteral(id))
-}
+${fireScheduleCall(model, operations, 'operation')}}
 
 // PutInFlight es lo mismo con el reloj a AHORA: la fila acaba de entrar en vuelo y hay alguien trabajando en ella. Es la
 // mitad que separa rescatar de robarle el trabajo a quien lo está haciendo: un rescate sin cota temporal pasa el
@@ -160,7 +165,7 @@ func (s *Scenario) StallInFlight(operation, id string) {
 func (s *Scenario) PutInFlight(operation, id string) {
 	s.Helper()
 	s.Db(s.rescueOf(operation).put + idLiteral(id))
-}
+${fireScheduleCall(model, operations, 'operation')}}
 
 // InFlightWithoutClock es cuántas filas quedaron EN VUELO con el reloj sin estampar. Tiene que valer cero siempre: si el
 // reclamo mueve el estado sin estampar la marca en el MISMO UPDATE, la fila que caiga en esa ventana queda irrescatable.
@@ -326,6 +331,9 @@ func (s *Scenario) Db(sql string) string {
   }
   // Sobre documentos, MongoEval y el rescate con los scripts de mongosh (document-harness.js).
   if (documentProbe(model)) helpers.push(...documentFlowMembers(model));
+  // El cronómetro (DSL 2.26, inc. 8): FireTimer adelanta un recurrente; los helpers del rescate y de la reconciliación lo
+  // llaman tras fabricar su precondición.
+  if (usesRelational(model) ? dbProbe(model) : documentProbe(model)) helpers.push(...fireTimerMember(model, fireTimerScript));
   const rescue = rescueMembers(model);
   const aging = reconciliationAgingMembers(model);
   // El plazo de negocio (DSL 2.26): AgeForDeadline envejece el since y el temporizador a la vez.

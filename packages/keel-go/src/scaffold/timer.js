@@ -46,6 +46,7 @@ import {
   TIMER_PURGE_KIND,
   TIMER_SWITCH,
   CRON_UTC_CASES,
+  scheduleKind,
   timerStatements
 } from '@keel-system/keel-core/gen/timer-store';
 import { ageDeadlineScript } from '@keel-system/keel-core/gen/mongo-probes';
@@ -61,9 +62,10 @@ import { sentinelOf } from './errors.js';
 import { parametersType } from './service-parameters.js';
 import { contractOf, messageComponents, messageType, operations, useCaseField } from './services.js';
 import { usesCorrelation } from './correlation.js';
-import { schedulingYaml, usesScheduling } from './scheduling.js';
+import { scheduledServices, schedulingYaml, tasksFunc, usesScheduling } from './scheduling.js';
 import { tablePurges } from './purge.js';
-import { timerPurges, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
+import { agingSweeps } from '@keel-system/keel-core/gen/aging-targets';
+import { DRAIN_CASES, claimDrains, clusterRecurrings, scheduledByTimer, timerPurges, timerSchedules, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { pascalCase } from '@keel-system/keel-core/gen';
 
 export { usesDeadlines, usesTimer, deadlineHandlerNote, lateTransitionNote, deadlineOf };
@@ -71,6 +73,27 @@ export { usesDeadlines, usesTimer, deadlineHandlerNote, lateTransitionNote, dead
 /** La constante del kind de la purga de una tabla del generador: `KindPurgeOutboxEvent`. */
 export function purgeKindConstant(table) {
   return `KindPurge${pascalCase(table)}`;
+}
+
+/** La constante del kind del schedule de una operación: `KindScheduleSendPayouts`. */
+export function scheduleKindConstant(operation) {
+  return `KindSchedule${goExported(operation)}`;
+}
+
+/** ¿Hay `schedule` sobre el cronómetro (inc. 8 del plan 2.26)? Entonces se emiten `NewSchedule` y la señal del drenaje. */
+export function usesTimerSchedules(model) {
+  return timerSchedules(model).length > 0;
+}
+
+/**
+ * El aviso del lote lleno en un reclamo GENERADO cuyo barrido corre sobre el cronómetro (`claimDrains`): la pasada se lo
+ * dice al tick, que la repite. `size` es cuántos candidatos leyó y `batch` su cota.
+ */
+export function sweepPassSignal(model, claim, size, batch, indent = '\t') {
+  if (!claimDrains(model, claim)) return '';
+  return `${indent}// Lote lleno: puede que queden candidatos, y el tick del cronómetro repite la pasada (drenaje).
+${indent}application.SweepClaimed(ctx, ${size}, ${batch})
+`;
 }
 
 /** El paquete del cronómetro. */
@@ -350,6 +373,15 @@ export function generate(model) {
     // La prueba del sondeador es INTERNA al paquete (package timer): usa sus tipos sin calificar, y con el paquete externo
     // (timer_test) no compilaba (lo midió go-check).
     { path: `${timerPkg.dir}/poller_test.go`, content: packageFile(model, timerPkg, { imports: ['context', 'errors', 'log/slog', 'testing', 'testing/synctest', 'time', 'github.com/google/uuid'], body: pollerTest() }) },
+    // Los schedule de las operaciones sobre el cronómetro (inc. 8): el recurrente que drena y la señal del lote lleno, que
+    // vive en la aplicación porque también la llama el handler del agente cuando reclama él.
+    ...(usesTimerSchedules(model)
+      ? [
+          file('schedules', ['context', 'time', 'internal/application'], SCHEDULES_BODY),
+          { path: `${timerPkg.dir}/schedules_test.go`, content: packageFile(model, timerPkg, { imports: ['context', 'errors', 'testing', 'testing/synctest', 'time', 'internal/application'], body: schedulesTest() }) },
+          { path: `${application.dir}/sweep_pass.go`, content: packageFile(model, application, { imports: ['context', 'sync/atomic'], body: SWEEP_PASS_BODY }) }
+        ]
+      : []),
     {
       path: `${store.dir}/timers.go`,
       content: packageFile(model, store, {
@@ -451,6 +483,10 @@ function kindsBody(model) {
     rows.push({ text: `\t// ${purgeKindConstant(purge.table)} es la purga de ${purge.table}: un recurrente en modo clúster.` });
     rows.push({ indent: '\t', cells: [purgeKindConstant(purge.table), `= ${goString(purge.kind)}`] });
   }
+  for (const schedule of timerSchedules(model)) {
+    rows.push({ text: `\t// ${scheduleKindConstant(schedule.operation)} es el schedule de ${schedule.operation}: un recurrente en modo clúster que drena.` });
+    rows.push({ indent: '\t', cells: [scheduleKindConstant(schedule.operation), `= ${goString(schedule.kind)}`] });
+  }
   rows.push({ text: '\t// NilEntityID es el entity_id de un recurrente: no tiene entidad, y la unicidad (kind, entity_id) necesita un valor.' });
   rows.push({ indent: '\t', cells: ['NilEntityID', `= ${goString(NIL_ENTITY_ID)}`] });
   return `
@@ -483,6 +519,7 @@ export function timerYaml(profile) {
     line(P.leaseMs),
     line(P.maxAttempts),
     line(P.retryDelayMs),
+    line(P.drainBudgetMs),
     line(P.retentionDays),
     '  purge:',
     '    # La purga de la propia tabla, evaluada en UTC.',
@@ -592,6 +629,9 @@ type Settings struct {
 	MaxAttempts int
 	// RetryDelay es cuándo se reintenta un temporizador que falló.
 	RetryDelay time.Duration
+	// DrainBudget es lo más que dura el tick de un schedule que drena: menor que el arriendo, o el tick lo repetiría otra
+	// réplica en paralelo (T4).
+	DrainBudget time.Duration
 	// RetentionDays es lo que la purga de la tabla deja de lo vencido sin reclamar.
 	RetentionDays int
 	// PurgeCron es cuándo corre esa purga, en UTC.
@@ -609,6 +649,7 @@ func SettingsFrom(cfg *config.Config) (Settings, error) {
 		Lease:         time.Duration(read.positive(${read(P.leaseMs)})) * time.Millisecond,
 		MaxAttempts:   read.positive(${read(P.maxAttempts)}),
 		RetryDelay:    time.Duration(read.positive(${read(P.retryDelayMs)})) * time.Millisecond,
+		DrainBudget:   time.Duration(read.positive(${read(P.drainBudgetMs)})) * time.Millisecond,
 		RetentionDays: read.positive(${read(P.retentionDays)}),
 		PurgeCron:     read.text(${goString(P.purgeCron.key)}, ${goString(P.purgeCron.default)}),
 	}
@@ -847,14 +888,12 @@ ${correlated ? `	// Cada disparo es una TRAZA nueva: no la origina ninguna petic
 // mecanismo gestiona las suyas), y lo rearma con el siguiente tick desde la hora de la base de DESPUÉS (R2). Si otra
 // réplica le quitó la fila (el tick duró más que el arriendo), el rearme no casa con la valla y no pisa nada. Un pánico es
 // un fallo más: no tumba la réplica.
-func (p *Poller) tick(ctx context.Context, recurring Recurring, timer Claimed, token uuid.UUID) (err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("pánico en el temporizador %s: %v", timer.Kind, recovered)
-		}
-	}()
-	if err = recurring.Tick(ctx); err != nil {
-		return err
+func (p *Poller) tick(ctx context.Context, recurring Recurring, timer Claimed, token uuid.UUID) error {
+	// Un tick que falla NO se aparca (RC-8): se rearma para el siguiente, como hacía su cron. Aparcarlo tras MaxAttempts
+	// fallos —una base caída unos minutos— dejaría el barrido o la purga sin reloj para siempre, y asegurar al arrancar no
+	// toca una fila con el mismo spec.
+	if err := runTick(ctx, recurring); err != nil {
+		p.logger.WarnContext(ctx, "temporizador: el tick falló; se rearma para el siguiente", "timer", timer.ID, "kind", timer.Kind, "error", err)
 	}
 	after, err := p.store.DBNow(ctx)
 	if err != nil {
@@ -865,6 +904,16 @@ func (p *Poller) tick(ctx context.Context, recurring Recurring, timer Claimed, t
 		return err
 	}
 	return p.store.Reschedule(ctx, timer.ID, token, next)
+}
+
+// runTick ejecuta el tick de un recurrente. Un pánico es un fallo más: no tumba la réplica.
+func runTick(ctx context.Context, recurring Recurring) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("pánico en el temporizador %s: %v", recurring.Kind(), recovered)
+		}
+	}()
+	return recurring.Tick(ctx)
 }
 
 // Armed avisa de un temporizador armado en ESTA réplica (tras el commit): si vence antes de lo que el bucle iba a dormir,
@@ -1237,7 +1286,7 @@ func (failing) Handle(context.Context, Claimed, time.Time) (Outcome, error) {
 }
 
 func testSettings() Settings {
-	return Settings{Enabled: true, MaxSleep: 30 * time.Second, BatchSize: 50, Lease: time.Minute, MaxAttempts: 2, RetryDelay: 0, RetentionDays: 7, PurgeCron: "0 30 5 * * *"}
+	return Settings{Enabled: true, MaxSleep: 30 * time.Second, BatchSize: 50, Lease: time.Minute, MaxAttempts: 2, RetryDelay: 0, DrainBudget: 50 * time.Second, RetentionDays: 7, PurgeCron: "0 30 5 * * *"}
 }
 
 func TestElSiguienteTickSeCalculaEnUTC(t *testing.T) {
@@ -1320,6 +1369,42 @@ func TestLaPurgaEsUnRecurrenteQueSeAseguraUnaVez(t *testing.T) {
 		}
 		if len(store.rows) != 1 {
 			t.Fatalf("asegurar dos veces dejó %d filas", len(store.rows))
+		}
+	})
+}
+
+// broken es un recurrente cuyo tick falla siempre.
+type broken struct{}
+
+func (broken) Kind() string { return "schedule:probe" }
+
+func (broken) Spec() string { return "0 * * * * *" }
+
+func (broken) Tick(context.Context) error { return errors.New("fallo de prueba") }
+
+func TestUnRecurrenteQueFallaSeRearmaYNoSeAparca(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// RC-8: con más fallos seguidos que MaxAttempts, el recurrente sigue armado para su siguiente tick.
+		store := newMemoryStore()
+		poller, err := NewPoller(store, nil, []Recurring{broken{}}, testSettings(), slog.New(slog.DiscardHandler))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := poller.EnsureRecurring(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		for range testSettings().MaxAttempts + 1 {
+			<-time.After(time.Minute)
+			if _, err := poller.PollOnce(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if parked, _ := store.ParkedCount(t.Context()); parked != 0 {
+			t.Fatalf("un recurrente que falla quedó aparcado")
+		}
+		row := store.rows["schedule:probe|"+NilEntityID]
+		if !row.claimed.DueAt.After(time.Now()) || row.claimed.Attempts != 0 {
+			t.Errorf("tras fallar quedó para %s con %d intentos; quería el siguiente tick y cero", row.claimed.DueAt, row.claimed.Attempts)
 		}
 	})
 }
@@ -1918,6 +2003,164 @@ func (s *TimerStore) Purge(ctx context.Context, retentionDays int) (int64, error
 `;
 }
 
+// ─── Los schedule sobre el cronómetro (inc. 8) ───────────────────────────────────────────────────
+
+const SCHEDULES_BODY = `
+// ScheduleKindPrefix es el prefijo del kind del schedule de una operación: schedule:<operación>, contrato con los otros
+// generadores (keel-core/gen/timer-store.js).
+const ScheduleKindPrefix = "schedule:"
+
+// NewSchedule es el schedule de una operación como recurrente del cronómetro en modo clúster: cada tick lo ejecuta UNA
+// réplica, la que gana su fila en ${KEEL_TIMER.table}. Su cron es el de su tarea (scheduler.<Grupo>Tasks), que es el del
+// diseño con el segundo repartido. Un cron inválido no deja arrancar.
+//
+// Por eso el tick DRENA: con una sola réplica trabajando, repite la pasada mientras el lote salga lleno —lo avisa el
+// reclamo con application.SweepClaimed— y para cuando sale a medias, cuando llega su siguiente tick o cuando agota
+// ${TIMER_PARAMETERS.drainBudgetMs.key}, que es menor que el arriendo. Lo que quede pasa al siguiente tick. Sin aviso, una
+// pasada por tick.
+//
+// El tick sigue siendo AL MENOS UNA VEZ: si la réplica muere a mitad, otra lo repite al vencer el arriendo. Por eso el
+// barrido sigue reclamando sus filas.
+func NewSchedule(operation, spec string, pass func(ctx context.Context) error, settings Settings) (Recurring, error) {
+	budget := settings.DrainBudget
+	return NewRecurring(ScheduleKindPrefix+operation, spec, func(ctx context.Context) error {
+		return drain(ctx, spec, budget, pass)
+	})
+}
+
+// drain repite la pasada mientras salga llena y quede presupuesto: hasta el siguiente tick de spec, y nunca más que
+// maxBudget. La primera pasada va siempre.
+func drain(ctx context.Context, spec string, maxBudget time.Duration, pass func(ctx context.Context) error) error {
+	start := time.Now()
+	next, err := NextTick(spec, start)
+	if err != nil {
+		return err
+	}
+	budget := min(next.Sub(start), maxBudget)
+	for {
+		full, err := application.RunSweepPass(ctx, pass)
+		if err != nil {
+			return err
+		}
+		if !full || time.Since(start) >= budget {
+			return nil
+		}
+	}
+}
+`;
+
+const SWEEP_PASS_BODY = `
+// La señal del DRENAJE de un barrido (DSL 2.26, incremento 8): una pasada que reclamó su lote lleno puede dejar
+// candidatos, y el tick del cronómetro la repite.
+//
+// Un tick en modo clúster lo ejecuta UNA réplica, así que, si cada tick hiciera una sola pasada, el barrido rendiría lo de
+// una réplica y no lo de todas. Quien reclama sabe si el lote salió lleno: lo avisan los reclamos que genera build, y TÚ,
+// si el handler reclama su lote a mano, con SweepClaimed(ctx, reclamadas, lote). Sin aviso, el tick hace una pasada, que
+// es correcto pero más lento con atrasos grandes. Fuera de un tick (una prueba, un despacho por otra puerta) no hace nada.
+
+// sweepPassKey es la clave de la pasada en curso en el contexto.
+type sweepPassKey struct{}
+
+// sweepPass es la pasada en curso: si algún reclamo de ella salió lleno.
+type sweepPass struct {
+	full atomic.Bool
+}
+
+// SweepClaimed lo llama quien reclama: claimed candidatos de una cota de batchSize. Lleno = puede que queden.
+func SweepClaimed(ctx context.Context, claimed, batchSize int) {
+	if pass, ok := ctx.Value(sweepPassKey{}).(*sweepPass); ok && batchSize > 0 && claimed >= batchSize {
+		pass.full.Store(true)
+	}
+}
+
+// RunSweepPass ejecuta una pasada y dice si algún reclamo de ella salió lleno. Lo llama el tick del cronómetro.
+func RunSweepPass(ctx context.Context, pass func(ctx context.Context) error) (bool, error) {
+	current := &sweepPass{}
+	err := pass(context.WithValue(ctx, sweepPassKey{}, current))
+	return current.full.Load(), err
+}
+`;
+
+/** La prueba interna de `NewSchedule`: los casos del drenaje de keel-core (DR-1 a DR-3) con el reloj falso. */
+function schedulesTest() {
+  return `
+// sweeping es una pasada que reclama un lote lleno las primeras full veces y uno a medias después, y tarda took en cada
+// una; cuenta sus pasadas en count.
+func sweeping(full int, took time.Duration, count *int) func(ctx context.Context) error {
+	return func(ctx context.Context) error {
+		*count++
+		if took > 0 {
+			<-time.After(took)
+		}
+		if *count <= full {
+			application.SweepClaimed(ctx, 10, 10)
+		} else {
+			application.SweepClaimed(ctx, 3, 10)
+		}
+		return nil
+	}
+}
+
+func tickOf(t *testing.T, pass func(ctx context.Context) error) error {
+	t.Helper()
+	schedule, err := NewSchedule("probe", "0 * * * * *", pass, testSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if schedule.Kind() != ScheduleKindPrefix+"probe" {
+		t.Fatalf("kind = %q", schedule.Kind())
+	}
+	return schedule.Tick(t.Context())
+}
+
+func TestElTickDrenaMientrasElLoteSalgaLleno(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// ${DRAIN_CASES[0].id}: ${DRAIN_CASES[0].what}.
+		var count int
+		if err := tickOf(t, sweeping(3, 0, &count)); err != nil || count != 4 {
+			t.Errorf("tres lotes llenos y uno a medias: %d pasadas (%v), quería 4", count, err)
+		}
+	})
+}
+
+func TestConElLoteAMediasElTickHaceUnaPasada(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// ${DRAIN_CASES[1].id}: ${DRAIN_CASES[1].what}.
+		var count int
+		if err := tickOf(t, sweeping(0, 0, &count)); err != nil || count != 1 {
+			t.Errorf("un lote a medias: %d pasadas (%v), quería 1", count, err)
+		}
+	})
+}
+
+func TestAgotadoElPresupuestoElTickPara(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// ${DRAIN_CASES[2].id}: ${DRAIN_CASES[2].what}. El siguiente tick está a 60 s y el presupuesto es de 50 s: con
+		// pasadas de 20 s, la tercera lo agota.
+		var count int
+		if err := tickOf(t, sweeping(1000, 20*time.Second, &count)); err != nil || count != 3 {
+			t.Errorf("siempre lleno con pasadas de 20 s: %d pasadas (%v), quería 3", count, err)
+		}
+	})
+}
+
+func TestUnaPasadaQueFallaCortaElTick(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		failure := errors.New("fallo de prueba")
+		var count int
+		err := tickOf(t, func(ctx context.Context) error {
+			count++
+			application.SweepClaimed(ctx, 10, 10)
+			return failure
+		})
+		if !errors.Is(err, failure) || count != 1 {
+			t.Errorf("una pasada que falla: %d pasadas (%v), quería 1 y su error", count, err)
+		}
+	})
+}
+`;
+}
+
 // ─── El arranque ─────────────────────────────────────────────────────────────────────────────────
 
 /** Los plazos vigentes, antes de los repositorios (que arman con ellos). */
@@ -1953,6 +2196,25 @@ export function timerWiring(model, store, repositoryCall) {
     };
   });
   const recurrings = ['timerPurge', ...purges.map((purge) => purge.variable)];
+  // Los schedule de las operaciones (inc. 8): las tareas de su grupo, que ya no van al reloj de cada réplica sino al
+  // cronómetro, en modo clúster y con drenaje.
+  const groups = usesTimerSchedules(model) ? scheduledServices(model).map(({ service }) => `scheduler.${tasksFunc(service)}(useCases)`) : [];
+  const schedules =
+    groups.length > 0
+      ? `	// Los schedule de las operaciones: UNA réplica por tick, la que gana su fila, y el tick drena (timer.NewSchedule).
+	var schedules []timer.Recurring
+	for _, group := range [][]scheduler.Task{${groups.join(', ')}} {
+		for _, task := range group {
+			schedule, err := timer.NewSchedule(task.Name, task.Cron, task.Run, timerSettings)
+			if err != nil {
+				return fmt.Errorf("el schedule de %s: %w", task.Name, err)
+			}
+			schedules = append(schedules, schedule)
+		}
+	}
+`
+      : '';
+  const recurringList = groups.length > 0 ? `append([]timer.Recurring{${recurrings.join(', ')}}, schedules...)` : `[]timer.Recurring{${recurrings.join(', ')}}`;
   return `	timerSettings, err := timer.SettingsFrom(cfg)
 	if err != nil {
 		return fmt.Errorf("configuración del cronómetro: %w", err)
@@ -1964,7 +2226,7 @@ export function timerWiring(model, store, repositoryCall) {
 	if err != nil {
 		return fmt.Errorf("la purga del cronómetro: %w", err)
 	}
-${purges.map((purge) => purge.code).join('')}	poller, err := timer.NewPoller(timerStore, ${handlers.length > 0 ? `[]timer.Handler{\n${handlers.join('\n')}\n\t}` : 'nil'}, []timer.Recurring{${recurrings.join(', ')}}, timerSettings, logger)
+${purges.map((purge) => purge.code).join('')}${schedules}	poller, err := timer.NewPoller(timerStore, ${handlers.length > 0 ? `[]timer.Handler{\n${handlers.join('\n')}\n\t}` : 'nil'}, ${recurringList}, timerSettings, logger)
 	if err != nil {
 		return err
 	}
@@ -2014,6 +2276,101 @@ func (s *Scenario) AgeForDeadline(entity, id string, seconds int64) {
 	s.Db(fmt.Sprintf(statements[0], seconds, idLiteral(id)))
 	s.Db(fmt.Sprintf(statements[1], seconds*1000, idLiteral(id)))
 }`];
+}
+
+/** ¿Puede el arnés adelantar un recurrente? Con cronómetro y con su sentencia `fire` (o su script documental). */
+export function firesTimer(model) {
+  if (!usesTimer(model)) return false;
+  return !usesRelational(model) || TIMER_ENGINES.includes(relationalEngine(model));
+}
+
+/**
+ * `FireTimer(kind)` en el arnés: adelanta un recurrente del cronómetro para que venza YA, con la hora de la base. Es la
+ * sentencia `fire` de keel-core (o `fireTimerScript` de mongo-probes.js), la misma que el AbstractFlowIT de keel-spring.
+ */
+export function fireTimerMember(model, fireTimerScript) {
+  if (!firesTimer(model)) return [];
+  const kinds = clusterRecurrings(model).map((recurring) => recurring.kind).join(', ');
+  const statement = usesRelational(model)
+    ? `s.Db(${goString(timerStatements(relationalEngine(model)).fire.split(':kind')[0])} + "'" + strings.ReplaceAll(kind, "'", "''") + "'")`
+    : (() => {
+        const [prefix, suffix] = fireTimerScript('{kind}').split('{kind}');
+        return `s.MongoEval(${goString(prefix)} + kind + ${goString(suffix)})`;
+      })();
+  return [
+    `// FireTimer adelanta el temporizador recurrente kind del cronómetro: vence YA, con la hora de la base, y sin arriendo.
+//
+// No dispara nada: el sondeador lo recoge en su próxima pasada (como mucho timer.max-sleep-ms), en UNA réplica, como en
+// producción. Es lo que hace que un escenario de barrido no espere al cron. Los helpers que fabrican la precondición de un
+// rescate o de una reconciliación ya lo llaman por ti. Recurrentes de este servicio: ${kinds}.
+func (s *Scenario) FireTimer(kind string) {
+	s.Helper()
+	${statement}
+}`
+  ];
+}
+
+/** Los `schedule` sobre el cronómetro de estas operaciones: `[{ operation, kind }]`. */
+const timerSchedulesOf = (model, operations) => timerSchedules(model).filter((schedule) => operations.includes(schedule.operation));
+
+/** `fireSchedule(operation)`, para el helper que fabrica la precondición de un barrido de esas operaciones (o nada). */
+export function fireScheduleMember(model, operations) {
+  const schedules = firesTimer(model) ? timerSchedulesOf(model, operations) : [];
+  if (schedules.length === 0) return [];
+  const rows = alignRows(schedules.map((schedule) => ({ indent: '\t', cells: [`${goString(schedule.operation)}:`, `${goString(schedule.kind)},`] })));
+  return [
+    `// scheduleTimers es el kind del schedule de cada barrido que dispara el cronómetro.
+var scheduleTimers = map[string]string{
+${rows.join('\n')}
+}
+
+// fireSchedule adelanta el barrido operation en el cronómetro (FireTimer), si lo dispara él.
+func (s *Scenario) fireSchedule(operation string) {
+	s.Helper()
+	if kind, ok := scheduleTimers[operation]; ok {
+		s.FireTimer(kind)
+	}
+}`
+  ];
+}
+
+/** La llamada con la que un helper adelanta el barrido que recoge lo que acaba de fabricar (o nada). */
+export function fireScheduleCall(model, operations, expression) {
+  return fireScheduleMember(model, operations).length > 0 ? `\ts.fireSchedule(${expression})\n` : '';
+}
+
+/** Los barridos sobre el cronómetro que recogen lo que envejece `AgeForReconciliation`, por activación. */
+function agedTimerSweeps(model) {
+  if (!firesTimer(model)) return [];
+  return [...agingSweeps(model)]
+    .map(([key, operations]) => [key, operations.filter((operation) => scheduledByTimer(model, operation))])
+    .filter(([, operations]) => operations.length > 0);
+}
+
+/** `fireAgedSweeps(activation)`, para `AgeForReconciliation` (o nada). */
+export function fireAgedMember(model) {
+  const aged = agedTimerSweeps(model);
+  if (aged.length === 0) return [];
+  const rows = alignRows(aged.map(([key, operations]) => ({ indent: '\t', cells: [`${goString(key)}:`, `{${operations.map((operation) => goString(scheduleKind(operation))).join(', ')}},`] })));
+  return [
+    `// agedSweeps son los schedule del cronómetro que recogen lo que envejece AgeForReconciliation, por activación.
+var agedSweeps = map[string][]string{
+${rows.join('\n')}
+}
+
+// fireAgedSweeps adelanta en el cronómetro los barridos que recogen la activación envejecida.
+func (s *Scenario) fireAgedSweeps(activation string) {
+	s.Helper()
+	for _, kind := range agedSweeps[activation] {
+		s.FireTimer(kind)
+	}
+}`
+  ];
+}
+
+/** La llamada de `AgeForReconciliation` a `fireAgedSweeps` (o nada). */
+export function fireAgedCall(model, expression) {
+  return agedTimerSweeps(model).length > 0 ? `\ts.fireAgedSweeps(${expression})\n` : '';
 }
 
 /** `AgeForDeadline` sobre documentos, con el script de keel-core (`ageDeadlineScript`). */

@@ -10,8 +10,9 @@ local y test, unos segundos). Un lote acotado por pasada —`h.paymentReconcilia
 
 ## El reclamo
 
-El reloj corre en todas las réplicas y despacha el barrido **sin transacción abarcadora**
-(`application.WithoutTransaction`). Antes de consultar, cada candidato se reclama con una escritura CONDICIONAL que
+El barrido lo dispara el cronómetro en una réplica por tick, pero al menos una vez (si la réplica muere a mitad, otra
+repite el tick), y su tarea lo despacha **sin transacción abarcadora** (`application.WithoutTransaction`). Si tu lote
+sale lleno, avísalo con `application.SweepClaimed(ctx, reclamados, lote)` y el tick repetirá la pasada. Antes de consultar, cada candidato se reclama con una escritura CONDICIONAL que
 vuelve a estampar `AwaitingSince`, y que confirma sola; la réplica que pierde ve 0 filas y lo salta. Sin reclamo, las N
 réplicas consultan el mismo cobro, y si la consulta desencadena una escritura, la hacen N veces.
 

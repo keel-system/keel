@@ -397,4 +397,10 @@ test('stock-reservation: con el uso correcto, VERDE; un finder, un error descart
 
   const unrestored = runGate('stock-reservation', { ...edits, [BEHAVIOR]: (source) => behaves(source).replace('if err := r.transitionTo(ReservationStatusReleased); err', 'if err := r.transitionTo(ReservationStatusConfirmed); err') });
   assert.equal(verdicts(unrestored.out).compensation, 'KO', unrestored.out);
+
+  // El registro en el cronómetro (inc. 8 del plan 2.26): sin montar las tareas en keel_timer, la reconciliación no se
+  // dispara nunca, y el gate lo dice.
+  const unregistered = runGate('stock-reservation', { ...edits, 'cmd/server/main.go': (source) => source.replace('timer.NewSchedule(task.Name', 'timer.NewRecurring(task.Name') });
+  assert.equal(verdicts(unregistered.out).reconciliation, 'KO', unregistered.out);
+  assert.match(unregistered.out, /ReconcileReservationsScheduleTimer · registro en el cronómetro/);
 });

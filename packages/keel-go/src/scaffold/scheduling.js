@@ -25,6 +25,7 @@ import { contractOf, entryGateField, messageComponents, messageType, useCaseFiel
 import { usesCorrelation } from './correlation.js';
 import { usesDependencies } from './use-cases.js';
 import { PURGE_CASES, PURGE_CASES_CUTOFF, tablePurges, usesTablePurges } from './purge.js';
+import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -497,11 +498,16 @@ ${body}
 	}
 }`;
   });
+  // Con el cronómetro (DSL 2.26, inc. 8) estas tareas no van al reloj de cada réplica: el arranque las monta como
+  // recurrentes de keel_timer (timer.NewSchedule), y cada tick lo ejecuta UNA réplica.
+  const where = scheduledByTimer(model, operations[0].name)
+    ? 'Las dispara el cronómetro (timer.NewSchedule, en el arranque): cada tick lo ejecuta UNA réplica, pero AL MENOS UNA\n// VEZ, y el tick repite la pasada mientras el lote salga lleno.'
+    : 'Cada uno corre en TODAS las réplicas del servicio.';
   return `
 // ${tasksFunc(service)} son los disparadores por reloj de las operaciones de ${group} que declaran schedule, con su cron de
 // seis campos.
 //
-// Cada uno corre en TODAS las réplicas del servicio. No todos despachan igual, y no es un descuido: lo decide el diseño
+// ${where} No todos despachan igual, y no es un descuido: lo decide el diseño
 // (keel-core/gen/scheduling.js), igual que en los servidores de keel-spring, keel-nest y keel-dotnet.
 //
 // El primer campo del cron —el segundo— no es 0 por casualidad: el diseño declara cinco campos y build reparte el

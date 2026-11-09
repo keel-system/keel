@@ -87,6 +87,7 @@ const IMPORTS = [
   { path: 'github.com/go-sql-driver/mysql', name: 'mysqldriver' },
   'internal/application',
   'internal/infrastructure/messaging',
+  'internal/infrastructure/timer',
   'internal/infrastructure/scheduler',
   'internal/domain',
   'internal/platform/correlation',

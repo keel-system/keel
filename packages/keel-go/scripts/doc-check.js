@@ -28,10 +28,10 @@ import { planService } from '../src/scaffold/index.js';
 import { AUTHORSHIP_DESIGNS, FIXTURES_DIR, UNCOVERED_BRANCHES, makeWorkspace } from '../test/helpers/workspace.js';
 import { docProbeFile } from './lib/doc-probes.js';
 import { DOC_SABOTAGES, applyDocSabotage } from '../test/helpers/doc-sabotages.js';
-import { PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSabotage, purgeTimerBreaksCovered, purgeTimerProbeFile, timerBreaksCovered, timerProbeFile, timerProbePatch, timerSabotageBreaks } from './lib/timer-probes.js';
+import { DRAIN_SABOTAGES, PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, drainBreaksCovered, isDrainSabotage, isPurgeTimerSabotage, isTimerSabotage, purgeTimerBreaksCovered, purgeTimerProbeFile, timerBreaksCovered, timerProbeFile, timerProbePatch, timerSabotageBreaks } from './lib/timer-probes.js';
 
 // Los del cronómetro y los plazos (DSL 2.26) caen en EXACTAMENTE sus casos DL (scripts/lib/timer-probes.js).
-const SABOTAGES = { ...DOC_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES };
+const SABOTAGES = { ...DOC_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES };
 import { resolveRuntime, startMongo, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 
 const only = process.argv.find((arg) => arg.startsWith('--only='))?.slice('--only='.length) ?? null;
@@ -103,7 +103,7 @@ try {
       fs.writeFileSync(target, file.content);
     }
     if (probe.unsampled.length > 0) console.log(`  (${name}: sin muestra para ${probe.unsampled.join(', ')})`);
-    subjects.push({ name, dir, db: `${name.replace(/-/g, '_')}_doc_probes`, purgeTimer: Boolean(purgeTimerProbe) });
+    subjects.push({ name, dir, db: `${name.replace(/-/g, '_')}_doc_probes`, purgeTimer: Boolean(purgeTimerProbe), drain: probe.content.includes('TestDrain_DR1_') });
   }
   const url = (db) => database.url.replace(/\/keel_db_check\?/, `/${db}?`);
   const outcomes = await pool(subjects, 2, async ({ dir, db }) => {
@@ -115,7 +115,7 @@ try {
     if (!built.ok) return { tidied, tested: built };
     return { tidied, tested: await runAsync(binary, ['-test.count=1', '-test.v'], { cwd: path.join(dir, storePath), env: { DOC_CHECK_URL: url(db) } }) };
   });
-  subjects.forEach(({ name, purgeTimer }, index) => {
+  subjects.forEach(({ name, purgeTimer, drain }, index) => {
     const { tidied, tested } = outcomes[index];
     if (!step(`${name}: go mod tidy`, tidied.ok, tidied.ok ? '' : tidied.output.slice(0, 2000))) return;
     const failed = [...tested.output.matchAll(/^\s*--- FAIL: (\S+)/gm)].map((m) => m[1]).filter((test) => !test.includes('/'));
@@ -134,7 +134,9 @@ try {
     // Los del cronómetro, además, en TODOS sus casos.
     if (isTimerSabotage(sabotage)) stray.push(...timerBreaksCovered(failed, sabotage, 'document').map((caseId) => `${caseId} no cayó`));
     // El de las purgas, en sus dos casos donde el sujeto las tiene.
-    if (isPurgeTimerSabotage(sabotage) && purgeTimer) stray.push(...purgeTimerBreaksCovered(failed).map((caseId) => `${caseId} no cayó`));
+    if (isPurgeTimerSabotage(sabotage) && purgeTimer) stray.push(...purgeTimerBreaksCovered(failed, sabotage).map((caseId) => `${caseId} no cayó`));
+    // Los del drenaje, en todos sus casos donde el sujeto los tiene (inc. 8).
+    if (isDrainSabotage(sabotage) && drain) stray.push(...drainBreaksCovered(failed, sabotage).map((caseId) => `${caseId} no cayó`));
     const compiled = ran > 0;
     step(
       `falsado: ${sabotage} en ${name} → ${expected.length > 0 ? `rojo en ${expected.join(', ')}` : 'ninguna sonda lo mide aquí'}`,

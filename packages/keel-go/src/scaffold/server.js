@@ -45,7 +45,7 @@ import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { MANAGEMENT_LISTEN, MANAGEMENT_SERVER, MANAGEMENT_SHUTDOWN, TELEMETRY_FLUSH, TELEMETRY_START } from './telemetry.js';
 import { usesRelational } from '@keel-system/keel-core/gen/features';
 import { purgedByTimer } from '@keel-system/keel-core/gen/timer-plan';
-import { CLOCK, DEADLINES, DEADLINES_VAR, TIMER_IMPORT, TIMER_WORKER, deadlinesReadParameters, deadlinesWiring, timerWiring, usesDeadlines, usesTimer } from './timer.js';
+import { CLOCK, DEADLINES, DEADLINES_VAR, TIMER_IMPORT, TIMER_WORKER, deadlinesReadParameters, deadlinesWiring, timerWiring, usesDeadlines, usesTimer, usesTimerSchedules } from './timer.js';
 
 // El gauge de las filas del outbox que se rindieron, leído en cada scrape (sin base, el perfil test, no hay relay que
 // mirar). NaN si no se puede leer: un cero diría que no hay ninguna.
@@ -397,7 +397,8 @@ function schedulingWiring(model, store) {
 		return fmt.Errorf("configuración del reloj: %w", err)
 	}
 	var tasks []scheduler.Task`];
-  for (const { service } of scheduledServices(model)) lines.push(`	tasks = append(tasks, scheduler.${tasksFunc(service)}(useCases)...)`);
+  // Los schedule que dispara el cronómetro (DSL 2.26, inc. 8) no van al reloj: los monta timerWiring con las mismas tareas.
+  if (!usesTimerSchedules(model)) for (const { service } of scheduledServices(model)) lines.push(`	tasks = append(tasks, scheduler.${tasksFunc(service)}(useCases)...)`);
   const purges = tablePurges(model);
   if (purges.length > 0) {
     // Las que corren en el cronómetro (DSL 2.26, inc. 7) no van al reloj: las monta timerWiring con la misma tarea.

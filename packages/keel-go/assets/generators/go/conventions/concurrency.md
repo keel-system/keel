@@ -33,7 +33,11 @@ En Windows SIGTERM no llega: la prueba emitida del arranque cancela el contexto,
 
 ## Varias réplicas
 
-El reloj dispara cada tarea en TODAS las réplicas a la vez: es «una vez por instancia», no «una vez en el clúster». Lo
+El reloj (`internal/infrastructure/scheduler`) dispara cada tarea en TODAS las réplicas a la vez: es «una vez por
+instancia», no «una vez en el clúster». Con cronómetro (DSL 2.26), los `schedule` de las operaciones no van al reloj: el
+arranque los monta como recurrentes de `keel_timer` (`timer.NewSchedule`) y cada tick lo ejecuta UNA réplica, la que gana
+su fila, pero AL MENOS UNA VEZ (si muere a mitad, otra lo repite al vencer el arriendo). El tick DRENA: repite la pasada
+mientras el lote salga lleno, que lo avisan los reclamos generados con `application.SweepClaimed`. En los dos casos, lo
 que actúa sobre las filas que encuentra tiene que **reclamarlas**, no solo leerlas. Para un barrido que mueve estados el
 reclamo ya lo genera build en el puerto y el adaptador de la raíz (`Claim<…>(ctx)`): candidatos con
 `FOR UPDATE SKIP LOCKED`, un `UPDATE` condicional por fila (1 fila afectada = es mía) y su propia transacción, que se

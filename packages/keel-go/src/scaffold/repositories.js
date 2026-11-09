@@ -99,6 +99,7 @@ const ADAPTER_IMPORTS = [
   'strings',
   'time',
   'github.com/google/uuid',
+  'internal/application',
   'internal/domain',
   'internal/platform/textfold',
   'internal/platform/wire',
