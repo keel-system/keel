@@ -212,7 +212,15 @@ export function timerProbeBlock(model, ctx) {
   const sample = sampleState(model, entity, inner, 'timer1');
   if (inner.refs.size > 0) throw new Error(`timer-probes: ${entity.name} referencia otras raíces (${[...inner.refs].join(', ')}); la sonda no las siembra`);
   const names = [...domainMembers(model, entity).map((member) => member.name), ...(entity.usesOptimisticLocking && !entity.declaresLockVersion ? [LOCK_VERSION.field] : [])];
-  const overrides = { [entity.idField?.name ?? 'id']: 'id ?? Guid.CreateVersion7()', [entity.lifecycle.field]: 'status', [deadline.since]: 'since', [LOCK_VERSION.field]: 'null' };
+  // Lo único por fila (la clave natural, un campo `unique`) no puede repetir el valor de la muestra: la sonda guarda
+  // decenas de entidades y la segunda chocaría por unicidad en vez de por lo que se mide (stock-reservation: orderId).
+  const unique = Object.fromEntries(
+    entity.fields
+      .filter((field) => !field.isId && (field.unique || (entity.naturalKey ?? []).includes(field.name)))
+      .map((field) => [field.name, field.base === 'uuid' ? 'Guid.NewGuid()' : field.base === 'string' ? `Guid.NewGuid().ToString("N")[..${Math.min(field.constraints?.maxLength ?? 32, 32)}]` : null])
+      .filter(([, value]) => value)
+  );
+  const overrides = { ...unique, [entity.idField?.name ?? 'id']: 'id ?? Guid.CreateVersion7()', [entity.lifecycle.field]: 'status', [deadline.since]: 'since', [LOCK_VERSION.field]: 'null' };
   const assigns = names.map((name) => `            ${csMember(name)} = ${overrides[name] ?? `sample.${csMember(name)}`},`).join('\n');
   const component = [...(operation?.pathParams ?? []), ...(operation?.bodyFields ?? [])][0];
   const store = document
@@ -488,7 +496,13 @@ public sealed class TimerProbeMediator(${port} repository) : IUseCaseMediator
 
     public async Task Dispatch(ICommand command, CancellationToken cancellationToken = default)
     {
-        var id = command is ${operation.messageClass} message ? message.${commandId} : throw new NotSupportedException(command?.GetType().Name);
+        // Otro comando (el de un \`schedule\` que la sonda de las purgas cuenta, como el barrido de stock-reservation) no es
+        // suyo: no hace nada, como el DrainProbeMediator. Lanzar haría fallar ese tick y no se contaría.
+        if (command is not ${operation.messageClass} message)
+        {
+            return;
+        }
+        var id = message.${commandId};
         if (id == FailId)
         {
             throw new InvalidOperationException("fallo de prueba del cronómetro");
