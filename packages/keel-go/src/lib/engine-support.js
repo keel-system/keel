@@ -101,6 +101,40 @@ export const MECHANISMS = {
       }
     }
   },
+  'timer-relay': {
+    parity: {
+      pair: 'notification-mailer',
+      markers: {
+        relational: [
+          `${PG}/outbox.go::func (t *Transactions) relayWake(ctx context.Context)`,
+          'internal/infrastructure/messaging/outbox.go::func (r *Relay) nextRun(',
+          'cmd/server/main.go::transactions.OnOutboxAppended(relay.Wake)'
+        ],
+        document: [
+          `${MONGO}/outbox.go::func (t *Transactions) relayWake(ctx context.Context)`,
+          'internal/infrastructure/messaging/outbox.go::func (r *Relay) nextRun(',
+          'cmd/server/main.go::transactions.OnOutboxAppended(relay.Wake)'
+        ]
+      }
+    },
+    emitter: 'src/scaffold/messaging.js (el Relay por réplica, Wake y nextRun) · src/scaffold/messaging-stores.js y document-stores.js (Transactions.relayWake) · src/scaffold/repositories.js y document-repositories.js (el Save avisa) · src/scaffold/server.js',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'notification-mailer: el messaging.Relay emitido corriendo con el sondeo de respaldo a 600 s, la fila escrita por appendOutbox y el aviso de Transactions.relayWake (RW-1 a RW-3, scripts/lib/relay-wake-probes.js). Falsado: relay-no-wake cae en RW-1 y relay-no-retry en RW-3. Los casos de keel-spring'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'notification-mailer-mongo: los mismos tres casos sobre el relay documental, con los mismos sabotajes'
+      }
+    }
+  },
   deadline: {
     parity: {
       pair: 'verification-codes',

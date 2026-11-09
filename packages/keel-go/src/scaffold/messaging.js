@@ -111,6 +111,9 @@ export function generate(model) {
   return files;
 }
 
+/** La línea con la que Transactions despierta al relay tras el commit (el sabotaje `relay-no-wake` la quita). */
+export const GO_OUTBOX_WAKE_LINE = 't.outboxAppended()';
+
 const PACKAGE_DOC = `Package messaging lleva lo de la mensajería que no depende del broker: la envoltura del cable, los eventos de
 integración, el puente que traduce los eventos de dominio, los mensajes de las suscripciones con su contrato, el relay
 del outbox y la guarda de los mensajes procesados. El envío y la recepción con el broker los escribe el agente en
@@ -119,7 +122,7 @@ cmd/server/broker.go.`;
 // ─── settings.go ─────────────────────────────────────────────────────────────────────────────────
 
 const RELAY_FIELDS = {
-  fixedDelayMs: { field: 'FixedDelay', millis: true },
+  pollMs: { field: 'Poll', millis: true },
   batchSize: { field: 'BatchSize', millis: false },
   maxAttempts: { field: 'MaxAttempts', millis: false },
   backoffInitialMs: { field: 'BackoffInitial', millis: true },
@@ -166,7 +169,7 @@ type SubscriptionSettings struct {
 // (OUTBOX_RELAY), los mismos que los servidores de keel-spring, keel-nest y keel-dotnet:
 ${relayDoc}
 type OutboxRelaySettings struct {
-	FixedDelay     time.Duration
+	Poll           time.Duration
 	BatchSize      int
 	MaxAttempts    int
 	BackoffInitial time.Duration
@@ -594,10 +597,12 @@ type OutboxEvent struct {
 	Payload     string
 }
 
-// FailedOutcome es el desenlace de un fallo: cuántos intentos lleva la fila y si se rindió.
+// FailedOutcome es el desenlace de un fallo: cuántos intentos lleva la fila, si se rindió y, si no, cuándo vuelve a ser
+// elegible (NextAttempt; cero si se rindió). El relay lo recuerda para no esperar al sondeo de respaldo (DSL 2.26).
 type FailedOutcome struct {
 	Attempts     int
 	DeadLettered bool
+	NextAttempt  time.Time
 }
 
 // OutboxStore son las transacciones CORTAS del relay, separadas de la publicación al broker. Las implementa el
@@ -687,43 +692,106 @@ type Relay struct {
 	dispatcher Dispatcher
 	settings   OutboxRelaySettings
 	logger     *slog.Logger
-${telemetry ? '	// Telemetry observa cada publicación; nil, ninguna. Se pone antes de arrancar el relay.\n	Telemetry *telemetry.Telemetry\n' : ''}	// pass es una pasada a la vez; también guarda paused, así que pausar espera a la pasada en vuelo.
+${telemetry ? '	// Telemetry observa cada publicación; nil, ninguna. Se pone antes de arrancar el relay.\n	Telemetry *telemetry.Telemetry\n' : ''}	// pass es una pasada a la vez; también guarda paused, pendingRetry y next, así que pausar espera a la pasada en vuelo.
 	pass   sync.Mutex
 	paused bool
+	// wake es el despertar: lo da el commit de una fila nueva en esta réplica (Wake) o Resume; uno basta.
+	wake chan struct{}
+	// pendingRetry es el reintento más próximo que esta réplica programó y aún no ha llegado (cero: ninguno).
+	pendingRetry time.Time
+	// next es cuándo toca la pasada siguiente, según la última.
+	next   time.Time
+	passes atomic.Int64
 }
 
 // NewRelay construye el relay.
 func NewRelay(store OutboxStore, dispatcher Dispatcher, settings OutboxRelaySettings, logger *slog.Logger) *Relay {
-	return &Relay{store: store, dispatcher: dispatcher, settings: settings, logger: logger}
+	return &Relay{store: store, dispatcher: dispatcher, settings: settings, logger: logger, wake: make(chan struct{}, 1)}
 }
 
-// Run hace una pasada cada FixedDelay (un retardo FIJO entre el final de una y el principio de la siguiente) hasta que
-// ctx se cancela. Al cancelarse no empieza otra publicación: las filas que quedan conservan su lease y otra pasada las
-// recoge. Una pasada que falla entera (la base caída) no para el relay: lo intenta en la siguiente.
+// Run es el relay de ESTA réplica (DSL 2.26, inc. 9) hasta que ctx se cancela: una pasada, y la siguiente en el acto con
+// el lote lleno, al reintento más próximo que programó o al sondeo de respaldo (Poll), lo que llegue antes
+// (relayNextRunMs de keel-core/gen/timer-plan.js); o cuando lo despierte el commit de una fila nueva (Wake). Al
+// cancelarse no empieza otra publicación: las filas que quedan conservan su lease y otra pasada las recoge. Una pasada que
+// falla entera (la base caída) no para el relay: lo intenta al sondeo de respaldo.
 func (r *Relay) Run(ctx context.Context) error {
-	timer := time.NewTimer(r.settings.FixedDelay)
-	defer timer.Stop()
 	for {
+		next := r.scheduledPass(ctx)
+		timer := time.NewTimer(time.Until(next))
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return nil
+		case <-r.wake:
+			timer.Stop()
 		case <-timer.C:
 		}
-		if _, err := r.scheduledPass(ctx); err != nil && ctx.Err() == nil {
-			r.logger.ErrorContext(ctx, "outbox: la pasada del relay falló", "error", err)
-		}
-		timer.Reset(r.settings.FixedDelay)
 	}
 }
 
-// scheduledPass es la pasada del reloj: ninguna mientras el relay esté en pausa.
-func (r *Relay) scheduledPass(ctx context.Context) (int, error) {
+// scheduledPass es la pasada del bucle, y devuelve cuándo toca la siguiente. En pausa no hay pasada, y la siguiente la
+// pide Resume.
+func (r *Relay) scheduledPass(ctx context.Context) time.Time {
 	r.pass.Lock()
 	defer r.pass.Unlock()
 	if r.paused {
-		return 0, nil
+		return time.Now().Add(r.settings.Poll)
 	}
-	return r.relay(ctx)
+	// Lo que despertó antes de esta pasada lo cubre ella; lo que despierte DURANTE la encadena.
+	select {
+	case <-r.wake:
+	default:
+	}
+	r.passes.Add(1)
+	if _, err := r.relay(ctx); err != nil {
+		if ctx.Err() == nil {
+			r.logger.ErrorContext(ctx, "outbox: la pasada del relay falló", "error", err)
+		}
+		return time.Now().Add(r.settings.Poll)
+	}
+	return r.next
+}
+
+// Wake despierta al relay de esta réplica: el commit de una fila nueva (lo cablea main con OnOutboxAppended). Durante una
+// pasada, la siguiente va sin dormir.
+func (r *Relay) Wake() {
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Passes son las pasadas que lleva el bucle de esta réplica: en reposo, una por sondeo de respaldo.
+func (r *Relay) Passes() int64 {
+	return r.passes.Load()
+}
+
+// nextRun es cuándo corre la pasada siguiente (relayNextRunMs de keel-core/gen/timer-plan.js): en el acto con el lote
+// lleno; si no, al primero del reintento más próximo que esta réplica programó y del sondeo de respaldo. Un reintento ya
+// vencido al empezar la pasada lo reclamó ella, así que se olvida.
+func (r *Relay) nextRun(full bool, retryAt, passStart time.Time) time.Time {
+	var remembered time.Time
+	if r.pendingRetry.After(passStart) {
+		remembered = r.pendingRetry
+	}
+	r.pendingRetry = earliest(remembered, retryAt)
+	now := time.Now()
+	if full {
+		return now
+	}
+	return earliest(r.pendingRetry, now.Add(r.settings.Poll))
+}
+
+// earliest es el primero de dos instantes, con el cero como «ninguno».
+func earliest(a, b time.Time) time.Time {
+	switch {
+	case a.IsZero():
+		return b
+	case b.IsZero(), a.Before(b):
+		return a
+	default:
+		return b
+	}
 }
 
 // RelayOnce es una pasada fuera del reloj, también en pausa: reclama, publica y registra el desenlace de cada fila.
@@ -735,6 +803,8 @@ func (r *Relay) RelayOnce(ctx context.Context) (int, error) {
 }
 
 func (r *Relay) relay(ctx context.Context) (int, error) {
+	passStart := time.Now()
+	var retryAt time.Time
 	claimed, err := r.store.ClaimBatch(ctx, r.settings.MaxAttempts, r.settings.BatchSize, r.settings.ClaimTimeout)
 	if err != nil {
 		return 0, err
@@ -763,6 +833,8 @@ ${
 				// La rendición: queda parada para inspección, sin borrarse ni bloquear al resto.
 				r.logger.ErrorContext(ctx, "outbox: la fila agotó sus reintentos y queda como dead-letter", "id", row.ID, "maxAttempts", r.settings.MaxAttempts, "reason", reason)
 			default:
+				// Un milisegundo más: la columna guarda menos precisión que time.Time, y la pasada llegaría antes de tiempo.
+				retryAt = earliest(retryAt, outcome.NextAttempt.Add(time.Millisecond))
 				r.logger.WarnContext(ctx, "outbox: fallo entregando la fila", "id", row.ID, "attempt", outcome.Attempts, "reason", reason)
 			}
 			continue
@@ -772,6 +844,7 @@ ${
 		}
 		r.logger.DebugContext(ctx, "outbox: evento publicado", "eventType", row.EventType, "id", row.ID)
 	}
+	r.next = r.nextRun(len(claimed) >= r.settings.BatchSize, retryAt, passStart)
 	return len(claimed), nil
 }
 
@@ -800,11 +873,12 @@ func (r *Relay) Pause() {
 	r.paused = true
 }
 
-// Resume reanuda las pasadas suspendidas con Pause.
+// Resume reanuda las pasadas suspendidas con Pause, con una en el acto: lo escrito durante la pausa no despertó a nadie.
 func (r *Relay) Resume() {
 	r.pass.Lock()
-	defer r.pass.Unlock()
 	r.paused = false
+	r.pass.Unlock()
+	r.Wake()
 }
 
 // CountDeadLettered son las filas rendidas ahora mismo: la señal de que el outbox perdió algo.

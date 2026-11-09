@@ -470,7 +470,9 @@ function listenersWiring(model, store) {
 			return err
 		}
 	}
-	relay := messaging.NewRelay(${store.name}.NewOutbox(transactions), dispatcher, *messagingSettings.OutboxRelay, logger)${usesTelemetry(model) ? DEAD_LETTERED_GAUGE : ''}`);
+	relay := messaging.NewRelay(${store.name}.NewOutbox(transactions), dispatcher, *messagingSettings.OutboxRelay, logger)${usesTelemetry(model) ? DEAD_LETTERED_GAUGE : ''}
+	// Una fila del outbox confirmada en esta réplica despierta a su relay (DSL 2.26): el evento sale sin esperar al sondeo.
+	transactions.OnOutboxAppended(relay.Wake)`);
   }
   if (consumes(model)) {
     const connection = brokerConnection(model);
@@ -504,8 +506,9 @@ function workers(model) {
 	})`);
   }
   if (usesGoOutbox(model)) {
+    // Con el cronómetro, su interruptor (scheduling.enabled, que ya incluye la base) apaga también el relay (DSL 2.26).
     parts.push(`
-	if database.Enabled {
+	if ${usesTimer(model) ? 'timerSettings.Enabled' : 'database.Enabled'} {
 		group.Go(func() error {
 			return relay.Run(groupCtx)
 		})

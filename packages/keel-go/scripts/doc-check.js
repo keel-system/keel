@@ -29,9 +29,10 @@ import { AUTHORSHIP_DESIGNS, FIXTURES_DIR, UNCOVERED_BRANCHES, makeWorkspace } f
 import { docProbeFile } from './lib/doc-probes.js';
 import { DOC_SABOTAGES, applyDocSabotage } from '../test/helpers/doc-sabotages.js';
 import { DRAIN_SABOTAGES, PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, drainBreaksCovered, isDrainSabotage, isPurgeTimerSabotage, isTimerSabotage, purgeTimerBreaksCovered, purgeTimerProbeFile, timerBreaksCovered, timerProbeFile, timerProbePatch, timerSabotageBreaks } from './lib/timer-probes.js';
+import { RELAY_WAKE_SABOTAGES } from './lib/relay-wake-probes.js';
 
 // Los del cronómetro y los plazos (DSL 2.26) caen en EXACTAMENTE sus casos DL (scripts/lib/timer-probes.js).
-const SABOTAGES = { ...DOC_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES };
+const SABOTAGES = { ...DOC_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES, ...RELAY_WAKE_SABOTAGES };
 import { resolveRuntime, startMongo, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 
 const only = process.argv.find((arg) => arg.startsWith('--only='))?.slice('--only='.length) ?? null;

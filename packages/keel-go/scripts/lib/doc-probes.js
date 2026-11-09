@@ -27,6 +27,7 @@ import { isOptional } from '../../src/scaffold/render.js';
 import { claimMethod, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { PROBE_RECONCILIATION, docReconciliationProbes } from './doc-reconciliation-probes.js';
 import { usesGoOutbox, usesGoProcessedEvents } from '../../src/scaffold/messaging.js';
+import { relayWakeProbes } from './relay-wake-probes.js';
 import { usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
 import { tablePurges } from '../../src/scaffold/purge.js';
 import { indexEntries } from '../../src/scaffold/document-persistence.js';
@@ -102,7 +103,17 @@ export function docProbeFile(model) {
   }
   parts.push(transactionProbes(model, roots.find((root) => root.usesOptimisticLocking) ?? roots[0]));
   if (usesRequestIdempotency(model)) parts.push(IDEMPOTENCY_PROBES);
-  if (usesGoOutbox(model)) parts.push(OUTBOX_PROBES);
+  if (usesGoOutbox(model)) {
+    parts.push(
+      OUTBOX_PROBES,
+      relayWakeProbes({
+        write: 'probeTx.write(ctx, func(ctx context.Context) error { return appendOutbox(ctx, probeTx, []messaging.OutboxRecord{record}) })',
+        empty: `if _, err := probeDB.Collection(outboxCollection).DeleteMany(t.Context(), bson.D{}); err != nil {
+		t.Fatalf("vaciar el outbox: %v", err)
+	}`
+      })
+    );
+  }
   if (usesGoProcessedEvents(model)) parts.push(PROCESSED_PROBES);
   if (tablePurges(model).length > 0) parts.push(purgeProbes(model));
   for (const root of roots) parts.push(...claimProbes(model, root));

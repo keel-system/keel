@@ -19,7 +19,7 @@ import { goString } from '../lib/go-source.js';
 import { sqlDialect } from '../lib/relational-engine.js';
 import { MYSQL_DRIVER } from './persistence-runtime.js';
 import { layout, packageFile } from './render.js';
-import { MESSAGING_IMPORT, usesGoOutbox, usesGoProcessedEvents } from './messaging.js';
+import { GO_OUTBOX_WAKE_LINE, MESSAGING_IMPORT, usesGoOutbox, usesGoProcessedEvents } from './messaging.js';
 
 /** Las tablas de los almacenes que el diseño usa, como las espera el baseline (persistence.js). */
 export function storeTables(model) {
@@ -47,6 +47,22 @@ function outboxBody(model) {
   const table = OUTBOX_EVENT.table;
   const claimOptions = d.mysql ? 'sql.TxOptions{Isolation: sql.LevelReadCommitted}' : 'sql.TxOptions{}';
   return `
+// relayWake despierta al relay de ESTA réplica cuando confirma la transacción que escribió filas del outbox (DSL 2.26,
+// inc. 9): el evento sale ya, sin esperar al sondeo de respaldo. Si la transacción revierte, el aviso no llega a nadie.
+func (t *Transactions) relayWake(ctx context.Context) {
+	t.afterCommit(ctx, func(context.Context) {
+		if t.outboxAppended != nil {
+			${GO_OUTBOX_WAKE_LINE}
+		}
+	})
+}
+
+// OnOutboxAppended hace que appended se llame tras confirmar una transacción que escribe en el outbox: el despertar del
+// relay de esta réplica (messaging.Relay.Wake). Se fija en el arranque, antes de servir nada.
+func (t *Transactions) OnOutboxAppended(appended func()) {
+	t.outboxAppended = appended
+}
+
 // appendOutbox escribe las filas del outbox en la transacción del cambio (q): el evento y el cambio del agregado
 // confirman o revierten juntos. El relay las publica después, fuera de ella.
 func appendOutbox(ctx context.Context, q DBTX, records []messaging.OutboxRecord) error {
@@ -147,6 +163,7 @@ func (o *Outbox) MarkFailed(ctx context.Context, id uuid.UUID, reason string, ma
 		if !outcome.DeadLettered {
 			at := time.Now().UTC().Add(messaging.BackoffDelay(attempts, backoffInitial, backoffMax))
 			next = &at
+			outcome.NextAttempt = at
 		}
 		_, err = q.ExecContext(ctx, ${goString(`UPDATE ${table} SET attempts = ${p(1)}, last_error = ${p(2)}, next_attempt_at = ${d.mysql ? `COALESCE(${p(3)}, next_attempt_at)` : `COALESCE(${p(3)}::timestamptz, next_attempt_at)`} WHERE id = ${p(4)}`)}, attempts, reason, next, id)
 		return err

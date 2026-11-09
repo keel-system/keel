@@ -19,7 +19,7 @@ import { storeDocumentFields, storeDocumentKey } from '@keel-system/keel-core/ge
 import { usesDocument } from '@keel-system/keel-core/gen/features';
 import { goString } from '../lib/go-source.js';
 import { layout, packageFile } from './render.js';
-import { MESSAGING_IMPORT, usesGoOutbox, usesGoProcessedEvents } from './messaging.js';
+import { GO_OUTBOX_WAKE_LINE, MESSAGING_IMPORT, usesGoOutbox, usesGoProcessedEvents } from './messaging.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
 import { tablePurges } from './purge.js';
 import { BSON, MONGO_DRIVER, MONGO_OPTIONS } from './document-persistence.js';
@@ -71,6 +71,22 @@ function outboxBody() {
   return `
 // outboxCollection es la colección del outbox.
 const outboxCollection = ${goString(table)}
+
+// relayWake despierta al relay de ESTA réplica cuando confirma la transacción que escribió filas del outbox (DSL 2.26,
+// inc. 9): el evento sale ya, sin esperar al sondeo de respaldo. Si la transacción revierte, el aviso no llega a nadie.
+func (t *Transactions) relayWake(ctx context.Context) {
+	t.afterCommit(ctx, func(context.Context) {
+		if t.outboxAppended != nil {
+			${GO_OUTBOX_WAKE_LINE}
+		}
+	})
+}
+
+// OnOutboxAppended hace que appended se llame tras confirmar una transacción que escribe en el outbox: el despertar del
+// relay de esta réplica (messaging.Relay.Wake). Se fija en el arranque, antes de servir nada.
+func (t *Transactions) OnOutboxAppended(appended func()) {
+	t.outboxAppended = appended
+}
 
 // appendOutbox escribe los documentos del outbox en la transacción del cambio (la del Save del repositorio, cuya sesión
 // viaja en ctx): el evento y el cambio del agregado confirman o abortan juntos. El relay los publica después, fuera de ella.
@@ -218,6 +234,7 @@ func (o *Outbox) MarkFailed(ctx context.Context, id uuid.UUID, reason string, ma
 	outcome := messaging.FailedOutcome{Attempts: int(attempts), DeadLettered: messaging.DeadLettered(int(attempts), maxAttempts)}
 	if !outcome.DeadLettered {
 		next := time.Now().UTC().Add(messaging.BackoffDelay(int(attempts), backoffInitial, backoffMax))
+		outcome.NextAttempt = next
 		if _, err := documents.UpdateOne(ctx, filter, bson.D{{Key: "$set", Value: bson.D{{Key: "next_attempt_at", Value: instantValue(next)}}}}); err != nil {
 			return outcome, err
 		}

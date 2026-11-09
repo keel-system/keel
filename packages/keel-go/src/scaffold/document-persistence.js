@@ -34,6 +34,7 @@ import { documentIndexes, exportIndexesScript } from '@keel-system/keel-core/gen
 import { localMongoUrl } from '@keel-system/keel-core/gen/infra-catalog';
 import { envFor } from '@keel-system/keel-core/gen/runtime-env';
 import { usesDocument } from '@keel-system/keel-core/gen/features';
+import { usesGoOutbox } from './messaging.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { sentinelOf } from './errors.js';
 import { layout, packageFile } from './render.js';
@@ -288,7 +289,7 @@ func EnsureIndexes(ctx context.Context, db *Database, logger *slog.Logger) error
 function transactionsBody(model) {
   // El despertar del cronómetro (DSL 2.26) también espera al commit.
   const timers = usesTimer(model);
-  const afterCommit = usesBestEffort(model) || timers;
+  const afterCommit = usesBestEffort(model) || timers || usesGoOutbox(model);
   const hooks = afterCommit
     ? `
 
@@ -326,7 +327,7 @@ type txKey struct{}
 // hace que el documento del agregado y lo que se escribe con él (el outbox, el registro de idempotencia) confirmen juntos.
 type Transactions struct {
 	db     *Database
-	logger *slog.Logger${timers ? '\n\n\t// timerArmed despierta al sondeador del cronómetro tras el commit que arma un temporizador (timers.go); nil, a nadie.\n\ttimerArmed func(time.Time)' : ''}
+	logger *slog.Logger${timers ? '\n\n\t// timerArmed despierta al sondeador del cronómetro tras el commit que arma un temporizador (timers.go); nil, a nadie.\n\ttimerArmed func(time.Time)' : ''}${usesGoOutbox(model) ? '\n\n\t// outboxAppended despierta al relay de esta réplica tras el commit que escribe filas del outbox; nil, a nadie.\n\toutboxAppended func()' : ''}
 }
 
 var _ application.Transactor = (*Transactions)(nil)

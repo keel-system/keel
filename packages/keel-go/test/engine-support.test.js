@@ -1,6 +1,7 @@
 // La matriz de paridad de keel-go se ata al catálogo neutral: una fila por mecanismo, sin inventar ids, con el vocabulario de
 // estados común y, en cada celda, una promesa que se pueda leer (una red que existe, y el sabotaje que la falsa).
 
+import { RELAY_WAKE_SABOTAGES } from '../scripts/lib/relay-wake-probes.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -81,11 +82,13 @@ const FALSIFIED_BY = {
   'timer-purge/relational': ['timer-every-replica'],
   'timer-purge/document': ['timer-every-replica'],
   'timer-schedule/relational': ['drain-no-signal', 'drain-no-budget', 'timer-every-replica-schedule'],
-  'timer-schedule/document': ['drain-no-signal', 'drain-no-budget', 'timer-every-replica-schedule']
+  'timer-schedule/document': ['drain-no-signal', 'drain-no-budget', 'timer-every-replica-schedule'],
+  'timer-relay/relational': ['relay-no-wake', 'relay-no-retry'],
+  'timer-relay/document': ['relay-no-wake', 'relay-no-retry']
 };
 
 test('el sabotaje con que se falsa cada celda de db-check o doc-check existe de verdad', () => {
-  const known = { 'db-check': { ...DB_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES }, 'doc-check': { ...DOC_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES } };
+  const known = { 'db-check': { ...DB_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES, ...RELAY_WAKE_SABOTAGES }, 'doc-check': { ...DOC_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES, ...RELAY_WAKE_SABOTAGES } };
   for (const { id, branch, cell } of cells()) {
     if (!known[cell.net]) continue;
     const named = FALSIFIED_BY[`${id}/${branch}`];

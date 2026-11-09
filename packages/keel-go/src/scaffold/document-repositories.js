@@ -595,7 +595,11 @@ ${arming ? `${arming.before}\n` : ''}${prelude.join('\n')}${prelude.length > 0 ?
 	})
 	if err != nil {
 		return nil, err
-	}${events && !outbox ? `
+	}${outbox ? `
+	if len(events) > 0 {
+		// Las filas del outbox ya confirmaron (o confirman con el caso de uso): el relay de esta réplica sale ya.
+		r.tx.relayWake(ctx)
+	}` : ''}${events && !outbox ? `
 	if len(events) > 0 {
 		r.tx.afterCommit(ctx, func(ctx context.Context) {
 			r.events.Deliver(ctx, events)

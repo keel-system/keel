@@ -41,6 +41,7 @@ import { probeFile } from './lib/db-probes.js';
 import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
 import { DB_SABOTAGES, applyDbSabotage } from '../test/helpers/db-sabotages.js';
 import { DRAIN_SABOTAGES, PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, drainBreaksCovered, isDrainSabotage, isPurgeTimerSabotage, isTimerSabotage, purgeTimerBreaksCovered, purgeTimerProbeFile, timerBreaksCovered, timerProbeFile, timerProbePatch, timerSabotageBreaks } from './lib/timer-probes.js';
+import { RELAY_WAKE_SABOTAGES } from './lib/relay-wake-probes.js';
 import { resolveRuntime, startDatabase, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 import { ENGINE_LABELS, STORE_PACKAGES } from '../src/lib/relational-engine.js';
 import { SUPPORTED_DATABASES } from '../src/lib/supported-features.js';
@@ -59,7 +60,7 @@ const storePath = `internal/infrastructure/${STORE_PACKAGES[engine]}`;
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.slice('--sabotage='.length) ?? null;
 const keep = process.argv.includes('--keep');
 // Los del cronómetro y los plazos (DSL 2.26) caen en EXACTAMENTE sus casos DL (scripts/lib/timer-probes.js).
-const SABOTAGES = { ...DB_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES };
+const SABOTAGES = { ...DB_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES, ...RELAY_WAKE_SABOTAGES };
 
 if (sabotage && !SABOTAGES[sabotage]) {
   console.error(`No hay ningún sabotaje '${sabotage}'. Los hay: ${Object.keys(SABOTAGES).join(', ')}.`);

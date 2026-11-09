@@ -16,11 +16,20 @@ import { OUTBOX_EVENT, PROCESSED_EVENT } from '@keel-system/keel-core/gen/messag
 import { goString } from '../../src/lib/go-source.js';
 import { sqlDialect } from '../../src/lib/relational-engine.js';
 import { usesBestEffort, usesGoOutbox, usesGoProcessedEvents } from '../../src/scaffold/messaging.js';
+import { relayWakeProbes } from './relay-wake-probes.js';
 
 export function messagingProbes(model) {
   const d = sqlDialect(model);
   const parts = [];
-  if (usesGoOutbox(model)) parts.push(outboxProbes(d));
+  if (usesGoOutbox(model)) {
+    parts.push(
+      outboxProbes(d),
+      relayWakeProbes({
+        write: 'probeTx.write(ctx, func(q DBTX) error { return appendOutbox(ctx, q, []messaging.OutboxRecord{record}) })',
+        empty: 'emptyOutbox(t)'
+      })
+    );
+  }
   if (usesGoProcessedEvents(model)) parts.push(processedProbes(d));
   if (usesBestEffort(model)) parts.push(AFTER_COMMIT_PROBE);
   return parts.join('\n\n');
@@ -209,7 +218,7 @@ func TestOutbox_RelayPublishesAndCountsFailures(t *testing.T) {
 	emptyOutbox(t)
 	appendRecords(t, "Ok", "Ko")
 	dispatcher := &probeDispatcher{failing: map[string]bool{"Ko": true}}
-	settings := messaging.OutboxRelaySettings{FixedDelay: time.Second, BatchSize: 10, MaxAttempts: 5, BackoffInitial: time.Second, BackoffMax: time.Minute, ClaimTimeout: time.Minute}
+	settings := messaging.OutboxRelaySettings{Poll: time.Second, BatchSize: 10, MaxAttempts: 5, BackoffInitial: time.Second, BackoffMax: time.Minute, ClaimTimeout: time.Minute}
 	relay := messaging.NewRelay(NewOutbox(probeTx), dispatcher, settings, slog.New(slog.DiscardHandler))
 	if n, err := relay.RelayOnce(t.Context()); err != nil || n != 2 {
 		t.Fatalf("RelayOnce = %d, %v; quiero 2", n, err)

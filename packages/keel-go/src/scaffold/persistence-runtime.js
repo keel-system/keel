@@ -437,10 +437,10 @@ func bind(args []any) []any {
  * cuando confirma la transacción abierta (la publicación best-effort).
  */
 function transactionNeeds(model) {
-  return { apart: usesGoOutbox(model) || usesGoProcessedEvents(model) || usesReplicas(model), afterCommit: usesBestEffort(model) || usesTimer(model), counting: usesStatementCount(model), timers: usesTimer(model) };
+  return { apart: usesGoOutbox(model) || usesGoProcessedEvents(model) || usesReplicas(model), afterCommit: usesBestEffort(model) || usesTimer(model) || usesGoOutbox(model), counting: usesStatementCount(model), timers: usesTimer(model), outbox: usesGoOutbox(model) };
 }
 
-function transactionsBody(d, { apart = false, afterCommit = false, counting = false, timers = false } = {}) {
+function transactionsBody(d, { apart = false, afterCommit = false, counting = false, timers = false, outbox = false } = {}) {
   const p = TRANSACTION_PLATFORM[d.engine];
   // La conexión que ven los repositorios; con la cuenta de sentencias (statement-count.js), pasando por ella.
   const connection = (expr) => (counting ? `t.observed(${p.wrap(expr)})` : p.wrap(expr));
@@ -539,7 +539,7 @@ type txKey struct{}
 // Transactions abre la transacción de cada caso de uso y la deja en el contexto, donde la encuentran los repositorios.
 // Con la persistencia, es el application.Transactor del servicio.
 type Transactions struct {
-${p.field}${countingField}${timersField}
+${p.field}${countingField}${timersField}${outbox ? '\n\n\t// outboxAppended despierta al relay de esta réplica tras el commit que escribe filas del outbox; nil, a nadie.\n\toutboxAppended func()' : ''}
 }
 
 var _ application.Transactor = (*Transactions)(nil)
