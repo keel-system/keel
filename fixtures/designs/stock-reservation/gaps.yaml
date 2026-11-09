@@ -3,15 +3,18 @@
 # diseñador: las decisiones van como decididas en el artefacto que las sostiene, y las de la clase 16 como
 # riesgo aceptado. Parte del barrido de stock-reservation-events (la misma mensajería) y añade lo que esta
 # silueta tiene y aquella no: la llamada saliente, la reconciliación por reloj y el clúster.
+#
+# v1.2.0 (incremento 12 de PLAN-DSL-226-PLAZOS.md, 2026-11-09): se recorrió lo que cambió —el plazo de pending,
+# el estado expired y la operación expireReservation— y se volvió a sellar. Lo demás no lo toca el plazo.
 reviewedBy: keel-gap-sweep
-reviewedAt: 1.1.0
+reviewedAt: 1.2.0
 
 coverage:
   - class: 1
     units: [ Reservation ]
     result: findings
   - class: 2
-    units: [ createReservation, confirmReservation, applyStockReserved, noteStockCount, releaseReservation, reconcileReservations ]
+    units: [ createReservation, confirmReservation, applyStockReserved, noteStockCount, releaseReservation, expireReservation, reconcileReservations ]
     result: findings
   - class: 3
     units: [ Reservation ]
@@ -20,7 +23,7 @@ coverage:
     # createReservation: la clave natural (orderId) más el registro de la clave, y su carrera (FL-RES-001-C,
     # FL-CLU-003). noteStockCount: dos recuentos DISTINTOS a la vez chocan en el bloqueo optimista y el
     # perdedor se reintenta. reconcileReservations: el reclamo reparte entre réplicas (FL-CLU-002).
-    units: [ createReservation, confirmReservation, applyStockReserved, noteStockCount, releaseReservation, reconcileReservations ]
+    units: [ createReservation, confirmReservation, applyStockReserved, noteStockCount, releaseReservation, expireReservation, reconcileReservations ]
     result: findings
   - class: 5
     units: [ getReservation ]
@@ -32,7 +35,7 @@ coverage:
     units: [ inventory.activations.reserveStock, inventory.activations.cancelStock, clients.inventory, subscriptions.StockReserved, subscriptions.StockCountAdjusted, subscriptions.StockRejected ]
     result: findings
   - class: 9
-    units: [ createReservation, confirmReservation, applyStockReserved, noteStockCount, getReservation, releaseReservation, reconcileReservations ]
+    units: [ createReservation, confirmReservation, applyStockReserved, noteStockCount, getReservation, releaseReservation, expireReservation, reconcileReservations ]
     result: findings
   - class: 12
     units: [ service ]
@@ -62,6 +65,18 @@ findings:
     reason: "Decidido en v1.1.0: es la carrera resuelta —otro camino ya sacó la reserva de la espera—, así
       que el aviso se confirma SIN efecto y sin ir al descarte, y la reserva liberada no se resucita. Lo fija
       FL-REC-001-B (el candidato a escenario que dejó abierto stock-reservation-events)."
+  - class: 1
+    unit: Reservation
+    what: >-
+      Una reserva que nadie confirma se quedaba en pending para siempre: el sistema de pedidos puede
+      abandonarla y nada la cerraba. Es el paso del tiempo como causa de la transición, no un fallo.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.2.0: lifecycle.deadlines.pending, que la caduca a expired a los
+      reservationHoldMinutes (15 por defecto) desde createdAt, con expireReservation. La acción tardía se
+      rechaza: confirmar pasado el plazo es 410 RESERVATION_EXPIRED aunque el cronómetro no haya pasado,
+      porque encargar stock de una reserva que el negocio ya da por caducada es justo el error caro.
+      FL-EXP-001 lo afirma."
 
   # --- Clase 2 ---
   - class: 2
@@ -82,6 +97,16 @@ findings:
     reason: "Decidido: es la carrera con el camino feliz, resuelta: no se registra como error ni se reintenta,
       y no se cancela el bloqueo de un encargo que el almacén sí contestó (nota del stub, y la transición
       awaitingStock → released la rechaza desde confirmed o released)."
+  - class: 2
+    unit: expireReservation
+    what: >-
+      El cronómetro despacha la caducidad de una reserva que ya salió de pending (el cliente la confirmó en
+      el último instante, o otra réplica se adelantó).
+    severity: risk
+    state: decided
+    reason: "Decidido: no es un error. El cronómetro revalida el estado con la hora de la base antes de
+      despachar, y si aun así llega tarde la transición pending → expired la rechaza el lifecycle: no hay
+      nada que caducar (nota del handler, la misma en los cuatro generadores)."
 
   # --- Clase 4 ---
   - class: 4
@@ -102,6 +127,16 @@ findings:
     state: decided
     reason: "Decidido: reclamo con marca persistida y caducable en reconciliation_claim (lo genera build) y
       FL-CLU-002, que cuenta las cancelaciones RECIBIDAS por el proveedor con dos réplicas vivas."
+  - class: 4
+    unit: expireReservation
+    what: >-
+      Dos réplicas podrían caducar la misma reserva, y la caducidad puede coincidir con la confirmación del
+      cliente.
+    severity: gap
+    state: decided
+    reason: "Decidido: el temporizador se reclama con arriendo en la tabla del cronómetro (lo genera build y
+      lo miden sus redes, DL-6), y la transición es condicional con optimisticLocking all: contra la
+      confirmación concurrente gana una, y la otra es INVALID_STATE_TRANSITION o un no-op."
 
   # --- Clase 7 ---
   - class: 7
@@ -181,7 +216,7 @@ findings:
     severity: gap
     state: decided
     reason: "Decidido en v1.1.0: security con protocol none y access public, a propósito. La API es interna y
-      la llama solo el sistema de pedidos; la frontera de confianza la pone su red. Vale para las siete
+      la llama solo el sistema de pedidos; la frontera de confianza la pone su red. Vale para las ocho
       operaciones (las internas no tienen otra puerta que su suscripción o su reloj)."
 
   # --- Clase 12 ---

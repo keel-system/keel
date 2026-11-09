@@ -108,7 +108,7 @@ test('las marcas se purgan como en keel-nest, y el arranque lee los barridos y s
   assert.equal(purge.prefix, 'reconciliation.purge');
   assert.match(content(files, 'internal/infrastructure/postgres/purges.go'), /"DELETE FROM reconciliation_claim WHERE claimed_at < \$1 AND claimed_at <= \$2"/);
   const main = content(files, 'cmd/server/main.go');
-  assert.ok(main.indexOf('reconciliation, err := postgres.ReconciliationSettingsFrom(cfg)') < main.indexOf('postgres.NewReservationRepository(transactions, bridge, reconciliation)'));
+  assert.ok(main.indexOf('reconciliation, err := postgres.ReconciliationSettingsFrom(cfg)') < main.indexOf('postgres.NewReservationRepository(transactions, bridge, reconciliation'));
   assert.match(main, /scheduler\.PurgeTask\("reconciliation_claim", purges\.ReconciliationClaim, postgres\.NewReconciliationClaimPurge\(transactions\), logger\)/);
 });
 

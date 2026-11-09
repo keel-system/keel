@@ -51,6 +51,12 @@ operations:
       - code: RESERVATION_NOT_FOUND
         when: No existe una reserva con ese id.
         http: 404
+      # El rechazo tardío del plazo de pending (lifecycle.deadlines): pasado `reservationHoldMinutes` desde
+      # que nació, confirmar se rechaza aunque el cronómetro todavía no la haya caducado. 410 y no 409: la
+      # reserva no está en conflicto con otra cosa, ya no está disponible.
+      - code: RESERVATION_EXPIRED
+        when: La reserva superó su plazo sin confirmarse.
+        http: 410
     # El encargo viaja PUBLICADO, así que esta operación no conoce el desenlace: lo
     # que hace es dejar la reserva esperándolo. Es la operación que crea la deuda —a
     # partir de aquí hay trabajo encargado al almacén— y también la que crea el estado
@@ -156,6 +162,28 @@ operations:
       - entity: Reservation
         from: [awaitingStock, confirmed]
         to: released
+
+  expireReservation:
+    description: Caduca una reserva que superó su plazo sin confirmarse.
+    kind: command
+    # La operación `by` del plazo de pending (lifecycle.deadlines): no es un barrido ni tiene `schedule`; la
+    # despacha el cronómetro del servicio una vez por cada reserva vencida, ya revalidada con la hora de la
+    # base. No hay nada que deshacer contra el almacén: en pending el encargo todavía no salió.
+    internal: true
+    input:
+      fields:
+        id:
+          type: uuid
+          required: true
+    output: "void"
+    errors:
+      - code: RESERVATION_NOT_FOUND
+        when: No existe una reserva con ese id.
+        http: 404
+    transitions:
+      - entity: Reservation
+        from: [pending]
+        to: expired
 
   reconcileReservations:
     description: Barre las reservas que llevan demasiado tiempo esperando al almacén.

@@ -106,8 +106,9 @@ test('se genera un TaskScheduler de hilos de plataforma donde hay algo programad
   //
   // No da error: llega tarde. Y en un mecanismo con cota temporal encima, eso hace que la
   // cota deje de medir lo que decía.
-  // Sobre MariaDB, que no tiene cronómetro: con él (PostgreSQL) ya no queda ningún @Scheduled en esta fixture.
-  const config = project('stock-reservation', { ...RELATIONAL, database: 'mariadb' }).file('SchedulingConfig.java');
+  // Sobre MariaDB, que no tiene cronómetro: con él (PostgreSQL) ya no queda ningún @Scheduled en esta fixture. Y
+  // catalog-extended y no stock-reservation, que desde su v1.2.0 declara un plazo y MariaDB la rechaza.
+  const config = project('catalog-extended', { ...RELATIONAL, database: 'mariadb' }).file('SchedulingConfig.java');
 
   assert.match(config, /class SchedulingConfig/);
   assert.match(config, /ThreadPoolTaskScheduler/);
@@ -125,8 +126,9 @@ test('el pool da un hilo por tarea programada: acotarlo serializa los barridos',
   // primera. Ese acoplamiento es el que hace que un barrido lento acabe retrasando la
   // entrega de eventos del outbox, y es la razón por la que `conventions/dependencies.md`
   // descarta acotar la concurrencia global del scheduler.
-  // Sobre MariaDB no hay cronómetro: todo sigue siendo @Scheduled, y el pool tiene que dar para todo.
-  const model = modelFor('stock-reservation', { ...RELATIONAL, database: 'mariadb' });
+  // Sobre MariaDB no hay cronómetro: todo sigue siendo @Scheduled, y el pool tiene que dar para todo (catalog-extended:
+  // stock-reservation declara un plazo desde su v1.2.0, y MariaDB la rechaza).
+  const model = modelFor('catalog-extended', { ...RELATIONAL, database: 'mariadb' });
   const scheduled = [...model.services.flatMap((s) => s.operations).filter((o) => o.schedule)];
 
   const count = scheduledTaskCount(model);

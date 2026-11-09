@@ -18,11 +18,26 @@ keel: "2.26"
 # la auditoría se escribe, el motivo de un rechazo lleva cota, y los escenarios de clúster salen
 # (el arnés de keel-nest no arranca una segunda réplica; el reclamo entre réplicas lo mide su
 # db-check).
+#
+# v1.2.0 (incremento 12 de PLAN-DSL-226-PLAZOS.md, 2026-11-09): el PLAZO de negocio. Una reserva que nadie
+# confirma no retiene el stock para siempre: caduca a los `reservationHoldMinutes` de crearse
+# (`lifecycle.deadlines.pending`), la caduca el cronómetro del servicio con `expireReservation`, y confirmarla
+# pasado el plazo es RESERVATION_EXPIRED aunque el cronómetro todavía no haya pasado.
 service:
   name: stock-reservation
-  version: 1.1.0
+  version: 1.2.0
   description: Reserva stock para un pedido y lo libera si el almacén lo rechaza después.
   domain: fulfillment
+parameters:
+  # La duración del plazo de `pending` (lifecycle.deadlines.pending.after): configurable por despliegue,
+  # con la unidad que declara el plazo.
+  reservationHoldMinutes:
+    type: int
+    description: "Minutos que una reserva sin confirmar retiene el pedido antes de caducar."
+    constraints: { min: 1 }
+    default: 15
+    testValue: 15
+    requiredInProduction: false
 conventions:
   # Un campo sin valor viaja como null (releaseReason y lastCountedQuantity hasta que algo los escribe):
   # el default, escrito.

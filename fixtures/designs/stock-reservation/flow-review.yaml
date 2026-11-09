@@ -1,13 +1,16 @@
-# Careo de flujos (flow-walkthrough.md) de stock-reservation v1.1.0, hecho al preparar la corrida del
-# incremento 11 de keel-nest (2026-10-07) por quien la preparaba, NO por un keel-flow-review de contexto
-# limpio: se puede repetir con él antes de la corrida. Los flujos de la mensajería son los de
-# stock-reservation-events, careados en su corrida; aquí se carearon los que trae esta silueta (FL-CLU-*,
-# FL-REC-*) y los que cambiaron. Pasada 1 con un hallazgo (corregido en el escenario) y pasada 2 limpia
-# sobre el documento corregido. Las decisiones (resolution) son del diseñador, por delegación.
-reviewedAt: 1.1.0
-passes: 2
-scenariosSha256: b0ad60d8a66e49bb340e94db62f419f015ae75e508488a3c29c1e75aa05a78ab
-conventionsSha256: a06a0dc51bc59f40e89292a72d72b1f236fa4748a07741c45da04e754a232ab2
+# Careo de flujos (flow-walkthrough.md) de stock-reservation v1.2.0 (incremento 12 de PLAN-DSL-226-PLAZOS.md,
+# 2026-11-09), hecho por quien preparaba la versión, NO por un keel-flow-review de contexto limpio: se puede
+# repetir con él antes de la corrida de control. La versión nueva devolvió el presupuesto entero y se carearon
+# los 24 flujos contra el diseño con el plazo de pending. Lo nuevo es FL-EXP-001/-B; los demás no cambiaron de
+# texto, y se recorrieron buscando lo que el plazo pudiera romper (una reserva que se quede en pending más que
+# reservationHoldMinutes dentro de un flujo): ninguno la deja más de unos segundos. En FL-EXP-001 el Then 1
+# admite el 409 del cronómetro adelantado, y eso no deja el rechazo tardío sin medir: tras envejecer el plazo el
+# sondeador duerme hasta timer.max-sleep-ms (30 s) o el siguiente recurrente, y el POST sale en milisegundos.
+# Pasada 1 limpia.
+reviewedAt: 1.2.0
+passes: 1
+scenariosSha256: 1be914032afcf6ee5bbde0ee52342e3c2cbd5c38339ace4a1ab7d7ecd430e26a
+conventionsSha256: d11c42953837f976392d13cbce088e61e8a21785c47034115edea3861e6b2bbb
 flows:
   - { id: FL-RES-001, sha256: b26005bf6a1271a41e1d3201819c8edf11fea9644472b3045f0a4828257b8407 }
   - { id: FL-RES-001-B, sha256: daf9378d76e9806a292f16a259ec40b15d38507f80262141b802c72f1b86b1de }
@@ -23,6 +26,8 @@ flows:
   - { id: FL-CMP-001-C, sha256: 5679bcbef0f73989d54fe9c3c0af093af56f57ef99d3b8598317a441435933cb }
   - { id: FL-CNT-001, sha256: 8f6c57ac65ea69105daede99b24838514bb6e7beba55e0dc1567e8d4ad2e8b3e }
   - { id: FL-CNT-001-B, sha256: fd07866940fcd166cc20e6b0764f7d623f2b1f456eae2e338bc9def32217e688 }
+  - { id: FL-EXP-001, sha256: bf93a478c01f05d309ce623fdb4fa7fbbfd86041f1b1e09674cbef53176a6032 }
+  - { id: FL-EXP-001-B, sha256: faa15f29cba23311955ddd7b68d33316fbfc2480956d1719b84a8632e772bc47 }
   - { id: FL-CLU-001, sha256: de7c1448762109cc6762b9ecee0d3a1bc474e72d53a5e09487e54c7fd02cae9f }
   - { id: FL-CLU-002, sha256: 2287343d77922f2a80feb528dffa20ec989e97257d198cdb0b68dd57e4ad3772 }
   - { id: FL-CLU-003, sha256: c64a7a419fddbe543a65db0213b5f4c1440c85731098dff602b4d2107cf7e14d }
@@ -30,18 +35,4 @@ flows:
   - { id: FL-REC-001-B, sha256: 1885d6b4fe54f8a653f6574f2d8e0c9c16d6a250d83cb9ee019bec3102871353 }
   - { id: FL-REC-002, sha256: 8acd696805d52ad3067efc592d2209831af977d3a3777a5d4ba1b5e11b543755 }
   - { id: FL-REC-003, sha256: 6427ef67fa0da3ba2cac1d3b34d0f437c2e1e1ac029c25eb8096a85214108637 }
-findings:
-  - flow: FL-CLU-002
-    step: "3"
-    kind: unobservable
-    artifact: validation-scenarios.md § Estado entre flujos
-    evidence: >-
-      Pasada 1. El Then 3 decía «ninguna reserva ajena al escenario se ve afectada», pero el arnés deja el
-      estado como recién arrancado al empezar cada flujo y el Given solo crea las cinco reservas envejecidas:
-      no hay ninguna reserva ajena, así que la afirmación pasa sin mirar nada y no distingue un barrido que
-      reclama por el umbral de uno que se lleva todo lo que está en espera.
-    proposal: >-
-      Que el Given cree una sexta reserva en espera SIN envejecer, y que el Then afirme que sigue en
-      awaitingStock y que el proveedor no recibió su cancelación.
-    resolution: scenario
-    reason: "Corregido en el escenario: la sexta reserva sin envejecer hace que el Then 3 mida el umbral con las dos réplicas vivas."
+findings: []

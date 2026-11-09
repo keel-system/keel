@@ -4,7 +4,9 @@ types:
     # `awaitingStock` es el estado de ESPERA, y es lo que hace que la reconciliación
     # tenga algo que barrer: el encargo se publicó y el desenlace llega por un evento
     # que puede no llegar nunca. Sin un estado así, `reconciledBy` no tendría sentido.
-    values: [pending, awaitingStock, confirmed, released]
+    # `expired` es el desenlace del PLAZO (DSL 2.26): una reserva que nadie confirma a tiempo no retiene el
+    # pedido para siempre.
+    values: [pending, awaitingStock, confirmed, released, expired]
 
 entities:
   Reservation:
@@ -63,6 +65,11 @@ entities:
       createdAt:
         type: timestamp
         generated: true
+        description: >-
+          Cuándo nació la reserva. Es también el instante desde el que cuenta su plazo en pending: una
+          reserva nace en pending y ninguna arista vuelve a él, así que nacer y entrar en el estado son el
+          mismo instante. Para la espera del almacén no vale (puede confirmarse horas después), y por eso
+          esa tiene su marca propia.
     lifecycle:
       field: status
       transitions:
@@ -70,8 +77,9 @@ entities:
         # IRREPETIBLE la compensación por construcción — aplicarla dos veces la
         # rechaza el propio agregado, sin depender de ninguna guarda del borde.
         # Y una reserva pendiente no tiene stock encargado todavía: no hay nada que
-        # compensar, así que tampoco hay arista pending → released.
-        pending: [awaitingStock]
+        # compensar, así que tampoco hay arista pending → released. Si nadie la confirma, caduca (expired):
+        # tampoco hay nada que deshacer contra el almacén, porque el encargo todavía no salió.
+        pending: [awaitingStock, expired]
         # Desde la espera se sale por tres sitios, y esa es toda la historia del
         # encargo asíncrono: el almacén confirma (confirmed), el almacén rechaza o el
         # barrido se rinde (released), o no pasa NADA y la reserva se queda aquí —
@@ -79,3 +87,16 @@ entities:
         awaitingStock: [confirmed, released]
         confirmed: [released]
         released: []
+        expired: []
+      deadlines:
+        # El plazo de negocio: una reserva sin confirmar retiene el pedido `reservationHoldMinutes` desde
+        # que nace, y después la caduca `expireReservation`, que despacha el cronómetro del servicio por
+        # cada reserva vencida. Confirmar pasado el plazo se rechaza en el instante exacto del
+        # vencimiento, haya pasado el cronómetro o no: el cliente que confirma en el minuto 15 y medio no
+        # puede encargar stock de una reserva que el negocio ya da por caducada.
+        pending:
+          after: { parameter: reservationHoldMinutes, unit: minutes }
+          since: createdAt
+          to: expired
+          by: expireReservation
+          lateAction: { error: RESERVATION_EXPIRED }

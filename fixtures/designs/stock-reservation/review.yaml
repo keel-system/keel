@@ -1,8 +1,9 @@
-# Revisión semántica (review-checklist.md) de stock-reservation v1.1.0, hecha al preparar la corrida del
-# incremento 11 de keel-nest (2026-10-07) por quien la preparaba, siguiendo la checklist de /keel-validate id
-# a id, por delegación del diseñador. Los veredictos que no son `ok` llevan su porqué.
+# Revisión semántica (review-checklist.md) de stock-reservation v1.2.0. La de la v1.1.0 se hizo al preparar la
+# corrida del incremento 11 de keel-nest (2026-10-07); en la v1.2.0 (incremento 12 de PLAN-DSL-226-PLAZOS.md,
+# 2026-11-09) se rehízo entera, id a id, sobre el diseño con el plazo de pending, por delegación del diseñador.
+# Los veredictos que no son `ok` llevan su porqué.
 reviewedBy: keel-design-review
-reviewedAt: 1.1.0
+reviewedAt: 1.2.0
 findings:
   - id: REV-DOMAIN-PROMISED-STATE
     scope: domain.entities.Reservation
@@ -10,8 +11,17 @@ findings:
     note: >-
       Todo lo que la prosa promete se representa: la espera (awaitingStock, con su marca
       reserveStockAwaitingSince), sus tres salidas (confirmed; released por rechazo o por el barrido, con
-      releaseReason) y la corrección de recuento (lastCountedQuantity y adjustmentCount), que no mueve el
-      estado.
+      releaseReason), la caducidad del plazo (expired, al que solo se llega desde pending) y la corrección
+      de recuento (lastCountedQuantity y adjustmentCount), que no mueve el estado.
+  - id: REV-DOMAIN-DEADLINE-SINCE
+    scope: domain.entities.Reservation.lifecycle.deadlines.pending
+    verdict: ok
+    note: >-
+      El plazo de pending cuenta desde createdAt, y aquí vale: la reserva NACE en pending (createReservation
+      la crea con el default del estado) y ninguna arista vuelve a pending, así que nacer y entrar en el
+      estado son el mismo instante y no puede caducar antes de tiempo por una segunda entrada. createdAt lo
+      estampa la auditoría al crear y nadie lo reescribe. La espera del almacén, que sí empieza después de
+      nacer, tiene su marca propia (reserveStockAwaitingSince) y no comparte reloj con el plazo.
   - id: REV-DOMAIN-PARTIAL-WRITER
     scope: domain.entities.Reservation.releaseReason
     verdict: ok
@@ -19,7 +29,8 @@ findings:
       Hay dos vías a released —releaseReservation (el rechazo del almacén) y reconcileReservations (el
       barrido que se rinde)— y las dos escriben el porqué: la primera el motivo del evento, la segunda
       "sin respuesta del almacén" (regla de reconcileReservations, afirmada en FL-REC-001). Encontrado en
-      esta revisión: en la v1.0.0 el barrido liberaba sin motivo.
+      esta revisión: en la v1.0.0 el barrido liberaba sin motivo. A expired solo llega expireReservation,
+      y ahí releaseReason queda null a propósito: caducar no es liberar (FL-EXP-001 lo afirma).
   - id: REV-USECASES-GUARD-ORDER
     scope: use-cases.operations.reconcileReservations
     verdict: ok
@@ -28,7 +39,8 @@ findings:
       awaitingStock → released y solo necesita la reserva reclamada, que ya está cargada. Los órdenes de
       evaluación de validation-scenarios.md son implementables: la clave de idempotencia antes que la
       unicidad del pedido (FL-RES-001-C), y en el barrido la reserva resuelta antes de llamar al almacén
-      (la nota del stub, el orden de un deshacer).
+      (la nota del stub, el orden de un deshacer). expireReservation no tiene reglas: la transición
+      pending → expired es todo lo que hace, y la revalidación del estado la hace el cronómetro.
   - id: REV-USECASES-INTERNAL-REPEAT
     scope: use-cases
     verdict: accepted
@@ -36,7 +48,8 @@ findings:
       confirmReservation no declara idempotency a propósito: repetirla la rechaza la transición
       pending → awaitingStock, así que no publica un segundo encargo (registro estructural § 3.2).
       applyStockReserved y releaseReservation los frena su transición; reconcileReservations, el reclamo
-      y la transición awaitingStock → released. noteStockCount no tiene guarda de dominio y escribe un
+      y la transición awaitingStock → released; expireReservation, que el cronómetro puede despachar más de
+      una vez, la transición pending → expired. noteStockCount no tiene guarda de dominio y escribe un
       contador: lo único que frena la reentrega es el registro de procesados de su suscripción
       (tryRecord). Se acepta: es la rama que la fixture existe para medir (FL-CNT-001-B), y la operación es
       interna, sin otra puerta que la suscripción.
@@ -92,4 +105,5 @@ findings:
     note: >-
       getReservation busca por id (la clave primaria) y las tres operaciones internas por orderId, que
       es la naturalKey (índice único). El barrido filtra por estado y marca de espera, con su índice
-      compuesto [status, reserveStockAwaitingSince]. No hay listados.
+      compuesto [status, reserveStockAwaitingSince]. expireReservation busca por id, y el plazo no barre
+      la tabla de reservas: lo lleva la tabla del cronómetro, con su propio índice. No hay listados.

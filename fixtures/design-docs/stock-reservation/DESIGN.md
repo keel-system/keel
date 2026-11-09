@@ -1,17 +1,19 @@
 # stock-reservation — Documento de diseño
 
-> specs/stock-reservation v1.1.0. Diseño cerrado al preparar la corrida del incremento 11 de keel-nest
-> (2026-10-07); las decisiones las tomó quien la preparaba, por delegación del diseñador.
+> specs/stock-reservation v1.2.0. Diseño cerrado al preparar la corrida del incremento 11 de keel-nest
+> (2026-10-07) y ampliado con el plazo de `pending` en el incremento 12 de PLAN-DSL-226-PLAZOS.md
+> (2026-11-09); las decisiones las tomó quien lo preparaba, por delegación del diseñador.
 
 ## 1. Propósito y alcance
 
 Reserva stock para un pedido **encargándoselo al almacén**: la reserva se registra, se confirma publicando
 el encargo, y su desenlace llega por un aviso del almacén — que la confirma, la libera o corrige su
 recuento. Si el aviso **no llega nunca**, un barrido por reloj se rinde: libera la reserva y le cancela el
-bloqueo al almacén con una llamada HTTP. Es el diseño que mide la cadena entera de compensación e
+bloqueo al almacén con una llamada HTTP. Y una reserva que nadie confirma **caduca** a los 15 minutos de
+crearse. Es el diseño que mide la cadena entera de compensación e
 idempotencia de los generadores: idempotencia de petición, outbox, consumo deduplicado en los dos órdenes
 del guard, compensación irrepetible, reconciliación con reclamo entre réplicas y llamada saliente
-resiliente con clave de idempotencia.
+resiliente con clave de idempotencia; y desde la v1.2.0, el plazo de negocio con su rechazo tardío.
 
 Queda fuera, a propósito: la autenticación (API interna), la caché, el almacenamiento de archivos y el
 borrado. Motivos en § 6.
@@ -24,14 +26,17 @@ borrado. Motivos en § 6.
 
 Ciclo de vida: `pending` → `awaitingStock` (confirmada y encargada; `reserveStockAwaitingSince` dice desde
 cuándo espera) → `confirmed` (el almacén bloqueó el stock) o `released` (el almacén la rechazó, o el barrido
-se rindió; `releaseReason` dice por qué). Desde `confirmed` también se puede liberar. `released` es
-terminal. `lastCountedQuantity` y `adjustmentCount` registran las correcciones de recuento del almacén,
+se rindió; `releaseReason` dice por qué). Desde `confirmed` también se puede liberar. Una reserva que sigue
+en `pending` pasado su plazo pasa a `expired`. `released` y `expired` son terminales. `lastCountedQuantity` y `adjustmentCount` registran las correcciones de recuento del almacén,
 sin mover el estado.
 
 ## 3. Invariantes y reglas clave
 
 - Una reserva por pedido: la clave natural es `orderId`.
-- Confirmar solo desde `pending`; liberar desde `awaitingStock` o `confirmed`, nunca dos veces.
+- Confirmar solo desde `pending` y dentro del plazo: una reserva en `pending` caduca a los
+  `reservationHoldMinutes` (15 por defecto) desde `createdAt`, y confirmarla después se rechaza con
+  `RESERVATION_EXPIRED` en el instante exacto del vencimiento, haya pasado el cronómetro o no.
+- Liberar desde `awaitingStock` o `confirmed`, nunca dos veces.
 - Cada recuento suma uno a `adjustmentCount`: aplicar dos veces el mismo es un error que se ve.
 - El encargo se publica en la misma transacción que la confirmación (outbox).
 - Una reserva que lleva más de 30 minutos esperando al almacén se libera con el motivo «sin respuesta del
@@ -42,11 +47,12 @@ sin mover el estado.
 | Operación | Puerta | Éxito | Errores |
 |---|---|---|---|
 | `createReservation` | `POST /api/v1/reservations` (con `Idempotency-Key`) | `201` con la reserva | `409 RESERVATION_ALREADY_EXISTS`, `409 IDEMPOTENCY_KEY_IN_PROGRESS`/`_REUSED`, `400 VALIDATION_ERROR` |
-| `confirmReservation` | `POST /api/v1/reservations/{id}/confirm` | `200`, reserva en `awaitingStock` y `StockReservationRequested` publicado | `404 RESERVATION_NOT_FOUND`, `409 INVALID_STATE_TRANSITION` |
+| `confirmReservation` | `POST /api/v1/reservations/{id}/confirm` | `200`, reserva en `awaitingStock` y `StockReservationRequested` publicado | `404 RESERVATION_NOT_FOUND`, `409 INVALID_STATE_TRANSITION`, `410 RESERVATION_EXPIRED` |
 | `getReservation` | `GET /api/v1/reservations/{id}` | `200` con la reserva | `404 RESERVATION_NOT_FOUND` |
 | `applyStockReserved` | suscripción `StockReserved` | reserva en `confirmed` | sin reserva → descarte; ya liberada → sin efecto |
 | `noteStockCount` | suscripción `StockCountAdjusted` | recuento anotado | sin reserva → descarte |
 | `releaseReservation` | suscripción `StockRejected` | reserva en `released` con su motivo | sin reserva → descarte |
+| `expireReservation` | cronómetro, por cada reserva cuyo plazo venció | reserva en `expired` | ya fuera de `pending` → sin efecto |
 | `reconcileReservations` | reloj, cada minuto | las reservas atascadas, en `released`, y su bloqueo cancelado | — |
 
 ## 5. Fronteras e integraciones
@@ -75,6 +81,10 @@ reintenta hasta tres veces solo ante timeout o corte de conexión —un 5xx no s
   almacén. Corre en todas las réplicas y reclama con una marca persistida y caducable.
 - **La cancelación no repite un 5xx y se ignora si falla**: es una escritura ajena (repetir un 5xx puede
   ejecutarla dos veces) sobre un encargo cuyo desenlace ya no sabemos; el bloqueo huérfano es del almacén.
+- **El plazo de `pending` rechaza la confirmación tardía**: encargar stock de una reserva que el negocio ya
+  da por caducada es el error caro, y que la ventana dependa de cuándo pase el cronómetro no lo ha decidido
+  nadie. El plazo cuenta desde `createdAt` porque la reserva nace en `pending` y no vuelve a él. Caducar no
+  cancela nada en el almacén: en `pending` el encargo todavía no salió.
 - **Bloqueo optimista en la raíz**: la compensación puede entregarse dos veces a la vez, y el barrido
   puede coincidir con el desenlace del almacén.
 - **Sin autenticación**: la API es interna y la llama solo el sistema de pedidos, detrás de su red.
@@ -86,12 +96,15 @@ reintenta hasta tres veces solo ante timeout o corte de conexión —un 5xx no s
 Estable: las tres rutas, la forma de la reserva con `null` explícito, los `code`, el evento publicado y
 los tres que consume, con su envoltura Keel, y la llamada de cancelación con su clave de idempotencia.
 Adaptable: el broker y el motor (se eligen al generar), la política de reintentos, el umbral de paciencia
-del barrido (`unansweredAfterSeconds`) y la resiliencia de la llamada.
+del barrido (`unansweredAfterSeconds`), la duración del plazo (`reservationHoldMinutes`, un parámetro de
+despliegue) y la resiliencia de la llamada.
 
 ### Supuestos y limitaciones
 
 - La marca de espera no sale en ninguna respuesta: que se estampe al encargar no se comprueba en caja
   negra, lo vigila el gate estático.
+- Hasta que pasa el cronómetro, una reserva con el plazo vencido se lee en `pending`: el estado que se
+  devuelve es el guardado, no el efectivo.
 - No hay borrado ni retención: una reserva liberada sigue siendo el registro de lo que pasó.
 - Sin autenticación ni `cors`.
 

@@ -67,7 +67,7 @@ test('el reclamo del adaptador: SKIP LOCKED sobre la espera, el lote del perfil,
   const port = content(files, '/Repository/IReservationRepository.cs');
   assert.match(port, /Task<IReadOnlyList<Reservation>> ClaimForReconcileReservationsReserveStock\(CancellationToken cancellationToken = default\);/);
   const adapter = content(files, '/Repositories/ReservationRepository.cs');
-  assert.match(adapter, /ReconciliationSettings reconciliation, ReconciliationClaimStore reconciliationClaims\) : IReservationRepository/);
+  assert.match(adapter, /ReconciliationSettings reconciliation, ReconciliationClaimStore reconciliationClaims[,)][^\n]*\) : IReservationRepository/);
   assert.match(adapter, /RequireOwnTransaction\("ClaimForReconcileReservationsReserveStock"\);/);
   assert.match(adapter, /var window = reconciliation\.Windows\["reserveStock"\];/);
   assert.match(

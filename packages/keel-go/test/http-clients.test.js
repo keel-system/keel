@@ -101,7 +101,7 @@ test('el handler que activa otro servidor por HTTP recibe el puerto, cableado en
   assert.match(viaEvent, /se delega publicando StockReservationRequested/);
   const useCases = content(files, 'internal/application/use_cases.go');
   assert.match(useCases, /InventoryClient domain\.InventoryClient/);
-  assert.match(useCases, /NewReconcileReservationsCommandHandler\(deps\.ReservationRepository, deps\.InventoryClient\)/);
+  assert.match(useCases, /NewReconcileReservationsCommandHandler\(deps\.ReservationRepository, deps\.InventoryClient[,)]/);
   const main = content(files, 'cmd/server/main.go');
   assert.match(main, /clients\.SettingsFrom\(cfg\)/);
   assert.match(main, /inventoryClient, err := clients\.NewInventoryHTTPAdapter\(clientSettings, exchange, logger\)/);

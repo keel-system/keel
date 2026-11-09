@@ -1,7 +1,7 @@
 # stock-reservation — Escenarios de validación
 
 > Escenarios de aceptación ejecutables (Given/When/Then) derivados de
-> specs/stock-reservation v1.1.0. Contrato de validación para la fase de generación.
+> specs/stock-reservation v1.2.0. Contrato de validación para la fase de generación.
 
 > **Fixture de test del repo Keel.** Este archivo no es un diseño real: es el escenario **mínimo** que
 > ejercita la cadena entera de compensación e idempotencia contra infraestructura real —el encargo sale
@@ -15,6 +15,10 @@
 > entregas a la vez, la reentrega sin guarda de dominio y el desenlace que no llega, con el almacén
 > respondiendo, sin conexión o roto. Son los únicos que distinguen un servidor que implementa la
 > garantía de uno que solo la declara.
+
+> **Y el del plazo.** `FL-EXP-001` es la reserva que nadie confirma: el tiempo, por sí solo, la saca de
+> `pending`. Lo que mide no es que el cronómetro acabe pasando, sino que confirmar **pasado el plazo** se
+> rechace aunque todavía no haya pasado.
 
 > **Y los de clúster.** `FL-CLU-001`, `FL-CLU-002` y `FL-CLU-003` son las mismas garantías con una
 > **segunda instancia** del servicio viva: el relay, el barrido y la clave arbitrados entre instancias, que
@@ -60,16 +64,23 @@
   fila —retrasa su marca de espera directamente en la base— y espera un tick, con margen (hasta 90 s).
   No se acorta el umbral: eso pondría a todos los demás flujos bajo el barrido y mediría un servicio que
   nadie opera.
+- **Plazo**: el plazo de `pending` (`reservationHoldMinutes`: 15 min) cuenta desde `createdAt`, y el
+  escenario no lo espera ni lo acorta: lo **envejece para esa reserva** —retrasa su `createdAt` y el
+  vencimiento de su temporizador los mismos segundos, `ageForDeadline` del arnés— y a partir de ahí el
+  rechazo tardío ya lo ve en el acto. La caducidad la ejecuta el cronómetro en su próxima pasada, como en
+  producción, y el escenario la espera con margen (hasta 90 s). Acortar el parámetro pondría a todas las
+  reservas de los demás flujos bajo el plazo.
 
 ## Matriz de cobertura
 
 | Operación | Flujos | Superficie |
 |-----------|--------|------------|
 | createReservation | FL-RES-001, FL-RES-001-B, **FL-RES-001-C**, **FL-RES-001-D** | usuarios |
-| confirmReservation | FL-RES-002, **FL-OBX-001**, FL-RES-004 | usuarios |
+| confirmReservation | FL-RES-002, **FL-OBX-001**, FL-RES-004, **FL-EXP-001**, FL-EXP-001-B | usuarios |
 | applyStockReserved | FL-RES-003, FL-RES-003-B, FL-RES-004, FL-REC-001-B | suscripción (interna) |
 | noteStockCount | FL-CNT-001, **FL-CNT-001-B** | suscripción (interna) |
-| getReservation | FL-RES-001, FL-RES-004 | usuarios |
+| getReservation | FL-RES-001, FL-RES-004, FL-EXP-001 | usuarios |
+| expireReservation | **FL-EXP-001** | cronómetro (interna); alcanzable envejeciendo el plazo de la reserva |
 | releaseReservation | FL-CMP-001, FL-CMP-001-B, **FL-CMP-001-C** | suscripción (interna) |
 | reconcileReservations | **FL-REC-001**, **FL-REC-002**, **FL-REC-003**, **FL-CLU-002** | programada; alcanzable retrasando el reloj de la fila |
 | **clúster (2 réplicas)** | **FL-CLU-001**, **FL-CLU-002**, **FL-CLU-003** | outbox, barrido e idempotencia, arbitrados entre instancias |
@@ -86,6 +97,7 @@ Y la misma matriz leída por **mecanismo**, que es como se decide si falta algo:
 | Reconciliación (`reconciliation_claim`) | — | **FL-REC-001** (se rinde y cancela) |
 | Resiliencia de la llamada saliente | FL-REC-001 (responde) | **FL-REC-002** (sin conexión: reintenta) · **FL-REC-003** (5xx: no reintenta) |
 | Idempotencia saliente (`OutboundIdempotency`) | FL-REC-001 Then 3 (la cabecera en el cable) | **FL-REC-002** Then 3 (la MISMA clave en el reintento) |
+| Plazo de negocio (`keel_timer` y el rechazo tardío) | — | **FL-EXP-001** (confirmar tarde se rechaza; el cronómetro caduca) |
 | Arbitraje ENTRE réplicas | — | **FL-CLU-001** (relay) · **FL-CLU-002** (barrido) · **FL-CLU-003** (clave) |
 
 `reconcileReservations` es una operación por reloj y un cron no se alcanza desde fuera; lo que la hace
@@ -330,6 +342,45 @@ aplicar el efecto. Es el orden contrario al de la compensación, y no son interc
 primero es correcto porque un fallo transitorio se reintenta y la repetición la frena el agregado; aquí
 no hay nada que la frene, así que la ventana se cierra antes a cambio de perder el mensaje si el handler
 revienta.
+
+## Plazo: la reserva que nadie confirma
+
+El paso del tiempo como **causa** de una transición, no como recuperación de un fallo: nadie se equivoca
+y nada se cae, simplemente la reserva no se confirma a tiempo. Hay dos mecanismos y el flujo mide los dos:
+el **rechazo tardío**, que es del dominio y rechaza en el instante exacto del vencimiento, y la
+**caducidad**, que la ejecuta el cronómetro del servicio cuando pasa. Entre los dos queda una ventana —el
+plazo vencido y el cronómetro sin pasar— y es la que el rechazo tardío existe para cerrar.
+
+### FL-EXP-001: la reserva caduca sin confirmarse y confirmarla tarde se rechaza
+
+**Given**: una reserva `<r11>` con su pedido `<o11>`, creada como en FL-RES-001 y todavía en `pending`;
+otra reserva `<r12>` con su pedido `<o12>`, también en `pending` y sin envejecer. Se envejece el plazo de
+`<r11>` más allá de `reservationHoldMinutes` (una hora: el escenario lo hace sobre esa reserva, sin tocar
+el reloj del servicio ni el parámetro).
+
+**When**: inmediatamente después, `POST /api/v1/reservations/{r11}/confirm`.
+**Then**:
+1. Status `410` con `code` = `RESERVATION_EXPIRED`. El plazo venció y el dominio lo rechaza sin esperar al
+   cronómetro. Si el cronómetro se adelantó al `POST` y la reserva ya está en `expired`, lo que sale es
+   `409` con `code` = `INVALID_STATE_TRANSITION`, y es la misma decisión vista después; cualquier otra
+   respuesta es incorrecta, y un `200` es justo el fallo que este flujo existe para cazar: encargar stock
+   de una reserva que el negocio ya daba por caducada.
+2. No se publicó ningún `StockReservationRequested` con `orderId` = `<o11>`: rechazar es no encargar.
+3. `GET /api/v1/reservations/{r11}` acaba devolviendo `status` = `"expired"` (el cronómetro la caduca en su
+   próxima pasada) y `releaseReason` = `null`: caducar no es liberar, no había nada encargado que
+   deshacer.
+4. El proveedor **no** recibió ningún `DELETE /stock/reservations/{o11}`: en `pending` el encargo no
+   había salido.
+5. `<r12>` sigue en `pending`, y `POST /api/v1/reservations/{r12}/confirm` responde `200` con `status` =
+   `"awaitingStock"`: solo caduca la reserva cuyo plazo venció.
+
+#### FL-EXP-001-B: confirmar una reserva ya caducada
+
+**When**: con `<r11>` ya en `expired`, `POST /api/v1/reservations/{r11}/confirm` otra vez.
+**Then**:
+1. Status `409` con `code` = `INVALID_STATE_TRANSITION`: `expired` es terminal y de él no sale ninguna
+   arista. Ya no es el rechazo tardío —la caducidad pasó—, es el lifecycle.
+2. `GET /api/v1/reservations/{r11}` sigue devolviendo `status` = `"expired"`.
 
 ## Clúster: dos réplicas sobre la misma base
 
