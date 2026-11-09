@@ -55,6 +55,8 @@ import { messageComponents, messagePath } from './services.js';
 import { parametersClass, parametersPath } from './service-parameters.js';
 import { TABLE_PURGES_TS, tablePurges } from './purge.js';
 import { schedulerClass, schedulerPath } from './scheduling.js';
+import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
+import { ATTRIBUTES, OBSERVATIONS, TIMER_LAG, TIMER_PARKED } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 
 export { usesDeadlines, usesTimer, deadlineOf, TIMER_DATABASES };
 
@@ -314,7 +316,7 @@ export function generate(model) {
     { path: TIMER_STORE_TS, content: timerStoreFile() },
     document ? { path: MONGO_TIMER_STORE_TS, content: mongoTimerStoreFile() } : { path: SQL_TIMER_STORE_TS, content: sqlTimerStoreFile(model) },
     { path: TIMER_SETTINGS_TS, content: timerSettingsFile() },
-    { path: TIMER_POLLER_TS, content: timerPollerFile() },
+    { path: TIMER_POLLER_TS, content: timerPollerFile(model) },
     { path: TIMER_PURGE_TS, content: timerPurgeFile() },
     ...timerPurges(model).map((purge) => ({ path: purgeTimerPath(purge.table), content: purgeTimerFile(model, purge) })),
     ...timerSchedules(model).map((schedule) => ({ path: scheduleTimerPath(schedule.operation), content: scheduleTimerFile(model, schedule) })),
@@ -541,8 +543,11 @@ export abstract class TimerStore {
   /** Cuántos milisegundos faltan para lo próximo reclamable de esos kinds (null: nada; puede ser negativo). */
   abstract nextDueMs(kinds: readonly string[]): Promise<number | null>;
 
-  /** Los aparcados. */
+  /** Los aparcados, de todos los kinds (T5). */
   abstract parkedCount(): Promise<number>;
+
+  /** Cuántos milisegundos lleva esperando lo más antiguo reclamable YA de esos kinds (null: nada). El retraso del cronómetro. */
+  abstract lagMs(kinds: readonly string[]): Promise<number | null>;
 
   /** La purga de la tabla: vencido hace más de la retención y sin reclamar (R4, R7). */
   abstract purge(retentionDays: number): Promise<number>;
@@ -552,7 +557,7 @@ export abstract class TimerStore {
 
 // ─── El almacén relacional: las sentencias de keel-core, tal cual ────────────
 
-const STATEMENT_NAMES = ['dbNow', 'arm', 'ensureRecurring', 'claimLock', 'claimMark', 'claimed', 'complete', 'reschedule', 'fail', 'nextDueMs', 'parkedCount', 'purge'];
+const STATEMENT_NAMES = ['dbNow', 'arm', 'ensureRecurring', 'claimLock', 'claimMark', 'claimed', 'complete', 'reschedule', 'fail', 'nextDueMs', 'parkedCount', 'lagMs', 'purge'];
 
 function sqlTimerStoreFile(model) {
   const engine = engineOf(model);
@@ -717,6 +722,11 @@ export class SqlTimerStore extends TimerStore {
 
   async parkedCount(): Promise<number> {
     return Number(single((await this.exec(SQL.parkedCount)).records) ?? 0);
+  }
+
+  async lagMs(kinds: readonly string[]): Promise<number | null> {
+    const value = single((await this.exec(SQL.lagMs, { kinds: [...kinds] })).records);
+    return value == null ? null : Number(value);
   }
 
   async purge(retentionDays: number): Promise<number> {
@@ -922,6 +932,24 @@ export class MongoTimerStore extends TimerStore {
     return this.timers.countDocuments({ parked_at: { $ne: null } });
   }
 
+  async lagMs(kinds: readonly string[]): Promise<number | null> {
+    // El filtro del reclamo, el más antiguo y la hora del SERVIDOR ($$NOW), como lagPipeline de keel-core.
+    const result = await this.timers
+      .aggregate([
+        {
+          $match: {
+            kind: { $in: [...kinds] },
+            parked_at: null,
+            $expr: { $and: [{ $lte: ['$due_at', '$$NOW'] }, { $or: [{ $eq: ['$claimed_until', null] }, { $lt: ['$claimed_until', '$$NOW'] }] }] }
+          }
+        },
+        { $group: { _id: null, oldest: { $min: '$due_at' } } },
+        { $project: { _id: 0, lagMs: { $subtract: ['$$NOW', '$oldest'] } } }
+      ])
+      .next();
+    return result?.lagMs == null ? null : Number(result.lagMs);
+  }
+
   async purge(retentionDays: number): Promise<number> {
     const result = await this.timers.deleteMany({
       claim_token: null,
@@ -1041,10 +1069,20 @@ function text(configuration: Configuration, key: string, fallback: string): stri
 
 // ─── El sondeador ────────────────────────────────────────────────────────────
 
-function timerPollerFile() {
+function timerPollerFile(model) {
+  // Con telemetría (DSL 2.26, inc. 11): cada disparo es una observación y la réplica publica el retraso y los aparcados.
+  const telemetry = usesTelemetry(model);
+  // El disparo, observado con su kind (acotado por el diseño: nunca el id de la entidad) y su desenlace; sin telemetría, tal cual.
+  const observed = (expression) => (telemetry ? `observedTick(timer.kind, () => ${expression.replace(/\n/g, '\n  ')})` : expression);
   return tsModule(
     TIMER_POLLER_TS,
     [
+      ...(telemetry
+        ? [
+            { symbol: 'Telemetry', from: TELEMETRY_TS },
+            { symbol: 'ROOT_CONTEXT', from: '@opentelemetry/api' }
+          ]
+        : []),
       { symbol: 'Inject', from: '@nestjs/common' },
       { symbol: 'Injectable', from: '@nestjs/common' },
       { symbol: 'Logger', from: '@nestjs/common' },
@@ -1071,7 +1109,18 @@ export function nextTick(spec: string, from: Date): Date {
   return new CronTime(spec, 'UTC').getNextDateFrom(from, 'UTC').toJSDate();
 }
 
-/** Cuánto dormir: hasta lo próximo, con el tope y nunca negativo. */
+${telemetry ? `/**
+ * Un disparo, observado (${OBSERVATIONS.timerTick}): su kind —acotado por el diseño, nunca el id de la entidad— y su
+ * desenlace, y su duración en el histograma que el panel agrupa por kind. Raíz a propósito: un tick no tiene petición de
+ * la que colgar, y abre la traza de lo que hace.
+ */
+function observedTick<T>(kind: string, action: () => Promise<T>): Promise<T> {
+  const telemetry = Telemetry.current();
+  if (telemetry == null) return action();
+  return telemetry.observe('${OBSERVATIONS.timerTick}', { name: \`timer \${kind}\`, labels: { '${ATTRIBUTES.timerKind}': kind }, parent: ROOT_CONTEXT }, action);
+}
+
+` : ''}/** Cuánto dormir: hasta lo próximo, con el tope y nunca negativo. */
 export function sleepMs(nextDueMs: number | null, maxSleepMs: number): number {
   if (nextDueMs == null) return maxSleepMs;
   return Math.max(0, Math.min(nextDueMs, maxSleepMs));
@@ -1140,7 +1189,7 @@ export class TimerPoller implements OnApplicationBootstrap, BeforeApplicationShu
           // falla NO se aparca: aparcarlo tras max-attempts fallos (una base caída unos minutos) dejaría el barrido o la
           // purga sin reloj para siempre, y asegurar al arrancar no toca una fila con el mismo spec.
           try {
-            await recurring.tick();
+            await ${observed('recurring.tick()')};
           } catch (failure) {
             this.logger.warn(\`El tick del recurrente \${timer.kind} falló; se rearma para el siguiente: \${failure instanceof Error ? failure.message : String(failure)}\`);
           }
@@ -1148,11 +1197,11 @@ export class TimerPoller implements OnApplicationBootstrap, BeforeApplicationShu
           continue;
         }
         if (handler == null) throw new Error(\`Sin handler para el temporizador \${timer.kind}\`);
-        await this.transactions.inTransaction(async () => {
+        await ${observed(`this.transactions.inTransaction(async () => {
           const outcome = await handler.handle(timer, await this.store.dbNow());
           if (outcome.done) await this.store.complete(timer.id, token);
           else await this.store.reschedule(timer.id, token, outcome.dueAt);
-        });
+        })`)};
       } catch (failure) {
         await this.failed(timer, token, failure);
       }
@@ -1232,7 +1281,12 @@ export class TimerPoller implements OnApplicationBootstrap, BeforeApplicationShu
       this.logger.log('Cronómetro apagado (${TIMER_SWITCH.key}: false): los temporizadores se arman, pero nadie los dispara');
       return;
     }
-    this.running = true;
+    this.running = true;${telemetry ? `
+    // El RETRASO y los APARCADOS, en cada scrape. Cada réplica publica lo mismo (la tabla es una): el panel los agrega con max.
+    Telemetry.current()?.gauge('${TIMER_LAG}', 'Segundos que lleva esperando el temporizador vencido y sin reclamar más antiguo', async () =>
+      Math.max(0, (await this.store.lagMs(this.kinds)) ?? 0) / 1000
+    );
+    Telemetry.current()?.gauge('${TIMER_PARKED}', 'Temporizadores que agotaron sus intentos y quedaron aparcados', () => this.store.parkedCount());` : ''}
     this.unsubscribe = this.signal.subscribe((dueAt) => this.onArmed(dueAt));
     this.loopDone = this.loop();
   }

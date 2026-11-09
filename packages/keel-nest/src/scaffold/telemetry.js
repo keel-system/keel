@@ -468,8 +468,15 @@ export class Telemetry {
       name: metric,
       help,
       registers: [this.registry],
+      // Una lectura que falla (la base caída, la tabla que todavía no existe) publica NaN, como Micrometer, y NO lanza:
+      // prom-client convierte la excepción de un collect en un 500 del scrape ENTERO, y una base que va mal se llevaría
+      // por delante todas las métricas justo cuando hacen falta (medido en telemetry-check, DSL 2.26 inc. 11).
       async collect() {
-        this.set(await read());
+        try {
+          this.set(await read());
+        } catch {
+          this.set(Number.NaN);
+        }
       }
     });
   }

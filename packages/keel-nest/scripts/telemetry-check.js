@@ -25,14 +25,16 @@ import zlib from 'node:zlib';
 import { randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { loadService } from '@keel-system/keel-core';
-import { ATTRIBUTES, METRICS_TRANSPORT, OBSERVATIONS, promMetric, promTag } from '@keel-system/keel-core/gen/telemetry-vocabulary';
+import { ATTRIBUTES, METRICS_TRANSPORT, OBSERVATIONS, TIMER_LAG, TIMER_PARKED, promGauge, promMetric, promTag } from '@keel-system/keel-core/gen/telemetry-vocabulary';
+import { KEEL_TIMER, TIMER_PARAMETERS, TIMER_PURGE_KIND } from '@keel-system/keel-core/gen/timer-store';
+import { GENERATOR_TABLES, schemaStepSql } from '@keel-system/keel-core/gen/schema-steps';
 import { trafficPath } from '@keel-system/keel-core/gen/deploy-probes';
 import { planService } from '../src/scaffold/index.js';
 import { NODE_RUNTIME } from '../src/scaffold/telemetry.js';
 import { JOSE_VERSION, MYSQL2_VERSION } from '../src/lib/assets.js';
 import { FIXTURES_DIR } from '../test/helpers/workspace.js';
 import { tmpDir } from '../test/helpers/tmp.js';
-import { freePort, resolveRuntime, startDatabase, stopDatabase } from './lib/database-container.js';
+import { DB_NAME, freePort, resolveRuntime, run, startDatabase, stopDatabase } from './lib/database-container.js';
 
 const keep = process.argv.includes('--keep');
 const isWindows = process.platform === 'win32';
@@ -49,7 +51,8 @@ const CASES = {
   'TEL-8': 'la traza llega al colector y continúa la de quien llamó',
   'TEL-9': 'los logs de consola (ECS) llevan el trace.id y el correlationId de la petición',
   'TEL-10': 'production: el scrape vive en el puerto de gestión y no en el principal; las sondas, en el principal',
-  'TEL-11': 'con seguridad, el scrape entra sin token mientras la API exige credencial'
+  'TEL-11': 'con seguridad, el scrape entra sin token mientras la API exige credencial',
+  'TEL-12': 'el cronómetro publica su retraso (con el valor de lo vencido), sus aparcados y la duración de cada disparo por kind'
 };
 
 const results = [];
@@ -202,6 +205,66 @@ async function developCases(variant, app, model, receiver, trace, correlationId,
   record(variant, 'TEL-9', Boolean(logLine), 'ninguna línea ECS con el correlationId y el trace.id de la petición');
 }
 
+/**
+ * El cronómetro (DSL 2.26, inc. 11). La app corre con el sueño máximo del sondeador a 10 minutos: así, la purga de keel_timer
+ * vencida A ESPALDAS del sondeador (por SQL, hace 120 s según la base) se queda sin reclamar, y el retraso se lee con su
+ * VALOR. El disparo se mide al rearrancar: la primera pasada reclama la purga ya vencida y la observa.
+ */
+const LONG_SLEEP = { [TIMER_PARAMETERS.maxSleepMs.env]: '600000' };
+
+function ageTimerPurge(engine, database) {
+  const statement =
+    engine === 'postgresql'
+      ? `UPDATE keel_timer SET due_at = current_timestamp - interval '120 seconds' WHERE kind = '${TIMER_PURGE_KIND}'`
+      : `UPDATE keel_timer SET due_at = DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 120 SECOND) WHERE kind = '${TIMER_PURGE_KIND}'`;
+  const args =
+    engine === 'postgresql'
+      ? ['exec', database.name, 'psql', '-U', DB_NAME, '-d', DB_NAME, '-v', 'ON_ERROR_STOP=1', '-c', statement]
+      : ['exec', database.name, 'mysql', '-h', '127.0.0.1', '-u', 'root', `-p${database.password}`, DB_NAME, '-e', statement];
+  const result = run(runtime, args);
+  if (result.status !== 0) throw new Error(`no se pudo vencer la purga de keel_timer: ${result.stderr}`);
+}
+
+const gaugeValue = (text, name) => {
+  const line = text.split('\n').find((candidate) => candidate.startsWith(`${name} `) || candidate.startsWith(`${name}{`));
+  return line == null ? null : Number(line.slice(line.lastIndexOf(' ') + 1));
+};
+
+/** La primera mitad, con la app en marcha: el retraso con su valor y la serie de los aparcados. */
+async function timerLag(app, engine, database) {
+  const scrapeOf = async () => (await get(`${app.base}${METRICS_TRANSPORT.scrapePath}`)).text;
+  // La app asegura sus recurrentes al arrancar: hasta que la fila existe, no hay qué vencer.
+  let lag = null;
+  let text = '';
+  for (let attempt = 0; attempt < 40; attempt++) {
+    ageTimerPurge(engine, database);
+    text = await scrapeOf();
+    lag = gaugeValue(text, promGauge(TIMER_LAG));
+    if (lag != null && lag >= 100) break;
+    await sleep(500);
+  }
+  return { lag, parked: gaugeValue(text, promGauge(TIMER_PARKED)) };
+}
+
+/** La segunda mitad, tras rearrancar: el histograma del disparo con su kind y su desenlace. */
+async function timerTicked(app) {
+  const tick = promMetric(OBSERVATIONS.timerTick);
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const text = (await get(`${app.base}${METRICS_TRANSPORT.scrapePath}`)).text;
+    const hit = text
+      .split('\n')
+      .some(
+        (line) =>
+          line.startsWith(tick.bucket) &&
+          line.includes(`${promTag(ATTRIBUTES.timerKind)}="${TIMER_PURGE_KIND}"`) &&
+          line.includes(`${promTag(ATTRIBUTES.outcome)}="ok"`)
+      );
+    if (hit) return true;
+    await sleep(500);
+  }
+  return false;
+}
+
 const runtime = resolveRuntime();
 if (!runtime) {
   console.error('telemetry-check necesita podman o docker en marcha.');
@@ -233,6 +296,18 @@ try {
   const mysql = await startDatabase(runtime, 'mysql');
   databases.push(mysql);
   const dbEnv = (database) => ({ DB_URL: database.url, DB_USERNAME: database.user, DB_PASSWORD: database.password });
+  // keel_timer, con el paso de esquema del generador (gen/schema-steps.js): en develop el esquema lo ponen las
+  // migraciones, y un proyecto recién generado no trae la baseline (la exporta el agente). Sin la tabla no hay retraso
+  // que leer ni disparo que observar.
+  for (const [engine, database] of [['postgresql', postgres], ['mysql', mysql]]) {
+    const step = schemaStepSql(engine, GENERATOR_TABLES.filter((table) => table.table === KEEL_TIMER.table));
+    const args =
+      engine === 'postgresql'
+        ? ['exec', '-i', database.name, 'psql', '-U', DB_NAME, '-d', DB_NAME, '-v', 'ON_ERROR_STOP=1']
+        : ['exec', '-i', database.name, 'mysql', '-h', '127.0.0.1', '-u', 'root', `-p${database.password}`, DB_NAME];
+    const created = run(runtime, args, { input: step });
+    if (created.status !== 0) throw new Error(`no se pudo crear keel_timer en ${engine}: ${created.stderr}`);
+  }
 
   for (const [variant, project, database, poolMax] of [
     ['job-dispatch@postgresql', base, postgres, 7],
@@ -243,8 +318,11 @@ try {
       ...dbEnv(database),
       DB_POOL_MAX_SIZE: String(poolMax),
       OTEL_EXPORTER_OTLP_ENDPOINT: receiver.endpoint,
-      TELEMETRY_EXPORT_ENABLED: 'true'
+      TELEMETRY_EXPORT_ENABLED: 'true',
+      ...LONG_SLEEP
     });
+    const engine = variant.endsWith('@mysql') ? 'mysql' : 'postgresql';
+    let timer;
     try {
       const trace = caller();
       const correlationId = `tel-check-${randomBytes(4).toString('hex')}`;
@@ -252,8 +330,21 @@ try {
         await get(`${app.base}${trafficPath(project.model)}`, { traceparent: trace.traceparent, 'x-correlation-id': correlationId });
       }
       await developCases(variant, app, project.model, receiver, trace, correlationId, poolMax);
+      timer = await timerLag(app, engine, database);
     } finally {
       await app.stop();
+    }
+    const again = await startApp(project.dir, { PROFILE: 'develop', ...dbEnv(database), ...LONG_SLEEP });
+    try {
+      const ticked = await timerTicked(again);
+      record(
+        variant,
+        'TEL-12',
+        timer.lag >= 100 && timer.lag < 600 && timer.parked === 0 && ticked,
+        `retraso ${timer.lag} s (se esperaban unos 120), aparcados ${timer.parked}, disparo de ${TIMER_PURGE_KIND} observado: ${ticked}`
+      );
+    } finally {
+      await again.stop();
     }
   }
 
@@ -292,7 +383,7 @@ try {
   if (keep) console.log(`  (--keep) proyectos en ${root}`);
 }
 
-const expected = ['TEL-1', 'TEL-2', 'TEL-3', 'TEL-4', 'TEL-5', 'TEL-6', 'TEL-7', 'TEL-8', 'TEL-9'].length * 2 + 2;
+const expected = ['TEL-1', 'TEL-2', 'TEL-3', 'TEL-4', 'TEL-5', 'TEL-6', 'TEL-7', 'TEL-8', 'TEL-9', 'TEL-12'].length * 2 + 2;
 const failed = results.filter((result) => !result.ok).length;
 if (fatal) {
   console.error(`\nsin veredicto: ${fatal}`);

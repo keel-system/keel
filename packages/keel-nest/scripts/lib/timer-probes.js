@@ -91,8 +91,9 @@ export const TIMER_SABOTAGES = Object.freeze({
     // Sin arriendo, el bucle de findOneAndUpdate vuelve a llevarse en el MISMO lote lo que acaba de reclamar: cae
     // además DL-5 (en relacional el lote es una sola sentencia y no lo ve). Lo mismo que midió keel-spring.
     document: ['mongo-timer-store.ts', "$add: ['$$NOW', leaseMs]", "$add: ['$$NOW', 0]"],
-    breaks: DEADLINE_SABOTAGES['dl-no-lease'].breaks,
-    documentBreaks: ['DL-5', ...DEADLINE_SABOTAGES['dl-no-lease'].breaks]
+    // Y TL-1 (inc. 11): con arriendo cero, lo «arrendado» vuelve a contar en el retraso al instante siguiente.
+    breaks: [...DEADLINE_SABOTAGES['dl-no-lease'].breaks, 'TL-1'],
+    documentBreaks: ['DL-5', ...DEADLINE_SABOTAGES['dl-no-lease'].breaks, 'TL-1']
   },
   'dl-outside-tx': {
     // El armado en una transacción NUEVA, fuera de la del caso de uso.
@@ -121,7 +122,7 @@ export function timerSabotageBreaks(id, branch) {
  * sonda se llama `DL-n: …`; `R1: …` no lo rompe ningún sabotaje.
  */
 export function timerSabotageVerdict(checks, id, branch) {
-  const failedIds = [...new Set(checks.filter((check) => !check.ok).map((check) => /^(DL-\d+|R\d+):/.exec(check.name)?.[1] ?? check.name))].sort();
+  const failedIds = [...new Set(checks.filter((check) => !check.ok).map((check) => /^(DL-\d+|R\d+|TL-\d+):/.exec(check.name)?.[1] ?? check.name))].sort();
   const want = timerSabotageBreaks(id, branch);
   return { exact: failedIds.length === want.length && failedIds.every((name, index) => name === want[index]), failed: failedIds, want };
 }
@@ -381,6 +382,17 @@ ${lateTarget ? `    await tx.inTransaction(async () => {
     await sondeador.pollOnce();
     check('DL-10: agotados los intentos, el temporizador se aparca', (await timerStore.parkedCount()) === antes + 1, await timerStore.parkedCount());
     check('DL-10: el aparcado no movió la entidad', (await state(id)) === ${enumOf(deadline.state)}, await state(id));
+  });
+  // El RETRASO del cronómetro (DSL 2.26, inc. 11): lo que lee el gauge keel.timer.lag.seconds, contra el motor real. El
+  // filtro es el del reclamo, así que ni lo arrendado ni un kind que la réplica no conoce cuentan.
+  await dl('TL-1', 'el retraso del cronómetro: lo vencido y libre más antiguo de los kinds conocidos, con la hora de la base', async () => {
+    check('TL-1: sin nada vencido, el retraso es nulo', (await timerStore.lagMs([KIND])) === null, await timerStore.lagMs([KIND]));
+    await expired(120_000);
+    const lag = await timerStore.lagMs([KIND]);
+    check('TL-1: el retraso es lo que lleva vencido (unos 120 s)', lag >= 115_000 && lag < 180_000, lag);
+    check('TL-1: un kind que la réplica no conoce no cuenta', (await timerStore.lagMs(['deadline:Ajeno.pending'])) === null, await timerStore.lagMs(['deadline:Ajeno.pending']));
+    await timerStore.claim([KIND], 10, 60_000, randomUUID());
+    check('TL-1: lo arrendado no cuenta', (await timerStore.lagMs([KIND])) === null, await timerStore.lagMs([KIND]));
   });
   await dl('R1', 'cada réplica asegura sus recurrentes al arrancar, y asegurarlos dos veces no duplica', async () => {
     const sondeador = poller();

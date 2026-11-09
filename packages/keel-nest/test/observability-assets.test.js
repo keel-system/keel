@@ -25,8 +25,29 @@ const SUBJECTS = [
   { name: 'notification-mailer', stack: { database: 'mysql', broker: 'rabbitmq', telemetry: 'otel' } }
 ];
 
+const NEST_STUB = `
+export const Inject = () => () => {};
+export const Injectable = () => () => {};
+export const Global = () => () => {};
+export const Module = () => () => {};
+export class Logger {
+  log() {}
+  warn() {}
+  error() {}
+}
+`;
+
+// Y el de `cron`: el sondeador solo le pide el siguiente tick de un recurrente, al rearmarlo tras el disparo.
+const CRON_STUB = `
+export class CronTime {
+  getNextDateFrom() {
+    return { toJSDate: () => new Date(Date.now() + 86_400_000) };
+  }
+}
+`;
+
 const PROMQL_WORDS = new Set([
-  'sum', 'max', 'min', 'rate', 'by', 'le', 'histogram_quantile', 'clamp_min', 'max_over_time', 'irate', 'avg', 'count', 'without', 'on'
+  'sum', 'max', 'min', 'rate', 'by', 'le', 'histogram_quantile', 'clamp_min', 'max_over_time', 'min_over_time', 'irate', 'avg', 'count', 'without', 'on'
 ]);
 
 /** Los nombres de serie que nombra una expresión PromQL (sin funciones, etiquetas ni literales). */
@@ -87,7 +108,8 @@ for (const { name, stack } of SUBJECTS) {
   });
 
   test(`${name}: toda serie que consultan el panel y las alertas la publica la telemetría emitida`, async () => {
-    const tree = transpileTree(nest.files);
+    // El sustituto de @nestjs/common: el sondeador del cronómetro lo importa (sus decoradores y su Logger) y aquí no hay Nest.
+    const tree = transpileTree(nest.files, { stubs: { '@nestjs/common': NEST_STUB, cron: CRON_STUB } });
     const { Telemetry, instrumentStorage, instrumentMail } = await tree.load('src/infrastructure/telemetry/telemetry.ts');
     const configuration = {
       profiles: ['local'],
@@ -107,6 +129,36 @@ for (const { name, stack } of SUBJECTS) {
       telemetry.cacheGet('c', true);
       telemetry.gauge('keel.outbox.dead_lettered', 'x', async () => 0);
       telemetry.connectionPool(() => ({ active: 1, idle: 1, max: 4, pending: 0 }));
+      // El cronómetro (DSL 2.26, inc. 11): el TimerPoller EMITIDO, con un almacén falso que entrega la purga de la tabla ya
+      // vencida. Arrancarlo registra el retraso y los aparcados; su primera pasada dispara la purga y la observa.
+      const pollerFile = nest.files.find((file) => file.path.endsWith('/timer-poller.ts'));
+      if (pollerFile) {
+        const { TimerPoller } = await tree.load(pollerFile.path);
+        const kind = 'purge:keel_timer';
+        let claims = 0;
+        const store = {
+          dbNow: async () => new Date(),
+          ensureRecurring: async () => {},
+          claim: async () => (claims++ === 0 ? [{ id: 't1', kind, entityId: null, dueAt: new Date(), attempts: 0 }] : []),
+          reschedule: async () => true,
+          nextDueMs: async () => null,
+          lagMs: async () => 120_000,
+          parkedCount: async () => 0
+        };
+        const settings = { enabled: true, maxSleepMs: 30_000, batchSize: 10, leaseMs: 60_000, maxAttempts: 3, retryDelayMs: 0, drainBudgetMs: 1_000, retentionDays: 7, purgeCron: '0 30 5 * * *' };
+        const poller = new TimerPoller(store, [], [{ kind, spec: '0 30 5 * * *', tick: async () => {} }], settings, { inTransaction: (work) => work() }, { subscribe: () => () => {} });
+        poller.onApplicationBootstrap();
+        while (claims === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+        await poller.beforeApplicationShutdown();
+        const exposition = await telemetry.registry.metrics();
+        assert.match(exposition, /^keel_timer_lag_seconds 120$/m, 'el gauge del retraso no publica lo que dice el almacén, en segundos');
+        assert.match(exposition, /^keel_timer_tick_seconds_count\{[^}]*keel_timer_kind="purge:keel_timer"[^}]*\} 1$/m, 'el disparo no dejó su serie con el kind');
+      }
+      // Un gauge cuya lectura falla (la base caída) no puede tumbar el scrape entero: publica NaN y lo demás sale.
+      telemetry.gauge('keel.probe.failing', 'sonda', async () => {
+        throw new Error('base caída');
+      });
+      assert.match(await telemetry.registry.metrics(), /^keel_probe_failing nan$/im, 'un gauge que falla tumba el scrape');
       const { default: Fastify } = await import('fastify');
       const fastify = Fastify();
       telemetry.installHttp(fastify);

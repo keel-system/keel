@@ -138,6 +138,35 @@ export const MECHANISMS = {
       }
     }
   },
+  'timer-telemetry': {
+    emitter: 'src/scaffold/timer.js (TimerPoller: observedTick y los dos gauges; lagMs en SqlTimerStore y MongoTimerStore) · src/scaffold/observability-assets.js',
+    why: 'El retraso se lee con una consulta por almacén y un gauge que no casa con nada no falla: publica 0, el panel dice que el cronómetro va al día y la alerta no dispara nunca. Y un disparo sin su kind deja el p95 del panel sin nada por lo que agrupar.',
+    parity: {
+      pair: 'notification-mailer',
+      // Las series solo existen con telemetría: sin el stack, ninguna rama tendría marcadores.
+      stack: { telemetry: 'otel' },
+      markers: {
+        relational: ['observedTick(timer.kind', "'keel.timer.lag.seconds'", 'SQL.lagMs'],
+        document: ['observedTick(timer.kind', "'keel.timer.lag.seconds'", "lagMs: { $subtract: ['$$NOW', '$oldest'] }"]
+      }
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'telemetry-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'job-dispatch: TEL-12 con la app arrancada en develop y el sueño máximo a 10 min: la purga de keel_timer vencida por SQL hace 120 s publica ese retraso, y al rearrancar la primera pasada deja keel_timer_tick_seconds con kind y desenlace. db-check (TL-1, verification-codes) ejecuta la consulta del retraso contra los dos motores: lo vencido, un kind ajeno y lo arrendado. test/observability-assets.test.js EJECUTA el TimerPoller emitido y exige sus series. Falsado: sin el kind en la observación cae TEL-12 en los dos motores, y lagMs con la sentencia equivocada cae TL-1. De paso destapó un defecto: un gauge cuya lectura fallaba devolvía 500 en el scrape ENTERO; ahora publica NaN'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'verification-codes-mongo: TL-1 ejecuta la agregación del retraso ($match del reclamo, $min de due_at y $$NOW) contra el replica set. El disparo observado es el mismo TimerPoller que mide la rama relacional. Falsado: la resta invertida ($oldest - $$NOW) cae en TL-1, y dl-no-lease cae además en TL-1 (lo arrendado vuelve a contar)'
+      }
+    }
+  },
   deadline: {
     emitter: 'src/scaffold/timer.js (lateGuardBlock, adapterArming) · src/scaffold/entities.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js',
     why: 'Un rechazo tardío con < en vez de <= o un armado fuera de la transacción compilan igual de bien, y ningún escenario de un solo instante los ve: el precio es confirmar lo que el negocio daba por caducado, o un temporizador huérfano de una alta que revirtió.',

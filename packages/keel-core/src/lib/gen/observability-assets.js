@@ -52,7 +52,7 @@ import { usesTimer } from './timer-plan.js';
 
 const DATASOURCE = { type: 'prometheus', uid: 'prometheus' };
 
-const PROMQL_WORDS = new Set(['sum', 'max', 'min', 'rate', 'by', 'le', 'histogram_quantile', 'clamp_min', 'max_over_time', 'irate', 'avg', 'count', 'without', 'on']);
+const PROMQL_WORDS = new Set(['sum', 'max', 'min', 'rate', 'by', 'le', 'histogram_quantile', 'clamp_min', 'max_over_time', 'min_over_time', 'irate', 'avg', 'count', 'without', 'on']);
 
 /** Los nombres de serie que nombra una expresión PromQL (sin funciones, etiquetas ni literales). */
 export function seriesOf(expr) {
