@@ -34,7 +34,17 @@ nada de la huella toca el cronómetro, el relay, las purgas ni el reclamo: lo re
 
 Sin relanzar `score-scenarios.sh`: se leyó el JUnit (22 clases, ninguna con `<failure>`), la huella y `design-gaps.yaml`.
 
+## El orden que el agente adivinó
+
+`listProducts` no declaraba `sort` en la v1.1.0 (`CHK-USECASES-COLLECTION-NO-SORT`, uno de los `undecided` del
+`--accept-unready`): el contrato era el orden por id. FL-PRD-003-B y -C afirman `createdAt` descendente, que solo
+decía la prosa de la convención «Orden de las colecciones». El agente lo escribió a mano en `ListProductsQueryHandler.java`
+(`createdAt` desc, `sku` asc) y no lo reportó como hueco: pasó, pero desviado del spec sin decirlo. La corrida de
+keel-dotnet se paró ahí con `culprit: design`, y la fixture lo declara desde la v1.1.1.
+
 ## designGaps
+
+- `list-order-in-prose` — `listProducts` sin `sort`: el orden de los escenarios solo estaba en prosa (no reportado; cerrado en la v1.1.1)
 
 - `upload-type-rejection` — `addProductImage` no declara `FILE_TOO_LARGE` (413) ni `UNSUPPORTED_CONTENT_TYPE` (415); el código los usa por convención
 - `category-no-create` — no hay operación que cree categorías: los escenarios las siembran por SQL

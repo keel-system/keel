@@ -102,6 +102,9 @@ operations:
     output:
       entity: Product
       paginated: true
+      # El orden que afirman FL-PRD-003-B y -C (v1.1.1: antes solo lo decía la prosa de los
+      # escenarios, y el contrato era el orden por id).
+      sort: [createdAt:desc, sku:asc]
       # Marcador operativo del barrido, no algo que el cliente necesite.
       exclude: [recordWithdrawalAwaitingSince]
 

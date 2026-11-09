@@ -1,7 +1,7 @@
 # catalog — Escenarios de validación
 
 > Escenarios de aceptación ejecutables (Given/When/Then) derivados de
-> specs/catalog v1.1.0. Contrato de validación para la fase de generación.
+> specs/catalog v1.1.1. Contrato de validación para la fase de generación.
 
 > **Fixture de test del repo Keel.** Este archivo no es un diseño real: existe para que los tests
 > de `keel-spring` ejerciten el andamiaje de pruebas de integración (`src/integrationTest/`) y el

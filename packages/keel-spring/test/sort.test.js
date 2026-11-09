@@ -34,7 +34,10 @@ function scaffold(patch, stack) {
 }
 
 test('sin sort declarado, el adaptador ordena igualmente por id: la paginación no queda al azar', () => {
-  const { read } = scaffold();
+  // catalog-extended declara el orden de listProducts desde la v1.1.1: aquí se le quita.
+  const { read } = scaffold((layers) => {
+    delete layers['use-cases'].operations.listProducts.output.sort;
+  });
   const adapter = read(ADAPTER);
 
   assert.ok(adapter.includes('private static final Sort TIE_BREAKER = Sort.by(Sort.Order.asc("id"));'));

@@ -35,7 +35,17 @@ Seis fallos, todos de prueba y ninguno en `src/`: `seedCategory` no rellenaba `c
 C y E en cascada), dos aserciones que el Then no fija (FL-IMG-001-D, FL-PRD-002-F) y un cierre exacto de `category`
 que no contaba con `recordWithdrawalAwaitingSince` (FL-PRD-002-D).
 
+## El orden que el agente adivinó
+
+`listProducts` no declaraba `sort` en la v1.1.0 (`CHK-USECASES-COLLECTION-NO-SORT`, uno de los `undecided` del
+`--accept-unready`): el contrato era el orden por id. FL-PRD-003-B y -C afirman `createdAt` descendente, que solo
+decía la prosa de la convención «Orden de las colecciones». El agente lo escribió a mano en `list-products-query-handler.ts`
+(`createdAt` desc, `sku` asc) y no lo reportó como hueco: pasó, pero desviado del spec sin decirlo. La corrida de
+keel-dotnet se paró ahí con `culprit: design`, y la fixture lo declara desde la v1.1.1.
+
 ## designGaps
+
+- `list-order-in-prose` — `listProducts` sin `sort`: el orden de los escenarios solo estaba en prosa (no reportado; cerrado en la v1.1.1)
 
 - `upload-type-rejection` — `addProductImage` no declara 413, 415, `CATEGORY_NOT_FOUND` ni la parte `image` ausente (hoy 400 sin code)
 - `category-no-create` — no hay operación que cree categorías (y la siembra tiene que poner `created_at`)
