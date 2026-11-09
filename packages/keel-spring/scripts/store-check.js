@@ -48,6 +48,9 @@
 // mismo vale para cada `<Operación>ScheduleTimer`, y `--sabotage=timer-every-replica-schedule` sabotea SOLO esos: es
 // lo que demuestra que la sonda mide el `schedule` y no solo la primera purga, que es la que cae antes en las aserciones.
 //
+// `--sabotage=relay-no-wake` (inc. 9) quita del bridge EMITIDO el aviso al relay tras escribir la fila: verde es que caiga
+// exactamente RW-1. `--sabotage=relay-no-retry` hace que el relay olvide el reintento que programó: cae exactamente RW-3.
+//
 // Necesita podman o docker, y JDK (Gradle compila el proyecto entero, `main` incluido).
 
 import fs from 'node:fs';
@@ -63,6 +66,7 @@ import { scaffoldService } from '../src/scaffold/index.js';
 import { storeSubjects, storeTestClasses, hasSubjects, TEST_GLOB } from '../src/lib/store-probes.js';
 import { CLASS_PURGE_TIMER, everyReplicaSabotage, purgeTargetFiles, purgeTimerTestClass, scheduleTargetFiles, usesPurgeTimers } from '../src/lib/purge-timer-probes.js';
 import { databaseHealthProbe } from '../src/lib/stack-catalog.js';
+import { CLASS_RELAY_WAKE, RELAY_WAKE_SABOTAGES, relayWakeTestClass } from '../src/lib/relay-wake-probes.js';
 
 // La URI del Mongo del perfil `local`, leída del db.yaml GENERADO. En Boot 4 la conexión del cliente
 // es `spring.mongodb.uri` (antes `spring.data.mongodb.uri`). Si no aparece, el runner se para aquí:
@@ -81,7 +85,7 @@ const keep = args.includes('--keep');
 const fixture = args.find((arg) => !arg.startsWith('--')) ?? 'notification-mailer';
 const database = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ?? 'postgresql';
 const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
-const SABOTAGES = ['eager-fetch', 'timer-every-replica', 'timer-every-replica-schedule'];
+const SABOTAGES = ['eager-fetch', 'timer-every-replica', 'timer-every-replica-schedule', ...Object.keys(RELAY_WAKE_SABOTAGES)];
 if (sabotage && !SABOTAGES.includes(sabotage)) {
   console.error(`store-check: sabotaje desconocido '${sabotage}' (conocidos: ${SABOTAGES.join(', ')})`);
   process.exit(2);
@@ -190,6 +194,14 @@ function prepare() {
       fs.writeFileSync(target, original.replace(patch.find, patch.replace).replace(patch.field.find, patch.field.replace), 'utf8');
     }
   }
+  if (RELAY_WAKE_SABOTAGES[sabotage]) {
+    if (!subjects.outbox) throw new Error(`sabotaje ${sabotage}: '${fixture}' no tiene outbox`);
+    const patch = RELAY_WAKE_SABOTAGES[sabotage];
+    const target = findGenerated(projectDir, patch.file(model));
+    const original = fs.readFileSync(target, 'utf8');
+    if (!original.includes(patch.find)) throw new Error(`sabotaje ${sabotage}: ${patch.file(model)} ya no tiene la forma que el sabotaje rompe`);
+    fs.writeFileSync(target, original.replace(patch.find, patch.replace), 'utf8');
+  }
   const db = YAML.parse(fs.readFileSync(dbFile, 'utf8'));
   const datasource = document ? { uri: mongoUriOf(db) } : (db?.spring?.datasource ?? {});
 
@@ -248,6 +260,11 @@ function prepare() {
       package: timer.timer,
       content: purgeTimerTestClass(model, { datasource, packages: { ...timer, ...scheduling, targets } })
     });
+  }
+  // El relay por réplica (inc. 9): con el relay EMITIDO en marcha y el bridge escribiendo la fila.
+  if (subjects.outbox) {
+    const relayPackages = resolvePackages(projectDir, { relay: 'OutboxRelay.java', bridge: `${model.service.className}DomainEventBridge.java` });
+    clases.push({ className: CLASS_RELAY_WAKE, package: relayPackages.relay, content: relayWakeTestClass(model, { datasource, packages: relayPackages }) });
   }
   for (const clase of clases) {
     const testFile = path.join(projectDir, 'src/test/java', ...clase.package.split('.'), `${clase.className}.java`);
@@ -392,7 +409,8 @@ console.log(
     ...(subjects.commandIdempotency ? ['almacén de claves de petición'] : []),
     ...(subjects.dedupe ? ['deduplicación de consumo'] : []),
     ...(subjects.reconciliation ? [`reclamo de reconciliación (${subjects.reconciliation.activation})`] : []),
-    ...(clases.some((clase) => clase.className === CLASS_PURGE_TIMER) ? ['purgas en modo clúster (cronómetro)'] : [])
+    ...(clases.some((clase) => clase.className === CLASS_PURGE_TIMER) ? ['purgas en modo clúster (cronómetro)'] : []),
+    ...(clases.some((clase) => clase.className === CLASS_RELAY_WAKE) ? ['relay por réplica (despertar y reintento)'] : [])
   ].join(', ')}`
 );
 

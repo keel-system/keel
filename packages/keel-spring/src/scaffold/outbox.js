@@ -13,6 +13,7 @@ import { javaFile, javaPath, subPackage } from './render.js';
 import { claimSelectionSnippet, claimTransaction, supportsSkipLocked } from '../lib/claim-sql.js';
 import { usesTelemetry, tracedDispatch, messageTracingImport, TRACED_DISPATCH_IMPORTS } from './telemetry.js';
 import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, purgeSchedule, purgeScheduleImports, PURGE_QUERY_IMPORTS } from './purge.js';
+import { TIMER_SWITCH } from '@keel-system/keel-core/gen/timer-store';
 import {
   OUTBOX_EVENT,
   OUTBOX_LAST_ERROR_LENGTH,
@@ -86,6 +87,8 @@ export function generate(model) {
     renderDispatcherPort(model),
     renderDispatcherStub(model),
     document ? renderDocumentRelay(model) : renderRelay(model),
+    renderPurge(model),
+    renderAppended(model),
     // Las dos piezas que sacan la publicación de la transacción, solo en la rama
     // relacional: la documental nunca la tuvo dentro (ver renderDocumentRelay).
     ...(document ? [] : [renderClaimedEvent(model), renderRelayStore(model)])
@@ -552,7 +555,7 @@ function renderDocumentRelay(model) {
  * broker — I/O externo dentro de una transacción de base de datos.
  */
 @Component
-public class OutboxRelay {
+public class OutboxRelay implements SmartLifecycle {
 
     private static final Logger log = LoggerFactory.getLogger(OutboxRelay.class);
 
@@ -577,8 +580,7 @@ public class OutboxRelay {
     @Value("\${${OUTBOX_RELAY.claimTimeoutMs.key}:${OUTBOX_RELAY.claimTimeoutMs.default}}")
     private long claimTimeoutMs;
 
-    @Value("\${${OUTBOX_PURGE.retentionDays.key}:${OUTBOX_PURGE.retentionDays.default}}")
-    private int retentionDays;
+${relayLoopFields()}
 
     public OutboxRelay(
             OutboxEventMongoRepository outboxRepository,
@@ -612,9 +614,15 @@ public class OutboxRelay {
                 OutboxEventDocument.class);
     }
 
-    @Scheduled(fixedDelayString = "\${${OUTBOX_RELAY.fixedDelayMs.key}:${OUTBOX_RELAY.fixedDelayMs.default}}")
-    public void relay() {
-        for (OutboxEventDocument row : claimPending()) {
+    /**
+     * Una pasada: reclama, publica y devuelve CUÁNDO correr la siguiente (ver {@link #nextRun}). La llama el bucle del
+     * relay; visible para las pruebas.
+     */
+    public long relay() {
+        long passStart = System.currentTimeMillis();
+        long retryAt = Long.MAX_VALUE;
+        List<OutboxEventDocument> claimed = claimPending();
+        for (OutboxEventDocument row : claimed) {
             try {
                 dispatcher.dispatch(row.getDestination(), row.getRoutingKey(), row.getEventType(), row.getPayload());
                 row.markPublished(Instant.now());
@@ -635,12 +643,16 @@ public class OutboxRelay {
                 } else {
                     // Backoff: aplaza el próximo intento crecientemente para no
                     // reintentar en bucle apretado si el broker está caído.
-                    row.scheduleNextAttempt(Instant.now().plusMillis(backoffDelayMs(row.getAttempts())));
+                    Instant nextAttempt = Instant.now().plusMillis(backoffDelayMs(row.getAttempts()));
+                    row.scheduleNextAttempt(nextAttempt);
+                    // Hacia ARRIBA: truncado, la pasada llegaría microsegundos antes de que la fila sea elegible.
+                    retryAt = Math.min(retryAt, nextAttempt.toEpochMilli() + 1);
                     log.warn("Outbox: fallo entregando {} (intento {}): {}", row.getId(), row.getAttempts(), ex.getMessage());
                 }
             }
             outboxRepository.save(row);
         }
+        return nextRun(claimed.size() >= batchSize, retryAt, passStart);
     }
 
     /**
@@ -694,13 +706,7 @@ public class OutboxRelay {
         return delay;
     }
 
-${purgeSchedule(model, OUTBOX_EVENT.table, OUTBOX_PURGE.cron)}    public void purge() {
-        Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
-        long deleted = outboxRepository.deletePublishedBefore(cutoff);
-        if (deleted > 0) {
-            log.info("Outbox: purgados {} documentos publicados antes de {}", deleted, cutoff);
-        }
-    }
+${relayLoopMethods(model)}
 
     private static String truncate(String message) {
         if (message == null) {
@@ -717,7 +723,6 @@ ${purgeSchedule(model, OUTBOX_EVENT.table, OUTBOX_PURGE.cron)}    public void pu
       subPackage(model, OUTBOX_PKG),
       [
         'java.time.Instant',
-        'java.time.temporal.ChronoUnit',
         'java.util.ArrayList',
         'java.util.List',
         'org.slf4j.Logger',
@@ -732,8 +737,8 @@ ${purgeSchedule(model, OUTBOX_EVENT.table, OUTBOX_PURGE.cron)}    public void pu
         'org.springframework.data.mongodb.core.query.Criteria',
         'org.springframework.data.mongodb.core.query.Query',
         'org.springframework.data.mongodb.core.query.Update',
-        'org.springframework.scheduling.annotation.Scheduled',
         'org.springframework.stereotype.Component',
+        ...RELAY_LOOP_IMPORTS,
         ...traced.imports
       ],
       traced.body
@@ -876,7 +881,7 @@ function renderRelay(model) {
  * retención y tope de intentos salen de parameters/, nunca del código.
  */
 @Component
-public class OutboxRelay {
+public class OutboxRelay implements SmartLifecycle {
 
     private static final Logger log = LoggerFactory.getLogger(OutboxRelay.class);
 
@@ -907,10 +912,7 @@ public class OutboxRelay {
     @Value("\${${OUTBOX_RELAY.claimTimeoutMs.key}:${OUTBOX_RELAY.claimTimeoutMs.default}}")
     private long claimTimeoutMs;
 
-    @Value("\${${OUTBOX_PURGE.retentionDays.key}:${OUTBOX_PURGE.retentionDays.default}}")
-    private int retentionDays;
-
-${purgeSettings('outbox.purge')}
+${relayLoopFields()}
 
     public OutboxRelay(OutboxEventJpaRepository outboxRepository, OutboxRelayStore store,
             OutboxDispatcher dispatcher, MeterRegistry meterRegistry) {
@@ -941,8 +943,13 @@ ${purgeSettings('outbox.purge')}
                 .register(meterRegistry);
     }
 
-    @Scheduled(fixedDelayString = "\${${OUTBOX_RELAY.fixedDelayMs.key}:${OUTBOX_RELAY.fixedDelayMs.default}}")
-    public void relay() {
+    /**
+     * Una pasada: reclama, publica y devuelve CUÁNDO correr la siguiente (ver {@link #nextRun}). La llama el bucle del
+     * relay; visible para las pruebas.
+     */
+    public long relay() {
+        long passStart = System.currentTimeMillis();
+        long retryAt = Long.MAX_VALUE;
         // (1) Reclamo: transacción corta, solo base de datos.
         List<ClaimedOutboxEvent> claimed = store.claimBatch(maxAttempts, batchSize, claimTimeoutMs);
         for (ClaimedOutboxEvent row : claimed) {
@@ -965,23 +972,15 @@ ${purgeSettings('outbox.purge')}
                     log.error("Outbox: {} agotó {} reintentos y queda como dead-letter: {}",
                             row.id(), maxAttempts, ex.getMessage());
                 } else {
+                    retryAt = Math.min(retryAt, outcome.nextAttemptAtMs());
                     log.warn("Outbox: fallo entregando {} (intento {}): {}", row.id(), outcome.attempts(), ex.getMessage());
                 }
             }
         }
+        return nextRun(claimed.size() >= batchSize, retryAt, passStart);
     }
 
-    /**
-     * Por lotes y SIN transacción propia: cada lote confirma en la suya (ver BatchedPurge). Una
-     * sola transacción alrededor de todo volvería a ser el DELETE único que esto sustituye.
-     */
-${purgeSchedule(model, OUTBOX_EVENT.table, OUTBOX_PURGE.cron)}    public void purge() {
-        Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
-        long deleted = ${purgeCall({ what: 'Outbox', repository: 'outboxRepository', deleteMethod: 'deletePublishedBefore' })};
-        if (deleted > 0) {
-            log.info("Outbox: purgadas {} filas publicadas antes de {}", deleted, cutoff);
-        }
-    }
+${relayLoopMethods(model)}
 
     private static String truncate(String message) {
         if (message == null) {
@@ -998,7 +997,6 @@ ${purgeSchedule(model, OUTBOX_EVENT.table, OUTBOX_PURGE.cron)}    public void pu
       subPackage(model, OUTBOX_PKG),
       [
         'java.time.Instant',
-        'java.time.temporal.ChronoUnit',
         'java.util.List',
         'org.slf4j.Logger',
         'org.slf4j.LoggerFactory',
@@ -1006,9 +1004,8 @@ ${purgeSchedule(model, OUTBOX_EVENT.table, OUTBOX_PURGE.cron)}    public void pu
         'io.micrometer.core.instrument.MeterRegistry',
         'jakarta.annotation.PostConstruct',
         'org.springframework.beans.factory.annotation.Value',
-        'org.springframework.scheduling.annotation.Scheduled',
         'org.springframework.stereotype.Component',
-        ...purgeCallImports(model),
+        ...RELAY_LOOP_IMPORTS,
         ...traced.imports
       ],
       traced.body
@@ -1110,16 +1107,20 @@ ${claimTx.annotation}
                     row.markFailed(truncatedError);
                     int attempts = row.getAttempts();
                     boolean deadLettered = attempts >= maxAttempts;
+                    long nextAttemptAtMs = Long.MAX_VALUE;
                     if (!deadLettered) {
                         // Backoff: aplaza el próximo intento crecientemente para no
                         // reintentar en bucle apretado si el broker está caído.
-                        row.scheduleNextAttempt(Instant.now().plusMillis(backoffDelayMs(attempts, backoffInitialMs, backoffMaxMs)));
+                        Instant nextAttempt = Instant.now().plusMillis(backoffDelayMs(attempts, backoffInitialMs, backoffMaxMs));
+                        row.scheduleNextAttempt(nextAttempt);
+                        // Hacia ARRIBA: truncado, la pasada llegaría microsegundos antes de que la fila sea elegible.
+                        nextAttemptAtMs = nextAttempt.toEpochMilli() + 1;
                     }
-                    return new MarkFailedOutcome(attempts, deadLettered);
+                    return new MarkFailedOutcome(attempts, deadLettered, nextAttemptAtMs);
                 })
                 // La fila desapareció entre el reclamo y el desenlace: no hay nada que
                 // actualizar, y se reporta agotada para no reintentar sobre un id que ya no está.
-                .orElse(new MarkFailedOutcome(maxAttempts, true));
+                .orElse(new MarkFailedOutcome(maxAttempts, true, Long.MAX_VALUE));
     }
 
     // Backoff exponencial (multiplicador 2) con tope: initial * 2^(attempts-1), saturado en
@@ -1133,7 +1134,8 @@ ${claimTx.annotation}
         return delay;
     }
 
-    record MarkFailedOutcome(int attempts, boolean deadLettered) {
+    /** {@code nextAttemptAtMs}: cuándo vuelve a ser elegible la fila (Long.MAX_VALUE si se rindió); el relay lo recuerda. */
+    record MarkFailedOutcome(int attempts, boolean deadLettered, long nextAttemptAtMs) {
     }
 }`;
 
@@ -1149,6 +1151,275 @@ ${claimTx.annotation}
         'org.springframework.data.domain.PageRequest',
         'org.springframework.stereotype.Component',
         ...claimTx.imports
+      ],
+      body
+    )
+  };
+}
+
+// ─── El relay por réplica (DSL 2.26, inc. 9) ─────────────────────────────────
+//
+// El relay ya no es un `@Scheduled` de 1 s: lleva su propio bucle, uno por réplica, en un hilo de plataforma (como el
+// sondeador del cronómetro). Lo despierta el commit de la transacción que escribe en el outbox (`OutboxAppended`, que
+// publica el bridge), sondea de respaldo cada `outbox.relay.poll-ms` y recuerda el reintento más próximo que programó
+// para no esperar al respaldo tras un fallo. La regla de cuándo corre la pasada siguiente es `relayNextRunMs` de
+// keel-core/gen/timer-plan.js, la misma en los cuatro generadores.
+//
+// La pausa del arnés (resiembra del broker) deja de depender de `ScheduledAnnotationBeanPostProcessor`: el relay expone
+// `pause()`/`resume()`, y el arnés los llama por reflexión sobre el bean, que resuelve por nombre.
+
+/** El evento con el que el bridge avisa de una fila nueva del outbox: lo oye el relay TRAS el commit. */
+export const OUTBOX_APPENDED_CLASS = 'OutboxAppended';
+
+/** La línea con la que el bridge avisa al relay, tras escribir la fila (el sabotaje `relay-no-wake` la quita). */
+export const OUTBOX_WAKE_LINE = `events.publishEvent(${OUTBOX_APPENDED_CLASS}.INSTANCE);`;
+
+function renderAppended(model) {
+  const body = `/**
+ * Una fila nueva en el outbox. La publica el bridge al escribirla, DENTRO de la transacción del cambio, y el relay de
+ * esta réplica la oye después del commit ({@code @TransactionalEventListener}): es lo que hace que el evento salga en
+ * milisegundos en vez de esperar al sondeo de respaldo. Si la transacción revierte, no llega a nadie.
+ */
+public record ${OUTBOX_APPENDED_CLASS}() {
+
+    public static final ${OUTBOX_APPENDED_CLASS} INSTANCE = new ${OUTBOX_APPENDED_CLASS}();
+}`;
+  return { path: javaPath(model, OUTBOX_PKG, OUTBOX_APPENDED_CLASS), content: javaFile(subPackage(model, OUTBOX_PKG), [], body) };
+}
+
+/** Los imports del bucle del relay, en las dos ramas. */
+const RELAY_LOOP_IMPORTS = [
+  'java.util.concurrent.CountDownLatch',
+  'java.util.concurrent.TimeUnit',
+  'java.util.concurrent.atomic.AtomicLong',
+  'java.util.concurrent.locks.ReentrantLock',
+  'org.springframework.context.SmartLifecycle',
+  'org.springframework.core.task.SimpleAsyncTaskExecutor',
+  'org.springframework.transaction.event.TransactionPhase',
+  'org.springframework.transaction.event.TransactionalEventListener'
+];
+
+/** Los campos del bucle: el sondeo de respaldo, el interruptor y el estado del despertar y de la pausa. */
+function relayLoopFields() {
+  return `    /** El sondeo de RESPALDO: lo normal es que despierte el commit (ver {@link #onAppended}). */
+    @Value("\${${OUTBOX_RELAY.pollMs.key}:${OUTBOX_RELAY.pollMs.default}}")
+    private long pollMs;
+
+    /** El interruptor de los relojes, el mismo que el del cronómetro: en {@code test} va apagado. */
+    @Value("\${${TIMER_SWITCH.key}:${TIMER_SWITCH.default}}")
+    private boolean enabled;
+
+    private final Object monitor = new Object();
+    /** Lo tiene la pasada mientras corre: {@link #pause()} lo toma para esperar a la que esté en vuelo. */
+    private final ReentrantLock passLock = new ReentrantLock();
+    private volatile boolean running;
+    private volatile boolean paused;
+    private boolean woken;
+    /** El reintento más próximo que esta réplica programó y aún no ha llegado; {@code Long.MAX_VALUE}: ninguno. */
+    private long pendingRetryMs = Long.MAX_VALUE;
+    private volatile CountDownLatch stopped;
+    private final AtomicLong passes = new AtomicLong();`;
+}
+
+/** Los métodos del bucle, comunes a las dos ramas: `relay()` es la pasada de cada una. */
+function relayLoopMethods(model) {
+  return `    /**
+     * Cuándo corre la pasada siguiente ({@code relayNextRunMs} de keel-core/gen/timer-plan.js): en el acto con el lote
+     * lleno (quedan pendientes); si no, al primero del reintento más próximo que esta réplica programó y del sondeo de
+     * respaldo. Un reintento ya vencido al empezar la pasada lo reclamó ella, así que se olvida.
+     */
+    long nextRun(boolean full, long retryAtMs, long passStartMs) {
+        long remembered = pendingRetryMs > passStartMs ? pendingRetryMs : Long.MAX_VALUE;
+        pendingRetryMs = Math.min(remembered, retryAtMs);
+        long now = System.currentTimeMillis();
+        if (full) {
+            return now;
+        }
+        return Math.min(pendingRetryMs, now + pollMs);
+    }
+
+    /** Una fila nueva confirmada en ESTA réplica: el relay sale ya, sin esperar al sondeo. */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onAppended(${OUTBOX_APPENDED_CLASS} appended) {
+        wake();
+    }
+
+    /** Adelanta la pasada a AHORA. Un despertar durante una pasada no se pierde: la siguiente va sin dormir. */
+    public void wake() {
+        synchronized (monitor) {
+            woken = true;
+            monitor.notifyAll();
+        }
+    }
+
+    /**
+     * Para el relay de esta réplica y ESPERA a la pasada que esté en vuelo: al volver, no hay ninguna publicando. Lo usa
+     * el arnés durante la resiembra del broker. Devuelve si había un relay en marcha que pausar.
+     */
+    public boolean pause() {
+        synchronized (monitor) {
+            paused = true;
+            monitor.notifyAll();
+        }
+        passLock.lock();
+        passLock.unlock();
+        return running;
+    }
+
+    /** Lo reanuda, con una pasada en el acto: lo escrito durante la pausa despertó a un relay parado. */
+    public void resume() {
+        synchronized (monitor) {
+            paused = false;
+            woken = true;
+            monitor.notifyAll();
+        }
+    }
+
+    private void loop() {
+        while (running) {
+            synchronized (monitor) {
+                while (running && paused) {
+                    try {
+                        monitor.wait();
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+                woken = false;
+            }
+            long next;
+            passLock.lock();
+            try {
+                // La pausa pudo llegar entre la espera y el candado: entonces esta pasada no corre.
+                if (paused || !running) {
+                    continue;
+                }
+                passes.incrementAndGet();
+                next = relay();
+            } catch (RuntimeException failure) {
+                log.error("La pasada del relay falló; se reintenta tras el sondeo de respaldo", failure);
+                next = System.currentTimeMillis() + pollMs;
+            } finally {
+                passLock.unlock();
+            }
+            synchronized (monitor) {
+                long remaining;
+                while (running && !woken && !paused && (remaining = next - System.currentTimeMillis()) > 0) {
+                    try {
+                        monitor.wait(remaining);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * El hilo lo da un ejecutor de Spring con hilos de PLATAFORMA, no un {@code Thread} a mano (lo veta
+     * check-logging.sh), y empieza sin contexto, como el {@code @Scheduled} al que sustituye.
+     */
+    @Override
+    public void start() {
+        running = true;
+        stopped = new CountDownLatch(1);
+        SimpleAsyncTaskExecutor executor = new SimpleAsyncTaskExecutor("${model.service.artifactId}-outbox-relay-");
+        executor.setVirtualThreads(false);
+        executor.execute(() -> {
+            try {
+                loop();
+            } finally {
+                stopped.countDown();
+            }
+        });
+    }
+
+    /** Al apagar se espera a la pasada en vuelo: cortarla deja filas con su lease, que otra réplica tendría que esperar. */
+    @Override
+    public void stop() {
+        running = false;
+        synchronized (monitor) {
+            monitor.notifyAll();
+        }
+        if (stopped != null) {
+            try {
+                stopped.await(30, TimeUnit.SECONDS);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    @Override
+    public boolean isRunning() {
+        return running;
+    }
+
+    @Override
+    public boolean isAutoStartup() {
+        return enabled;
+    }
+
+    /** Cuántas pasadas lleva el bucle de esta réplica: en reposo, una por sondeo de respaldo. */
+    long passes() {
+        return passes.get();
+    }`;
+}
+
+/**
+ * La purga de lo ya publicado, en un bean APARTE del relay (inc. 9): antes compartían bean, y pausar el relay pausaba la
+ * purga. La dispara el cronómetro (`OutboxEventPurgeTimer`) o, en un motor sin él, su `@Scheduled`; lo que hace es lo de
+ * siempre.
+ */
+function renderPurge(model) {
+  const document = model.persistenceKind === 'document';
+  const { repository } = outboxNames(model);
+  const call = document
+    ? 'outboxRepository.deletePublishedBefore(cutoff)'
+    : purgeCall({ what: 'Outbox', repository: 'outboxRepository', deleteMethod: 'deletePublishedBefore' });
+  const body = `/**
+ * Purga lo ya publicado del outbox (lo pendiente no se toca nunca): la tabla no es un histórico.${document ? '' : `
+ *
+ * <p>Por lotes y SIN transacción propia: cada lote confirma en la suya (ver BatchedPurge). Una sola transacción
+ * alrededor de todo volvería a ser el DELETE único que esto sustituye.`}
+ */
+@Component
+public class OutboxPurge {
+
+    private static final Logger log = LoggerFactory.getLogger(OutboxPurge.class);
+
+    private final ${repository} outboxRepository;
+
+    @Value("\${${OUTBOX_PURGE.retentionDays.key}:${OUTBOX_PURGE.retentionDays.default}}")
+    private int retentionDays;
+${document ? '' : `\n${purgeSettings('outbox.purge')}\n`}
+    public OutboxPurge(${repository} outboxRepository) {
+        this.outboxRepository = outboxRepository;
+    }
+
+${purgeSchedule(model, OUTBOX_EVENT.table, OUTBOX_PURGE.cron)}    public void purge() {
+        Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
+        long deleted = ${call};
+        if (deleted > 0) {
+            log.info("Outbox: purgadas {} ${document ? 'documentos publicados' : 'filas publicadas'} antes de {}", deleted, cutoff);
+        }
+    }
+}`;
+  return {
+    path: javaPath(model, OUTBOX_PKG, 'OutboxPurge'),
+    content: javaFile(
+      subPackage(model, OUTBOX_PKG),
+      [
+        'java.time.Instant',
+        'java.time.temporal.ChronoUnit',
+        'org.slf4j.Logger',
+        'org.slf4j.LoggerFactory',
+        'org.springframework.beans.factory.annotation.Value',
+        'org.springframework.stereotype.Component',
+        ...purgeScheduleImports(model, OUTBOX_EVENT.table),
+        ...(document ? [] : purgeCallImports(model))
       ],
       body
     )

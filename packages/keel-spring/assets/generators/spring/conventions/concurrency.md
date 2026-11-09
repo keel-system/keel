@@ -76,8 +76,10 @@ ya no lleva `@Scheduled`: solo despacha. Ojo con dos cosas que no cambian:
 - Un tick que falla no se aparca: se rearma para el siguiente, como hacía su cron.
 
 Sobre MariaDB, SQL Server y Oracle no hay cronómetro (sus sentencias no se han medido), y todo lo de abajo
-sigue siendo `@Scheduled`, que corre **en todas las réplicas** a la vez. El relay del outbox es
-`@Scheduled` en todos los motores. Los que genera `build` están preparados para eso:
+sigue siendo `@Scheduled`, que corre **en todas las réplicas** a la vez. El relay del outbox no es ni lo uno
+ni lo otro: corre **por réplica** en su propio bucle, en todos los motores (DSL 2.26). Lo despierta el commit
+que escribe en el outbox, en su réplica, y sondea de respaldo cada `outbox.relay.poll-ms` (30 s) para lo que
+dejó una réplica caída. Los que genera `build` están preparados para correr en todas las réplicas:
 
 - Las purgas (`processed_event`, `idempotency_record`, `outbox_event`) borran por rango de fecha: N
   réplicas ejecutando el mismo `DELETE` es ruido, no daño. Y cada tabla lleva su índice sobre la columna

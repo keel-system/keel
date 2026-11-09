@@ -401,7 +401,7 @@ entre instancias lo único que sirve es el reclamo.
 Es una mitigación, no una garantía: reparte el arranque. Dos barridos que duren más que su separación se
 solapan igual, y contra eso el segundo inicial no puede nada. Acotar la concurrencia del scheduler
 (`concurrency-limit`) sí los serializaría, pero es **global**: se lo aplicaría también al `OutboxRelay`,
-que corre cada segundo, y un barrido largo pasaría a retrasar la entrega de eventos. Por eso el
+que hasta el DSL 2.26 corría cada segundo (hoy lleva su propio bucle), y un barrido largo retrasaba la entrega de eventos. Por eso el
 `SchedulingConfig` que genera `build` dimensiona su pool a **un hilo por tarea programada**: saca el
 reloj de los carriers de los hilos virtuales sin serializar a nadie, que es lo que se quería conservar.
 

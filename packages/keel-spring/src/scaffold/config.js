@@ -1201,8 +1201,9 @@ function messagingYaml(model, profile) {
     lines.push(
       'outbox:',
       '  relay:',
-      '    # Cada cuánto el relay busca filas pendientes y las entrega al broker.',
-      parameterLine(profile, OUTBOX_RELAY.fixedDelayMs),
+      '    # Sondeo de RESPALDO: al relay lo despierta el commit que escribe en el outbox,',
+      '    # en su réplica; esto solo recoge lo que dejó una réplica caída (DSL 2.26).',
+      parameterLine(profile, OUTBOX_RELAY.pollMs),
       parameterLine(profile, OUTBOX_RELAY.batchSize),
       '    # Tras agotar los reintentos, la fila queda como dead-letter (no se',
       '    # reintenta más ni se borra); se reporta a ERROR para inspección.',

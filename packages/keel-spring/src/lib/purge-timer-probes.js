@@ -43,7 +43,7 @@ export function scheduleTargetFiles(model) {
 export function purgeTargetFiles(model) {
   const document = model.persistenceKind === 'document';
   const files = {
-    outbox_event: 'OutboxRelay.java',
+    outbox_event: 'OutboxPurge.java',
     processed_event: 'IdempotencyGuard.java',
     idempotency_record: document ? 'MongoIdempotencyStore.java' : 'JpaIdempotencyStore.java',
     reconciliation_claim: 'ReconciliationClaimPurge.java'

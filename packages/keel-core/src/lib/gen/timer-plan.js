@@ -10,7 +10,8 @@
 //   · inc. 8: el `schedule` de las operaciones, también en modo CLÚSTER y con DRENAJE (abajo). Antes cada réplica corría
 //     su pasada con su cron, y el reclamo por fila repartía el trabajo; el reclamo sigue (el tick es al menos una vez),
 //     pero la pasada la hace una sola réplica;
-//   · inc. 9: el relay del outbox.
+//   · inc. 9: el relay del outbox, en modo POR RÉPLICA (abajo): cada réplica sigue relayando lo suyo, porque su reclamo
+//     ya reparte las filas, pero deja de sondear cada segundo. La despierta el commit que escribe en el outbox.
 //
 // Un motor sin sentencias medidas (MariaDB, SQL Server, Oracle: solo los genera keel-spring) no tiene cronómetro, y sus
 // purgas se quedan como estaban, con su cron por réplica: la matriz de paridad lo dice como degradado.
@@ -161,3 +162,61 @@ export const DRAIN_CASES = Object.freeze([
   Object.freeze({ id: 'DR-2', what: 'con menos candidatos que el lote, el tick hace una sola pasada' }),
   Object.freeze({ id: 'DR-3', what: 'agotado el presupuesto, el tick para aunque el lote siga saliendo lleno' })
 ]);
+
+// ─── El relay del outbox, por réplica (inc. 9, decisión 8 del plan) ──────────
+//
+// El relay NO es un recurrente de `keel_timer`: con varias réplicas relayando a la vez el outbox se vacía antes, y su
+// reclamo por fila (SKIP LOCKED con lease, o findAndModify) ya reparte el trabajo. Lo que gana con el cronómetro es
+// DESPERTAR AL CONFIRMAR: la transacción que escribe en `outbox_event` despierta al relay de su réplica después del
+// commit, y el evento sale en milisegundos en vez de esperar al siguiente sondeo de 1 s. Sondear queda de respaldo, cada
+// `outbox.relay.poll-ms` (30 s), para lo que nadie despierta: el lease vencido de una réplica caída.
+//
+// Lo que no puede perder al dejar de sondear cada segundo es el REINTENTO: una fila que falló vuelve a ser elegible a los
+// `backoff` milisegundos (2 s en `local`, que es lo que espera el escenario del broker caído), no a los 30 s del respaldo.
+// Por eso la pasada recuerda el reintento más próximo que ha programado ella misma.
+
+/**
+ * Cuándo corre la SIGUIENTE pasada del relay de una réplica, en milisegundos de su reloj (la referencia ejecutable que
+ * reproducen los cuatro generadores):
+ *
+ *   · con el lote LLENO, en el acto: quedan pendientes (el drenaje, como el del `schedule`);
+ *   · si no, al primero de: el reintento más próximo que esta réplica ha programado y aún no ha llegado, y el sondeo de
+ *     respaldo. Los reintentos ya vencidos al empezar la pasada los reclamó ella (el lote no salió lleno), así que se
+ *     olvidan.
+ *
+ * Un despertar (el commit de una escritura en el outbox) adelanta la pasada a AHORA, sea cual sea lo planeado.
+ *
+ * @param full         ¿el lote de esta pasada salió lleno?
+ * @param retryAtMs    los `next_attempt_at` que esta pasada programó al fallar (los que no se rindieron), REDONDEADOS
+ *                     HACIA ARRIBA al milisegundo: la columna guarda microsegundos, y una pasada que llega truncada la
+ *                     encuentra todavía sin vencer, no reclama nada y olvida el reintento (medido en store-check)
+ * @param pendingRetryMs el reintento más próximo que recordaba de antes (null: ninguno)
+ * @param passStartMs  cuándo empezó la pasada
+ * @param nowMs        ahora, al terminarla
+ * @returns `{ nextRunMs, pendingRetryMs }`: cuándo correr, y el reintento que recordar para la pasada siguiente
+ */
+export function relayNextRunMs({ full, retryAtMs = [], pendingRetryMs = null, passStartMs, nowMs, pollMs }) {
+  const remembered = pendingRetryMs !== null && pendingRetryMs > passStartMs ? [pendingRetryMs] : [];
+  const retries = [...remembered, ...retryAtMs];
+  const nextRetry = retries.length > 0 ? Math.min(...retries) : null;
+  if (full) return { nextRunMs: nowMs, pendingRetryMs: nextRetry };
+  const fallback = nowMs + pollMs;
+  return { nextRunMs: nextRetry === null ? fallback : Math.min(nextRetry, fallback), pendingRetryMs: nextRetry };
+}
+
+/** Los casos del relay por réplica que miden las redes de los cuatro (RW-*), con el broker real. */
+export const RELAY_WAKE_CASES = Object.freeze([
+  Object.freeze({ id: 'RW-1', what: 'un evento confirmado sale al broker sin esperar al sondeo: lo despierta el commit' }),
+  Object.freeze({ id: 'RW-2', what: 'en reposo el relay no consulta el outbox más que una vez por sondeo de respaldo' }),
+  Object.freeze({ id: 'RW-3', what: 'una fila que falló se reintenta a su backoff, no al sondeo de respaldo' })
+]);
+
+/**
+ * Los sabotajes que falsan el relay por réplica en las cuatro redes, cada uno con los casos que tumba:
+ *   · relay-no-wake: la escritura en el outbox ya no despierta al relay, y la salida espera al sondeo;
+ *   · relay-no-retry: el relay olvida el reintento que programó, y la fila que falló espera al sondeo.
+ */
+export const RELAY_SABOTAGES = Object.freeze({
+  'relay-no-wake': Object.freeze(['RW-1']),
+  'relay-no-retry': Object.freeze(['RW-3'])
+});

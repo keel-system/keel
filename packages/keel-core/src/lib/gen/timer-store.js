@@ -6,7 +6,7 @@
 // Dos clases de temporizador en la misma tabla:
 //   · un PLAZO es de una sola vez y lleva su entidad: se arma al entrar en el estado (en la misma transacción) y se borra
 //     al dispararse;
-//   · un RECURRENTE es una fila por mecanismo (un `schedule`, una purga, el relay): al dispararse se rearma para el
+//   · un RECURRENTE es una fila por mecanismo (un `schedule`, una purga): al dispararse se rearma para el
 //     siguiente tick. Lleva el uuid nulo en `entity_id`, y no NULL: la unicidad (kind, entity_id) no se cumpliría con
 //     NULL, que en una constraint única nunca choca con otro NULL.
 //
@@ -94,7 +94,10 @@ export const TIMER_SWITCH = Object.freeze({ key: 'scheduling.enabled', env: 'SCH
 export const scheduleKind = (operationName) => `schedule:${operationName}`;
 /** `purge:<tabla>`: la purga de una tabla del generador. */
 export const purgeKind = (table) => `purge:${table}`;
-/** El relay del outbox, por réplica. */
+/**
+ * El relay del outbox, por réplica (inc. 9). No tiene fila en `keel_timer`: en modo por réplica la tabla no decide nada, y
+ * cada réplica lleva su tick en su proceso (timer-plan.js, `relayNextRunMs`). El nombre es el de sus logs y su métrica.
+ */
 export const RELAY_KIND = 'relay:outbox';
 /** La purga de la propia tabla. */
 export const TIMER_PURGE_KIND = purgeKind(KEEL_TIMER.table);

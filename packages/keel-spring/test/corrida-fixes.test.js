@@ -106,7 +106,8 @@ test('se genera un TaskScheduler de hilos de plataforma donde hay algo programad
   //
   // No da error: llega tarde. Y en un mecanismo con cota temporal encima, eso hace que la
   // cota deje de medir lo que decía.
-  const config = project('stock-reservation', RELATIONAL).file('SchedulingConfig.java');
+  // Sobre MariaDB, que no tiene cronómetro: con él (PostgreSQL) ya no queda ningún @Scheduled en esta fixture.
+  const config = project('stock-reservation', { ...RELATIONAL, database: 'mariadb' }).file('SchedulingConfig.java');
 
   assert.match(config, /class SchedulingConfig/);
   assert.match(config, /ThreadPoolTaskScheduler/);
@@ -137,10 +138,11 @@ test('el pool da un hilo por tarea programada: acotarlo serializa los barridos',
 
 test('con el cronómetro, el pool solo cuenta lo que sigue siendo @Scheduled', () => {
   // Las purgas (inc. 7) y los schedule (inc. 8) corren en el hilo del sondeador: contarlos daría
-  // hilos que nadie usa. Sobre PostgreSQL, en stock-reservation solo queda el relay del outbox.
+  // hilos que nadie usa. Y el relay del outbox lleva su propio bucle desde el inc. 9. Sobre PostgreSQL, en
+  // stock-reservation ya no queda nada: ni el pool ni @EnableScheduling.
   const model = modelFor('stock-reservation', RELATIONAL);
-  assert.equal(scheduledTaskCount(model), 1);
-  assert.match(generateScheduling(model)[0].content, /scheduling\.pool-size:1/);
+  assert.equal(scheduledTaskCount(model), 0);
+  assert.deepEqual(generateScheduling(model), []);
 });
 
 test('sin nada programado no se genera el bean', () => {
@@ -306,7 +308,10 @@ test('el relay se pausa mientras se recrea la topología, y solo donde se pierde
   assert.match(harness, new RegExp(`OUTBOX_RELAY_BEAN = "${outboxRelayBeanName()}"`));
   assert.ok(!harness.includes('import com.test.'), 'el arnés importó algo de la aplicación');
   // Una pausa que no pausa deja el defecto igual con apariencia de arreglado.
-  assert.match(harness, /No se canceló ninguna tarea programada/);
+  assert.match(harness, /no está en marcha: la pausa no está surtiendo/);
+  // Por el pause()/resume() del propio relay (DSL 2.26): ya no tiene @Scheduled que cancelar.
+  assert.match(harness, /invokeOutboxRelay\(context, "pause"\)/);
+  assert.ok(!harness.includes('ScheduledAnnotationBeanPostProcessor'));
 });
 
 // Un escenario cuyo disparador es un mensaje ENTRANTE con el canal de SALIDA caído no se

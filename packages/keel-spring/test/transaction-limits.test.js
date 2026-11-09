@@ -67,7 +67,7 @@ test('la rama documental no recibe ni el tope ni el handler: el tope se fija en 
 test('las purgas relacionales van por lotes, y sin transacción alrededor del bucle', () => {
   const { read } = generate('stock-reservation');
   const purges = [
-    { owner: '/OutboxRelay.java', repo: '/OutboxEventJpaRepository.java', del: 'deletePublishedBefore' },
+    { owner: '/OutboxPurge.java', repo: '/OutboxEventJpaRepository.java', del: 'deletePublishedBefore' },
     { owner: '/IdempotencyGuard.java', repo: '/ProcessedEventJpaRepository.java', del: 'deleteProcessedBefore' },
     { owner: '/JpaIdempotencyStore.java', repo: '/IdempotencyRecordJpaRepository.java', del: 'deleteExpiredBefore' },
     { owner: '/ReconciliationClaimPurge.java', repo: '/ReconciliationClaimJpaRepository.java', del: 'deleteClaimedBefore' }

@@ -682,7 +682,7 @@ Con el `Accept` por defecto la respuesta trae las mismas series y las mismas eti
 
 ### Ruido, y por qué no lo hay
 
-El relay del outbox consulta la base de datos **cada segundo**. Sin filtro, eso serían miles de trazas vacías al día que además se comerían tu cuota de muestreo. Build descarta las peticiones al *actuator*, los ciclos de las tareas programadas y las consultas que no cuelgan de nada.
+El relay del outbox consulta la base de datos al confirmarse cada evento y, de respaldo, cada 30 s (hasta el DSL 2.26, cada segundo). Sin filtro, eso serían trazas vacías que además se comerían tu cuota de muestreo. Build descarta las peticiones al *actuator*, los ciclos de las tareas programadas y las consultas que no cuelgan de nada.
 
 > Medido en una corrida real: media hora de servicio en marcha, con unas 1.800 pasadas del relay, produjo **16 trazas**, todas con contenido.
 

@@ -1091,8 +1091,7 @@ function abstractImports(model) {
   // La pausa del relay resuelve su bean por NOMBRE desde el contexto: nada de src/main.
   if (pausesRelay(model)) {
     imports.push(
-      'org.springframework.context.ApplicationContext',
-      'org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor'
+      'org.springframework.context.ApplicationContext'
     );
   }
   // Segunda réplica: proceso aparte lanzado desde el jar.
@@ -3243,7 +3242,7 @@ function relayPauseMethods(model) {
     private static final AtomicBoolean OUTBOX_RELAY_PAUSED = new AtomicBoolean(false);
 
     /**
-     * Detiene las tareas programadas del relay mientras la topología se recrea.
+     * Detiene el relay mientras la topología se recrea.
      *
      * <p><b>Por qué.</b> {@link #startBroker()} reinicia el contenedor entero, y con él se
      * pierden destinos y suscripciones. Entre que {@code infra/init-messaging.sh} recrea el
@@ -3252,13 +3251,13 @@ function relayPauseMethods(model) {
      * cuenta, no coordinado con este arnés: si cae ahí, marca la fila como publicada y el
      * evento no existe para nadie.
      *
-     * <p><b>Cómo.</b> Por el {@code ScheduledAnnotationBeanPostProcessor} del propio contexto:
-     * {@code postProcessBeforeDestruction} cancela las tareas registradas para ese bean y
-     * {@code postProcessAfterInitialization} vuelve a registrarlas. No se toca el código de la
-     * aplicación ni su configuración, y el bean se resuelve por nombre — su clase vive en
-     * {@code src/main/java}, que este source set no compila.
+     * <p><b>Cómo.</b> Con el {@code pause()} del propio relay (DSL 2.26): para su bucle y ESPERA a
+     * la pasada que esté en vuelo, así que al volver no hay ninguna publicando. {@code resume()} lo
+     * reanuda con una pasada en el acto. Se llaman por reflexión sobre el bean, que se resuelve
+     * por nombre — su clase vive en {@code src/main/java}, que este source set no compila. Antes
+     * cancelaba su {@code @Scheduled}; el relay ya no lo tiene.
      *
-     * <p><b>Falla ruidosamente si no cancela nada.</b> Una pausa que no pausa deja el defecto
+     * <p><b>Falla ruidosamente si no pausa nada.</b> Una pausa que no pausa deja el defecto
      * igual que antes pero con la apariencia de estar arreglado, y su síntoma —un evento
      * perdido cada varias corridas— cuesta un ciclo entero de arbitraje.
      */
@@ -3270,27 +3269,30 @@ function relayPauseMethods(model) {
         if (!OUTBOX_RELAY_PAUSED.compareAndSet(false, true)) {
             return;
         }
-        ScheduledAnnotationBeanPostProcessor processor =
-                context.getBean(ScheduledAnnotationBeanPostProcessor.class);
-        int before = processor.getScheduledTasks().size();
-        processor.postProcessBeforeDestruction(context.getBean(OUTBOX_RELAY_BEAN), OUTBOX_RELAY_BEAN);
-        if (processor.getScheduledTasks().size() >= before) {
+        if (!Boolean.TRUE.equals(invokeOutboxRelay(context, "pause"))) {
             OUTBOX_RELAY_PAUSED.set(false);
             throw new IllegalStateException(
-                    "No se canceló ninguna tarea programada de '" + OUTBOX_RELAY_BEAN + "': la pausa del "
-                            + "relay no está surtiendo efecto, y sin ella la resiembra pierde eventos en silencio.");
+                    "El relay '" + OUTBOX_RELAY_BEAN + "' no está en marcha: la pausa no está surtiendo "
+                            + "efecto, y sin ella la resiembra pierde eventos en silencio.");
         }
     }
 
-    /** Vuelve a registrar las tareas del relay. El registrar ya tiene scheduler: se replanifican en el acto. */
+    /** Reanuda el relay, con una pasada en el acto. */
     protected static void resumeOutboxRelay() {
         ApplicationContext context = CONTEXT;
         if (context == null || !OUTBOX_RELAY_PAUSED.compareAndSet(true, false)) {
             return;
         }
-        ScheduledAnnotationBeanPostProcessor processor =
-                context.getBean(ScheduledAnnotationBeanPostProcessor.class);
-        processor.postProcessAfterInitialization(context.getBean(OUTBOX_RELAY_BEAN), OUTBOX_RELAY_BEAN);
+        invokeOutboxRelay(context, "resume");
+    }
+
+    private static Object invokeOutboxRelay(ApplicationContext context, String method) {
+        Object relay = context.getBean(OUTBOX_RELAY_BEAN);
+        try {
+            return relay.getClass().getMethod(method).invoke(relay);
+        } catch (ReflectiveOperationException failure) {
+            throw new IllegalStateException("El relay '" + OUTBOX_RELAY_BEAN + "' no responde a " + method + "()", failure);
+        }
     }
 `;
 }
@@ -4257,7 +4259,7 @@ const RABBIT_PAYLOAD_DECODING = String.raw`
 // Espera al drenaje del outbox antes de purgar un destino.
 //
 // La carrera que cierra, y que costó dos escenarios de la corrida del 18/08: el relay
-// drena la tabla cada `fixed-delay-ms`, y su fase respecto al `purgeMessages()` de un
+// drena la tabla al confirmarse cada evento (o con su sondeo de respaldo), y su fase respecto al `purgeMessages()` de un
 // test es arbitraria (la JVM lleva corriendo la suite entera y el relay no se reinicia
 // entre clases). Un evento legítimo del escenario ANTERIOR puede aterrizar en la cola
 // justo DESPUÉS de la purga, y el escenario siguiente lo lee como propio — con lo que
@@ -5007,7 +5009,7 @@ function purgeWrapper(model) {
      * <p>La espera no es prudencia: sin ella, un evento legítimo del escenario ANTERIOR
      * puede aterrizar en la cola justo después de la purga, y el escenario siguiente lo
      * lee como propio — con lo que falla una aserción de «no se publicó nada» por algo
-     * que no tiene que ver con ella. El relay drena cada {@code fixed-delay-ms} y su fase
+     * que no tiene que ver con ella. El relay drena al confirmarse cada evento y su fase
      * respecto a este método es arbitraria.
      */
     protected static void purgeMessages(String destination) {

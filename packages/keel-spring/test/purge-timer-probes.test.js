@@ -80,7 +80,7 @@ test('sin cronómetro (MariaDB) no hay sonda: las purgas conservan su @Scheduled
   const { model, files } = plan('notification-mailer', 'mariadb');
   assert.equal(usesPurgeTimers(model), false);
   assert.ok(!files.some((file) => file.path.endsWith('PurgeTimer.java')), 'sin cronómetro no hay recurrentes');
-  assert.ok(javaNamed(files, 'OutboxRelay.java').content.includes('@Scheduled(cron = "${outbox.purge.cron:'));
+  assert.ok(javaNamed(files, 'OutboxPurge.java').content.includes('@Scheduled(cron = "${outbox.purge.cron:'));
   assert.ok(javaNamed(files, 'IdempotencyGuard.java').content.includes('@Scheduled(cron = "${processed-event.purge.cron:'));
   assert.ok(!files.some((file) => file.path.endsWith('/TimerPoller.java')), 'sin plazos ni cronómetro no hay sondeador');
 });

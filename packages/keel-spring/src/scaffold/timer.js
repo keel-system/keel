@@ -1276,7 +1276,7 @@ function purgeTarget(model, table) {
   const document = isDocument(model);
   switch (table) {
     case 'outbox_event':
-      return { pkg: 'infrastructure.messaging.outbox', className: 'OutboxRelay' };
+      return { pkg: 'infrastructure.messaging.outbox', className: 'OutboxPurge' };
     case 'processed_event':
       return { pkg: 'infrastructure.messaging.idempotency', className: 'IdempotencyGuard' };
     case 'idempotency_record':

@@ -173,7 +173,7 @@ export function messagingYaml(model, profile, { outbox = false, processedEvents 
     lines.push(
       'outbox:',
       '  relay:',
-      ...line(OUTBOX_RELAY.fixedDelayMs, 'Cada cuánto el relay busca filas pendientes y las entrega al broker.'),
+      ...line(OUTBOX_RELAY.pollMs, 'Sondeo de respaldo: al relay lo despierta el commit que escribe en el outbox; esto recoge lo que dejó una réplica caída.'),
       ...line(OUTBOX_RELAY.batchSize),
       ...line(OUTBOX_RELAY.maxAttempts, 'Tras agotar los reintentos la fila queda como dead-letter: no se reintenta ni se borra.'),
       '    backoff:',

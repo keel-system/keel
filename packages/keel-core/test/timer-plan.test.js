@@ -14,8 +14,11 @@ import { usesDeadlines } from '../src/lib/gen/deadlines.js';
 import { GENERATOR_TABLES } from '../src/lib/gen/schema-steps.js';
 import { KEEL_TIMER, TIMER_PARAMETERS, TIMER_PURGE_KIND, purgeKind, scheduleKind } from '../src/lib/gen/timer-store.js';
 import { scheduleCron, scheduledOperations } from '../src/lib/gen/scheduling.js';
+import { OUTBOX_RELAY } from '../src/lib/gen/messaging-stores.js';
 import {
   DRAIN_CASES,
+  RELAY_SABOTAGES,
+  RELAY_WAKE_CASES,
   TIMER_DATABASES,
   batchFull,
   clusterRecurrings,
@@ -24,6 +27,7 @@ import {
   generatorPurges,
   generatorSchedules,
   purgedByTimer,
+  relayNextRunMs,
   scheduledByTimer,
   timerPurges,
   timerSchedules,
@@ -232,4 +236,38 @@ test('agingSweeps: lo que envejece el arnés lo recoge el barrido que reconcilia
       for (const operation of operations) assert.ok(scheduledOperations(subject).some((candidate) => candidate.name === operation), operation);
     }
   }
+});
+
+// ─── El relay por réplica (inc. 9) ───────────────────────────────────────────
+
+test('relayNextRunMs: con el lote lleno, la pasada siguiente va en el acto (drena)', () => {
+  const next = relayNextRunMs({ full: true, passStartMs: 0, nowMs: 10, pollMs: OUTBOX_RELAY.pollMs.default });
+  assert.equal(next.nextRunMs, 10);
+});
+
+test('relayNextRunMs: en reposo, el sondeo de respaldo y nada más', () => {
+  const next = relayNextRunMs({ full: false, passStartMs: 0, nowMs: 10, pollMs: 30000 });
+  assert.deepEqual(next, { nextRunMs: 30010, pendingRetryMs: null });
+});
+
+test(`${RELAY_WAKE_CASES[2].id}: el reintento va a su backoff, no al sondeo, y se recuerda entre pasadas`, () => {
+  const first = relayNextRunMs({ full: false, retryAtMs: [2000, 5000], passStartMs: 0, nowMs: 10, pollMs: 30000 });
+  assert.deepEqual(first, { nextRunMs: 2000, pendingRetryMs: 2000 });
+  // Una pasada que despertó un commit ANTES del reintento no lo olvida.
+  const woken = relayNextRunMs({ full: false, pendingRetryMs: first.pendingRetryMs, passStartMs: 500, nowMs: 510, pollMs: 30000 });
+  assert.equal(woken.nextRunMs, 2000);
+  // La pasada del reintento lo reclamó: ya no se recuerda, y vuelve el respaldo.
+  const after = relayNextRunMs({ full: false, pendingRetryMs: woken.pendingRetryMs, passStartMs: 2000, nowMs: 2010, pollMs: 30000 });
+  assert.deepEqual(after, { nextRunMs: 32010, pendingRetryMs: null });
+});
+
+test('relayNextRunMs: un reintento más lejano que el respaldo no retrasa el respaldo', () => {
+  const next = relayNextRunMs({ full: false, retryAtMs: [60000], passStartMs: 0, nowMs: 0, pollMs: 30000 });
+  assert.deepEqual(next, { nextRunMs: 30000, pendingRetryMs: 60000 });
+});
+
+test('el sabotaje del despertar solo puede tumbar RW-1, y los casos RW tienen id estable', () => {
+  assert.deepEqual(RELAY_WAKE_CASES.map((c) => c.id), ['RW-1', 'RW-2', 'RW-3']);
+  assert.deepEqual(RELAY_SABOTAGES, { 'relay-no-wake': ['RW-1'], 'relay-no-retry': ['RW-3'] });
+  assert.equal(OUTBOX_RELAY.pollMs.default, TIMER_PARAMETERS.maxSleepMs.default, 'el respaldo del relay es el sueño máximo del sondeador');
 });

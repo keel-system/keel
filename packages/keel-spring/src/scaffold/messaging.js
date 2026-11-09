@@ -20,7 +20,7 @@ import { javaFile, javaPath, subPackage } from './render.js';
 import { domainTypeImport } from './entities.js';
 import { nullInclusion } from './dtos.js';
 import { rawJsonAnnotations } from './jackson.js';
-import { usesOutbox, outboxNames } from './outbox.js';
+import { usesOutbox, outboxNames, OUTBOX_APPENDED_CLASS, OUTBOX_WAKE_LINE } from './outbox.js';
 import { correlationImport } from './correlation.js';
 import { usesTelemetry, messageTracingImport } from './telemetry.js';
 import { deadLetterDestination, missingTargetRetryDestinations, subscriptionDestination } from '@keel-system/keel-core/gen';
@@ -154,14 +154,21 @@ function renderBridge(model, outbox) {
     const outboxTypes = outboxNames(model);
     imports.add(`${subPackage(model, 'infrastructure.messaging.outbox')}.${outboxTypes.entity}`);
     imports.add(`${subPackage(model, 'infrastructure.messaging.outbox')}.${outboxTypes.repository}`);
+    imports.add(`${subPackage(model, 'infrastructure.messaging.outbox')}.${OUTBOX_APPENDED_CLASS}`);
+    imports.add('org.springframework.context.ApplicationEventPublisher');
     imports.add('java.time.Instant');
     imports.add('java.util.UUID');
     fields.push(
       `    private final ${outboxTypes.repository} outboxRepository;`,
-      '    private final ObjectMapper objectMapper;'
+      '    private final ObjectMapper objectMapper;',
+      '    private final ApplicationEventPublisher events;'
     );
-    ctorParams.push(`${outboxTypes.repository} outboxRepository`, 'ObjectMapper objectMapper');
-    ctorAssigns.push('        this.outboxRepository = outboxRepository;', '        this.objectMapper = objectMapper;');
+    ctorParams.push(`${outboxTypes.repository} outboxRepository`, 'ObjectMapper objectMapper', 'ApplicationEventPublisher events');
+    ctorAssigns.push(
+      '        this.outboxRepository = outboxRepository;',
+      '        this.objectMapper = objectMapper;',
+      '        this.events = events;'
+    );
   } else {
     imports.add('org.springframework.transaction.event.TransactionalEventListener');
     imports.add('org.springframework.transaction.event.TransactionPhase');
@@ -269,6 +276,9 @@ function renderOutboxAppend(model) {
                     0,
                     null,
                     null));
+            // Despierta al relay de ESTA réplica tras el commit (DSL 2.26, inc. 9): el evento sale ya, sin esperar
+            // al sondeo de respaldo. Si la transacción revierte, el aviso no llega a nadie.
+            ${OUTBOX_WAKE_LINE}
         } catch (JacksonException ex) {
             // Serializar un evento propio no puede fallar: si falla, el diseño
             // del payload está roto y la transacción debe revertir.

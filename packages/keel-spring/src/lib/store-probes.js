@@ -752,6 +752,8 @@ function documentOutboxClass(model, { datasource, packages }) {
   const properties = [
     `"spring.mongodb.uri=${datasource.uri}"`,
     '"spring.profiles.active="',
+    // El relay es un SmartLifecycle desde el DSL 2.26: encendido, su bucle reclamaría lo que siembran los casos.
+    '"scheduling.enabled=false"',
     `"outbox.relay.batch-size=${BATCH_SIZE}"`,
     `"outbox.relay.max-attempts=${MAX_ATTEMPTS}"`,
     `"outbox.relay.claim-timeout-ms=${CLAIM_TIMEOUT_MS}"`

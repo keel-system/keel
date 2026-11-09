@@ -2514,7 +2514,11 @@ test('outbox: fila en la misma transacción, relay determinista y envío tras el
 
   // El relay es determinista; lo acoplado al broker sale por el puerto.
   const relay = read(workspace, `${outboxDir}/OutboxRelay.java`);
-  assert.ok(relay.includes('@Scheduled(fixedDelayString = "${outbox.relay.fixed-delay-ms:1000}")'));
+  // Por réplica y sin @Scheduled (DSL 2.26, inc. 9): lo despierta el commit, y sondea de respaldo.
+  assert.ok(!relay.includes('@Scheduled('));
+  assert.ok(relay.includes('@Value("${outbox.relay.poll-ms:30000}")'));
+  assert.ok(relay.includes('public void onAppended(OutboxAppended appended)'));
+  assert.ok(bridge.includes('events.publishEvent(OutboxAppended.INSTANCE);'));
   assert.ok(relay.includes('dispatcher.dispatch(row.destination()'));
   // Tope de intentos + dead-letter reportado a ERROR.
   assert.ok(relay.includes('@Value("${outbox.relay.max-attempts:10}")'));
@@ -2532,9 +2536,9 @@ test('outbox: fila en la misma transacción, relay determinista y envío tras el
   // pool durante toda la llamada de red, por todo el lote, y bajo presión el que se queda
   // sin conexión es cualquier otro que la necesite en ese momento — el fallo aparece
   // lejísimos de aquí, como «un estado no transicionó a tiempo».
-  // Hasta el @Scheduled de purge(), no hasta su firma: purge() SÍ es transaccional y con
-  // razón —borra filas y no habla con nadie de fuera—, así que su anotación no cuenta.
-  const relayMethod = relay.slice(relay.indexOf('public void relay()'), relay.indexOf('@Scheduled(cron'));
+  // La pasada entera, hasta nextRun (la purga vive desde el DSL 2.26 en OutboxPurge).
+  const relayMethod = relay.slice(relay.indexOf('public long relay()'), relay.indexOf('long nextRun('));
+  assert.ok(relayMethod.length > 0, 'no encuentro la pasada del relay');
   assert.ok(!relayMethod.includes('@Transactional'), 'la publicación volvió a quedar dentro de una transacción');
   assert.ok(relayMethod.includes('store.claimBatch('), 'el reclamo ya no pasa por el store');
   assert.ok(relayMethod.includes('store.markPublished('));
@@ -2577,8 +2581,8 @@ test('outbox: fila en la misma transacción, relay determinista y envío tras el
   assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/domain/events/ProductCreatedPublisher.java'));
   assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/ProductCreatedPublisherStub.java'));
 
-  // El relay es @Scheduled: sin @EnableScheduling no saldría nada.
-  assert.ok(read(workspace, 'src/main/java/com/commerce/productcatalog/ProductCatalogApplication.java').includes('@EnableScheduling'));
+  // El relay ya no es @Scheduled (DSL 2.26): lleva su propio bucle, y con el cronómetro aquí no queda nada programado.
+  assert.ok(!read(workspace, 'src/main/java/com/commerce/productcatalog/ProductCatalogApplication.java').includes('@EnableScheduling'));
   const messagingYaml = read(workspace, 'src/main/resources/parameters/local/messaging.yaml');
   assert.ok(messagingYaml.includes('retention-days: 7'));
   // El PRESUPUESTO de reintentos (intentos × tope) se alarga solo en local, y por la

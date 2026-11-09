@@ -31,8 +31,8 @@
 // El tamaño del pool es UN HILO POR TAREA, y esa cuenta importa. Acotar la concurrencia
 // serializaría los barridos entre sí, y esa es exactamente la objeción con la que
 // `conventions/dependencies.md` descarta tocar `concurrency-limit`: es global, así que se le
-// aplicaría también al OutboxRelay —que corre cada segundo— y un barrido largo pasaría a
-// retrasar la entrega de eventos. Con un hilo por tarea nadie espera a nadie, que es la
+// aplicaría también a lo que corriera a su lado —el OutboxRelay corría aquí cada segundo hasta el
+// DSL 2.26— y un barrido largo pasaría a retrasar lo demás. Con un hilo por tarea nadie espera a nadie, que es la
 // propiedad que había antes del pinning y la que se conserva aquí.
 //
 // Lo que NO cambia: los hilos virtuales siguen activos para todo lo demás (web, listeners
@@ -67,8 +67,8 @@ export function scheduledTaskCount(model) {
   }
   // Las purgas de las tablas del generador, salvo las que van por el cronómetro (inc. 7).
   const purge = (table) => (purgedByTimer(model, table) ? 0 : 1);
-  // El relay del outbox y la purga de su tabla (outbox.js).
-  if (usesOutbox(model)) total += 1 + purge('outbox_event');
+  // La purga del outbox (outbox.js). El relay ya no es un @Scheduled: lleva su propio bucle, con su hilo (inc. 9).
+  if (usesOutbox(model)) total += purge('outbox_event');
   // La purga del registro de procesados (idempotency.js).
   if (usesIdempotency(model)) total += purge('processed_event');
   // La purga del registro de comandos (http-idempotency.js).

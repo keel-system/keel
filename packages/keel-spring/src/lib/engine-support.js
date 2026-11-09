@@ -739,6 +739,33 @@ const SPRING_MECHANISMS = {
       }
     }
   },
+  'timer-relay': {
+    emitter: 'src/scaffold/outbox.js · src/scaffold/messaging.js · src/scaffold/integration-tests.js',
+    why: 'Un relay que no despierta con el commit sigue entregando, solo que al sondeo de respaldo: nada falla, y la salida de cada evento pasa de milisegundos a decenas de segundos. Y uno que olvida el reintento de una fila que falló la deja esperando al respaldo en vez de a su backoff.',
+    parity: {
+      pair: 'notification-mailer',
+      markers: {
+        relational: ['class OutboxRelay implements SmartLifecycle', 'events.publishEvent(OutboxAppended.INSTANCE);', 'class OutboxPurge'],
+        document: ['class OutboxRelay implements SmartLifecycle', 'events.publishEvent(OutboxAppended.INSTANCE);', 'class OutboxPurge']
+      }
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'store-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'notification-mailer: el OutboxRelay emitido en marcha con el sondeo de respaldo a 600 s y el bridge emitido escribiendo la fila (RW-1 a RW-3, relay-wake-probes.js). Falsado: relay-no-wake cae en RW-1 y relay-no-retry en RW-3. La medición destapó el reintento truncado al milisegundo, que la pasada encontraba sin vencer y olvidaba'
+      },
+      document: {
+        state: 'verificado',
+        net: 'store-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'notification-mailer-mongo: los mismos tres casos sobre el relay documental, con los mismos sabotajes'
+      }
+    }
+  },
   'conditional-write': {
     emitter:
       'src/scaffold/conditional-writes.js · src/scaffold/controllers.js · src/scaffold/services.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js · src/scaffold/cache.js · src/scaffold/security.js',

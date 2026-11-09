@@ -110,8 +110,17 @@ export function storeColumns(table, persistenceKind = 'relational') {
 
 /** Lo que gobierna el relay del outbox. */
 export const OUTBOX_RELAY = Object.freeze({
-  /** Cada cuánto busca filas pendientes. */
-  fixedDelayMs: Object.freeze({ key: 'outbox.relay.fixed-delay-ms', env: 'OUTBOX_RELAY_DELAY_MS', default: 1000 }),
+  /**
+   * El sondeo de RESPALDO (DSL 2.26, inc. 9): el relay ya no busca cada segundo, sino que lo despierta la transacción que
+   * escribe en el outbox, tras el commit y en su réplica. Sondear queda para lo que nadie despierta: lo que dejó una
+   * réplica caída con su lease vencido. Antes era `outbox.relay.fixed-delay-ms`, a 1 s: con tres réplicas en reposo, 360
+   * transacciones por minuto para no encontrar nada.
+   *
+   * En `local` sigue siendo 1 s: ahí el arnés de flujos escribe, aparca y desaparca filas por SQL a espaldas del relay
+   * (en keel-dotnet y keel-go, además, desde otro proceso), y nada de eso lo despierta. Con 30 s, cada uno de esos pasos
+   * esperaría al respaldo.
+   */
+  pollMs: Object.freeze({ key: 'outbox.relay.poll-ms', env: 'OUTBOX_RELAY_POLL_MS', default: 30000, local: 1000 }),
   /** Cuántas reclama en una pasada. */
   batchSize: Object.freeze({ key: 'outbox.relay.batch-size', env: 'OUTBOX_RELAY_BATCH_SIZE', default: 100 }),
   /**
