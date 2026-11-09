@@ -143,6 +143,34 @@ export const MECHANISMS = {
       }
     }
   },
+  'timer-telemetry': {
+    parity: {
+      pair: 'notification-mailer',
+      // Las series solo existen con telemetría: sin el stack, ninguna rama tendría marcadores.
+      stack: { telemetry: 'otel' },
+      markers: {
+        relational: ['Observed(timer.Kind, () => recurring.Tick(cancellationToken))', 'Observations.TimerLag', 'LagMsSql'],
+        document: ['Observed(timer.Kind, () => recurring.Tick(cancellationToken))', 'Observations.TimerLag', '{ "lagMs", new BsonDocument("$subtract", new BsonArray { "$$NOW", "$oldest" }) }']
+      }
+    },
+    emitter: 'src/scaffold/timer.js (TimerPoller: Observed y RegisterGauges; LagMs en los dos TimerStore) · src/scaffold/telemetry.js (TimerLag, TimerParked y el gauge que no tumba el scrape) · src/scaffold/observability-assets.js',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'telemetry-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'job-dispatch: TEL-12 con la app arrancada en develop y el sueño máximo a 10 min: la purga de keel_timer vencida por SQL hace 120 s publica ese retraso, y al rearrancar la primera pasada deja keel_timer_tick_seconds con kind y desenlace. db-check (TL1, verification-codes) ejecuta la consulta del retraso contra los dos motores, y la prueba emitida TelemetryTests (cs-check --fixtures) exige las series del panel y que un gauge que falla no tumbe el scrape. Falsado: timer-kind (telemetry-check) cae en TEL-12 en los dos motores; tl-lag (db-check) en TL-1; dl-no-lease arrastra TL-1, ya declarado'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'verification-codes-mongo: TL1 ejecuta la agregación del retraso ($match del reclamo, $min de due_at y $$NOW) contra el replica set; el disparo observado es el mismo TimerPoller que mide la rama relacional. Falsado: tl-lag (la resta invertida) cae en TL-1, y dl-no-lease en DL-5, DL-6, DL-7 y TL-1'
+      }
+    }
+  },
   deadline: {
     parity: {
       pair: 'verification-codes',

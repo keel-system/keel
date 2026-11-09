@@ -294,6 +294,12 @@ public sealed class TelemetryTests : IDisposable
         await telemetry.Observe(Observations.MailSend, new ObserveOptions(), () => Task.CompletedTask);
         telemetry.CacheGet("prueba", hit: true);
         telemetry.RegisterGauge(Observations.OutboxDeadLettered, "prueba", _ => Task.FromResult(0d));
+        // El cronómetro (DSL 2.26, inc. 11): el disparo con su kind, y el retraso y los aparcados.
+        await telemetry.Observe(Observations.TimerTick, new ObserveOptions { Labels = new Dictionary<string, string> { [TelemetryAttributes.TimerKind] = "purge:prueba" } }, () => Task.CompletedTask);
+        telemetry.RegisterGauge(Observations.TimerLag, "prueba", _ => Task.FromResult(0d));
+        telemetry.RegisterGauge(Observations.TimerParked, "prueba", _ => Task.FromResult(0d));
+        // Un gauge cuya lectura falla (la base caída) no puede tumbar el scrape: publica NaN y lo demás sale.
+        telemetry.RegisterGauge("keel.probe.failing", "prueba", _ => throw new InvalidOperationException("base caída"));
         telemetry.FinishServer(null, Stopwatch.GetTimestamp(), "GET", "/prueba/{id}", 200, null);
         telemetry.FinishClient(null, Stopwatch.GetTimestamp(), "prueba", "GET", "/prueba/{id}", 200);
         var published = (await Exposition(telemetry)).Split('\n')

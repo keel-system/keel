@@ -18,7 +18,7 @@
 //   · Los spans de los drivers (SQL, Mongo, Redis) son otro tramo: `telemetry-store-spans` de la matriz.
 
 import { collectorHostEndpoint } from '@keel-system/keel-core/gen/infra-catalog';
-import { ATTRIBUTES, METRICS_TRANSPORT, OBSERVATIONS, OUTBOX_DEAD_LETTERED, instrumentationFor, promGauge, usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
+import { ATTRIBUTES, METRICS_TRANSPORT, OBSERVATIONS, OUTBOX_DEAD_LETTERED, TIMER_LAG, TIMER_PARKED, instrumentationFor, promGauge, usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { telemetryYaml as neutralTelemetryYaml } from '@keel-system/keel-core/gen/telemetry-config';
 import { csFile, csString, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
@@ -189,6 +189,12 @@ ${constants(OBSERVATIONS)}
 
     /// <summary>El gauge de los eventos del outbox que agotaron sus reintentos: no se publicarán nunca.</summary>
     public const string OutboxDeadLettered = ${csString(OUTBOX_DEAD_LETTERED)};
+
+    /// <summary>El retraso del cronómetro: los segundos que lleva esperando lo vencido y sin reclamar más antiguo.</summary>
+    public const string TimerLag = ${csString(TIMER_LAG)};
+
+    /// <summary>Los temporizadores aparcados: agotaron sus intentos y no se van a cumplir solos.</summary>
+    public const string TimerParked = ${csString(TIMER_PARKED)};
 }
 
 /// <summary>Los atributos que estampa el código generado; <c>CorrelationId</c> va solo al span, nunca a una etiqueta de métrica.</summary>
@@ -577,7 +583,20 @@ public sealed class KeelTelemetry
         });
         if (created)
         {
-            Registry.AddBeforeCollectCallback(async cancellationToken => gauge.Set(await read(cancellationToken)));
+            // Una lectura que falla (la base caída, la tabla que todavía no existe) publica NaN y NO lanza: un callback que
+            // lanza tumba el scrape ENTERO, y una base que va mal se llevaría por delante todas las métricas justo cuando hacen
+            // falta (medido en keel-nest, DSL 2.26 inc. 11).
+            Registry.AddBeforeCollectCallback(async cancellationToken =>
+            {
+                try
+                {
+                    gauge.Set(await read(cancellationToken));
+                }
+                catch (Exception error) when (error is not OperationCanceledException)
+                {
+                    gauge.Set(double.NaN);
+                }
+            });
         }
     }
 

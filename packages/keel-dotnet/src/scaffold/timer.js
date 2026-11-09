@@ -54,6 +54,8 @@ import { usesMySql } from './relational-engine.js';
 import { tablePurges } from './purge.js';
 import { purgeSettingsExpression } from './scheduling-tests.js';
 import { usesDocument, usesRelational } from '@keel-system/keel-core/gen/features';
+import { OBSERVATIONS } from '@keel-system/keel-core/gen/telemetry-vocabulary';
+import { telemetryNamespace, usesTelemetry } from './telemetry.js';
 
 export { usesDeadlines, usesTimer, TIMER_DATABASES };
 
@@ -99,7 +101,7 @@ ${indent}SweepPass.Claimed(${size}, ${batch});
 export const sweepPassNamespace = (model) => namespaceOf(model, 'appSupport');
 
 /** Las sentencias del almacén relacional, en el orden en que se emiten: los nombres son los de `timerStatements`. */
-export const TIMER_STATEMENTS = Object.freeze(['dbNow', 'arm', 'ensureRecurring', 'claimLock', 'claimMark', 'claimed', 'complete', 'reschedule', 'fail', 'nextDueMs', 'parkedCount', 'purge']);
+export const TIMER_STATEMENTS = Object.freeze(['dbNow', 'arm', 'ensureRecurring', 'claimLock', 'claimMark', 'claimed', 'complete', 'reschedule', 'fail', 'nextDueMs', 'parkedCount', 'lagMs', 'purge']);
 
 /** El nombre de la constante C# de una sentencia: `claimLock` → `ClaimLockSql`. */
 export const statementConstant = (name) => `${name[0].toUpperCase()}${name.slice(1)}Sql`;
@@ -369,7 +371,18 @@ export function generate(model) {
           ['System.Data.Common', 'System.Globalization', 'System.Text.RegularExpressions', 'Microsoft.EntityFrameworkCore', 'Microsoft.EntityFrameworkCore.Storage', 'Microsoft.Extensions.DependencyInjection', namespaceOf(model, 'persistence')],
           relationalStoreBody(model)
         ),
-    timer('TimerPoller', ['Cronos', 'Microsoft.Extensions.DependencyInjection', 'Microsoft.Extensions.Hosting', 'Microsoft.Extensions.Logging', namespaceOf(model, 'persistence')], pollerBody()),
+    timer(
+      'TimerPoller',
+      [
+        'Cronos',
+        'Microsoft.Extensions.DependencyInjection',
+        'Microsoft.Extensions.Hosting',
+        'Microsoft.Extensions.Logging',
+        namespaceOf(model, 'persistence'),
+        ...(usesTelemetry(model) ? ['System.Diagnostics', telemetryNamespace(model)] : [])
+      ],
+      pollerBody(model)
+    ),
     timer('KeelTimerPurge', [], purgeBody()),
     ...timerPurges(model).map((purge) => timer(purgeTimerClass(purge.table), [namespaceOf(model, 'purge')], purgeTimerBody(model, purge))),
     ...timerSchedules(model).map((schedule) =>
@@ -582,8 +595,11 @@ public interface ITimerStore
     /// <summary>Cuántos milisegundos faltan para lo próximo reclamable de esos kinds (null: nada; puede ser negativo).</summary>
     Task<long?> NextDueMs(IReadOnlyList<string> kinds, CancellationToken cancellationToken = default);
 
-    /// <summary>Los aparcados.</summary>
+    /// <summary>Los aparcados, de todos los kinds (T5).</summary>
     Task<long> ParkedCount(CancellationToken cancellationToken = default);
+
+    /// <summary>Cuántos milisegundos lleva esperando lo más antiguo reclamable YA de esos kinds (null: nada). El retraso del cronómetro.</summary>
+    Task<long?> LagMs(IReadOnlyList<string> kinds, CancellationToken cancellationToken = default);
 
     /// <summary>La purga de la tabla: vencido hace más de la retención y sin reclamar (R4, R7).</summary>
     Task<int> Purge(int retentionDays, CancellationToken cancellationToken = default);
@@ -832,6 +848,13 @@ ${constants}
 
     public async Task<long> ParkedCount(CancellationToken cancellationToken = default) =>
         Convert.ToInt64(await Scalar(db, ParkedCountSql, [], cancellationToken), CultureInfo.InvariantCulture);
+
+    public async Task<long?> LagMs(IReadOnlyList<string> kinds, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(kinds);
+        var value = await Scalar(db, LagMsSql, new() { ["kinds"] = new Many([.. kinds]) }, cancellationToken);
+        return value is null or DBNull ? null : Convert.ToInt64(value, CultureInfo.InvariantCulture);
+    }
 
     public Task<int> Purge(int retentionDays, CancellationToken cancellationToken = default) =>
         Execute(db, PurgeSql, new() { ["retentionDays"] = retentionDays }, cancellationToken);
@@ -1204,6 +1227,37 @@ public sealed class TimerStore(DocumentDatabase database, PersistenceTransaction
     public async Task<long> ParkedCount(CancellationToken cancellationToken = default) =>
         await Collection.CountDocumentsAsync(new BsonDocument("parked_at", new BsonDocument("$ne", BsonNull.Value)), cancellationToken: cancellationToken);
 
+    public async Task<long?> LagMs(IReadOnlyList<string> kinds, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(kinds);
+        // El filtro del reclamo, el más antiguo y la hora del SERVIDOR ($$NOW), como lagPipeline de keel-core.
+        var claimable = new BsonDocument
+        {
+            { "kind", new BsonDocument("$in", new BsonArray(kinds)) },
+            { "parked_at", BsonNull.Value },
+            {
+                "$expr", new BsonDocument("$and", new BsonArray
+                {
+                    new BsonDocument("$lte", new BsonArray { "$due_at", "$$NOW" }),
+                    new BsonDocument("$or", new BsonArray
+                    {
+                        new BsonDocument("$eq", new BsonArray { "$claimed_until", BsonNull.Value }),
+                        new BsonDocument("$lt", new BsonArray { "$claimed_until", "$$NOW" })
+                    })
+                })
+            }
+        };
+        var pipeline = new BsonDocumentStagePipelineDefinition<BsonDocument, BsonDocument>(
+        [
+            new BsonDocument("$match", claimable),
+            new BsonDocument("$group", new BsonDocument { { "_id", BsonNull.Value }, { "oldest", new BsonDocument("$min", "$due_at") } }),
+            new BsonDocument("$project", new BsonDocument { { "_id", 0 }, { "lagMs", new BsonDocument("$subtract", new BsonArray { "$$NOW", "$oldest" }) } })
+        ]);
+        using var cursor = await Collection.AggregateAsync(pipeline, cancellationToken: cancellationToken);
+        var result = await cursor.FirstOrDefaultAsync(cancellationToken);
+        return result is null || !result.Contains("lagMs") || result["lagMs"].IsBsonNull ? null : result["lagMs"].ToInt64();
+    }
+
     public async Task<int> Purge(int retentionDays, CancellationToken cancellationToken = default)
     {
         var filter = new BsonDocument
@@ -1219,7 +1273,47 @@ public sealed class TimerStore(DocumentDatabase database, PersistenceTransaction
 
 // ─── El sondeador ────────────────────────────────────────────────────────────────────────────────
 
-function pollerBody() {
+/**
+ * La telemetría del sondeador (DSL 2.26, inc. 11): el disparo como observación y los dos gauges, leídos de la tabla en cada
+ * scrape con la hora de la base.
+ */
+const TELEMETRY_MEMBERS = `    /// <summary>
+    /// Un disparo, observado (${OBSERVATIONS.timerTick}): su kind —acotado por el diseño, nunca el id de la entidad— y su
+    /// desenlace, y su duración en el histograma que el panel agrupa por kind. Raíz a propósito (el contexto vacío pide una
+    /// traza nueva): un tick no tiene petición de la que colgar, y abre la traza de lo que hace.
+    /// </summary>
+    private static Task Observed(string kind, Func<Task> action) =>
+        KeelTelemetry.Current is { } telemetry
+            ? telemetry.Observe(
+                Observations.TimerTick,
+                new ObserveOptions { Name = "timer " + kind, Labels = new Dictionary<string, string> { [TelemetryAttributes.TimerKind] = kind }, Parent = default(ActivityContext) },
+                action)
+            : action();
+
+    /// <summary>
+    /// El RETRASO y los APARCADOS, leídos de la tabla en cada scrape. Cada réplica publica lo mismo (la tabla es una): el panel
+    /// los agrega con max.
+    /// </summary>
+    private void RegisterGauges()
+    {
+        KeelTelemetry.Current?.RegisterGauge(Observations.TimerLag, "Segundos que lleva esperando el temporizador vencido y sin reclamar más antiguo", async cancellationToken =>
+        {
+            await using var scope = scopes.CreateAsyncScope();
+            var lag = await scope.ServiceProvider.GetRequiredService<ITimerStore>().LagMs(Kinds, cancellationToken);
+            return Math.Max(0, lag ?? 0) / 1000d;
+        });
+        KeelTelemetry.Current?.RegisterGauge(Observations.TimerParked, "Temporizadores que agotaron sus intentos y quedaron aparcados", async cancellationToken =>
+        {
+            await using var scope = scopes.CreateAsyncScope();
+            return await scope.ServiceProvider.GetRequiredService<ITimerStore>().ParkedCount(cancellationToken);
+        });
+    }
+
+`;
+
+function pollerBody(model) {
+  // Con telemetría (DSL 2.26, inc. 11): cada disparo es una observación y la réplica publica el retraso y los aparcados.
+  const telemetry = usesTelemetry(model);
   return `/// <summary>
 /// El sondeador del cronómetro: UNO por réplica. Cada pasada reclama un lote de lo vencido (ITimerStore.Claim: dos réplicas
 /// nunca toman el mismo mientras dure el arriendo), resuelve cada temporizador con su ITimerHandler DENTRO de una transacción
@@ -1337,7 +1431,7 @@ public sealed partial class TimerPoller : BackgroundService
                     // purga sin reloj para siempre, y asegurar al arrancar no toca una fila con el mismo spec.
                     try
                     {
-                        await recurring.Tick(cancellationToken);
+                        ${telemetry ? 'await Observed(timer.Kind, () => recurring.Tick(cancellationToken));' : 'await recurring.Tick(cancellationToken);'}
                     }
                     catch (Exception error) when (error is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
                     {
@@ -1347,7 +1441,7 @@ public sealed partial class TimerPoller : BackgroundService
                     continue;
                 }
                 var handler = scope.ServiceProvider.GetServices<ITimerHandler>().First(candidate => candidate.Kind == timer.Kind);
-                await scope.ServiceProvider.GetRequiredService<PersistenceTransactions>().InTransaction(
+                await ${telemetry ? 'Observed(timer.Kind, () => ' : ''}scope.ServiceProvider.GetRequiredService<PersistenceTransactions>().InTransaction(
                     async () =>
                     {
                         var outcome = await handler.Handle(timer, await store.DbNow(cancellationToken), cancellationToken);
@@ -1362,7 +1456,7 @@ public sealed partial class TimerPoller : BackgroundService
                         return true;
                     },
                     readOnly: false,
-                    cancellationToken);
+                    cancellationToken)${telemetry ? ')' : ''};
             }
             catch (Exception error) when (error is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
@@ -1381,7 +1475,7 @@ public sealed partial class TimerPoller : BackgroundService
         }
     }
 
-    /// <summary>Un temporizador armado en ESTA réplica (tras el commit): si vence antes de lo que iba a dormir, despierta.</summary>
+${telemetry ? TELEMETRY_MEMBERS : ''}    /// <summary>Un temporizador armado en ESTA réplica (tras el commit): si vence antes de lo que iba a dormir, despierta.</summary>
     public void OnArmed(DateTimeOffset dueAt)
     {
         lock (monitor)
@@ -1410,7 +1504,8 @@ public sealed partial class TimerPoller : BackgroundService
         {
             LogDisabled();
             return;
-        }
+        }${telemetry ? `
+        RegisterGauges();` : ''}
         try
         {
             await EnsureRecurring(stoppingToken);

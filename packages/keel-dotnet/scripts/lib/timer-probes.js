@@ -72,8 +72,16 @@ export const TIMER_SABOTAGES = Object.freeze({
     // Sin arriendo, el bucle de FindOneAndUpdate vuelve a llevarse en el MISMO lote lo que acaba de reclamar: cae además
     // DL-5 (en relacional el lote es una sola sentencia y no lo ve). Lo mismo que midieron keel-spring y keel-nest.
     document: ['Timers/TimerStore.cs', 'new BsonInt64(leaseMs)', 'new BsonInt64(0)'],
-    breaks: DEADLINE_SABOTAGES['dl-no-lease'].breaks,
-    documentBreaks: ['DL-5', ...DEADLINE_SABOTAGES['dl-no-lease'].breaks]
+    // Y TL-1 (inc. 11): con arriendo cero, lo «arrendado» vuelve a contar en el retraso al instante siguiente.
+    breaks: [...DEADLINE_SABOTAGES['dl-no-lease'].breaks, 'TL-1'],
+    documentBreaks: ['DL-5', ...DEADLINE_SABOTAGES['dl-no-lease'].breaks, 'TL-1']
+  },
+  // El retraso del cronómetro (inc. 11): en relacional, la sentencia del siguiente vencimiento en vez de la del retraso; en
+  // documentos, la resta invertida. Los dos publican 0 (o null) con algo vencido: el panel diría que va al día.
+  'tl-lag': {
+    relational: ['Timers/TimerStore.cs', 'Scalar(db, LagMsSql,', 'Scalar(db, NextDueMsSql,'],
+    document: ['Timers/TimerStore.cs', 'new BsonArray { "$$NOW", "$oldest" }', 'new BsonArray { "$oldest", "$$NOW" }'],
+    breaks: ['TL-1']
   },
   'dl-outside-tx': {
     // El armado con un contexto NUEVO, en su propia conexión: confirma solo, fuera de la transacción del caso de uso.
@@ -105,7 +113,7 @@ export function timerSabotageVerdict(failureLines, id, branch) {
   const failed = [
     ...new Set(
       failureLines.map((line) => {
-        const match = /\.(DL|R)(\d+)_/.exec(line);
+        const match = /\.(DL|R|TL)(\d+)_/.exec(line);
         return match ? `${match[1]}-${match[2]}` : line;
       })
     )
@@ -440,6 +448,24 @@ ${lateMove}        await TimerProbePoller().PollOnce(Cancel);
         await sondeador.PollOnce(Cancel);
         Assert.Equal(antes + 1, await InScope(services => services.GetRequiredService<ITimerStore>().ParkedCount(Cancel)));
         Assert.Equal(${state(deadline.state)}, await TimerState(id));
+    }
+
+    /// <summary>
+    /// El RETRASO del cronómetro (DSL 2.26, inc. 11): lo que lee el gauge keel.timer.lag.seconds, contra el motor real. El
+    /// filtro es el del reclamo, así que ni lo arrendado ni un kind que la réplica no conoce cuentan.
+    /// </summary>
+    [Fact]
+    public async Task TL1_ElRetrasoEsLoVencidoYLibreMasAntiguo()
+    {
+        await TimerStart();
+        Task<long?> Lag(string kind) => InScope(services => services.GetRequiredService<ITimerStore>().LagMs([kind], Cancel));
+        Assert.Null(await Lag(${kind}));
+        await TimerExpired(TimeSpan.FromMinutes(2));
+        var lag = await Lag(${kind});
+        Assert.True(lag is >= 115_000 and < 180_000, $"el retraso es lo que lleva vencido (unos 120 s): {lag}");
+        Assert.Null(await Lag("deadline:Ajeno.pending"));
+        await TimerClaim(10, 60_000);
+        Assert.Null(await Lag(${kind}));
     }
 
     [Fact]

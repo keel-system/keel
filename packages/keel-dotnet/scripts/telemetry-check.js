@@ -19,6 +19,7 @@
 //   pool-name       el pool se lee de un instrumento de Npgsql que no existe (TEL-7)
 //   management      en production el scrape también se sirve en el puerto principal (TEL-10)
 //   server-parent   la entrada HTTP no continúa la traza de quien llama (TEL-3, TEL-8, y TEL-9: el log ya no lleva su traza)
+//   timer-kind      el disparo del cronómetro se observa sin su kind (TEL-12)
 //
 // Códigos de salida: 0 todo OK · 1 hay casos rojos · 2 el arnés no pudo correr. Necesita el SDK de .NET 10, red (NuGet)
 // y podman o docker.
@@ -31,7 +32,9 @@ import zlib from 'node:zlib';
 import { randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { loadService } from '@keel-system/keel-core';
-import { ATTRIBUTES, METRICS_TRANSPORT, OBSERVATIONS, promMetric, promTag } from '@keel-system/keel-core/gen/telemetry-vocabulary';
+import { ATTRIBUTES, METRICS_TRANSPORT, OBSERVATIONS, TIMER_LAG, TIMER_PARKED, promGauge, promMetric, promTag } from '@keel-system/keel-core/gen/telemetry-vocabulary';
+import { TIMER_PARAMETERS, TIMER_PURGE_KIND } from '@keel-system/keel-core/gen/timer-store';
+import { usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { trafficPath } from '@keel-system/keel-core/gen/deploy-probes';
 import { planService } from '../src/scaffold/index.js';
 import { solution } from '../src/scaffold/render.js';
@@ -39,7 +42,7 @@ import { DOTNET_RUNTIME } from '../src/scaffold/telemetry.js';
 import { poolMeter } from '../src/scaffold/relational-engine.js';
 import { FIXTURES_DIR } from '../test/helpers/workspace.js';
 import { tmpDir } from '../test/helpers/tmp.js';
-import { freePort, resolveRuntime, startDatabase, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
+import { DB_NAME, freePort, resolveRuntime, run, startDatabase, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 import { decodeTraces } from './lib/otlp-traces.js';
 
 const keep = process.argv.includes('--keep');
@@ -51,7 +54,9 @@ const SABOTAGES = {
   // El máximo del pool de cada driver (POOL_METERS), con un nombre que su Meter no publica.
   'pool-name': (sln, model) => [`${sln.infrastructure.dir}/Telemetry/KeelTelemetry.cs`, `PoolValue("${poolMeter(model).max}", null)`, `PoolValue("${poolMeter(model).max}imum", null)`],
   management: (sln) => [`${sln.infrastructure.dir}/Telemetry/TelemetryRegistration.cs`, 'scrape.RequireHost(', '_ = ('],
-  'server-parent': (sln) => [`${sln.infrastructure.dir}/Telemetry/KeelTelemetry.cs`, 'var span = Begin(method + " " + path, ActivityKind.Server, parent);', 'var span = Begin(method + " " + path, ActivityKind.Server, null);']
+  'server-parent': (sln) => [`${sln.infrastructure.dir}/Telemetry/KeelTelemetry.cs`, 'var span = Begin(method + " " + path, ActivityKind.Server, parent);', 'var span = Begin(method + " " + path, ActivityKind.Server, null);'],
+  // Solo donde hay cronómetro (profile-directory no tiene ningún reloj): null es «no aplica a este proyecto».
+  'timer-kind': (sln, model) => (usesTimer(model) ? [`${sln.infrastructure.dir}/Timers/TimerPoller.cs`, '{ [TelemetryAttributes.TimerKind] = kind }', '{ }'] : null)
 };
 if (sabotage && !SABOTAGES[sabotage]) {
   console.error(`Sabotaje desconocido: ${sabotage}. Los hay: ${Object.keys(SABOTAGES).join(', ')}.`);
@@ -69,7 +74,8 @@ const CASES = {
   'TEL-8': 'la traza llega al colector y continúa la de quien llamó',
   'TEL-9': 'los logs de consola (ECS) llevan el trace.id y el correlationId de la petición',
   'TEL-10': 'production: el scrape vive en el puerto de gestión y no en el principal; las sondas, en el principal',
-  'TEL-11': 'con seguridad, el scrape entra sin token mientras la API exige credencial'
+  'TEL-11': 'con seguridad, el scrape entra sin token mientras la API exige credencial',
+  'TEL-12': 'el cronómetro publica su retraso (con el valor de lo vencido), sus aparcados y la duración de cada disparo por kind'
 };
 
 const results = [];
@@ -107,8 +113,9 @@ function materialize(root, name, stack, dirName = name) {
     fs.writeFileSync(out, file.content);
   }
   const sln = solution(model);
-  if (sabotage) {
-    const [file, from, to] = SABOTAGES[sabotage](sln, model);
+  const sabotaged = sabotage ? SABOTAGES[sabotage](sln, model) : null;
+  if (sabotaged) {
+    const [file, from, to] = sabotaged;
     const target = path.join(dir, file);
     const text = fs.readFileSync(target, 'utf8');
     if (!text.includes(from)) throw new Error(`el sabotaje '${sabotage}' no se aplica a lo emitido hoy (${file})`);
@@ -248,6 +255,80 @@ if (spawnSync('dotnet', ['--version'], { encoding: 'utf8' }).status !== 0) {
   process.exit(2);
 }
 
+/**
+ * El cronómetro (DSL 2.26, inc. 11), como en keel-nest. La app corre con el sueño máximo del sondeador a 10 minutos: la purga
+ * de keel_timer vencida A ESPALDAS del sondeador (por SQL, hace 120 s según la base) se queda sin reclamar, y el retraso se
+ * lee con su VALOR. El disparo se mide al rearrancar: la primera pasada reclama la purga ya vencida y la observa.
+ */
+const LONG_SLEEP = { [TIMER_PARAMETERS.maxSleepMs.env]: '600000' };
+
+function ageTimerPurge(engine, database) {
+  const statement =
+    engine === 'postgresql'
+      ? `UPDATE keel_timer SET due_at = current_timestamp - interval '120 seconds' WHERE kind = '${TIMER_PURGE_KIND}'`
+      : `UPDATE keel_timer SET due_at = DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 120 SECOND) WHERE kind = '${TIMER_PURGE_KIND}'`;
+  const args =
+    engine === 'postgresql'
+      ? ['exec', database.name, 'psql', '-U', DB_NAME, '-d', DB_NAME, '-v', 'ON_ERROR_STOP=1', '-c', statement]
+      : ['exec', database.name, 'mysql', '-h', '127.0.0.1', '-u', 'root', `-p${database.password}`, DB_NAME, '-e', statement];
+  const result = run(runtime, args);
+  if (result.status !== 0) throw new Error(`no se pudo vencer la purga de keel_timer: ${result.stderr}`);
+}
+
+const gaugeValue = (text, name) => {
+  const line = text.split(String.fromCharCode(10)).find((candidate) => candidate.startsWith(`${name} `) || candidate.startsWith(`${name}{`));
+  return line == null ? null : Number(line.slice(line.lastIndexOf(' ') + 1));
+};
+
+/** La primera mitad, con la app en marcha: el retraso con su valor y la serie de los aparcados. */
+async function timerLag(app, engine, database) {
+  let lag = null;
+  let text = '';
+  for (let attempt = 0; attempt < 40; attempt++) {
+    ageTimerPurge(engine, database);
+    text = (await get(`${app.base}${METRICS_TRANSPORT.scrapePath}`)).text;
+    lag = gaugeValue(text, promGauge(TIMER_LAG));
+    if (lag != null && lag >= 100) break;
+    await sleep(500);
+  }
+  return { lag, parked: gaugeValue(text, promGauge(TIMER_PARKED)) };
+}
+
+/** La segunda mitad, tras rearrancar: el histograma del disparo con su kind y su desenlace. */
+async function timerTicked(app) {
+  const tick = promMetric(OBSERVATIONS.timerTick);
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const text = (await get(`${app.base}${METRICS_TRANSPORT.scrapePath}`)).text;
+    const hit = text
+      .split(String.fromCharCode(10))
+      .some(
+        (line) =>
+          line.startsWith(tick.bucket) &&
+          line.includes(`${promTag(ATTRIBUTES.timerKind)}="${TIMER_PURGE_KIND}"`) &&
+          line.includes(`${promTag(ATTRIBUTES.outcome)}="ok"`)
+      );
+    if (hit) return true;
+    await sleep(500);
+  }
+  return false;
+}
+
+/** TEL-12 de una variante: el retraso con la app que ya corrió los casos de develop, y el disparo al rearrancar. */
+async function timerCase(variant, project, engine, database, env, timer) {
+  const again = await startApp(project, { PROFILE: 'develop', ...env, ...LONG_SLEEP });
+  try {
+    const ticked = await timerTicked(again);
+    record(
+      variant,
+      'TEL-12',
+      timer.lag >= 100 && timer.lag < 600 && timer.parked === 0 && ticked,
+      `retraso ${timer.lag} s (se esperaban unos 120), aparcados ${timer.parked}, disparo de ${TIMER_PURGE_KIND} observado: ${ticked}`
+    );
+  } finally {
+    await again.stop();
+  }
+}
+
 const root = keep ? fs.mkdtempSync(path.join(os.tmpdir(), 'kd-tel-')) : tmpDir('kd-tel-');
 const databases = [];
 let fatal = null;
@@ -271,8 +352,10 @@ try {
     ...dbEnv,
     DB_POOL_MAX_SIZE: String(poolMax),
     OTEL_EXPORTER_OTLP_ENDPOINT: receiver.endpoint,
-    TELEMETRY_EXPORT_ENABLED: 'true'
+    TELEMETRY_EXPORT_ENABLED: 'true',
+    ...LONG_SLEEP
   });
+  let timer;
   try {
     const trace = caller();
     const correlationId = `tel-check-${randomBytes(4).toString('hex')}`;
@@ -280,9 +363,11 @@ try {
       await get(`${app.base}${trafficPath(project.model)}`, { traceparent: trace.traceparent, 'x-correlation-id': correlationId });
     }
     await developCases('job-dispatch@postgresql', app, project.model, receiver, trace, correlationId, poolMax);
+    timer = await timerLag(app, 'postgresql', postgres);
   } finally {
     await app.stop();
   }
+  await timerCase('job-dispatch@postgresql', project, 'postgresql', postgres, dbEnv, timer);
 
   const mysql = await startDatabase(runtime, 'mysql');
   databases.push(mysql);
@@ -293,8 +378,10 @@ try {
     DB_PASSWORD: mysql.password,
     DB_POOL_MAX_SIZE: String(poolMax),
     OTEL_EXPORTER_OTLP_ENDPOINT: receiver.endpoint,
-    TELEMETRY_EXPORT_ENABLED: 'true'
+    TELEMETRY_EXPORT_ENABLED: 'true',
+    ...LONG_SLEEP
   });
+  let mysqlTimer;
   try {
     const trace = caller();
     const correlationId = `tel-check-${randomBytes(4).toString('hex')}`;
@@ -302,9 +389,11 @@ try {
       await get(`${mysqlApp.base}${trafficPath(onMysql.model)}`, { traceparent: trace.traceparent, 'x-correlation-id': correlationId });
     }
     await developCases('job-dispatch@mysql', mysqlApp, onMysql.model, receiver, trace, correlationId, poolMax);
+    mysqlTimer = await timerLag(mysqlApp, 'mysql', mysql);
   } finally {
     await mysqlApp.stop();
   }
+  await timerCase('job-dispatch@mysql', onMysql, 'mysql', mysql, { DB_URL: mysql.url, DB_USERNAME: mysql.user, DB_PASSWORD: mysql.password }, mysqlTimer);
 
   // production: el scrape solo en el puerto de gestión.
   const production = await startApp(project, { PROFILE: 'production', ...dbEnv, OTEL_EXPORTER_OTLP_ENDPOINT: receiver.endpoint });
@@ -341,8 +430,8 @@ try {
   if (keep) console.log(`  (--keep) proyectos en ${root}`);
 }
 
-// Los nueve casos de develop en cada motor, production y la seguridad.
-const expected = 20;
+// Los diez casos de develop en cada motor (TEL-12 incluido), production y la seguridad.
+const expected = 22;
 const failed = results.filter((result) => !result.ok).length;
 if (fatal) {
   console.error(`\nsin veredicto: ${fatal}`);
