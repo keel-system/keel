@@ -20,7 +20,7 @@
 
 import { collectorHostEndpoint } from '@keel-system/keel-core/gen/infra-catalog';
 import { telemetryYaml as neutralTelemetryYaml } from '@keel-system/keel-core/gen/telemetry-config';
-import { ATTRIBUTES, METRICS_TRANSPORT, OBSERVATIONS, OUTBOX_DEAD_LETTERED, instrumentationFor, usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
+import { ATTRIBUTES, METRICS_TRANSPORT, OBSERVATIONS, OUTBOX_DEAD_LETTERED, TIMER_LAG, TIMER_PARKED, instrumentationFor, usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { usesRelational } from '@keel-system/keel-core/gen/features';
 import { goString } from '../lib/go-source.js';
 import { usesCorrelation } from './correlation.js';
@@ -270,6 +270,10 @@ const (
 ${constants(OBSERVATIONS)}
 	// OutboxDeadLettered es el gauge de los eventos del outbox que agotaron sus reintentos: no se publicarán nunca.
 	OutboxDeadLettered = ${goString(OUTBOX_DEAD_LETTERED)}
+	// TimerLag es el retraso del cronómetro: los segundos que lleva esperando lo vencido y sin reclamar más antiguo.
+	TimerLag = ${goString(TIMER_LAG)}
+	// TimerParked son los temporizadores aparcados: agotaron sus intentos y no se van a cumplir solos.
+	TimerParked = ${goString(TIMER_PARKED)}
 )
 
 // Los atributos que estampa el código generado. Attr${exported('correlationId')} va solo al span, nunca a una etiqueta de métrica.

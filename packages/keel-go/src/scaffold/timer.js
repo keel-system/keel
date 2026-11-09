@@ -53,6 +53,7 @@ import { ageDeadlineScript } from '@keel-system/keel-core/gen/mongo-probes';
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { snakeCase } from '@keel-system/keel-core/gen';
 import { usesRelational } from '@keel-system/keel-core/gen/features';
+import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { goExported } from '../lib/go-projection.js';
 import { alignRows, goString, keyedLiteral } from '../lib/go-source.js';
 import { relationalEngine, sqlDialect } from '../lib/relational-engine.js';
@@ -607,8 +608,11 @@ type Store interface {
 	Fail(ctx context.Context, id string, token uuid.UUID, maxAttempts int, retryDelay time.Duration) error
 	// NextDue es cuánto falta para lo próximo reclamable de esos kinds (puede ser negativo); false si no hay nada.
 	NextDue(ctx context.Context, kinds []string) (time.Duration, bool, error)
-	// ParkedCount son los temporizadores aparcados.
+	// ParkedCount son los temporizadores aparcados, de todos los kinds (T5).
 	ParkedCount(ctx context.Context) (int64, error)
+	// Lag es cuánto lleva esperando lo más antiguo reclamable YA de esos kinds; false si no hay nada. Es el retraso del
+	// cronómetro: lo arrendado no cuenta mientras dure el arriendo, ni un kind que esta réplica no conoce.
+	Lag(ctx context.Context, kinds []string) (time.Duration, bool, error)
 	// Purge borra lo vencido hace más de la retención y sin reclamar (R4, R7).
 	Purge(ctx context.Context, retentionDays int) (int64, error)
 }
@@ -752,6 +756,7 @@ type Poller struct {
 	kinds      []string
 	settings   Settings
 	logger     *slog.Logger
+	observe    Observer
 
 	// wake avisa al bucle de que wakeAt cambió; con hueco para uno, nunca bloquea a quien arma.
 	wake chan struct{}
@@ -799,6 +804,22 @@ func NewPoller(store Store, handlers []Handler, recurrings []Recurring, settings
 	return p, nil
 }
 
+// Observer observa un disparo del cronómetro (la telemetría, si la hay): run es el trabajo del temporizador de ese kind.
+type Observer func(ctx context.Context, kind string, run func(ctx context.Context) error) error
+
+// Observe instala quien observa cada disparo. Sin él, los disparos corren tal cual.
+func (p *Poller) Observe(observer Observer) {
+	p.observe = observer
+}
+
+// observed ejecuta un disparo a través del observador, si lo hay.
+func (p *Poller) observed(ctx context.Context, kind string, run func(ctx context.Context) error) error {
+	if p.observe == nil {
+		return run(ctx)
+	}
+	return p.observe(ctx, kind, run)
+}
+
 // Kinds son los kinds que esta réplica reclama.
 func (p *Poller) Kinds() []string {
 	return append([]string(nil), p.kinds...)
@@ -843,8 +864,10 @@ func (p *Poller) PollOnce(ctx context.Context) (time.Duration, error) {
 		if recurring, ok := p.recurrings[timer.Kind]; ok {
 			err = p.tick(ctx, recurring, timer, token)
 		} else {
-			err = p.store.Resolve(ctx, timer, token, func(ctx context.Context) (Outcome, error) {
-				return p.handle(ctx, timer)
+			err = p.observed(ctx, timer.Kind, func(ctx context.Context) error {
+				return p.store.Resolve(ctx, timer, token, func(ctx context.Context) (Outcome, error) {
+					return p.handle(ctx, timer)
+				})
 			})
 		}
 		if err != nil {
@@ -892,7 +915,7 @@ func (p *Poller) tick(ctx context.Context, recurring Recurring, timer Claimed, t
 	// Un tick que falla NO se aparca (RC-8): se rearma para el siguiente, como hacía su cron. Aparcarlo tras MaxAttempts
 	// fallos —una base caída unos minutos— dejaría el barrido o la purga sin reloj para siempre, y asegurar al arrancar no
 	// toca una fila con el mismo spec.
-	if err := runTick(ctx, recurring); err != nil {
+	if err := p.observed(ctx, timer.Kind, func(ctx context.Context) error { return runTick(ctx, recurring) }); err != nil {
 		p.logger.WarnContext(ctx, "temporizador: el tick falló; se rearma para el siguiente", "timer", timer.ID, "kind", timer.Kind, "error", err)
 	}
 	after, err := p.store.DBNow(ctx)
@@ -1262,6 +1285,23 @@ func (m *memoryStore) NextDue(_ context.Context, kinds []string) (time.Duration,
 	return time.Until(next), true, nil
 }
 
+func (m *memoryStore) Lag(context.Context, []string) (time.Duration, bool, error) {
+	var oldest time.Time
+	now := time.Now()
+	for _, row := range m.rows {
+		if row.parked || row.claimed.DueAt.After(now) || row.claimedUntil.After(now) {
+			continue
+		}
+		if oldest.IsZero() || row.claimed.DueAt.Before(oldest) {
+			oldest = row.claimed.DueAt
+		}
+	}
+	if oldest.IsZero() {
+		return 0, false, nil
+	}
+	return now.Sub(oldest), true, nil
+}
+
 func (m *memoryStore) ParkedCount(context.Context) (int64, error) {
 	var n int64
 	for _, row := range m.rows {
@@ -1417,7 +1457,7 @@ const CRON_CASES_ROWS = CRON_UTC_CASES.map(([spec, from, next]) => `\t\t{${goStr
 // ─── El almacén relacional: las sentencias de keel-core, tal cual ────────────────────────────────
 
 /** Las sentencias que el almacén usa, por su nombre de keel-core, y la constante Go de cada una. */
-export const TIMER_STATEMENT_NAMES = ['dbNow', 'arm', 'ensureRecurring', 'claimLock', 'claimMark', 'claimed', 'complete', 'reschedule', 'fail', 'nextDueMs', 'parkedCount', 'purge'];
+export const TIMER_STATEMENT_NAMES = ['dbNow', 'arm', 'ensureRecurring', 'claimLock', 'claimMark', 'claimed', 'complete', 'reschedule', 'fail', 'nextDueMs', 'parkedCount', 'lagMs', 'purge'];
 export const statementConstant = (name) => `timer${cap(name).replace(/^Db/, 'DB')}`;
 
 function relationalStoreBody(model) {
@@ -1678,6 +1718,23 @@ func (s *TimerStore) ParkedCount(ctx context.Context) (int64, error) {
 	var count int64
 	err = q.QueryRowContext(ctx, timerParkedCount).Scan(&count)
 	return count, err
+}
+
+// Lag implementa timer.Store.
+func (s *TimerStore) Lag(ctx context.Context, kinds []string) (time.Duration, bool, error) {
+	q, err := s.tx.conn(ctx)
+	if err != nil {
+		return 0, false, err
+	}
+	query, args, err := timerSQL(timerLagMs, map[string]any{"kinds": anyOf(kinds)})
+	if err != nil {
+		return 0, false, err
+	}
+	var ms sql.NullInt64
+	if err := q.QueryRowContext(ctx, query, args...).Scan(&ms); err != nil {
+		return 0, false, err
+	}
+	return time.Duration(ms.Int64) * time.Millisecond, ms.Valid, nil
 }
 
 // Purge implementa timer.Store.
@@ -1984,6 +2041,43 @@ func (s *TimerStore) ParkedCount(ctx context.Context) (int64, error) {
 	return timers.CountDocuments(outside(ctx), bson.D{{Key: "parked_at", Value: bson.D{{Key: "$ne", Value: nil}}}})
 }
 
+// Lag implementa timer.Store: el filtro del reclamo, el más antiguo y la hora del SERVIDOR ($$NOW), como lagPipeline de
+// keel-core.
+func (s *TimerStore) Lag(ctx context.Context, kinds []string) (time.Duration, bool, error) {
+	timers, err := s.timers()
+	if err != nil {
+		return 0, false, err
+	}
+	pipeline := bson.A{
+		bson.D{{Key: "$match", Value: bson.D{
+			{Key: "kind", Value: bson.D{{Key: "$in", Value: kinds}}},
+			{Key: "parked_at", Value: nil},
+			{Key: "$expr", Value: bson.D{{Key: "$and", Value: bson.A{
+				bson.D{{Key: "$lte", Value: bson.A{"$due_at", "$$NOW"}}},
+				bson.D{{Key: "$or", Value: bson.A{
+					bson.D{{Key: "$eq", Value: bson.A{"$claimed_until", nil}}},
+					bson.D{{Key: "$lt", Value: bson.A{"$claimed_until", "$$NOW"}}},
+				}}},
+			}}}},
+		}}},
+		bson.D{{Key: "$group", Value: bson.D{{Key: "_id", Value: nil}, {Key: "oldest", Value: bson.D{{Key: "$min", Value: "$due_at"}}}}}},
+		bson.D{{Key: "$project", Value: bson.D{{Key: "_id", Value: 0}, {Key: "lagMs", Value: bson.D{{Key: "$subtract", Value: bson.A{"$$NOW", "$oldest"}}}}}}},
+	}
+	cursor, err := timers.Aggregate(outside(ctx), pipeline)
+	if err != nil {
+		return 0, false, err
+	}
+	defer cursor.Close(ctx)
+	if !cursor.Next(ctx) {
+		return 0, false, cursor.Err()
+	}
+	ms, ok := cursor.Current.Lookup("lagMs").AsInt64OK()
+	if !ok {
+		return 0, false, nil
+	}
+	return time.Duration(ms) * time.Millisecond, true, nil
+}
+
 // Purge implementa timer.Store: vencido hace más de la retención y sin reclamar.
 func (s *TimerStore) Purge(ctx context.Context, retentionDays int) (int64, error) {
 	timers, err := s.timers()
@@ -2232,8 +2326,36 @@ ${purges.map((purge) => purge.code).join('')}${schedules}	poller, err := timer.N
 	}
 	// Un temporizador armado en esta réplica despierta a su sondeador tras el commit.
 	transactions.OnTimerArmed(poller.Armed)
-`;
+${usesTelemetry(model) ? TIMER_TELEMETRY : ''}`;
 }
+
+/**
+ * El cronómetro observado (DSL 2.26, inc. 11): cada disparo con su kind y su desenlace, y el retraso y los aparcados en
+ * cada scrape. NaN si no se pueden leer: un cero diría que el cronómetro va al día.
+ */
+const TIMER_TELEMETRY = `	if timerSettings.Enabled {
+		poller.Observe(func(ctx context.Context, kind string, run func(ctx context.Context) error) error {
+			return observability.Observe(ctx, telemetry.TimerTick, telemetry.Options{Name: "timer " + kind, Labels: map[string]string{telemetry.AttrTimerKind: kind}, NewRoot: true}, run)
+		})
+		observability.RegisterGauge(telemetry.TimerLag, "Segundos que lleva esperando el temporizador vencido y sin reclamar más antiguo", func() float64 {
+			lag, pending, err := timerStore.Lag(ctx, poller.Kinds())
+			if err != nil {
+				return math.NaN()
+			}
+			if !pending {
+				return 0
+			}
+			return max(0, lag.Seconds())
+		})
+		observability.RegisterGauge(telemetry.TimerParked, "Temporizadores que agotaron sus intentos y quedaron aparcados", func() float64 {
+			count, err := timerStore.ParkedCount(ctx)
+			if err != nil {
+				return math.NaN()
+			}
+			return float64(count)
+		})
+	}
+`;
 
 /** El sondeador en el errgroup: al cancelarse el contexto termina la pasada en vuelo y vuelve, antes de cerrar la base. */
 export const TIMER_WORKER = `

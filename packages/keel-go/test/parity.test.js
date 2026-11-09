@@ -20,14 +20,17 @@ import { FIXTURES_DIR } from './helpers/workspace.js';
 
 const pkgRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+// Por fixture Y por stack: lo que solo se emite con una elección de stack (la telemetría del cronómetro, con telemetry: otel)
+// declara su `stack` en el bloque parity, como en keel-nest.
 const arboles = new Map();
-function arbolDe(fixture) {
-  if (arboles.has(fixture)) return arboles.get(fixture);
+function arbolDe(fixture, stack = null) {
+  const clave = `${fixture}::${JSON.stringify(stack ?? {})}`;
+  if (arboles.has(clave)) return arboles.get(clave);
   const { manifest, layers, errors } = loadService(path.join(FIXTURES_DIR, fixture));
   assert.deepEqual(errors, [], `${fixture} no carga`);
-  const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR });
+  const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, ...(stack ? { stack } : {}) });
   const arbol = { archivos: new Map(files.map((file) => [file.path, file.content])), texto: files.map((file) => file.content).join('\n') };
-  arboles.set(fixture, arbol);
+  arboles.set(clave, arbol);
   return arbol;
 }
 
@@ -66,7 +69,7 @@ for (const [id, mechanism] of porModelo) {
     test(`${id}/${modelo}: el árbol generado lo trae`, () => {
       const fixture = PAIRS[mechanism.parity.pair][modelo];
       for (const marker of mechanism.parity.markers[modelo]) {
-        assert.ok(trae(arbolDe(fixture), marker), `${id}/${modelo}: '${marker}' no aparece en ${fixture}: o la rama dejó de emitirlo o el marcador se quedó obsoleto`);
+        assert.ok(trae(arbolDe(fixture, mechanism.parity.stack), marker), `${id}/${modelo}: '${marker}' no aparece en ${fixture}: o la rama dejó de emitirlo o el marcador se quedó obsoleto`);
       }
     });
   }

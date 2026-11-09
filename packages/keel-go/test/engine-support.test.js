@@ -83,6 +83,7 @@ const FALSIFIED_BY = {
   'timer-purge/document': ['timer-every-replica'],
   'timer-schedule/relational': ['drain-no-signal', 'drain-no-budget', 'timer-every-replica-schedule'],
   'timer-schedule/document': ['drain-no-signal', 'drain-no-budget', 'timer-every-replica-schedule'],
+  'timer-telemetry/document': ['tl-lag', 'dl-no-lease'],
   'timer-relay/relational': ['relay-no-wake', 'relay-no-retry'],
   'timer-relay/document': ['relay-no-wake', 'relay-no-retry']
 };

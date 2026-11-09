@@ -101,6 +101,34 @@ export const MECHANISMS = {
       }
     }
   },
+  'timer-telemetry': {
+    parity: {
+      pair: 'notification-mailer',
+      // Las series solo existen con telemetría: sin el stack, ninguna rama tendría marcadores.
+      stack: { telemetry: 'otel' },
+      markers: {
+        relational: ['cmd/server/main.go::poller.Observe(', 'cmd/server/main.go::telemetry.TimerLag', `${PG}/timers.go::timerSQL(timerLagMs,`],
+        document: ['cmd/server/main.go::poller.Observe(', 'cmd/server/main.go::telemetry.TimerLag', `${MONGO}/timers.go::bson.A{"$$NOW", "$oldest"}`]
+      }
+    },
+    emitter: 'src/scaffold/timer.js (Poller.Observe, Store.Lag en los dos motores y el cableado con telemetría en main) · src/scaffold/telemetry.js (TimerLag, TimerParked) · src/scaffold/observability-assets.js',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'telemetry-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'job-dispatch: TEL-12 con la app arrancada en develop y el sueño máximo a 10 min: la purga de keel_timer vencida por SQL hace 120 s publica ese retraso, y al rearrancar la primera pasada deja keel_timer_tick_seconds con kind y desenlace. db-check (TestTimer_TL1, verification-codes) ejecuta Store.Lag contra los dos motores, y la prueba emitida telemetry_test.go (go-check) exige las series del panel. Falsado: timer-kind (telemetry-check) cae en TEL-12 en los dos motores; tl-lag (db-check --only=verification-codes) en TL1; dl-no-lease arrastra TL1, ya declarado'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'verification-codes-mongo: TestTimer_TL1 ejecuta la agregación del retraso ($match del reclamo, $min de due_at y $$NOW) contra el replica set; el disparo observado es el mismo Poller que mide la rama relacional. Falsado: tl-lag (la resta invertida) cae en TL1, y dl-no-lease en DL5, DL6, DL7 y TL1'
+      }
+    }
+  },
   'timer-relay': {
     parity: {
       pair: 'notification-mailer',

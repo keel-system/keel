@@ -55,7 +55,7 @@ const REVALIDATION = /if !ok \|\| found\.\w+\(\) != [\w.]+ \{(\s*return Finished
 const expectOf = (ids) => new RegExp(ids.map((id) => `^TestTimer_${id.replace('-', '')}_`).join('|'));
 
 function sabotage(id, spec) {
-  const breaks = [...DEADLINE_SABOTAGES[id].breaks].sort();
+  const breaks = [...DEADLINE_SABOTAGES[id].breaks, ...(spec.extraBreaks ?? [])].sort();
   return { ...spec, breaks, expect: expectOf(breaks), ...(spec.documentBreaks ? { documentExpect: expectOf(spec.documentBreaks) } : {}) };
 }
 
@@ -67,10 +67,21 @@ export const TIMER_SABOTAGES = Object.freeze({
     files: TIMERS,
     from: /"leaseMs": lease\.Milliseconds\(\)|bson\.A\{"\$\$NOW", lease\.Milliseconds\(\)\}/,
     to: (match) => match.replace('lease.Milliseconds()', 'int64(0)'),
+    // Y TL-1 (inc. 11): con arriendo cero, lo «arrendado» vuelve a contar en el retraso al instante siguiente.
+    extraBreaks: ['TL-1'],
     // Sin arriendo, el bucle de FindOneAndUpdate vuelve a llevarse en el MISMO lote lo que acaba de reclamar: cae además
     // DL-5 (en relacional el lote es una sola sentencia y no lo ve). Lo mismo que midieron keel-spring, keel-nest y keel-dotnet.
-    documentBreaks: ['DL-5', ...DEADLINE_SABOTAGES['dl-no-lease'].breaks].sort()
+    documentBreaks: ['DL-5', ...DEADLINE_SABOTAGES['dl-no-lease'].breaks, 'TL-1'].sort()
   }),
+  // El retraso del cronómetro (inc. 11): en relacional, la sentencia del siguiente vencimiento en vez de la del retraso; en
+  // documentos, la resta invertida. Los dos dicen «nada vencido» con algo vencido: el panel diría que va al día.
+  'tl-lag': {
+    files: TIMERS,
+    from: /timerSQL\(timerLagMs,|bson\.A\{"\$\$NOW", "\$oldest"\}/,
+    to: (match) => (match.startsWith('timerSQL') ? 'timerSQL(timerNextDueMs,' : 'bson.A{"$oldest", "$$NOW"}'),
+    breaks: ['TL-1'],
+    expect: expectOf(['TL-1'])
+  },
   'dl-outside-tx': sabotage('dl-outside-tx', {
     files: TIMERS,
     // El armado fuera de la transacción del caso de uso: por la base y no por la transacción (relacional), o sin la sesión
@@ -91,7 +102,7 @@ export function timerSabotageBreaks(id, branch) {
 /** ¿Cayeron TODOS los casos del sabotaje? (las pruebas en rojo, por su nombre `TestTimer_DL<n>_…`). */
 export function timerBreaksCovered(failed, id, branch) {
   const { breaks } = timerSabotageBreaks(id, branch);
-  const seen = new Set(failed.map((test) => /^TestTimer_(DL|R)(\d+)_/.exec(test)).filter(Boolean).map((m) => `${m[1]}-${m[2]}`));
+  const seen = new Set(failed.map((test) => /^TestTimer_(DL|R|TL)(\d+)_/.exec(test)).filter(Boolean).map((m) => `${m[1]}-${m[2]}`));
   return breaks.filter((caseId) => !seen.has(caseId));
 }
 
@@ -533,6 +544,35 @@ func TestTimer_DL10_AgotadosLosIntentosSeAparca(t *testing.T) {
 	}
 	if got := timerState(t, id); got != ${state(deadline.state)} {
 		t.Fatalf("el aparcado no mueve la entidad: %v", got)
+	}
+}
+
+// El RETRASO del cronómetro (DSL 2.26, inc. 11): lo que lee el gauge keel.timer.lag.seconds, contra el motor real. El filtro
+// es el del reclamo, así que ni lo arrendado ni un kind que la réplica no conoce cuentan.
+func TestTimer_TL1_ElRetrasoEsLoVencidoYLibreMasAntiguo(t *testing.T) {
+	timerStart(t)
+	store := NewTimerStore(probeTx)
+	lag := func(kind string) (time.Duration, bool) {
+		t.Helper()
+		value, pending, err := store.Lag(t.Context(), []string{kind})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value, pending
+	}
+	if _, pending := lag(${kind}); pending {
+		t.Fatal("sin nada vencido, no hay retraso")
+	}
+	timerExpired(t, 2*time.Minute)
+	if value, pending := lag(${kind}); !pending || value < 115*time.Second || value >= 180*time.Second {
+		t.Fatalf("el retraso es lo que lleva vencido (unos 120 s): %v %v", value, pending)
+	}
+	if _, pending := lag("deadline:Ajeno.pending"); pending {
+		t.Fatal("un kind que la réplica no conoce no cuenta")
+	}
+	timerClaim(t, 10, time.Minute)
+	if value, pending := lag(${kind}); pending {
+		t.Fatalf("lo arrendado no cuenta: %v", value)
 	}
 }
 
