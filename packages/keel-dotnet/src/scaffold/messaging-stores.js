@@ -54,6 +54,7 @@ export function generate(model) {
       file('outbox', 'IOutboxDispatcher', [], dispatcherPortBody()),
       file('outbox', 'OutboxDispatcherFallback', ['Microsoft.Extensions.Logging'], dispatcherFallbackBody()),
       file('outbox', 'OutboxBackoff', [], backoffBody()),
+      file('outbox', 'OutboxWakeup', [], wakeupBody()),
       document
         ? file('outbox', 'OutboxRelayStore', ['MongoDB.Bson', 'MongoDB.Driver', persistenceNamespace(model)], documentRelayStoreBody())
         : file(
@@ -259,7 +260,11 @@ function relayStoreBody(model) {
 public sealed record ClaimedOutboxEvent(Guid Id, string Destination, string RoutingKey, string EventType, string Payload);
 
 /// <summary>El desenlace de un fallo: cuántos intentos lleva la fila y si se rindió.</summary>
-public sealed record MarkFailedOutcome(int Attempts, bool DeadLettered);
+/// <remarks>
+/// NextAttemptAtMs: cuándo vuelve a ser elegible la fila (milisegundos de la época; null si se rindió). El relay lo recuerda
+/// para no esperar al sondeo de respaldo (DSL 2.26).
+/// </remarks>
+public sealed record MarkFailedOutcome(int Attempts, bool DeadLettered, long? NextAttemptAtMs = null);
 
 /// <summary>
 /// Las transacciones CORTAS del relay, separadas de la publicación al broker (E/S de red):
@@ -335,12 +340,15 @@ public sealed class OutboxRelayStore(IServiceScopeFactory scopes)
                 row.Attempts += 1;
                 row.LastError = error;
                 var deadLettered = OutboxBackoff.DeadLettered(row.Attempts, maxAttempts);
+                long? nextAttemptAtMs = null;
                 if (!deadLettered)
                 {
                     row.NextAttemptAt = DateTimeOffset.UtcNow.AddMilliseconds(OutboxBackoff.BackoffMs(row.Attempts, backoffInitialMs, backoffMaxMs));
+                    // Hacia ARRIBA: la columna guarda microsegundos, y truncado la pasada llegaría antes de que sea elegible.
+                    nextAttemptAtMs = row.NextAttemptAt.Value.ToUnixTimeMilliseconds() + 1;
                 }
                 await db.SaveChangesAsync(cancellationToken);
-                return new MarkFailedOutcome(row.Attempts, deadLettered);
+                return new MarkFailedOutcome(row.Attempts, deadLettered, nextAttemptAtMs);
             },
             readOnly: false,
             cancellationToken);
@@ -365,6 +373,64 @@ public sealed class OutboxRelayStore(IServiceScopeFactory scopes)
 }`;
 }
 
+/**
+ * La señal de una fila nueva en el outbox (DSL 2.26, inc. 9): la da el bridge tras el commit de la transacción que la
+ * escribió, y la oye el relay de esta réplica, que sale en el acto en vez de esperar al sondeo de respaldo.
+ */
+function wakeupBody() {
+  return `/// <summary>
+/// El aviso de que ESTA réplica confirmó una fila nueva en el outbox: lo da el bridge tras el commit, y el relay lo escucha
+/// para salir ya. Si la transacción revierte, el bridge no avisa.
+/// </summary>
+public sealed class OutboxWakeup
+{
+    private readonly List<Action> listeners = [];
+    private readonly Lock gate = new();
+
+    /// <summary>
+    /// Lo llama el relay al arrancar, y se da de baja al parar (Dispose): un relay parado que siguiera suscrito recibiría
+    /// el aviso sobre un semáforo ya desechado, y su excepción cortaría el de los demás.
+    /// </summary>
+    public IDisposable Subscribe(Action listener)
+    {
+        ArgumentNullException.ThrowIfNull(listener);
+        lock (gate)
+        {
+            listeners.Add(listener);
+        }
+        return new Subscription(this, listener);
+    }
+
+    private void Unsubscribe(Action listener)
+    {
+        lock (gate)
+        {
+            listeners.Remove(listener);
+        }
+    }
+
+    private sealed class Subscription(OutboxWakeup owner, Action listener) : IDisposable
+    {
+        public void Dispose() => owner.Unsubscribe(listener);
+    }
+
+    /// <summary>Lo programa el bridge para después del commit.</summary>
+    public Task Notify()
+    {
+        Action[] current;
+        lock (gate)
+        {
+            current = [.. listeners];
+        }
+        foreach (var listener in current)
+        {
+            listener();
+        }
+        return Task.CompletedTask;
+    }
+}`;
+}
+
 function relayBody(model) {
   const telemetry = usesTelemetry(model);
   return `/// <summary>
@@ -379,9 +445,11 @@ function relayBody(model) {
 /// ERROR, sin borrarse.
 /// </para>
 /// <para>
-/// Corre con un retardo FIJO entre pasadas (outbox.relay.fixed-delay-ms) desde que la aplicación arranca, y al apagarse no
-/// empieza otra publicación: las filas que quedan conservan su lease y otra pasada las recoge. Sin base de datos (el
-/// perfil test) no corre.
+/// Corre POR RÉPLICA (DSL 2.26): lo despierta el commit que escribe en el outbox (OutboxWakeup), y la pasada siguiente va
+/// en el acto con el lote lleno, al reintento más próximo que programó o al sondeo de respaldo (outbox.relay.poll-ms), lo
+/// que llegue antes: relayNextRunMs de keel-core/gen/timer-plan.js. Al apagarse no empieza otra publicación: las filas
+/// que quedan conservan su lease y otra pasada las recoge. Sin base de datos o con scheduling.enabled apagado (el perfil
+/// test) no corre.
 /// </para>
 /// </remarks>
 public sealed partial class OutboxRelay(
@@ -389,59 +457,116 @@ public sealed partial class OutboxRelay(
     IOutboxDispatcher dispatcher,
     MessagingSettings messaging,
     DatabaseSettings database,
+    OutboxWakeup wakeup,
     ILogger<OutboxRelay> logger) : BackgroundService
 {
     private readonly OutboxRelaySettings settings = messaging.OutboxRelay ?? throw new InvalidOperationException("OutboxRelay sin outbox.relay en la configuración de mensajería");
 
     private readonly SemaphoreSlim pass = new(1, 1);
 
+    /// <summary>El despertar: lo suelta el commit de una fila nueva o Resume(); una pasada lo consume.</summary>
+    private readonly SemaphoreSlim woken = new(0, 1);
+
     private volatile bool paused;
 
     private volatile bool stopping;
 
+    /// <summary>El reintento más próximo que esta réplica programó y aún no ha llegado (long.MaxValue: ninguno).</summary>
+    private long pendingRetryMs = long.MaxValue;
+
+    /// <summary>Cuándo toca la pasada siguiente, según la última.</summary>
+    private long nextRunMs;
+
+    private long passCount;
+
+    private static long NowMs => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!database.Enabled)
+        if (!database.Enabled || !settings.Enabled)
         {
             return;
-        }${telemetry ? `
+        }
+        using var subscription = wakeup.Subscribe(Wake);${telemetry ? `
         // Las filas rendidas, leídas en cada scrape: la señal de que el outbox perdió algo (la alerta del panel).
         KeelTelemetry.Current?.RegisterGauge(Observations.OutboxDeadLettered, "Eventos del outbox que agotaron sus reintentos", async _ => (double)await CountDeadLettered());` : ''}
         using var registration = stoppingToken.Register(() => stopping = true);
         while (!stoppingToken.IsCancellationRequested)
         {
+            if (!paused)
+            {
+                // Lo que despertó antes de esta pasada lo cubre ella; lo que despierte DURANTE la encadena.
+                woken.Wait(0, CancellationToken.None);
+                await pass.WaitAsync(CancellationToken.None);
+                try
+                {
+                    if (!paused)
+                    {
+                        Interlocked.Increment(ref passCount);
+                        await RelayOnce();
+                    }
+                }
+                catch (Exception error) when (error is not OperationCanceledException)
+                {
+                    // Una pasada que falla entera (la base caída) no para el relay: lo intenta al sondeo de respaldo.
+                    nextRunMs = NowMs + settings.PollMs;
+                    LogPassFailed(error);
+                }
+                finally
+                {
+                    pass.Release();
+                }
+            }
             try
             {
-                await Task.Delay(settings.FixedDelayMs, stoppingToken);
+                var delay = paused ? Timeout.Infinite : (int)Math.Clamp(nextRunMs - NowMs, 0, int.MaxValue);
+                await woken.WaitAsync(delay, stoppingToken);
             }
             catch (OperationCanceledException)
             {
                 return;
             }
-            if (paused)
-            {
-                continue;
-            }
-            await pass.WaitAsync(CancellationToken.None);
-            try
-            {
-                await RelayOnce();
-            }
-            catch (Exception error) when (error is not OperationCanceledException)
-            {
-                // Una pasada que falla entera (la base caída) no para el relay: lo intenta en la siguiente.
-                LogPassFailed(error);
-            }
-            finally
-            {
-                pass.Release();
-            }
         }
     }
+
+    /// <summary>
+    /// Cuándo corre la pasada siguiente (relayNextRunMs de keel-core/gen/timer-plan.js): en el acto con el lote lleno; si
+    /// no, al primero del reintento más próximo que esta réplica programó y del sondeo de respaldo. Un reintento ya vencido
+    /// al empezar la pasada lo reclamó ella, así que se olvida.
+    /// </summary>
+    public long NextRun(bool full, long retryAtMs, long passStartMs)
+    {
+        var remembered = pendingRetryMs > passStartMs ? pendingRetryMs : long.MaxValue;
+        pendingRetryMs = Math.Min(remembered, retryAtMs);
+        var now = NowMs;
+        if (full)
+        {
+            return now;
+        }
+        return Math.Min(pendingRetryMs, now + settings.PollMs);
+    }
+
+    /// <summary>Una fila nueva confirmada en ESTA réplica: el relay sale ya. Durante una pasada, la siguiente va sin dormir.</summary>
+    public void Wake()
+    {
+        try
+        {
+            woken.Release();
+        }
+        catch (SemaphoreFullException)
+        {
+            // Ya había un despertar pendiente: uno basta.
+        }
+    }
+
+    /// <summary>Cuántas pasadas lleva el relay de esta réplica: en reposo, una por sondeo de respaldo.</summary>
+    public long Passes => Interlocked.Read(ref passCount);
 
     /// <summary>Una pasada: reclama, publica y registra el desenlace de cada fila. Devuelve cuántas reclamó.</summary>
     public async Task<int> RelayOnce()
     {
+        var passStartMs = NowMs;
+        var retryAtMs = long.MaxValue;
         var claimed = await store.ClaimBatch(settings.MaxAttempts, settings.BatchSize, settings.ClaimTimeoutMs);
         foreach (var row in claimed)
         {
@@ -469,10 +594,15 @@ ${telemetry ? `                // Dentro de la traza de la fila (la que quedó e
                 }
                 else
                 {
+                    if (outcome.NextAttemptAtMs is { } next)
+                    {
+                        retryAtMs = Math.Min(retryAtMs, next);
+                    }
                     LogDeliveryFailed(row.Id, outcome.Attempts, reason);
                 }
             }
         }
+        nextRunMs = NextRun(claimed.Count >= settings.BatchSize, retryAtMs, passStartMs);
         return claimed.Count;
     }
 
@@ -487,8 +617,12 @@ ${telemetry ? `                // Dentro de la traza de la fila (la que quedó e
         pass.Release();
     }
 
-    /// <summary>Reanuda las pasadas suspendidas con Pause().</summary>
-    public void Resume() => paused = false;
+    /// <summary>Reanuda las pasadas suspendidas con Pause(), con una en el acto: lo escrito durante la pausa no despertó a nadie.</summary>
+    public void Resume()
+    {
+        paused = false;
+        Wake();
+    }
 
     /// <summary>Las filas rendidas ahora mismo: la señal de que el outbox perdió algo (la mide el arnés).</summary>
     public Task<int> CountDeadLettered() => store.CountDeadLettered(settings.MaxAttempts);
@@ -519,6 +653,7 @@ ${telemetry ? `
     public override void Dispose()
     {
         pass.Dispose();
+        woken.Dispose();
         base.Dispose();
     }
 

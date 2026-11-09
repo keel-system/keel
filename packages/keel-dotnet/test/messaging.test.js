@@ -123,7 +123,8 @@ test('el adaptador de repositorio entrega los eventos al puente ANTES de SaveCha
   assert.ok(publish < adapter.indexOf('await db.SaveChangesAsync(cancellationToken);', publish - 2000) || adapter.indexOf('await db.SaveChangesAsync(cancellationToken);', publish) > publish);
   const bridge = content(files, '/Messaging/StockReservationEventsDomainEventBridge.cs');
   assert.match(bridge, /db\.Set<OutboxEventRow>\(\)\.Add/);
-  assert.doesNotMatch(bridge, /AfterCommit/);
+  // Lo único que va tras el commit es el AVISO al relay (DSL 2.26): la fila va dentro, con el cambio.
+  assert.deepEqual(bridge.match(/AfterCommit\([^;]*;/g), ['AfterCommit(wakeup.Notify);']);
 });
 
 test('best-effort (metering-digest): el puente publica tras el commit por el puerto, con un respaldo que avisa', () => {

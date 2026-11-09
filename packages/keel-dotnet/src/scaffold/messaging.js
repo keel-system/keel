@@ -26,6 +26,10 @@
 
 import { deadLetterDestination, missingTargetRetryDestinations, subscriptionDestination, subscriptionGroupId } from '@keel-system/keel-core/gen';
 import { OUTBOX_RELAY } from '@keel-system/keel-core/gen/messaging-stores';
+import { TIMER_SWITCH } from '@keel-system/keel-core/gen/timer-store';
+
+/** La línea con la que el bridge avisa al relay tras el commit (el sabotaje `relay-no-wake` la quita). */
+export const OUTBOX_WAKE_LINE = 'transactions.AfterCommit(wakeup.Notify);';
 import { usesMessaging, usesBridge, usesProcessedEvents, usesRabbitMq, usesKafka, usesSnsSqs } from '@keel-system/keel-core/gen/features';
 export { usesMessaging, usesBridge, usesProcessedEvents, usesRabbitMq, usesKafka, usesSnsSqs };
 import { consumerUnits, consumesFromQueue, messagingYaml, routingKeyName, subscriptionKey } from '@keel-system/keel-core/gen/messaging-plan';
@@ -328,11 +332,11 @@ function bridgeFile(model) {
   const usings = [namespaceOf(model, 'events'), namespaceOf(model, 'integrationEvents'), namespaceOf(model, 'correlation')];
   const ctor = [];
   if (outbox && document) {
-    usings.push(persistenceNamespace(model), 'MongoDB.Bson', 'MongoDB.Driver');
-    ctor.push('PersistenceTransactions transactions', 'MessagingSettings settings');
+    usings.push(persistenceNamespace(model), 'MongoDB.Bson', 'MongoDB.Driver', namespaceOf(model, 'outbox'));
+    ctor.push('PersistenceTransactions transactions', 'MessagingSettings settings', 'OutboxWakeup wakeup');
   } else if (outbox) {
-    usings.push(persistenceNamespace(model), rowsNamespace(model));
-    ctor.push(`${dbContextClass(model)} db`, 'MessagingSettings settings');
+    usings.push(persistenceNamespace(model), rowsNamespace(model), namespaceOf(model, 'outbox'));
+    ctor.push(`${dbContextClass(model)} db`, 'PersistenceTransactions transactions', 'MessagingSettings settings', 'OutboxWakeup wakeup');
   } else {
     usings.push(persistenceNamespace(model));
     ctor.push('PersistenceTransactions transactions');
@@ -374,12 +378,16 @@ function bridgeFile(model) {
         var rows = pending.ToList();
         pending.Clear();
         await transactions.Collection(${csString('outbox_event')}).InsertManyAsync(session, rows, cancellationToken: cancellationToken);
+        // Despierta al relay de ESTA réplica tras el commit (DSL 2.26, inc. 9): el evento sale ya, sin esperar al sondeo
+        // de respaldo. Si la transacción aborta, el aviso no llega a nadie.
+        ${OUTBOX_WAKE_LINE}
     }`
     : outbox
     ? `
 
     /// <summary>La fila del outbox, en la transacción del cambio: el evento y el cambio confirman o revierten juntos.</summary>
-    private void Append(string routingKey, string eventType, string payload) =>
+    private void Append(string routingKey, string eventType, string payload)
+    {
         db.Set<OutboxEventRow>().Add(new OutboxEventRow
         {
             Id = Guid.CreateVersion7(),
@@ -389,7 +397,11 @@ function bridgeFile(model) {
             Payload = payload,
             CreatedAt = DateTimeOffset.UtcNow,
             Attempts = 0
-        });`
+        });
+        // Despierta al relay de ESTA réplica tras el commit (DSL 2.26, inc. 9): el evento sale ya, sin esperar al sondeo
+        // de respaldo. Si la transacción revierte, el aviso no llega a nadie.
+        ${OUTBOX_WAKE_LINE}
+    }`
     : '';
   const publish = document
     ? `    /// <summary>Lo llama el adaptador de repositorio al guardar, dentro de la transacción del caso de uso.</summary>
@@ -747,8 +759,11 @@ function settingsBody(model) {
 /// <param name="GroupId">El consumer group de la suscripción (Kafka); null en los demás brokers.</param>
 public sealed record SubscriptionSettings(string Topic, string? Queue, string? GroupId);
 
-/// <summary>El relay del outbox: las claves de keel-core/gen/messaging-stores.js (OUTBOX_RELAY).</summary>
-public sealed record OutboxRelaySettings(${relayEntries.map(([name]) => `int ${csMember(name)}`).join(', ')});
+/// <summary>
+/// El relay del outbox: las claves de keel-core/gen/messaging-stores.js (OUTBOX_RELAY), y Enabled, el interruptor del
+/// cronómetro (${TIMER_SWITCH.key}), que también lo apaga: en el perfil test va apagado.
+/// </summary>
+public sealed record OutboxRelaySettings(bool Enabled, ${relayEntries.map(([name]) => `int ${csMember(name)}`).join(', ')});
 
 /// <summary>
 /// La mensajería del perfil activo, con las claves de config/parameters/&lt;perfil&gt;/messaging.yaml: las MISMAS que los
@@ -788,7 +803,7 @@ ${events.map((event) => `                [${csString(event.name)}] = Text(config
             {
 ${subscriptions.map(subscriptionRead).join('\n')}
             },
-            ${outbox ? `new OutboxRelaySettings(\n${relayEntries.map(([, parameter]) => `                Positive(configuration, ${csString(configKey(parameter.key))}, ${parameter.default})`).join(',\n')})` : 'null'});
+            ${outbox ? `new OutboxRelaySettings(\n                Flag(configuration, ${csString(configKey(TIMER_SWITCH.key))}, ${TIMER_SWITCH.default}),\n${relayEntries.map(([, parameter]) => `                Positive(configuration, ${csString(configKey(parameter.key))}, ${parameter.default})`).join(',\n')})` : 'null'});
 
     private static string Text(ServiceConfiguration? configuration, string key, string fallback) =>
         configuration?.Get(key) is { } value && !string.IsNullOrWhiteSpace(value) ? value : fallback;
@@ -803,7 +818,12 @@ ${subscriptions.map(subscriptionRead).join('\n')}
         return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) && parsed > 0
             ? parsed
             : throw new InvalidOperationException($"{key.Replace(':', '.')} tiene que ser un entero positivo: '{value}'");
-    }
+    }${outbox ? `
+
+    private static bool Flag(ServiceConfiguration? configuration, string key, bool fallback) =>
+        configuration?.Get(key) is { } value && !string.IsNullOrWhiteSpace(value)
+            ? string.Equals(value.Trim(), "true", StringComparison.OrdinalIgnoreCase)
+            : fallback;` : ''}
 }`;
 }
 
@@ -905,6 +925,8 @@ function registrationFile(model) {
   const domainEvents = [];
   if (bridge) {
     domainEvents.push(`        services.AddScoped<${bridgeClass(model)}>();`);
+    // La señal con la que el puente despierta al relay tras el commit (DSL 2.26): va con el puente, que la necesita.
+    if (outbox) domainEvents.push('        services.TryAddSingleton<OutboxWakeup>();');
     if (!outbox) for (const event of model.events) domainEvents.push(`        services.TryAddSingleton<${publisherPort(event)}, ${publisherStub(event)}>();`);
   }
   const body = `/// <summary>

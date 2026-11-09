@@ -36,6 +36,7 @@ import { purgeTimerFixtureRegistration, purgeTimerProbeBlock, purgeTimerProbeUsi
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
 import { parametersNamespace, parametersTestInstance, usesServiceParameters } from '../../src/scaffold/service-parameters.js';
+import { RELAY_WAKE_USINGS, relayWakeBlock } from './relay-wake-probes.js';
 
 /** Lo que el contenedor de la sonda registra antes de la persistencia (AddPersistence no pisa estos: TryAdd). */
 function fixtureRegistrations(model) {
@@ -490,7 +491,7 @@ function probesCs(model, namespace) {
   const keys = storeKeyBlock({ guard: usesProcessedEvents(model), idempotency: usesRequestIdempotency(model) });
   if (keys) blocks.push(keys);
   if (usesDotnetOutbox(model)) {
-    blocks.push(documentOutboxBlock());
+    blocks.push(documentOutboxBlock(), relayWakeBlock(model, { document: true }));
     const bridge = documentBridgeBlock(model, {
       bridge: bridgeClass(model),
       sample: (field) => sampleValue(model, field, ctx, 'evento') ?? 'default!'
@@ -553,7 +554,7 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
     ...typeUsings(model, roots.map((root) => root.name)),
     ...(usesRequestIdempotency(model) ? [idempotencyNamespace(model)] : []),
     ...(usesBridge(model) || usesProcessedEvents(model) ? [messagingNamespace(model)] : []),
-    ...(usesDotnetOutbox(model) ? [namespaceOf(model, 'outbox'), namespaceOf(model, 'events')] : []),
+    ...(usesDotnetOutbox(model) ? [namespaceOf(model, 'outbox'), namespaceOf(model, 'events'), ...RELAY_WAKE_USINGS] : []),
     ...(usesProcessedEvents(model) ? [namespaceOf(model, 'messageIdempotency')] : []),
     ...(tablePurges(model).length > 0 ? [purgeNamespace(model), 'Microsoft.Extensions.Logging.Abstractions'] : []),
     ...(usesServiceParameters(model) ? [parametersNamespace(model)] : []),

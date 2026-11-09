@@ -78,7 +78,11 @@ export function documentRelayStoreBody() {
 public sealed record ClaimedOutboxEvent(Guid Id, string Destination, string RoutingKey, string EventType, string Payload);
 
 /// <summary>El desenlace de un fallo: cuántos intentos lleva la fila y si se rindió.</summary>
-public sealed record MarkFailedOutcome(int Attempts, bool DeadLettered);
+/// <remarks>
+/// NextAttemptAtMs: cuándo vuelve a ser elegible la fila (milisegundos de la época; null si se rindió). El relay lo recuerda
+/// para no esperar al sondeo de respaldo (DSL 2.26).
+/// </remarks>
+public sealed record MarkFailedOutcome(int Attempts, bool DeadLettered, long? NextAttemptAtMs = null);
 
 /// <summary>
 /// Las operaciones del relay sobre ${OUTBOX_EVENT.table}, separadas de la publicación al broker (E/S de red).
@@ -164,15 +168,17 @@ public sealed class OutboxRelayStore(DocumentDatabase database)
         }
         var attempts = BsonValues.Int32(BsonValues.Field(row, "attempts"), "outbox_event.attempts");
         var deadLettered = OutboxBackoff.DeadLettered(attempts, maxAttempts);
-        if (!deadLettered)
+        if (deadLettered)
         {
-            var next = DateTimeOffset.UtcNow.AddMilliseconds(OutboxBackoff.BackoffMs(attempts, backoffInitialMs, backoffMaxMs));
-            await Outbox.UpdateOneAsync(
-                new BsonDocument("_id", BsonValues.Of(id)),
-                new BsonDocument("$set", new BsonDocument("next_attempt_at", BsonValues.Of(next))),
-                cancellationToken: cancellationToken);
+            return new MarkFailedOutcome(attempts, true);
         }
-        return new MarkFailedOutcome(attempts, deadLettered);
+        var next = DateTimeOffset.UtcNow.AddMilliseconds(OutboxBackoff.BackoffMs(attempts, backoffInitialMs, backoffMaxMs));
+        await Outbox.UpdateOneAsync(
+            new BsonDocument("_id", BsonValues.Of(id)),
+            new BsonDocument("$set", new BsonDocument("next_attempt_at", BsonValues.Of(next))),
+            cancellationToken: cancellationToken);
+        // Hacia ARRIBA: truncado al milisegundo, la pasada llegaría antes de que la fila sea elegible.
+        return new MarkFailedOutcome(attempts, false, next.ToUnixTimeMilliseconds() + 1);
     }
 
     /// <summary>

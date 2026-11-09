@@ -117,6 +117,32 @@ export const MECHANISMS = {
       }
     }
   },
+  'timer-relay': {
+    parity: {
+      pair: 'notification-mailer',
+      markers: {
+        relational: ['public sealed class OutboxWakeup', 'transactions.AfterCommit(wakeup.Notify);', 'public long NextRun(bool full, long retryAtMs, long passStartMs)'],
+        document: ['public sealed class OutboxWakeup', 'transactions.AfterCommit(wakeup.Notify);', 'public long NextRun(bool full, long retryAtMs, long passStartMs)']
+      }
+    },
+    emitter: 'src/scaffold/messaging-stores.js (OutboxRelay por réplica y OutboxWakeup) · src/scaffold/messaging.js (el puente avisa tras el commit) · src/scaffold/document-stores.js',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'notification-mailer: el OutboxRelay emitido arrancado con el sondeo de respaldo a 600 s y el puente emitido escribiendo la fila en su transacción (RW-1 a RW-3, scripts/lib/relay-wake-probes.js). Falsado: relay-no-wake cae en RW-1 y relay-no-retry en RW-3. Los casos de keel-spring'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'notification-mailer-mongo: los mismos tres casos sobre el relay documental, con los mismos sabotajes'
+      }
+    }
+  },
   deadline: {
     parity: {
       pair: 'verification-codes',

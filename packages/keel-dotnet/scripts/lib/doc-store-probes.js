@@ -175,8 +175,10 @@ export function documentOutboxBlock() {
         await Relay.ClaimBatch(maxAttempts: 2, batchSize: 1, claimTimeoutMs: 60000, Cancel);
         var before = DateTimeOffset.UtcNow;
         var first = await Relay.MarkFailed(ids[0], "$broker caído", maxAttempts: 2, backoffInitialMs: 60000, backoffMaxMs: 120000, Cancel);
-        Assert.Equal(new MarkFailedOutcome(1, false), first);
+        Assert.Equal((1, false), (first.Attempts, first.DeadLettered));
         var row = await OutboxRow(ids[0]);
+        // El reintento que recuerda el relay (DSL 2.26): el del documento, redondeado hacia arriba al milisegundo.
+        Assert.Equal(BsonValues.Instant(row["next_attempt_at"], "next_attempt_at").ToUnixTimeMilliseconds() + 1, first.NextAttemptAtMs);
         // Un texto que empieza por $ se guarda como texto: no se lee como un campo.
         Assert.Equal("$broker caído", row["last_error"].AsString);
         Assert.True(row["claimed_at"].IsBsonNull, "el fallo suelta la marca");

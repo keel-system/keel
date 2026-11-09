@@ -80,6 +80,7 @@ import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { expectedSchemaNames } from '../src/scaffold/persistence.js';
 import { probeProject, databaseOf } from './lib/db-probes.js';
 import { DRAIN_SABOTAGES, drainSabotageVerdict, isDrainSabotage } from './lib/timer-probes.js';
+import { RELAY_WAKE_SABOTAGES, isRelayWakeSabotage, relayWakeSabotageVerdict } from './lib/relay-wake-probes.js';
 import { timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
 import { PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSabotage, purgeTimerSabotageVerdict, timerProbePatch, timerSabotageVerdict, timerSubject } from './lib/timer-probes.js';
 import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
@@ -180,7 +181,9 @@ const SABOTAGES = {
   // Las purgas en modo clúster (DSL 2.26, inc. 7): sobre notification-mailer, caen PT_R1 y PT_RC1.
   ...Object.fromEntries(Object.entries(PURGE_TIMER_SABOTAGES).map(([id, spec]) => [id, spec.relational])),
   // El drenaje del schedule (DSL 2.26, inc. 8): sobre job-dispatch, caen DR1 o DR3 del bloque del reclamo.
-  ...Object.fromEntries(Object.entries(DRAIN_SABOTAGES).map(([id, spec]) => [id, spec.relational]))
+  ...Object.fromEntries(Object.entries(DRAIN_SABOTAGES).map(([id, spec]) => [id, spec.relational])),
+  // El relay por réplica (DSL 2.26, inc. 9): sobre notification-mailer, caen RW1 o RW3.
+  ...Object.fromEntries(Object.entries(RELAY_WAKE_SABOTAGES).map(([id, spec]) => [id, spec.relational]))
 };
 
 /** El sabotaje para un motor: [sufijo, texto, sustituto], o null si no aplica a ese motor. */
@@ -241,7 +244,7 @@ const SUBJECTS = only
   ? [only]
   : isTimerSabotage(sabotage)
     ? ['verification-codes']
-    : isPurgeTimerSabotage(sabotage)
+    : isPurgeTimerSabotage(sabotage) || isRelayWakeSabotage(sabotage)
       ? ['notification-mailer']
       : isDrainSabotage(sabotage)
         ? ['job-dispatch']
@@ -344,6 +347,11 @@ async function checkEngine(engine) {
       // Con el espacio delante: `Catalog.DbProbes.` es subcadena de `ProductCatalog.DbProbes.`.
       const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
       const ran = tested.output.includes(`${subject.probes.name}.dll`);
+      if (isRelayWakeSabotage(sabotage)) {
+        const verdict = relayWakeSabotageVerdict(mine, sabotage);
+        step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+        continue;
+      }
       if (isDrainSabotage(sabotage)) {
         const verdict = drainSabotageVerdict(mine, sabotage);
         step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);

@@ -62,6 +62,7 @@ import { documentIndexes } from '@keel-system/keel-core/gen/document';
 import { planFixture, makeWorkspace, UNCOVERED_BRANCHES } from '../test/helpers/workspace.js';
 import { docProbeProject, documentDatabaseOf } from './lib/doc-probes.js';
 import { DRAIN_SABOTAGES, drainSabotageVerdict, isDrainSabotage } from './lib/timer-probes.js';
+import { RELAY_WAKE_SABOTAGES, isRelayWakeSabotage, relayWakeSabotageVerdict } from './lib/relay-wake-probes.js';
 import { timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
 import { PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSabotage, purgeTimerSabotageVerdict, timerProbePatch, timerSabotageVerdict, timerSubject } from './lib/timer-probes.js';
 import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
@@ -115,7 +116,7 @@ const SUBJECTS = [
     ? subject.name === only
     : isDrainSabotage(sabotage)
       ? subject.name === 'job-dispatch-mongo'
-      : isPurgeTimerSabotage(sabotage)
+      : isPurgeTimerSabotage(sabotage) || isRelayWakeSabotage(sabotage)
       ? subject.name === 'notification-mailer-mongo'
       : !isTimerSabotage(sabotage) || subject.name === 'verification-codes-mongo'
 );
@@ -194,7 +195,9 @@ const SABOTAGES = {
   // Las purgas en modo clúster (DSL 2.26, inc. 7): sobre notification-mailer-mongo, caen PT_R1 y PT_RC1.
   ...Object.fromEntries(Object.entries(PURGE_TIMER_SABOTAGES).map(([id, spec]) => [id, spec.document])),
   // El drenaje del schedule (DSL 2.26, inc. 8): sobre job-dispatch-mongo, caen DR1 o DR3 del bloque del reclamo.
-  ...Object.fromEntries(Object.entries(DRAIN_SABOTAGES).map(([id, spec]) => [id, spec.document]))
+  ...Object.fromEntries(Object.entries(DRAIN_SABOTAGES).map(([id, spec]) => [id, spec.document])),
+  // El relay por réplica (DSL 2.26, inc. 9): sobre notification-mailer-mongo, caen RW1 o RW3.
+  ...Object.fromEntries(Object.entries(RELAY_WAKE_SABOTAGES).map(([id, spec]) => [id, spec.document]))
 };
 // El sabotaje del uuid tiene que cambiar las DOS direcciones (si no, la ida y vuelta lo cazaría sola): también al escribir.
 // Y el del clasificador, sus DOS vías: la etiqueta y el código 112 dicen lo mismo, así que quitar una sola es una mutación
@@ -294,6 +297,11 @@ try {
   for (const subject of subjects) {
     const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
     const ran = tested.output.includes(`${subject.probes.name}.dll`);
+    if (isRelayWakeSabotage(sabotage)) {
+      const verdict = relayWakeSabotageVerdict(mine, sabotage);
+      step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
     if (isDrainSabotage(sabotage)) {
       const verdict = drainSabotageVerdict(mine, sabotage);
       step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);

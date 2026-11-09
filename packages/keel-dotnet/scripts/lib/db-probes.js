@@ -69,6 +69,7 @@ import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { FINDER_PROBE_TEXT, findersOf, finderTextProbes } from '@keel-system/keel-core/gen/query-filters';
 import { driverNamespace, usesMySql, valueAlias } from '../../src/scaffold/relational-engine.js';
 import { loadsExpecting } from '../../src/scaffold/conditional-writes.js';
+import { RELAY_WAKE_USINGS, relayWakeBlock } from './relay-wake-probes.js';
 
 /**
  * El SQL de las sondas que cambia de un motor a otro: el alias que lee SqlQuery<T> (dentro de un `$"…"` y en un literal
@@ -619,7 +620,7 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
   }
 
   if (usesRequestIdempotency(model)) blocks.push(idempotencyBlock(model));
-  if (usesDotnetOutbox(model)) blocks.push(outboxBlock(model));
+  if (usesDotnetOutbox(model)) blocks.push(outboxBlock(model), relayWakeBlock(model, { document: false, context: dbContext(model) }));
   if (usesProcessedEvents(model)) blocks.push(guardBlock());
   if (usesReconciliationClaims(model)) blocks.push(reconciliationStoreBlock(model));
   const purges = tablePurges(model);
@@ -677,7 +678,7 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
     namespaceOf(model, 'appSupport'),
     ...(usesRequestIdempotency(model) ? [idempotencyNamespace(model)] : []),
     ...(usesBridge(model) || usesProcessedEvents(model) ? [messagingNamespace(model)] : []),
-    ...(usesDotnetOutbox(model) ? [namespaceOf(model, 'outbox'), namespaceOf(model, 'rows')] : []),
+    ...(usesDotnetOutbox(model) ? [namespaceOf(model, 'outbox'), namespaceOf(model, 'rows'), ...RELAY_WAKE_USINGS] : []),
     ...(usesProcessedEvents(model) ? [namespaceOf(model, 'messageIdempotency')] : []),
     ...(purges.length > 0 ? [purgeNamespace(model), namespaceOf(model, 'rows'), 'Microsoft.Extensions.Logging.Abstractions'] : []),
     ...(usesServiceParameters(model) ? [parametersNamespace(model)] : []),
@@ -1424,8 +1425,10 @@ function outboxBlock(model) {
         await Relay.ClaimBatch(maxAttempts: 2, batchSize: 1, claimTimeoutMs: 60000, Cancel);
         var before = DateTimeOffset.UtcNow;
         var first = await Relay.MarkFailed(ids[0], "broker caído", maxAttempts: 2, backoffInitialMs: 60000, backoffMaxMs: 120000, Cancel);
-        Assert.Equal(new MarkFailedOutcome(1, false), first);
+        Assert.Equal((1, false), (first.Attempts, first.DeadLettered));
         var row = await InScope(other => other.GetRequiredService<${context}>().Set<OutboxEventRow>().AsNoTracking().SingleAsync(r => r.Id == ids[0], Cancel));
+        // El reintento que recuerda el relay (DSL 2.26): el de la fila, redondeado hacia arriba al milisegundo.
+        Assert.Equal(row.NextAttemptAt!.Value.ToUnixTimeMilliseconds() + 1, first.NextAttemptAtMs);
         Assert.Equal("broker caído", row.LastError);
         Assert.True(row.NextAttemptAt >= before.AddMilliseconds(59000), "el backoff del primer fallo es el inicial");
         Assert.Equal(0, await Relay.CountDeadLettered(maxAttempts: 2, Cancel));
