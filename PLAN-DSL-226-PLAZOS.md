@@ -322,7 +322,7 @@ borra lo que no conoce: RC-5) y `relay-no-wake` (RC-7).
 | 6 | Lo mismo en keel-go | `go-check`, `db-check`, `doc-check`, `harness-check` |
 | 7 | **Hecho (2026-11-08)** en los cuatro; ver las notas de abajo. **Migrar las purgas** (las cuatro tablas) al modo clúster, en los cuatro | `store-check` en keel-spring y `db-check`/`doc-check` en los otros tres, con un sabotaje nuevo `timer-every-replica` (la purga vuelve a correr en todas: la sonda de dos réplicas la ve dos veces) |
 | 8 | **Hecho (2026-11-08)** en los cuatro; ver las notas de abajo. **Migrar el `schedule` de las operaciones** al modo clúster, con el drenaje, en los cuatro. Incluye `fireTimer(kind)` en el arnés de los cuatro (los flujos de rescate y reconciliación dejan de esperar un tick del cron), el rescate, la reconciliación, los pagos y la guarda del correo, que van montados en él | `claim-check` en keel-spring, `db-check`/`doc-check`, `harness-check` (el rescate y `ageForReconciliation` sobre el cronómetro) y `stub-check` (reconciliación de pagos); el gate de idempotencia con el registro nuevo, falsado |
-| 9 | **Migrar el relay del outbox** al modo por réplica, con despertar al confirmar, en los cuatro, conservando la pausa del arnés con la misma API (en keel-spring ya no puede depender de `ScheduledAnnotationBeanPostProcessor`, y la purga del outbox sale del bean del relay) | `broker-check` contra los tres brokers en los cuatro generadores (el relay es lo que más redes toca), con un sabotaje `relay-no-wake` (sin despertar, la latencia vuelve al sondeo y la sonda de latencia lo ve). Y `clock-load.js`: en reposo, menos de 10 transacciones/min por réplica (hoy 122), y la salida de un evento en milisegundos (hoy media 0,5 s, p95 0,94 s) |
+| 9 | **Hecho (2026-11-09)** en los cuatro; ver las notas de abajo y § La carga de partida. **Migrar el relay del outbox** al modo por réplica, con despertar al confirmar, en los cuatro, conservando la pausa del arnés con la misma API (en keel-spring ya no puede depender de `ScheduledAnnotationBeanPostProcessor`, y la purga del outbox sale del bean del relay) | `broker-check` contra los tres brokers en los cuatro generadores (el relay es lo que más redes toca), con un sabotaje `relay-no-wake` (sin despertar, la latencia vuelve al sondeo y la sonda de latencia lo ve). Y `clock-load.js`: en reposo, menos de 10 transacciones/min por réplica (hoy 122), y la salida de un evento en milisegundos (hoy media 0,5 s, p95 0,94 s) |
 | 10 | ~~Evolución~~: pasa al **2b** (§ Incremento 0: lo medido, punto 4) | — |
 | 11 | Telemetría del cronómetro (vencidos sin reclamar, aparcados, duración del tick) y su entrada en el panel y las alertas | `telemetry-check` en los cuatro |
 | 12 | Fixture `stock-reservation` con el plazo (versión nueva, escenarios con `ageForDeadline`) y su gemela documental si la hay | `--ready` en verde y las redes que la tienen de sujeto |
@@ -669,6 +669,95 @@ sujetos sin ellos.
 | `timer-every-replica-schedule` | R1, RC1 y R2, en los tres motores |
 | `reset-timer` | exactamente sus 5 pasos |
 
+**Lo que dejó el incremento 9, en lo neutral y en keel-spring.** El relay no tiene fila en `keel_timer`: el modo por
+réplica es un bucle propio en cada réplica, con el mismo interruptor que el cronómetro (`scheduling.enabled`). Lo
+neutral está en `keel-core/gen`:
+
+- `OUTBOX_RELAY.pollMs` (`outbox.relay.poll-ms`, `OUTBOX_RELAY_POLL_MS`) sustituye a `fixed-delay-ms`. Es el sondeo de
+  RESPALDO: 30 s, salvo en `local`, donde se queda en 1 s. Ahí el arnés de flujos escribe, aparca y desaparca filas por
+  SQL a espaldas del relay (en keel-dotnet y keel-go, desde otro proceso), y nada de eso lo despierta.
+- `relayNextRunMs` (`timer-plan.js`) es la referencia ejecutable de cuándo corre la pasada siguiente: en el acto con el
+  lote lleno; si no, al primero del reintento más próximo que programó la réplica y del respaldo. Un reintento ya
+  vencido al empezar la pasada lo reclamó ella, así que se olvida.
+- Los casos RW-1 (un evento confirmado sale sin esperar al sondeo), RW-2 (en reposo no hay pasadas hasta el sondeo) y
+  RW-3 (un fallo se reintenta a su backoff), y dos sabotajes: `relay-no-wake` (cae RW-1) y `relay-no-retry` (cae RW-3).
+
+En keel-spring, `OutboxRelay` deja de ser un `@Scheduled`: es un `SmartLifecycle` con su hilo de plataforma, lo despierta
+el commit del bridge (`OutboxAppended`, oído con `@TransactionalEventListener(AFTER_COMMIT)`) y expone `pause()`/`resume()`.
+El arnés los llama por reflexión sobre el bean, sin `ScheduledAnnotationBeanPostProcessor`. La purga sale del relay a
+`OutboxPurge`, así que pausar el relay ya no pausa la purga; el gate de idempotencia la excluye como al relay.
+
+La red es la sonda nueva de `store-check` (`src/lib/relay-wake-probes.js`): el relay EMITIDO en marcha con el respaldo a
+600 s y el bridge EMITIDO escribiendo la fila (su `append` es privado: se llama por reflexión).
+
+| Red | Resultado |
+|---|---|
+| `store-check` | 31/31 en PostgreSQL y MySQL, 25/25 en MongoDB |
+| `compile-check` | verde en los cinco sujetos (catalog-extended con rabbit y snssqs, el par documental, MariaDB, otel) |
+| `telemetry-check` | verde, con la app arrancada |
+| suite | 1905/1905 |
+
+Los dos sabotajes caen en exactamente su caso en los tres motores.
+
+Lo que destapó: **el reintento truncado al milisegundo**. La columna guarda microsegundos; recordado truncado, la pasada
+llegaba unos microsegundos antes de que la fila fuera elegible, no reclamaba nada y, como el reintento ya había pasado,
+lo olvidaba: la fila esperaba al respaldo. Los cuatro lo recuerdan redondeado hacia arriba (+1 ms), y la referencia
+neutral lo dice. RW-3 lo cazó al primer sabotaje, porque `relay-no-wake` lo dejaba sin el despertar que lo tapaba.
+
+**Lo que dejó el incremento 9 en keel-nest.** `OutboxRelay` deja el `setTimeout` fijo: `kick()` lanza una pasada (o la
+encadena si hay otra en vuelo), `plan()` duerme hasta `nextRun`, y `OutboxAppendedSignal` lo despierta. El bridge lo
+avisa con `transactions.afterCommit(() => this.appended.notify())`. `MarkFailedOutcome` lleva `nextAttemptAtMs` en las
+dos ramas, y `OutboxRelaySettings` el interruptor (`enabled`, de `scheduling.enabled`).
+
+| Red | Resultado |
+|---|---|
+| `db-check` | 36/36 en PostgreSQL y MySQL, con el bloque RW |
+| `doc-check` | 5/5 sobre `notification-mailer-mongo` |
+| `broker-check` | 55/55 contra RabbitMQ, Kafka y SNS/SQS |
+| suite | 992/992 |
+
+Los dos sabotajes caen en exactamente su caso en los tres motores. De paso, la aserción del reset que el inc. 8 dejó
+atrás (`NOT IN ('typeorm_migrations', 'keel_timer')`).
+
+**Lo que dejó el incremento 9 en keel-dotnet.** `OutboxRelay` deja `Task.Delay(fixed-delay)`. Espera en un `SemaphoreSlim`
+que suelta `OutboxWakeup`, y el puente lo avisa con `transactions.AfterCommit(wakeup.Notify)` tras escribir la fila (la
+rama relacional gana `PersistenceTransactions` en el constructor). `OutboxWakeup` se registra con el puente, en
+`AddDomainEvents`, porque es quien lo necesita y las sondas no registran la mensajería entera. `MarkFailedOutcome` lleva
+`NextAttemptAtMs`, y `OutboxRelaySettings` el interruptor (`Enabled`, de `scheduling.enabled`).
+
+| Red | Resultado |
+|---|---|
+| `db-check` | 47 sondas en PostgreSQL y 51 en MySQL, con RW1 a RW3 |
+| `doc-check` | 53 sondas sobre `notification-mailer-mongo` |
+| `broker-check` | 67/67 contra RabbitMQ, Kafka y SNS/SQS |
+| `cs-check` | 17/17 |
+| suite | 895/895 |
+
+Los dos sabotajes caen en exactamente su caso en los tres motores.
+
+Lo que destapó: **un relay parado seguía suscrito al aviso**. Las sondas arrancan un relay por caso; el siguiente aviso
+llegaba al semáforo desechado del anterior, y su excepción cortaba el bucle de `Notify` antes de llegar al relay vivo.
+RW-1 fallaba de forma intermitente, según el orden de los casos. En producción hay un relay por proceso, pero un
+`StopAsync`/`StartAsync` lo habría reproducido. `Subscribe` devuelve ahora la baja, y el relay la usa con `using`.
+
+**Lo que dejó el incremento 9 en keel-go.** `messaging.Relay` deja el temporizador fijo. `Run` duerme hasta la pasada
+siguiente o hasta `Wake`, un canal con hueco para un aviso, y `nextRun` es `relayNextRunMs`. El `Save` de cada adaptador
+llama a `Transactions.relayWake` tras escribir las filas, y eso dispara después del commit el `OnOutboxAppended` que `main`
+cablea a `relay.Wake`, como `OnTimerArmed` con el sondeador. `FailedOutcome` lleva `NextAttempt`, y con cronómetro el relay
+lo arranca `timerSettings.Enabled`, que ya incluye la base.
+
+| Red | Resultado |
+|---|---|
+| `db-check` | verde en PostgreSQL y MySQL sobre `notification-mailer`, con `TestRelayWake_RW1..3` |
+| `doc-check` | verde sobre `notification-mailer-mongo` |
+| `go-check` | 245/245 |
+| `broker-check` | 87/87 contra RabbitMQ, Kafka y SNS/SQS |
+| suite | 1437/1437 |
+
+Los dos sabotajes caen en exactamente su caso en los tres motores. La primera pasada de `go-check` y la de `broker-check`
+las cortó Claude Code por falta de memoria de la máquina, y se repitieron enteras con
+`CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` en el entorno.
+
 El orden va del menor al mayor riesgo. Los incrementos 3-6 añaden un mecanismo sin tocar nada medido. Después se migra
 lo que menos redes toca (las purgas) y al final el relay, que toca los tres brokers en los cuatro generadores. Cada
 migración es un incremento propio con su puerta, y entre una y otra el servidor generado sigue en verde.
@@ -811,6 +900,25 @@ Lo que dicen:
 - **Lo que esta medida no ve**: el `schedule` de `catalog-extended` es horario y las purgas son diarias, así que no caen
   en una ventana de 5 minutos. Su ganancia es no correr en las tres réplicas a la vez (migraciones 7 y 8), y se mide con
   el sabotaje `timer-every-replica`, no con este script.
+
+**Medida tras la migración 9 (2026-11-09).** El mismo proyecto, copiado a `D:\keel-tmp\clock-load\ws-inc9`, con el DSL
+subido a 2.26, refrescado con `keel-go build --refresh` (llega el paso `00002_keel_timer.sql`) y con `poll-ms` a 30000 en
+su `local`. Ese perfil deja el respaldo en 1 s y lo escribe sin variable, así que solo editando la copia se mide la cadencia
+de los demás perfiles. Los JSON llevan el sufijo `-inc9`.
+
+| Medida | Transacciones/min | Recorridos de `outbox_event`/min | Salida de un evento |
+|---|---|---|---|
+| 1 réplica, en reposo | **12,9** (antes 122) | 2 (antes 60) | — |
+| 3 réplicas, en reposo | **27,4** (antes 362) | 6 (antes 179) | — |
+| 1 réplica, 5 altas/s | 920 (antes 888) | 712 (antes 651) | **media 39 ms · p95 54 ms** (antes 500 · 940) |
+
+- **En reposo, −89 %**, y escala con las réplicas igual que antes: unas 9 por réplica. El 12,9 de `clock-load.js` incluye
+  su propio sobrecoste. Con `log_statement = all`, la app sola hace unas 9 transacciones/min: el reclamo del relay (2), el
+  sondeador del cronómetro con su reclamo y su «siguiente vencimiento» (unas 5) y el ping del pool (2). La puerta de
+  «menos de 10» se cumple en la app; con el instrumento de la línea base, no del todo.
+- **La salida de un evento pasa a milisegundos**, que era la segunda puerta.
+- **Con carga, +3,6 % de transacciones**: cada commit despierta una pasada, que reclama aunque otra ya se haya llevado la
+  fila. Con 5 altas/s es ruido; a ritmos mucho mayores habría que agrupar los despertares.
 
 Para repetirla tras cada migración: levantar la `infra/` del proyecto (`bash infra/up.sh && bash infra/validate-infra.sh`)
 y pasar `node scripts/clock-load.js <proyecto> --replicas=1|3 [--load=5] --label=<…>`. Hoy el script solo sabe
