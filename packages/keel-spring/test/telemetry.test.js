@@ -543,3 +543,28 @@ test('telemetría: la condición del appender de logs lee la MISMA clave que esc
   const value = key.split('.').reduce((node, part) => node?.[part], yaml);
   assert.notEqual(value, undefined, `telemetry.yaml no escribe ${key}: el appender no se instalaría nunca`);
 });
+
+// El cronómetro (DSL 2.26, inc. 11): con telemetría, cada disparo es una observación con su kind y su desenlace, la réplica
+// publica el retraso y los aparcados, y el disparo tiene histograma (el panel pide su p95). Sin telemetría, el sondeador
+// no cambia: ni registro de métricas ni de observaciones.
+test('cronómetro: el disparo observado y los dos gauges solo con telemetría, en los dos modelos', () => {
+  for (const fixture of ['notification-mailer', 'notification-mailer-mongo']) {
+    const con = generate(fixture, { telemetry: 'otel' });
+    const poller = con.find('TimerPoller.java');
+    assert.match(poller, /Observation\.createNotStarted\(TICK, observations\)/, fixture);
+    assert.ok(poller.includes(`"${OBSERVATIONS.timerTick}"`), fixture);
+    assert.ok(poller.includes(`.lowCardinalityKeyValue("${ATTRIBUTES.timerKind}", kind)`), fixture);
+    assert.ok(poller.includes('observed(timer.kind(), recurring::tick)'), `${fixture}: el tick de un recurrente sin observar`);
+    assert.ok(poller.includes('observed(timer.kind(), () -> transaction.executeWithoutResult('), `${fixture}: el plazo sin observar`);
+    assert.ok(poller.includes('Gauge.builder("keel.timer.lag.seconds", this, TimerPoller::lagSeconds)'), fixture);
+    assert.ok(poller.includes('Gauge.builder("keel.timer.parked", store, TimerStore::parkedCount)'), fixture);
+    const store = con.find(fixture.endsWith('-mongo') ? 'MongoTimerStore.java' : 'JdbcTimerStore.java');
+    assert.ok(store.includes('public Long lagMs(List<String> kinds)'), fixture);
+    assert.ok(con.read('src/main/resources/parameters/local/telemetry.yaml').includes(`"[${OBSERVATIONS.timerTick}]": true`), fixture);
+
+    const sin = generate(fixture, { telemetry: 'none' });
+    const plain = sin.find('TimerPoller.java');
+    assert.ok(!plain.includes('Observation') && !plain.includes('MeterRegistry'), `${fixture}: sin telemetría el sondeador no observa`);
+    assert.ok(plain.includes('                transaction.executeWithoutResult(status -> {'));
+  }
+});

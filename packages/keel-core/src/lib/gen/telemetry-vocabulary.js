@@ -27,11 +27,25 @@ export const OBSERVATIONS = {
   outboxPublish: 'keel.outbox.publish',
   messageConsume: 'keel.message.consume',
   storage: 'keel.storage',
-  mailSend: 'keel.mail.send'
+  mailSend: 'keel.mail.send',
+  // Cada disparo del cronómetro (DSL 2.26, inc. 11): un plazo resuelto o el tick de un recurrente, con su `kind`.
+  timerTick: 'keel.timer.tick'
 };
 
 /** El gauge de los eventos del outbox que agotaron sus reintentos: no se publicarán nunca. */
 export const OUTBOX_DEAD_LETTERED = 'keel.outbox.dead_lettered';
+
+/**
+ * Los dos gauges del cronómetro (DSL 2.26, inc. 11), leídos de `keel_timer` en cada scrape con la hora de la BASE:
+ *
+ *   · el RETRASO: los segundos que lleva esperando el temporizador vencido y sin reclamar más antiguo de los `kind` que la
+ *     réplica conoce (0 si no hay ninguno). Un número y no una cuenta: con plazos que vencen a cada momento siempre hay
+ *     alguno recién vencido, y lo que dice que el cronómetro va atrás es cuánto lleva esperando el más viejo. La unidad
+ *     va en el NOMBRE y no como unidad base, para que ningún exportador le añada otro sufijo;
+ *   · los APARCADOS (T5): los que agotaron sus intentos. Cada uno es un plazo que no se va a cumplir solo.
+ */
+export const TIMER_LAG = 'keel.timer.lag.seconds';
+export const TIMER_PARKED = 'keel.timer.parked';
 
 /**
  * Atributos que estampa el código generado. Todos de BAJA cardinalidad salvo `correlationId`, que va
@@ -46,7 +60,10 @@ export const ATTRIBUTES = {
   eventType: 'keel.event.type',
   correlationId: 'keel.correlation_id',
   storageOperation: 'keel.storage.operation',
-  storageBucket: 'keel.storage.bucket'
+  storageBucket: 'keel.storage.bucket',
+  // El `kind` del temporizador: `deadline:<Entidad>.<estado>`, `schedule:<operación>`, `purge:<tabla>`. Cardinalidad
+  // acotada por el diseño, sin ids: el de la entidad de un plazo no viaja nunca.
+  timerKind: 'keel.timer.kind'
 };
 
 /** Los valores de `keel.outcome`: sin ellos no hay consulta que separe los fallos del resto. */

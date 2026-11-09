@@ -236,8 +236,19 @@ function readProjectSpec(projectDir, stack) {
     spec.cacheConstantRef = `${/package\s+([\w.]+);/.exec(source)[1]}.CacheConfig.${constant[1]}`;
   }
 
+  // El cronómetro (DSL 2.26, inc. 11): aplica si build generó el sondeador.
+  const timerPoller = byName(`${path.sep}TimerPoller.java`)[0];
+  if (timerPoller) {
+    spec.subsystems.push('timer');
+    spec.timerPackage = /package\s+([\w.]+);/.exec(fs.readFileSync(timerPoller, 'utf8'))[1];
+  }
+
   spec.imports = [];
   spec.fields = '';
+  if (spec.subsystems.includes('timer')) {
+    spec.imports.push(`${spec.timerPackage}.TimerPoller`, `${spec.timerPackage}.TimerStore`);
+    spec.fields += '\n\n    @Autowired\n    private TimerPoller timerPoller;\n\n    @Autowired\n    private TimerStore timerStore;';
+  }
   if (spec.subsystems.includes('pool')) {
     if (spec.persistenceKind === 'relational') {
       spec.imports.push('javax.sql.DataSource');

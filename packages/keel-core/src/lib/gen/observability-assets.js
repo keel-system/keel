@@ -28,12 +28,15 @@ import {
   ATTRIBUTES,
   OBSERVATIONS,
   OUTBOX_DEAD_LETTERED,
+  TIMER_LAG,
+  TIMER_PARKED,
   instrumentationFor,
   promGauge,
   promMetric,
   promTag,
   usesTelemetry
 } from './telemetry-vocabulary.js';
+import { usesTimer } from './timer-plan.js';
 
 /**
  * Lo que pone cada generador:
@@ -183,6 +186,27 @@ function dashboard(model, platform) {
       );
     }
     row('Mensajes consumidos', items);
+  }
+
+  if (usesTimer(model)) {
+    // El CRONÓMETRO (DSL 2.26, inc. 11): plazos, `schedule`, purgas. Lo que no se ve sin esta fila es que vaya ATRÁS —una
+    // réplica caída con un lote arrendado, un tick que no cabe en su periodo— o que un plazo se haya rendido. Los dos gauges
+    // los publica cada réplica leyendo la misma tabla, así que se agregan con `max` y no con `sum`.
+    const tick = promMetric(OBSERVATIONS.timerTick);
+    const kindTag = promTag(ATTRIBUTES.timerKind);
+    row('Cronómetro', [
+      timeseries('Retraso del cronómetro (el vencido más antiguo sin reclamar)', [target(`max(${promGauge(TIMER_LAG)})`, 'retraso')], 's'),
+      // Debería ser siempre 0: cada unidad es un plazo que agotó sus intentos y no se va a cumplir solo.
+      stat('Temporizadores aparcados (debería ser 0)', [target(`max(${promGauge(TIMER_PARKED)})`, 'aparcados')]),
+      timeseries('Disparos por segundo y desenlace', [
+        target(`sum by (${kindTag}, ${outcomeTag}) (rate(${tick.count}[$__rate_interval]))`, `{{${kindTag}}} · {{${outcomeTag}}}`)
+      ]),
+      timeseries(
+        'p95 del disparo por temporizador',
+        [target(`histogram_quantile(0.95, sum by (le, ${kindTag}) (rate(${tick.bucket}[$__rate_interval])))`, `{{${kindTag}}}`)],
+        's'
+      )
+    ]);
   }
 
   for (const entry of instrumentationFor(model)) {
@@ -443,6 +467,34 @@ function alerting(model, platform) {
     })
   );
 
+  if (usesTimer(model)) {
+    rules.push(
+      rule({
+        uid: `keel-${model.service.artifactId}-timer-lag`,
+        title: 'Retraso del cronómetro',
+        // `min` en la ventana: un plazo recién vencido es lo normal; lo que alerta es que el más viejo lleve más de un
+        // minuto esperando DURANTE cinco.
+        expr: `min_over_time(max(${promGauge(TIMER_LAG)})[5m:1m])`,
+        threshold: 60,
+        forDuration: '5m',
+        severity: 'warning',
+        summary:
+          'Hay temporizadores vencidos que nadie reclama desde hace más de un minuto: plazos que no caducan a su hora y ' +
+          'barridos o purgas que no corren. Mira si hay réplicas sondeando (scheduling.enabled) y si un tick no cabe en su periodo.'
+      }),
+      rule({
+        uid: `keel-${model.service.artifactId}-timer-parked`,
+        title: 'Temporizadores aparcados',
+        expr: `max_over_time(max(${promGauge(TIMER_PARKED)})[5m:1m])`,
+        forDuration: '5m',
+        severity: 'critical',
+        summary:
+          'Hay plazos que agotaron sus intentos y quedaron APARCADOS: la transición que el diseño promete por el paso del tiempo ' +
+          'no va a ocurrir. Su handler falla siempre; los logs del cronómetro dicen cuál y por qué.'
+      })
+    );
+  }
+
   const lag = consumerLag(model, platform);
   if (lag) {
     rules.push(
@@ -617,7 +669,21 @@ ${pool
         labels: { severity: warning }
         annotations:
           summary: "El heap lleva diez minutos por encima del 90 %"
-${lag
+${usesTimer(model)
+    ? `      - alert: KeelTimerLag
+        expr: min_over_time(max(${promGauge(TIMER_LAG)})[5m:1m]) > 60
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Hay temporizadores vencidos sin reclamar desde hace más de un minuto"
+      - alert: KeelTimerParked
+        expr: max_over_time(max(${promGauge(TIMER_PARKED)})[5m:1m]) > 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Hay plazos aparcados: agotaron sus intentos y no se van a cumplir solos"
+`
+    : ''}${lag
     ? `      - alert: KeelConsumerLag
         expr: max(${lag.series}) > 1000
         for: 10m

@@ -618,9 +618,13 @@ function telemetryYaml(model, profile) {
  * el panel pero no se puede saltar desde ella a una traza.
  */
 function histogramLines(model) {
-  return instrumentationFor(model)
-    .filter((entry) => entry.id !== 'cache')
-    .map((entry) => `        "[${entry.id === 'storage' ? OBSERVATIONS.storage : OBSERVATIONS.mailSend}]": true`);
+  return [
+    ...instrumentationFor(model)
+      .filter((entry) => entry.id !== 'cache')
+      .map((entry) => `        "[${entry.id === 'storage' ? OBSERVATIONS.storage : OBSERVATIONS.mailSend}]": true`),
+    // La duración del disparo del cronómetro (DSL 2.26, inc. 11): el panel pide su p95 por kind.
+    ...(usesTimer(model) ? [`        "[${OBSERVATIONS.timerTick}]": true`] : [])
+  ];
 }
 
 /**

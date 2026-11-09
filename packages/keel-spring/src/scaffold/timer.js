@@ -41,6 +41,7 @@ import {
   TIMER_SWITCH,
   timerStatements
 } from '@keel-system/keel-core/gen/timer-store';
+import { ATTRIBUTES, OBSERVATIONS, TIMER_LAG, TIMER_PARKED, usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { TIMER_DATABASES, claimDrains, timerPurges, timerSchedules, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 
 export { usesDeadlines, usesTimer, TIMER_DATABASES };
@@ -499,8 +500,11 @@ public interface TimerStore {
     /** Cuántos milisegundos faltan para lo próximo reclamable de esos kinds (null: nada; puede ser negativo). */
     Long nextDueMs(List<String> kinds);
 
-    /** Los aparcados. */
+    /** Los aparcados, de todos los kinds (T5). */
     long parkedCount();
+
+    /** Cuántos milisegundos lleva esperando lo más antiguo reclamable YA de esos kinds (null: nada). El retraso del cronómetro. */
+    Long lagMs(List<String> kinds);
 
     /** La purga de la tabla: vencido hace más de la retención y sin reclamar (R4, R7). */
     int purge(int retentionDays);
@@ -517,7 +521,7 @@ function jdbcTimerStore(model) {
   const engine = model.stack.database;
   const sql = timerStatements(engine);
   const mysql = engine === 'mysql';
-  const constants = ['dbNow', 'arm', 'ensureRecurring', 'claimLock', 'claimMark', 'claimed', 'complete', 'reschedule', 'fail', 'nextDueMs', 'parkedCount', 'purge']
+  const constants = ['dbNow', 'arm', 'ensureRecurring', 'claimLock', 'claimMark', 'claimed', 'complete', 'reschedule', 'fail', 'nextDueMs', 'parkedCount', 'lagMs', 'purge']
     .map((name) => `    private static final String ${name.replace(/([A-Z])/g, '_$1').toUpperCase()} = ${javaText(sql[name])};`)
     .join('\n');
   // La forma del uuid y de la hora en el cable de JDBC: la que deja Hibernate en la misma columna.
@@ -702,6 +706,14 @@ ${constants}
     @Override
     public long parkedCount() {
         return jdbc.sql(PARKED_COUNT).query(Long.class).single();
+    }
+
+    @Override
+    public Long lagMs(List<String> kinds) {
+        return jdbc.sql(LAG_MS).param("kinds", kinds).query((rs, row) -> {
+            long value = rs.getLong(1);
+            return rs.wasNull() ? null : value;
+        }).optional().orElse(null);
     }
 
     @Override
@@ -945,6 +957,25 @@ public class MongoTimerStore implements TimerStore {
     }
 
     @Override
+    public Long lagMs(List<String> kinds) {
+        // El filtro del reclamo, el más antiguo y la hora del SERVIDOR ($$NOW), como lagPipeline de keel-core.
+        Document claimable = new Document("kind", new Document("$in", kinds))
+                .append("parked_at", null)
+                .append("$expr", new Document("$and", List.of(
+                        new Document("$lte", List.of("$due_at", "$$NOW")),
+                        new Document("$or", List.of(
+                                new Document("$eq", Arrays.asList("$claimed_until", null)),
+                                new Document("$lt", List.of("$claimed_until", "$$NOW")))))));
+        List<Document> pipeline = List.of(
+                new Document("$match", claimable),
+                new Document("$group", new Document("_id", null).append("oldest", new Document("$min", "$due_at"))),
+                new Document("$project", new Document("_id", 0).append("lagMs", new Document("$subtract", List.of("$$NOW", "$oldest")))));
+        Document result = mongo.getCollection(COLLECTION).aggregate(pipeline).first();
+        Number ms = result == null ? null : result.get("lagMs", Number.class);
+        return ms == null ? null : ms.longValue();
+    }
+
+    @Override
     public int purge(int retentionDays) {
         Document filter = new Document("claim_token", null).append("$expr", new Document("$lt", List.of("$due_at",
                 new Document("$subtract", List.of("$$NOW", retentionDays * 86_400_000L)))));
@@ -960,7 +991,12 @@ const value = ({ key, default: fallback }) => `@Value("\${${key}:${fallback}}")`
 
 function timerPoller(model) {
   const P = TIMER_PARAMETERS;
+  // Con telemetría (DSL 2.26, inc. 11): cada disparo es una observación y la réplica publica el retraso y los aparcados.
+  const telemetry = usesTelemetry(model);
   const imports = [
+    ...(telemetry
+      ? ['io.micrometer.core.instrument.Gauge', 'io.micrometer.core.instrument.MeterRegistry', 'io.micrometer.observation.Observation', 'io.micrometer.observation.ObservationRegistry']
+      : []),
     'java.time.Instant',
     'java.util.List',
     'java.util.Map',
@@ -1012,7 +1048,8 @@ public class TimerPoller implements SmartLifecycle {
     private final Map<String, RecurringTimerHandler> recurrings;
     private final List<String> kinds;
     private final TransactionTemplate transaction;
-    private final Object monitor = new Object();
+    private final Object monitor = new Object();${telemetry ? `
+    private ObservationRegistry observations = ObservationRegistry.NOOP;` : ''}
 
     ${value(P.maxSleepMs)}
     private long maxSleepMs;
@@ -1039,8 +1076,12 @@ public class TimerPoller implements SmartLifecycle {
             TimerStore store,
             ObjectProvider<TimerHandler> handlers,
             ObjectProvider<RecurringTimerHandler> recurrings,
-            PlatformTransactionManager transactionManager) {
-        this(store, handlers.orderedStream().toList(), recurrings.orderedStream().toList(), transactionManager);
+            PlatformTransactionManager transactionManager${telemetry ? `,
+            ObservationRegistry observations,
+            MeterRegistry meters` : ''}) {
+        this(store, handlers.orderedStream().toList(), recurrings.orderedStream().toList(), transactionManager);${telemetry ? `
+        this.observations = observations;
+        registerGauges(meters);` : ''}
     }
 
     /** El de las pruebas: los handlers a mano, como dos réplicas con los suyos. */
@@ -1093,14 +1134,14 @@ public class TimerPoller implements SmartLifecycle {
             }
             TimerHandler handler = handlers.get(timer.kind());
             try {
-                transaction.executeWithoutResult(status -> {
+                ${telemetry ? 'observed(timer.kind(), () -> ' : ''}transaction.executeWithoutResult(status -> {
                     TimerOutcome outcome = handler.handle(timer, store.dbNow());
                     if (outcome.done()) {
                         store.complete(timer.id(), token);
                     } else {
                         store.reschedule(timer.id(), token, outcome.dueAt());
                     }
-                });
+                })${telemetry ? ')' : ''};
             } catch (RuntimeException failure) {
                 log.warn("El temporizador {} ({}) falló en su intento {}: {}", timer.id(), timer.kind(), timer.attempts() + 1, failure.toString());
                 store.fail(timer.id(), token, maxAttempts, retryDelayMs);
@@ -1123,13 +1164,13 @@ public class TimerPoller implements SmartLifecycle {
      */
     private void tick(RecurringTimerHandler recurring, ClaimedTimer timer, UUID token) {
         try {
-            recurring.tick();
+            ${telemetry ? 'observed(timer.kind(), recurring::tick);' : 'recurring.tick();'}
         } catch (RuntimeException failure) {
             log.warn("El tick del recurrente {} falló; se rearma para el siguiente: {}", timer.kind(), failure.toString());
         }
         store.reschedule(timer.id(), token, nextTick(recurring.spec(), store.dbNow()));
     }
-
+${telemetry ? timerTelemetryMethods() : ''}
     /** Un temporizador armado en ESTA réplica: si vence antes de lo que iba a dormir, despierta (tras el commit). */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onArmed(TimerArmed armed) {
@@ -1223,6 +1264,55 @@ public class TimerPoller implements SmartLifecycle {
     }
 }`;
   return { path: javaPath(model, TIMER_PKG, 'TimerPoller'), content: javaFile(subPackage(model, TIMER_PKG), imports, body) };
+}
+
+/**
+ * La telemetría del sondeador (DSL 2.26, inc. 11): el disparo como observación —su histograma da la duración por \`kind\`,
+ * y su span cuelga las consultas del tick— y los dos gauges, que se leen de la tabla en cada scrape con la hora de la base.
+ */
+function timerTelemetryMethods() {
+  return `
+    /**
+     * Un disparo, observado: {@code ${OBSERVATIONS.timerTick}} con el {@code kind} (acotado por el diseño, nunca el id de la entidad) y el
+     * desenlace. Es raíz a propósito: un tick no tiene petición de la que colgar, y abre la traza de lo que hace.
+     */
+    private void observed(String kind, Runnable work) {
+        Observation observation = Observation.createNotStarted(TICK, observations)
+                .lowCardinalityKeyValue("${ATTRIBUTES.timerKind}", kind)
+                .start();
+        try (Observation.Scope scope = observation.openScope()) {
+            work.run();
+            observation.lowCardinalityKeyValue("${ATTRIBUTES.outcome}", "ok");
+        } catch (RuntimeException failure) {
+            observation.lowCardinalityKeyValue("${ATTRIBUTES.outcome}", "error");
+            observation.error(failure);
+            throw failure;
+        } finally {
+            observation.stop();
+        }
+    }
+
+    private static final String TICK = "${OBSERVATIONS.timerTick}";
+
+    /**
+     * El RETRASO y los APARCADOS. Gauges y no contadores: lo que importa es cuánto lleva esperando lo vencido AHORA y
+     * cuántos plazos hay rendidos, también los de antes de arrancar. Cada réplica publica lo mismo (la tabla es una): el
+     * panel los agrega con {@code max}.
+     */
+    private void registerGauges(MeterRegistry meters) {
+        Gauge.builder("${TIMER_LAG}", this, TimerPoller::lagSeconds)
+                .description("Segundos que lleva esperando el temporizador vencido y sin reclamar más antiguo")
+                .register(meters);
+        Gauge.builder("${TIMER_PARKED}", store, TimerStore::parkedCount)
+                .description("Temporizadores que agotaron sus intentos y quedaron aparcados")
+                .register(meters);
+    }
+
+    private double lagSeconds() {
+        Long ms = store.lagMs(kinds);
+        return ms == null ? 0 : Math.max(0, ms) / 1000.0;
+    }
+`;
 }
 
 function timerPurge(model) {

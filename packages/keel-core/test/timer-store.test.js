@@ -13,7 +13,7 @@ import { STACK_DEFAULTS } from '../src/lib/gen/infra-catalog.js';
 import { BASE_DIR } from './design-mutations/runner.js';
 import { EXTENSIONS } from './design-mutations/catalog.js';
 import { PROBE } from './helpers/probe-projection.js';
-import { KEEL_TIMER, TIMER_ENGINES, TIMER_PARAMETERS, bindNamed, expandList, timerStatements, timerDocumentId, NIL_ENTITY_ID } from '../src/lib/gen/timer-store.js';
+import { KEEL_TIMER, KEEL_TIMER_DOCUMENT, TIMER_ENGINES, TIMER_PARAMETERS, bindNamed, expandList, timerStatements, timerDocumentId, NIL_ENTITY_ID } from '../src/lib/gen/timer-store.js';
 import { CLOCK_PORT, DEADLINE_CASES, DEADLINE_SABOTAGES, deadlineHandlerNote, deadlineKind, deadlineOf, lateGuards, lateTransitionNote, modelDeadlines, usesDeadlines } from '../src/lib/gen/deadlines.js';
 import { DEADLINE_GATE, ENTRY_GATES, carriesEntryGate, entryGates } from '../src/lib/gen/entry-gates.js';
 
@@ -42,6 +42,21 @@ test('las sentencias de cada motor: solo comparan con la hora del motor, y el re
   // Y parked_at va antes que attempts: MySQL asigna de izquierda a derecha con los valores ya asignados.
   assert.match(timerStatements('mysql').fail, /SET parked_at = CASE WHEN attempts \+ 1 >= :maxAttempts .* END, attempts = attempts \+ 1/);
   assert.throws(() => timerStatements('oracle'), /no tiene sentencias para 'oracle'/);
+});
+
+test('el retraso del cronómetro (inc. 11): lo reclamable de los kinds que conoce, con la hora del motor, en los dos modelos', () => {
+  for (const engine of TIMER_ENGINES) {
+    const { lagMs, claimLock, parkedCount } = timerStatements(engine);
+    // El mismo filtro que el reclamo: lo que el retraso cuenta es exactamente lo que una réplica podría reclamar ya.
+    assert.equal(lagMs.slice(lagMs.indexOf(' WHERE ')), claimLock.slice(claimLock.indexOf(' WHERE '), claimLock.indexOf(' ORDER BY ')), engine);
+    assert.match(lagMs, /min\(due_at\)/);
+    assert.doesNotMatch(parkedCount, /:kinds/, 'los aparcados se cuentan de todos los kinds');
+  }
+  const [match, group, project] = KEEL_TIMER_DOCUMENT.lagPipeline(['purge:x']);
+  assert.deepEqual(match.$match, KEEL_TIMER_DOCUMENT.claimFilter(['purge:x']));
+  assert.deepEqual(group.$group.oldest, { $min: '$due_at' });
+  assert.deepEqual(project.$project.lagMs, { $subtract: ['$$NOW', '$oldest'] });
+  assert.deepEqual(KEEL_TIMER_DOCUMENT.parkedFilter, { parked_at: { $ne: null } });
 });
 
 test('bindNamed y expandList: los marcadores al estilo de cada driver, en orden, y las listas expandidas', () => {

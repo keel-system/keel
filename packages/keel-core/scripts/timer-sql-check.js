@@ -7,7 +7,7 @@
 // La tabla se crea con el paso de esquema del generador (gen/schema-steps.js): timestamptz y uuid en PostgreSQL,
 // datetime(6) y binary(16) en MySQL. Los valores van como literales (la CLI del contenedor no liga parámetros), con `bindNamed` a la vista.
 //
-// Uso: node scripts/timer-sql-check.js [--database=postgresql|mysql] [--sabotage=no-skip-locked|no-fence|park-order]
+// Uso: node scripts/timer-sql-check.js [--database=postgresql|mysql] [--sabotage=no-skip-locked|no-fence|park-order|lag-all-kinds]
 //   (podman o docker; ~1 min). Con sabotaje, verde = el sabotaje cae en exactamente sus casos.
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -23,6 +23,9 @@ const SABOTAGES = {
   // El reclamo sin SKIP LOCKED: la segunda sesión espera al lock y, al soltarlo, ve la fila ya arrendada (la salta por el
   // arriendo) — pero mientras tanto se bloquea. Lo ve el caso que mide que no espera.
   'no-skip-locked': { breaks: ['skip-locked'], apply: (s) => ({ ...s, claimLock: s.claimLock.replace(' SKIP LOCKED', '') }) },
+  // El retraso sin el filtro de kinds (inc. 11): cuenta un kind que ninguna réplica conoce, y la alerta saltaría tras cada
+  // despliegue que retire uno.
+  'lag-all-kinds': { breaks: ['retraso'], apply: (s) => ({ ...s, lagMs: s.lagMs.replace('kind IN (:kinds) AND ', '') }) },
   'no-fence': { breaks: ['valla'], apply: (s) => ({ ...s, complete: s.complete.replace(' AND claim_token = :token', '') }) },
   'park-order': {
     breaks: ['aparcado'],
@@ -223,13 +226,29 @@ async function check(engine) {
     fail();
     const afterOne = count('parked_at IS NOT NULL');
     fail();
-    step(engine, 'aparcado', afterOne === 0 && count('parked_at IS NOT NULL') === 1 && count('attempts = 2') === 1, `tras el primer fallo, ${afterOne} aparcados`);
+    const parked = Number(run(S.parkedCount)[0][0]);
+    step(engine, 'aparcado', afterOne === 0 && parked === 1 && count('attempts = 2') === 1, `tras el primer fallo, ${afterOne} aparcados; la métrica cuenta ${parked}`);
 
     // Lo próximo: unos 7 s, con la hora del motor.
     reset();
     run(S.arm, { id: uuid(), kind: KIND, entityId: ids[0], spec: null, dueAt: ahead(7) });
     const next = Number(run(S.nextDueMs, { kinds: [KIND] })[0][0]);
     step(engine, 'siguiente vencimiento', next > 5000 && next <= 7000, `${next} ms`);
+
+    // El retraso (inc. 11): el vencido más antiguo y libre de los kinds conocidos, con la hora del motor. Ni lo arrendado,
+    // ni lo aparcado, ni un kind que esta réplica no conoce; y sin nada, NULL. La cota de arriba es holgada (cada orden al
+    // contenedor tarda segundos y el retraso crece con ellas), pero por debajo del siguiente candidato: el kind ajeno, a 90 s.
+    reset();
+    const empty = run(S.lagMs, { kinds: [KIND] })[0]?.[0] ?? null;
+    run(S.arm, { id: uuid(), kind: KIND, entityId: ids[0], spec: null, dueAt: ago(30) });
+    run(S.arm, { id: uuid(), kind: KIND, entityId: ids[2], spec: null, dueAt: ahead(600) });
+    run(S.arm, { id: uuid(), kind: 'schedule:retired', entityId: ids[1], spec: null, dueAt: ago(90) });
+    run(S.arm, { id: uuid(), kind: KIND, entityId: 'aaaaaaaa-0000-4000-8000-00000000000d', spec: null, dueAt: ago(200) });
+    run(S.arm, { id: uuid(), kind: KIND, entityId: 'aaaaaaaa-0000-4000-8000-00000000000e', spec: null, dueAt: ago(400) });
+    sql(engine, name, `UPDATE keel_timer SET claimed_until = ${literal(engine, ahead(600))} WHERE due_at < ${literal(engine, ago(150))} AND due_at > ${literal(engine, ago(300))};`);
+    sql(engine, name, `UPDATE keel_timer SET parked_at = ${literal(engine, ago(1))} WHERE due_at < ${literal(engine, ago(300))};`);
+    const lag = Number(run(S.lagMs, { kinds: [KIND] })[0][0]);
+    step(engine, 'retraso', (empty === null || empty === '' || empty === 'NULL') && lag >= 29000 && lag < 85000, `vacío ${JSON.stringify(empty)}, retraso ${lag} ms`);
 
     // La purga: lo vencido hace más de la retención y sin reclamar.
     reset();

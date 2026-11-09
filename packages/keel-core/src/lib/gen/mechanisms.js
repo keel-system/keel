@@ -157,6 +157,10 @@ export const MECHANISM_CATALOG = {
     title: 'El relay del outbox en modo por réplica (DSL 2.26, inc. 9): lo despierta el commit que escribe en el outbox, con un sondeo de respaldo y el reintento a su backoff',
     axis: 'model'
   },
+  'timer-telemetry': {
+    title: 'Telemetría del cronómetro (DSL 2.26, inc. 11; solo con telemetry: otel): el retraso de lo vencido sin reclamar, los aparcados y la duración de cada disparo por kind',
+    axis: 'model'
+  },
   'conditional-write': {
     title: 'Escritura condicional (DSL 2.25, api.concurrency): ETag, If-Match, 412 y 428, loadExpecting y la versión persistida',
     axis: 'model'

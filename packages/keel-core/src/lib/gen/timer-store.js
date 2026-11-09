@@ -130,6 +130,7 @@ const DIALECTS = Object.freeze({
       `ON CONFLICT (kind, entity_id) DO UPDATE SET ${assignments.map(([column, value]) => `${column} = ${value.replace(/new\./g, 'EXCLUDED.')}`).join(', ')}`,
     rowAlias: '',
     msUntil: (expression) => `CAST(EXTRACT(EPOCH FROM (${expression} - current_timestamp)) * 1000 AS bigint)`,
+    msSince: (expression) => `CAST(EXTRACT(EPOCH FROM (current_timestamp - ${expression})) * 1000 AS bigint)`,
     distinct: (a, b) => `${a} IS DISTINCT FROM ${b}`
   },
   mysql: {
@@ -144,6 +145,7 @@ const DIALECTS = Object.freeze({
     // La fila que se intentaba insertar, con nombre: VALUES() está obsoleto desde 8.0.20.
     rowAlias: ' AS new',
     msUntil: (expression) => `TIMESTAMPDIFF(MICROSECOND, utc_timestamp(6), ${expression}) DIV 1000`,
+    msSince: (expression) => `TIMESTAMPDIFF(MICROSECOND, ${expression}, utc_timestamp(6)) DIV 1000`,
     distinct: (a, b) => `NOT (${a} <=> ${b})`
   }
 });
@@ -204,8 +206,14 @@ export function timerStatements(engine) {
     nextDueMs:
       `SELECT ${d.msUntil(`min(CASE WHEN claimed_until IS NOT NULL AND claimed_until > due_at THEN claimed_until ELSE due_at END)`)} ` +
       `FROM ${KEEL_TIMER.table} WHERE kind IN (:kinds) AND parked_at IS NULL`,
-    // Los aparcados: lo que mide la métrica de T5.
+    // Los aparcados: lo que mide la métrica de T5. De TODOS los kinds: uno aparcado de otra versión también es un plazo que
+    // no se cumplió.
     parkedCount: `SELECT count(*) FROM ${KEEL_TIMER.table} WHERE parked_at IS NOT NULL`,
+    // El retraso del cronómetro (inc. 11): cuántos milisegundos lleva esperando lo más antiguo que esta réplica podría
+    // reclamar YA (null: nada). Solo de los kinds que conoce (R4): un kind que ya no existe se queda vencido hasta la purga
+    // de la tabla, y contarlo dispararía la alerta tras cada despliegue que quite uno. Lo arrendado no cuenta mientras dure
+    // el arriendo; cuando vence (la réplica que lo tenía cayó), cuenta desde su due_at.
+    lagMs: `SELECT ${d.msSince('min(due_at)')} FROM ${KEEL_TIMER.table} WHERE ${claimable}`,
     // La purga de la tabla (R4 y R7): vencido hace más de la retención y sin reclamar. Un `kind` que ninguna réplica conoce
     // no lo reclama nadie, así que acaba aquí, y nunca lo borra una réplica que no lo conoce (podría ser de otra versión).
     purge: `DELETE FROM ${KEEL_TIMER.table} WHERE due_at < ${d.minusDays('retentionDays')} AND claim_token IS NULL`,
@@ -254,7 +262,16 @@ export const KEEL_TIMER_DOCUMENT = Object.freeze({
       parked_at: null,
       $expr: { $and: [{ $lte: ['$due_at', '$$NOW'] }, { $or: [{ $eq: ['$claimed_until', null] }, { $lt: ['$claimed_until', '$$NOW'] }] }] }
     }),
-  claimUpdate: (leaseMs, token) => [{ $set: { claimed_until: { $add: ['$$NOW', leaseMs] }, claim_token: token } }]
+  claimUpdate: (leaseMs, token) => [{ $set: { claimed_until: { $add: ['$$NOW', leaseMs] }, claim_token: token } }],
+  // Los aparcados (T5), de todos los kinds, como `parkedCount`.
+  parkedFilter: Object.freeze({ parked_at: { $ne: null } }),
+  // El retraso (inc. 11), como `lagMs`: el filtro del reclamo, el más antiguo y la hora del SERVIDOR. Sin documentos, la
+  // agregación no devuelve ninguno (retraso 0).
+  lagPipeline: (kinds) => [
+    { $match: KEEL_TIMER_DOCUMENT.claimFilter(kinds) },
+    { $group: { _id: null, oldest: { $min: '$due_at' } } },
+    { $project: { _id: 0, lagMs: { $subtract: ['$$NOW', '$oldest'] } } }
+  ]
 });
 
 /** Los segundos de un plazo con su parámetro ya leído (`value` en la unidad del diseño). */

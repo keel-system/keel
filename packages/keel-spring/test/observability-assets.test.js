@@ -19,6 +19,7 @@ import { tmpDir } from './helpers/tmp.js';
 import { loadService } from '@keel-system/keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { ALERTING, GRAFANA_PROVISIONING, OBSERVABILITY_DIR } from '../src/lib/stack-catalog.js';
+import { TIMER_LAG, TIMER_PARKED } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 import {
   ATTRIBUTES,
@@ -93,6 +94,9 @@ test('panel y alertas: cada serie consultada la publica el servidor', () => {
   const publicadas = new Set([
     ...Object.values(OBSERVATIONS).flatMap((observation) => Object.values(promMetric(observation))),
     promGauge('keel.outbox.dead_lettered'),
+    // Los dos gauges del cronómetro (DSL 2.26, inc. 11), con los nombres con que los registra TimerPoller.
+    promGauge(TIMER_LAG),
+    promGauge(TIMER_PARKED),
     // De Spring Boot, no nuestras.
     ...Object.values(promMetric('http.server.requests')),
     'cache_gets_total',
@@ -197,13 +201,14 @@ test('panel y alertas: el retraso del consumidor solo existe con el broker que l
       .join('\n');
 
   assert.ok(panelDe(conLag).includes(CONSUMER_LAG.kafka.series), 'con Kafka falta el panel de retraso');
-  assert.ok(titulos(conLag).some((titulo) => titulo.includes('Retraso')), 'con Kafka falta la alerta de retraso');
+  assert.ok(titulos(conLag).some((titulo) => titulo.includes('Retraso del consumidor')), 'con Kafka falta la alerta de retraso');
 
   for (const broker of ['rabbitmq', 'snssqs']) {
     const sinLag = generate('asset-vault', { telemetry: 'otel', broker });
-    assert.ok(!panelDe(sinLag).includes('_lag'), `con ${broker} se emite una consulta de retraso que nadie publica`);
+    // El retraso del CRONÓMETRO (keel_timer_lag_seconds) no es del consumidor: lo publica la aplicación con cualquier broker.
+    assert.ok(!/(?<!keel_timer)_lag/.test(panelDe(sinLag)), `con ${broker} se emite una consulta de retraso que nadie publica`);
     assert.ok(
-      !titulos(sinLag).some((titulo) => titulo.includes('Retraso')),
+      !titulos(sinLag).some((titulo) => titulo.includes('Retraso del consumidor')),
       `con ${broker} se emite una alerta de retraso que no puede disparar`
     );
   }

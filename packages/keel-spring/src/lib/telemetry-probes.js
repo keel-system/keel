@@ -28,10 +28,13 @@ import {
   ATTRIBUTES,
   INSTRUMENTATION,
   METRICS_TRANSPORT,
+  TIMER_LAG,
+  TIMER_PARKED,
   promMetric,
   promGauge,
   promTag
 } from '@keel-system/keel-core/gen/telemetry-vocabulary';
+import { TIMER_PURGE_KIND } from '@keel-system/keel-core/gen/timer-store';
 export {
   usesTelemetry,
   OBSERVATIONS,
@@ -249,6 +252,15 @@ export const CASES = [
     subsystem: 'context',
     title: 'una tarea del executor de @Async de Boot sigue en la misma traza, con el MDC y la correlación'
   },
+  // El CRONÓMETRO (DSL 2.26, inc. 11): el retraso, los aparcados y el disparo. El retraso se mide con el sondeador PARADO y
+  // un temporizador vencido a mano, porque con él en marcha lo reclamaría antes del scrape: así se ve el VALOR (la consulta
+  // de cada almacén contra el motor, con su hora) y no solo que la serie exista.
+  {
+    id: 'TEL-16',
+    method: 'timerSeriesExist',
+    subsystem: 'timer',
+    title: 'el cronómetro publica su retraso (con el valor de lo vencido), sus aparcados y la duración de cada disparo por kind'
+  },
   // El colector CAÍDO. Es la promesa que hace el patrón —el servicio no depende de a dónde
   // exporta— y hasta aquí solo se había medido una vez, a mano. Vive en su propia clase porque
   // necesita un contexto con los tres exportadores encendidos contra un puerto cerrado.
@@ -371,6 +383,43 @@ export function probeClass(spec) {
     }
 `
       : '';
+
+  const tick = promMetric(OBSERVATIONS.timerTick);
+  const timerCase = subsystems.includes('timer')
+    ? `
+    @Test
+    @DisplayName("${display('timerSeriesExist')}")
+    void timerSeriesExist() {
+        // (1) El RETRASO, con el sondeador parado: la purga de la tabla, vencida hace dos minutos según la hora de la BASE.
+        // Un spec distinto hace que ensureRecurring recalcule su vencimiento (R1).
+        timerPoller.stop();
+        timerStore.ensureRecurring("${TIMER_PURGE_KIND}", "keel-telemetry-probe", timerStore.dbNow().minusSeconds(120));
+        String exposition = scrape();
+        double lag = exposition.lines()
+                .filter(line -> line.startsWith("${promGauge(TIMER_LAG)} ") || line.startsWith("${promGauge(TIMER_LAG)}{"))
+                .mapToDouble(line -> Double.parseDouble(line.substring(line.lastIndexOf(' ') + 1)))
+                .findFirst()
+                .orElse(-1);
+        assertThat(lag).as("el retraso: la serie no está, o no vale lo vencido (120 s)").isBetween(100.0, 600.0);
+        assertThat(exposition).as("la alerta de aparcados consulta esta serie").contains("${promGauge(TIMER_PARKED)}");
+        // (2) El DISPARO: UNA pasada del sondeador, todavía parado (al rearrancar volvería a asegurar sus recurrentes y la
+        // purga regresaría a su hora real antes de reclamarla). pollOnce es del paquete: se llama por reflexión.
+        try {
+            java.lang.reflect.Method pollOnce = TimerPoller.class.getDeclaredMethod("pollOnce");
+            pollOnce.setAccessible(true);
+            pollOnce.invoke(timerPoller);
+        } catch (ReflectiveOperationException failure) {
+            throw new IllegalStateException(failure);
+        } finally {
+            timerPoller.start();
+        }
+        boolean ticked = scrape().lines().anyMatch(line -> line.startsWith("${tick.bucket}")
+                && line.contains("${promTag(ATTRIBUTES.timerKind)}=\\"${TIMER_PURGE_KIND}\\"")
+                && line.contains("${promTag(ATTRIBUTES.outcome)}=\\"ok\\""));
+        assertThat(ticked).as("el disparo de la purga no dejó su histograma con kind y desenlace").isTrue();
+    }
+`
+    : '';
 
   const lagSeries = consumerLagFor(spec.broker)?.series;
   const lagCase =
@@ -643,7 +692,7 @@ ${spec.fields}${
                 .contains("${promMetric(RUNTIME_JVM.gcPause.replace(/_seconds$/, '')).sum}");
         assertThat(exposition).contains("${RUNTIME_JVM.threads}");
     }
-${storageCase}${mailCase}${cacheCase}${poolCase}${lagCase}${contextCase}
+${storageCase}${mailCase}${cacheCase}${poolCase}${lagCase}${timerCase}${contextCase}
     /**
      * Despacha un caso de uso REAL del diseño. El handler es un stub que lanza, y da igual: la
      * observación se abre antes de llamarlo y se cierra con su desenlace, que es justo lo que hay

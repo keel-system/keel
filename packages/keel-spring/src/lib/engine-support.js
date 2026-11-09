@@ -685,6 +685,35 @@ const SPRING_MECHANISMS = {
       }
     }
   },
+  'timer-telemetry': {
+    emitter: 'src/scaffold/timer.js · src/scaffold/config.js · src/scaffold/observability-assets.js',
+    why: 'El retraso se lee con una consulta por almacén (las sentencias de keel-core en relacional, una agregación con $$NOW en documental) y un gauge que no casa con nada no falla: publica 0, el panel dice que el cronómetro va al día y la alerta no dispara nunca. Y un disparo sin su kind deja el p95 del panel sin nada por lo que agrupar.',
+    parity: {
+      pair: 'notification-mailer',
+      // Las series solo existen con telemetría: sin el stack, ninguna rama tendría marcadores.
+      stack: { telemetry: 'otel' },
+      markers: {
+        relational: ['Gauge.builder("keel.timer.lag.seconds"', 'class JdbcTimerStore', 'LAG_MS'],
+        document: ['Gauge.builder("keel.timer.lag.seconds"', 'class MongoTimerStore', 'append("lagMs"']
+      }
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'telemetry-check',
+        engines: ['postgresql'],
+        falsified: true,
+        why: 'notification-mailer: TEL-16 con la app arrancada, el sondeador parado y la purga de keel_timer vencida hace 120 s según la base: el retraso publica ese valor, el gauge de aparcados existe, y una pasada deja el histograma keel_timer_tick_seconds con kind y desenlace. La sentencia del retraso es la de keel-core, medida en timer-sql-check contra PostgreSQL y MySQL con su sabotaje lag-all-kinds. Falsado: sin la etiqueta del kind en la observación cae TEL-16, él solo'
+      },
+      document: {
+        state: 'verificado',
+        net: 'telemetry-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'asset-vault: TEL-16 contra el Mongo de infra/. Falsado dos veces, cada sabotaje en TEL-16 y solo en él: la observación sin la etiqueta del kind, y la resta del retraso invertida ($oldest - $$NOW: el gauge publica 0 y el panel diría que el cronómetro va al día)'
+      }
+    }
+  },
   'timer-purge': {
     emitter: 'src/scaffold/timer.js · src/scaffold/purge.js',
     why: 'Una purga que vuelve a correr en todas las réplicas no rompe nada visible —borrar es idempotente—: el precio es que cada réplica repite el mismo recorrido de la tabla a la vez, y nada lo dice. Y una purga que no arbitra con UNA fila (un kind por instancia, una fila por réplica) compila, arranca y purga igual.',

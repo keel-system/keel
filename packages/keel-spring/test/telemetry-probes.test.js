@@ -81,7 +81,7 @@ test('cada caso del runner tiene id único y su método está en la clase que lo
     basePackage: 'com.ejemplo.servicio',
     appClass: 'ServicioApplication',
     commandFqn: 'com.ejemplo.servicio.application.commands.HacerAlgoCommand',
-    subsystems: ['storage', 'mail', 'cache', 'pool', 'consumerLag', 'context'],
+    subsystems: ['storage', 'mail', 'cache', 'pool', 'consumerLag', 'context', 'timer'],
     executorsFqn: 'com.ejemplo.servicio.application.support.ContextPropagatingExecutors',
     correlationFqn: 'com.ejemplo.servicio.infrastructure.correlation.CorrelationContext',
     persistenceKind: 'relational',

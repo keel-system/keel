@@ -10,6 +10,8 @@ import {
   OBSERVATIONS,
   OUTBOX_DEAD_LETTERED,
   OUTCOMES,
+  TIMER_LAG,
+  TIMER_PARKED,
   promGauge,
   promMetric,
   promTag,
@@ -28,10 +30,17 @@ test('una observación se ve como histograma en segundos, con sus tres derivadas
 });
 
 test('todo nombre propio vive en keel.*, y ningún nombre de serie colisiona con otro', () => {
-  const names = [...Object.values(OBSERVATIONS), OUTBOX_DEAD_LETTERED, ...Object.values(ATTRIBUTES)];
+  const names = [...Object.values(OBSERVATIONS), OUTBOX_DEAD_LETTERED, TIMER_LAG, TIMER_PARKED, ...Object.values(ATTRIBUTES)];
   for (const name of names) assert.match(name, /^keel\./, name);
   const series = Object.values(OBSERVATIONS).map((o) => promMetric(o).base);
   assert.equal(new Set(series).size, series.length);
+});
+
+test('el cronómetro (DSL 2.26, inc. 11): el retraso lleva la unidad en el nombre, el disparo es un histograma', () => {
+  assert.equal(promGauge(TIMER_LAG), 'keel_timer_lag_seconds');
+  assert.equal(promGauge(TIMER_PARKED), 'keel_timer_parked');
+  assert.equal(promMetric(OBSERVATIONS.timerTick).bucket, 'keel_timer_tick_seconds_bucket');
+  assert.equal(promTag(ATTRIBUTES.timerKind), 'keel_timer_kind');
 });
 
 test('cada interruptor tiene clave de configuración y variable propias', () => {
