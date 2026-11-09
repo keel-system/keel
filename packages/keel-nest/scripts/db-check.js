@@ -135,7 +135,8 @@ let sabotagesApplied = 0;
 function sabotaged(file) {
   if (!sabotage || typeof file.content !== 'string') return file.content;
   const [suffix, from, to] = SABOTAGES[sabotage];
-  if (!file.path.endsWith(suffix)) return file.content;
+  // El sufijo, o una expresión sobre la ruta cuando el archivo depende del sujeto (la entidad con plazo).
+  if (!(suffix instanceof RegExp ? suffix.test(file.path) : file.path.endsWith(suffix))) return file.content;
   const content = typeof from === 'string' ? file.content.replaceAll(from, to) : file.content.replace(from, to);
   if (content !== file.content) sabotagesApplied += 1;
   return content;
@@ -272,7 +273,7 @@ function probeScript(model, engine, db, expected) {
   const claimCode = claimBlock(model, engine, ctx);
   const reconciliationCode = reconciliationBlock(model, ctx);
   // El cronómetro (DSL 2.26): antes de listar los imports, que el bloque también añade.
-  const timerCode = timerBlock(model, ctx, { adapterArgs: adapterCtorArgs(model, modelDeadlines(model)[0]?.entity), replicaTx: 'new TransactionContext(dataSource, settings)' });
+  const timerCode = timerBlock(model, ctx, { adapterArgs: adapterCtorArgs(model, modelDeadlines(model)[0]?.entity, ctx), replicaTx: 'new TransactionContext(dataSource, settings)' });
   const imports = [...ctx.imports].map((entry) => {
     const [symbol, file] = entry.split('|');
     return `import { ${symbol} } from '${distOf(file)}';`;
@@ -394,9 +395,21 @@ ${PROBE_HELPERS}
  * raíz tiene plazos (DSL 2.26), el almacén del cronómetro y los plazos en su lugar (repositories.js los pone los últimos;
  * sin mensajería no hay puente, así que el sumidero no va).
  */
-function adapterCtorArgs(model, root) {
+function adapterCtorArgs(model, root, ctx) {
   if (!root || !modelDeadlines(model).some(({ entity }) => entity.name === root.name)) return 'tx, eventSink';
-  return ['tx', ...(emitsDomainEvents(model, root) && model.layersPresent?.messaging ? ['eventSink'] : []), ...TIMER_ADAPTER_ARGS].join(', ');
+  // En el orden del constructor emitido (constructorOf): la transacción, el puente, la configuración de los barridos,
+  // la tienda y los números de la reconciliación, y el cronómetro el último. stock-reservation (v1.2.0) los lleva todos:
+  // sin los de en medio, el almacén del cronómetro llegaba en el sitio de otro y el adaptador no armaba nada.
+  const reconciled = reconciliationClaims(model).filter((claim) => claim.entity === root.name);
+  if (reconciled.length > 0) ctx.imports.add(`ReconciliationClaimStore|${RECONCILIATION_CLAIM_STORE_TS}`);
+  const windows = `{ ${reconciled.map((claim) => `${JSON.stringify(claim.activation)}: { unansweredAfterSeconds: 1800, claimTimeoutMs: 60_000, batchSize: 10 }`).join(', ')} }`;
+  return [
+    'tx',
+    ...(emitsDomainEvents(model, root) && model.layersPresent?.messaging ? ['eventSink'] : []),
+    ...(claimsForEntity(model, root.name).length > 0 ? ['{ batchSize: {}, stalledAfterSeconds: {} }'] : []),
+    ...(reconciled.length > 0 ? ['new ReconciliationClaimStore(tx)', windows] : []),
+    ...TIMER_ADAPTER_ARGS
+  ].join(', ');
 }
 
 /** Lo que se comprueba de una raíz: ida y vuelta, la fila en crudo, versión, unicidad, página y borrado. */
@@ -426,7 +439,7 @@ function rootBlock(model, engine, root, index, ctx) {
   return `
 // ═══ ${name} ═══
 {
-  const repository = new ${adapterClass(root)}(${adapterCtorArgs(model, root)});
+  const repository = new ${adapterClass(root)}(${adapterCtorArgs(model, root, ctx)});
   const original = ${first};
   await repository.save(original);
   const loaded = await repository.findById(original.${idName});
@@ -462,7 +475,7 @@ ${foldedBlock(model, root, index, ctx, finder)}
 ${filterFoldBlock(model, root, index, ctx)}
 ${finderBlock(model, root, index, ctx, { sampleEntity })}
 ${rankBlock(model, root, index, ctx, { paginated, sampleEntity })}
-${inverseBlock(model, root, index, ctx, { sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterCtorArgs(model, owner)})` })}
+${inverseBlock(model, root, index, ctx, { sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterCtorArgs(model, owner, ctx)})` })}
 ${idBatchReason(model, root) ? `  {
     // findAllById: UNA consulta con In([...]) — en MySQL el id es binary(16) con transformador, y que TypeORM lo
     // aplique a cada valor del In es lo que aquí se mide (si no, la consulta no casaría nada sin dar error).
@@ -558,7 +571,7 @@ function concurrencyBlock(model, engine, root, ctx) {
   return `
 // ═══ Concurrencia: interbloqueo y tope de transacción ═══
 {
-  const repository = new ${adapterClass(root)}(${adapterCtorArgs(model, root)});
+  const repository = new ${adapterClass(root)}(${adapterCtorArgs(model, root, ctx)});
   const a = ${sampleEntity(model, root, ctx, 'xa')};
   const b = ${sampleEntity(model, root, ctx, 'xb')};
   await repository.save(a);

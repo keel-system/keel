@@ -66,8 +66,10 @@ export function timerSubject(model) {
 // base en la misma máquina.
 
 const GUARD = /if \((this\.#\w+\.getTime\(\) \+ deadlines\.\w+) <= now\.getTime\(\)\) \{/;
-const ENTITY_FILE = '/domain/aggregate/verification-code.ts';
-const HANDLER_FILE = '-pending-deadline.ts';
+// Los archivos por su forma y no por su nombre: el del sujeto cambia (verification-code.ts, reservation.ts), y la expresión
+// del guard ya solo casa en la entidad con plazo.
+const ENTITY_FILE = /\/domain\/aggregate\/[^/]+\.ts$/;
+const HANDLER_FILE = /-deadline\.ts$/;
 const REVALIDATION = /if \(found == null \|\| found\.\w+ !== \w+\.\w+\) return TimerOutcome\.finished\(\);\n(\s*const due = [^\n]*\n)\s*if \(due\.getTime\(\) > dbNow\.getTime\(\)\) return TimerOutcome\.rescheduleAt\(due\);\n/;
 
 export const TIMER_SABOTAGES = Object.freeze({
@@ -191,6 +193,12 @@ export function timerBlock(model, ctx, { adapterArgs, replicaTx }) {
   if (error) ctx.imports.add(`${error.exceptionClass}|${classPath(DIRS.errors, error.exceptionClass)}`);
   const sample = sampleEntity(model, entity, ctx, 'timer');
   const idName = entity.idField?.name ?? 'id';
+  // Lo único por fila (la clave natural, un campo `unique`) no puede repetir el valor de la muestra: la sonda guarda
+  // decenas de entidades y la segunda chocaría por unicidad en vez de por lo que se mide (stock-reservation: orderId).
+  const uniqueOverrides = entity.fields
+    .filter((field) => !field.isId && (field.unique || (entity.naturalKey ?? []).includes(field.name)))
+    .map((field) => (field.base === 'uuid' ? `${field.name}: randomUUID(), ` : field.base === 'string' ? `${field.name}: randomUUID().slice(0, ${Math.min(field.constraints?.maxLength ?? 36, 36)}), ` : ''))
+    .join('');
   const enumOf = (constant) => `${enumType}.${constant}`;
   const support = document
     ? {
@@ -251,7 +259,7 @@ export function timerBlock(model, ctx, { adapterArgs, replicaTx }) {
   const DL_MS = timerDeadlines.${component};
   const repository = new TimerRepository(${adapterArgs});
   const SAMPLE_STATE = stateOf(${sample});
-  const entity = (status, since, id = randomUUID()) => new ${entity.name}({ ...SAMPLE_STATE, ${idName}: id, ${statusField}: status, ${deadline.since}: since, lockVersion: null });
+  const entity = (status, since, id = randomUUID()) => new ${entity.name}({ ...SAMPLE_STATE, ${uniqueOverrides}${idName}: id, ${statusField}: status, ${deadline.since}: since, lockVersion: null });
   // Lo que escribiría el agente en el handler de ${deadline.by}: cargar, transicionar y guardar; el id de failId lanza.
   let failId = null;
   const mediator = {

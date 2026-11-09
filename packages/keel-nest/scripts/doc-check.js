@@ -95,7 +95,8 @@ let sabotagesApplied = 0;
 function sabotaged(file) {
   if (!sabotage || typeof file.content !== 'string') return file.content;
   const [suffix, from, to] = SABOTAGES[sabotage];
-  if (!file.path.endsWith(suffix)) return file.content;
+  // El sufijo, o una expresión sobre la ruta cuando el archivo depende del sujeto (la entidad con plazo).
+  if (!(suffix instanceof RegExp ? suffix.test(file.path) : file.path.endsWith(suffix))) return file.content;
   const content = typeof from === 'string' ? file.content.replaceAll(from, to) : file.content.replace(from, to);
   if (content !== file.content) sabotagesApplied += 1;
   return content;
