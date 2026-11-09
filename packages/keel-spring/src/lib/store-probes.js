@@ -35,6 +35,7 @@ import {
   idempotencyRecordNames
 } from '../scaffold/http-idempotency.js';
 import { reconciliationClaims } from '../scaffold/reconciliation-claim.js';
+import { adapterTimerBeans } from '../scaffold/timer.js';
 // La MISMA derivación que usa claim-check para sembrar una fila: los NOT NULL de la entidad, no
 // una lista escrita a mano. Una segunda copia se separa, y el día que se separe el síntoma será
 // «el barrido no se llevó nada» — indistinguible del defecto que se persigue.
@@ -1532,6 +1533,8 @@ function reconciliationSweepTests(claim, enumConstant, otroEstado) {
 function relationalReconciliationClass(model, subjects, { datasource, packages, database }) {
   const claim = subjects.reconciliation;
   const entity = entidadDe(model, claim);
+  // Una raíz con plazo (stock-reservation, DSL 2.26) arma su temporizador al guardar: su adaptador pide el cronómetro.
+  const timer = adapterTimerBeans(model, entity);
   const enumType = entity.lifecycle.enumType;
   // El aislamiento con el que se llama al reclamo, y NO es un detalle del check.
   //
@@ -1566,7 +1569,8 @@ function relationalReconciliationClass(model, subjects, { datasource, packages, 
     ...conexionPerezosa(datasource),
     '"spring.jpa.hibernate.ddl-auto=create-drop"',
     '"spring.flyway.enabled=false"',
-    ...parametrosDelBarrido(claim)
+    ...parametrosDelBarrido(claim),
+    ...timer.properties.map(javaString)
   ];
 
   const body = `${CABECERA}
@@ -1574,7 +1578,7 @@ function relationalReconciliationClass(model, subjects, { datasource, packages, 
         ${properties.join(',\n        ')}
 })
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
-@Import({ReconciliationClaimStore.class, ReconciliationClaimWriter.class, ${entity.name}RepositoryImpl.class})
+@Import({ReconciliationClaimStore.class, ReconciliationClaimWriter.class, ${entity.name}RepositoryImpl.class${timer.classes.map((name) => `, ${name}.class`).join('')}})
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class ${CLASS_RECONCILIATION} {
 
@@ -1682,11 +1686,13 @@ ${reconciliationSweepTests(claim, estadoDeEspera(claim, enumType), otroEstado(en
 function documentReconciliationClass(model, subjects, { datasource, packages }) {
   const claim = subjects.reconciliation;
   const entity = entidadDe(model, claim);
+  const timer = adapterTimerBeans(model, entity);
   const enumType = entity.lifecycle.enumType;
   const properties = [
     `"spring.mongodb.uri=${datasource.uri}"`,
     '"spring.profiles.active="',
-    ...parametrosDelBarrido(claim)
+    ...parametrosDelBarrido(claim),
+    ...timer.properties.map(javaString)
   ];
 
   const body = `${CABECERA}
@@ -1694,7 +1700,7 @@ function documentReconciliationClass(model, subjects, { datasource, packages }) 
         ${properties.join(',\n        ')}
 })
 @ImportAutoConfiguration(exclude = EmbeddedMongoAutoConfiguration.class)
-@Import({ReconciliationClaimStore.class, ${entity.name}RepositoryImpl.class, MongoTransactionConfig.class})
+@Import({ReconciliationClaimStore.class, ${entity.name}RepositoryImpl.class, MongoTransactionConfig.class${timer.classes.map((name) => `, ${name}.class`).join('')}})
 class ${CLASS_RECONCILIATION} {
 
 ${constantesDelBarrido(claim)}

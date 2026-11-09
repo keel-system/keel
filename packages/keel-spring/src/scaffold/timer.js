@@ -221,6 +221,26 @@ function deadlinesOf(model, entity) {
  * ENTRA en el estado: salir no cuesta nada, y re-guardarla dentro no lo rearma), `after` tras persistir, con `saved`.
  * `previous` es la expresión del estado que tenía en la base.
  */
+/**
+ * Lo que necesita un contexto de prueba recortado (`@DataJpaTest`, `@DataMongoTest`) para construir el adaptador de una
+ * raíz que ARMA plazos: el almacén del cronómetro, `TimerConfig` (los plazos vigentes y el reloj) y, si un plazo lee su
+ * duración de un `service.parameters`, el record de parámetros con sus propiedades (los placeholders no llevan default).
+ * Vacío si la raíz no tiene plazos. Lo usan las sondas de store-check.
+ */
+export function adapterTimerBeans(model, entity) {
+  if (deadlinesOf(model, entity).length === 0) return { classes: [], properties: [] };
+  const usesParameters = modelDeadlines(model).some(({ duration }) => duration.parameter);
+  const parameters = model.service.parameters ?? [];
+  return {
+    classes: [
+      `${subPackage(model, TIMER_PKG)}.${isDocument(model) ? 'MongoTimerStore' : 'JdbcTimerStore'}`,
+      `${subPackage(model, CONFIG_PKG)}.TimerConfig`,
+      ...(usesParameters ? [`${subPackage(model, 'infrastructure.configurations')}.${model.service.className}ParametersConfig`] : [])
+    ],
+    properties: usesParameters ? parameters.map((parameter) => `${model.service.artifactId}.${parameter.key}=${parameter.testValue}`) : []
+  };
+}
+
 export function adapterArming(model, entity, imports, previous) {
   const entries = deadlinesOf(model, entity);
   if (entries.length === 0) return null;
