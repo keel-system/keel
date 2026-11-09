@@ -24,6 +24,7 @@ import { constantOf } from '../../src/scaffold/enums.js';
 import { sentinelOf } from '../../src/scaffold/errors.js';
 import { isOptional } from '../../src/scaffold/render.js';
 import { repositoryArgs } from '../../src/scaffold/repositories.js';
+import { PROBE_RECONCILIATION } from './reconciliation-probes.js';
 import { messageComponents, messageType } from '../../src/scaffold/services.js';
 import { parametersType } from '../../src/scaffold/service-parameters.js';
 import { deadlineAccessor, deadlineHandlerType, deadlinesReadParameters, deadlinesType, kindConstant, purgeKindConstant, scheduleKindConstant, usesDeadlines } from '../../src/scaffold/timer.js';
@@ -146,8 +147,12 @@ export function timerProbeFile(model) {
   if (!repositoryRoots(model).some((root) => root.name === entity.name)) throw new Error(`timer-probes: ${entity.name} no es una raíz con repositorio`);
   const statusField = entity.fields.find((field) => field.name === entity.lifecycle.field);
   if (statusField && isOptional(statusField)) throw new Error(`timer-probes: el estado de ${entity.name} es opcional; la sonda no lo cubre`);
-  const args = repositoryArgs(model, entity, 'probeTx', 'nil');
-  if (args !== 'probeTx, deadlines') throw new Error(`timer-probes: el adaptador de ${entity.name} recibe ${args}; la sonda solo construye probeTx y deadlines`);
+  // Con los nombres de las demás sondas del paquete (db-probes construye así los repositorios): stock-reservation
+  // (v1.2.0) recibe además el puente y la reconciliación, que declaran claim-probes y reconciliation-probes.
+  const args = repositoryArgs(model, entity, 'probeTx', 'nil', { sweeps: 'probeSweeps', parameters: 'probeParameters', reconciliation: PROBE_RECONCILIATION });
+  const known = new Set(['probeTx', 'nil', 'probeSweeps', 'probeParameters', PROBE_RECONCILIATION, 'deadlines']);
+  const unknown = args.split(', ').filter((arg) => !known.has(arg));
+  if (unknown.length > 0) throw new Error(`timer-probes: el adaptador de ${entity.name} recibe ${unknown.join(', ')}, que la sonda no construye`);
   const component = messageComponents(by, model)[0];
   const command = `application.${messageType(by)}`;
   const enumType = entity.lifecycle.enumType;
@@ -156,7 +161,7 @@ export function timerProbeFile(model) {
   const since = goExported(deadline.since);
   const plazo = deadlineAccessor(entity, deadline);
   const kind = `timer.${kindConstant(entity, deadline)}`;
-  const repo = `New${entity.name}Repository(probeTx, deadlines)`;
+  const repo = `New${entity.name}Repository(${args})`;
   const params = model.service.parameters ?? [];
   const deadlinesValue = deadlinesReadParameters(model)
     ? `must(domain.New${deadlinesType(model)}(must(domain.New${parametersType(model)}(${params
