@@ -12,7 +12,8 @@ cambia el DSL, pero sí el servidor generado de cualquier diseño con persistenc
 **Estado: aprobado (2026-11-07).** El usuario aceptó las ocho propuestas de § Decisiones tomadas. Fases B, C y C2
 hechas el mismo día, la D (incremento 3, keel-spring) el 2026-11-08 y, de la fase E, la fase E entera ese mismo día
 (incrementos 4, 5 y 6: keel-nest, keel-dotnet y keel-go). De la fase F, el incremento 7 (las purgas) está hecho ese
-mismo día en los cuatro; siguen el 8 y el 9. **Lo
+mismo día en los cuatro, y el 8 y el 9 el 2026-11-08 y el 2026-11-09. De la fase G, el 10 lo absorbió el 2b y el 11 (la
+telemetría del cronómetro) está hecho el 2026-11-09; siguen el 12 (la fixture) y el 13 (las corridas de control). **Lo
 que queda se termina sin subagentes, todo desde `main` y en secuencia** (§ Cómo se ejecuta).
 
 ## Por qué
@@ -324,7 +325,7 @@ borra lo que no conoce: RC-5) y `relay-no-wake` (RC-7).
 | 8 | **Hecho (2026-11-08)** en los cuatro; ver las notas de abajo. **Migrar el `schedule` de las operaciones** al modo clúster, con el drenaje, en los cuatro. Incluye `fireTimer(kind)` en el arnés de los cuatro (los flujos de rescate y reconciliación dejan de esperar un tick del cron), el rescate, la reconciliación, los pagos y la guarda del correo, que van montados en él | `claim-check` en keel-spring, `db-check`/`doc-check`, `harness-check` (el rescate y `ageForReconciliation` sobre el cronómetro) y `stub-check` (reconciliación de pagos); el gate de idempotencia con el registro nuevo, falsado |
 | 9 | **Hecho (2026-11-09)** en los cuatro; ver las notas de abajo y § La carga de partida. **Migrar el relay del outbox** al modo por réplica, con despertar al confirmar, en los cuatro, conservando la pausa del arnés con la misma API (en keel-spring ya no puede depender de `ScheduledAnnotationBeanPostProcessor`, y la purga del outbox sale del bean del relay) | `broker-check` contra los tres brokers en los cuatro generadores (el relay es lo que más redes toca), con un sabotaje `relay-no-wake` (sin despertar, la latencia vuelve al sondeo y la sonda de latencia lo ve). Y `clock-load.js`: en reposo, menos de 10 transacciones/min por réplica (hoy 122), y la salida de un evento en milisegundos (hoy media 0,5 s, p95 0,94 s) |
 | 10 | ~~Evolución~~: pasa al **2b** (§ Incremento 0: lo medido, punto 4) | — |
-| 11 | Telemetría del cronómetro (vencidos sin reclamar, aparcados, duración del tick) y su entrada en el panel y las alertas | `telemetry-check` en los cuatro |
+| 11 | **Hecho (2026-11-09)** en los cuatro; ver las notas de abajo. Telemetría del cronómetro (vencidos sin reclamar, aparcados, duración del tick) y su entrada en el panel y las alertas | `telemetry-check` en los cuatro |
 | 12 | Fixture `stock-reservation` con el plazo (versión nueva, escenarios con `ageForDeadline`) y su gemela documental si la hay | `--ready` en verde y las redes que la tienen de sujeto |
 | 13 | Corrida de control en los cuatro sobre `stock-reservation` **y** repetición de la serie de `catalog-extended` (outbox, purgas, barridos y reconciliación, todo sobre el cronómetro) | Mismo resultado en los cuatro, el guard tardío en el dominio, y la serie de `catalog-extended` igual que la de 2.25 (55/55) |
 
@@ -757,6 +758,57 @@ lo arranca `timerSettings.Enabled`, que ya incluye la base.
 Los dos sabotajes caen en exactamente su caso en los tres motores. La primera pasada de `go-check` y la de `broker-check`
 las cortó Claude Code por falta de memoria de la máquina, y se repitieron enteras con
 `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` en el entorno.
+
+**Lo que dejó el incremento 11, en lo neutral.** Tres series nuevas en `telemetry-vocabulary.js`:
+
+- `keel.timer.lag.seconds`, el **retraso**: los segundos que lleva esperando el temporizador vencido y sin reclamar más
+  antiguo de los `kind` que la réplica conoce (0 si no hay ninguno). Se eligió un retraso y no una cuenta de vencidos. Con
+  plazos que vencen a cada momento siempre hay alguno recién vencido, y lo que dice que el cronómetro va atrás es cuánto lleva
+  esperando el más viejo. La unidad va en el nombre, y no como unidad base, para que ningún exportador le añada otro sufijo.
+- `keel.timer.parked`, los **aparcados** de T5, de todos los `kind`.
+- `keel.timer.tick`, la **duración de cada disparo**: un histograma con `keel.timer.kind` y `keel.outcome`. Cada disparo
+  abre una traza raíz, así que las consultas del tick cuelgan de ella.
+
+`timer-store.js` gana `lagMs`. Usa el filtro del reclamo, así que lo arrendado no cuenta mientras dure el arriendo, y un
+`kind` que ya no existe no dispara la alerta tras cada despliegue que lo retire (R4). En documentos, su forma es
+`lagPipeline`, junto a `parkedFilter`. `timer-sql-check` lo mide contra PostgreSQL y MySQL con el sabotaje
+`lag-all-kinds` (26/26, y el sabotaje cae en `retraso`).
+
+El panel gana la fila **Cronómetro**: el retraso, los aparcados, los disparos por segundo y el p95 por `kind`, agregados
+con `max` porque cada réplica lee la misma tabla. Hay dos alertas nuevas:
+
+- `KeelTimerLag` (warning): el más viejo lleva más de 60 s esperando durante cinco minutos (`min_over_time` en la ventana).
+- `KeelTimerParked` (critical).
+
+El catálogo de mecanismos gana `timer-telemetry`.
+
+En los cuatro, las series solo existen con `telemetry: otel`. Cada `telemetry-check` gana un caso nuevo, TEL-16 en keel-spring
+y TEL-12 en los otros tres. En keel-spring la sonda para el sondeador, vence la purga de `keel_timer` hace 120 s y lee el
+VALOR del retraso. Después ejecuta una pasada y busca el histograma con su `kind`. En los otros tres la app corre en `develop`
+con el sueño máximo a 10 minutos, se vence la purga por SQL a espaldas del sondeador y se rearranca para ver el disparo. La
+consulta del retraso la ejecuta además el caso TL-1 de `db-check`/`doc-check` sobre el par `verification-codes`, en los tres
+que no son keel-spring. TL-1 comprueba lo vencido, un `kind` ajeno y lo arrendado.
+
+| Generador | `telemetry-check` | TL-1 | Sabotajes, cada uno en exactamente su caso | Suite |
+|---|---|---|---|---|
+| keel-spring | TEL-16 verde en `notification-mailer` y `asset-vault` | — (la consulta es la de keel-core) | sin `kind` (los dos modelos) y la resta invertida en Mongo, a mano: TEL-16 | 1919/1919 |
+| keel-nest | 22/22 en PostgreSQL y MySQL | `db-check` y `doc-check` | sin `kind` → TEL-12; la sentencia equivocada y la resta invertida → TL-1, a mano | 995/995 |
+| keel-dotnet | 22/22 | `db-check` y `doc-check` | `timer-kind` → TEL-12; `tl-lag` → TL-1 en los tres motores | 898/898 |
+| keel-go | 22/22 | `db-check` y `doc-check` | `timer-kind` → TEL-12; `tl-lag` → TL-1 en los tres motores | 1440/1440 |
+
+`dl-no-lease` arrastra ahora TL-1 en los tres: con arriendo cero, lo «arrendado» vuelve a contar en el retraso. Está
+declarado en sus `breaks`, y el veredicto reconoce `TL-n`. keel-dotnet pasa además `cs-check --fixtures`, con 9367 pruebas
+emitidas, y keel-go pasa `go-check` (245/245).
+
+Lo que destapó:
+
+- **Un gauge cuya lectura falla tumbaba el scrape ENTERO**, en keel-nest. El check arrancaba la app sin `keel_timer`. El
+  `collect` de prom-client lanzaba y `/actuator/prometheus` respondía 500: una base que va mal se llevaba todas las
+  métricas justo cuando hacen falta. Ahora publica NaN, como Micrometer. keel-dotnet tenía la misma forma (un callback
+  que lanza), y se arregló igual. keel-go ya devolvía NaN.
+- **El detector neutral de series no conocía `min_over_time`**, y la habría dado por una serie que nadie publica.
+- **La prueba de paridad de keel-go no sabía de filas con `stack`**. Ahora genera el árbol por fixture y por stack, como
+  keel-nest.
 
 El orden va del menor al mayor riesgo. Los incrementos 3-6 añaden un mecanismo sin tocar nada medido. Después se migra
 lo que menos redes toca (las purgas) y al final el relay, que toca los tres brokers en los cuatro generadores. Cada
