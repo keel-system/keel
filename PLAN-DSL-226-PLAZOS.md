@@ -851,8 +851,8 @@ registradas en `docs/corridas/2026-11-09-*-control.md`:
 La puerta se cumple: el mismo resultado en los cuatro; el rechazo tardío en el dominio tal como lo emite build (el agente
 solo rellena los métodos semánticos y el handler pasa reloj y plazos); FL-EXP-001/-B en verde con `ageForDeadline` y la
 disyunción 410/409; y nada del cronómetro, del relay, de las purgas ni del reclamo en ninguna huella. La serie de
-`catalog-extended` tiene 57 escenarios y no 55 porque la v1.1.0 de la fixture añadió dos; las huellas son las de la 2.25
-archivo por archivo en número. **Cero huecos del generador en las ocho.**
+`catalog-extended` tiene 57 escenarios y no 55 porque la v1.1.0 de la fixture añadió dos; cada huella reescribe el mismo
+número de archivos que en la 2.25. **Cero huecos del generador en las ocho.**
 
 Lo que destaparon, todo del diseño o del método:
 
