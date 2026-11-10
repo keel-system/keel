@@ -9,7 +9,7 @@
 // `compile-check` de keel-spring, y como ellos se lanza antes de dar por bueno cualquier cambio en lo que
 // se emite.
 //
-//   node packages/keel-dotnet/scripts/cs-check.js [--keep] [--sabotage=<id>] [--fixtures] [--database=mysql]
+//   node packages/keel-dotnet/scripts/cs-check.js [--keep] [--sabotage=<id>] [--fixtures [--only=<diseño,…>]] [--database=mysql]
 //   npm run cs-check --workspace packages/keel-dotnet
 //
 // --keep deja el proyecto generado (y dice dónde) para inspeccionarlo.
@@ -132,6 +132,10 @@ const FIXTURE_SABOTAGES = {
   // La caché de la lectura que da el ETag guarda solo el cuerpo: un acierto sale sin la versión de la lectura (CW-11).
   'cw-cache-etag': ['catalog-conditional/src/CatalogConditional.Application/Support/CachedOperations.cs', 'CachedOperation<Versioned<GetProductBySlugResponseDto>, GetProductBySlugQuery>', 'CachedOperation<GetProductBySlugResponseDto, GetProductBySlugQuery>'],
   'cw-cors': ['shop-conditional/src/ShopConditional.Infrastructure/Security/CorsPolicy.cs', ', "ETag"];', '];'],
+  // La lectura acotada (DSL 2.27) fuera del adaptador, en la prueba emitida ReadScopeTests: la clave de caché sin el scope
+  // cae en RS-9, y el claim ausente leído como todo, la mitad del borde de rs-empty-is-all, en RS-10.
+  'rs-cache-key': ['vault-scoped/src/VaultScoped.Application/Support/CachedOperations.cs', 'CacheKey.Of(message.Id, message.ReadScope.CacheKey())', 'CacheKey.Of(message.Id)'],
+  'rs-empty-is-all': ['vault-scoped/src/VaultScoped.Infrastructure/Security/ReadScopes.cs', 'ReadScope.Within(scope.ScopedValues())', 'ReadScope.Within(scope.ScopedValues()) is { Values.Count: 0 } ? ReadScope.Unrestricted() : ReadScope.Within(scope.ScopedValues())'],
   'telemetry-exemplar': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, 'span is { Recorded: true }', 'span is { Recorded: false }'],
   'telemetry-parent': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, 'return Source.StartActivity(name, kind, remote);', 'return Source.StartActivity(name, kind);'],
   'telemetry-host': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, '            Activity.Current = null;\n', ''],
@@ -478,7 +482,13 @@ function compileAllFixtures() {
   const root = makeWorkspace('keel-dotnet-fixtures-');
   const projects = [];
   const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
-  const designs = [...fixtures.map((name) => ({ name, from: name })), ...DERIVED];
+  // --only=<a,b>: solo esos diseños (fixtures o variantes), para iterar o falsar sin compilarlo todo.
+  const only = process.argv.find((arg) => arg.startsWith('--only='))?.split('=')[1]?.split(',') ?? null;
+  const designs = [...fixtures.map((name) => ({ name, from: name })), ...DERIVED].filter((design) => !only || only.includes(design.name));
+  if (designs.length === 0) {
+    console.error(`--only=${only.join(',')}: ningún diseño se llama así.`);
+    process.exit(2);
+  }
   for (const { name, from, mutate, broker, paymentGateway, telemetry, database } of designs) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
     if (mutate) mutate(manifest, layers, name);
@@ -504,10 +514,12 @@ function compileAllFixtures() {
     fs.writeFileSync(target, text.replace(from, to));
     console.log(`(sabotaje de las fixtures: ${sabotage})`);
   }
-  for (const probes of PROBES) fs.cpSync(path.join(PROBES_DIR, probes), path.join(root, probes), { recursive: true });
+  // Las sondas comunes referencian fixtures concretas: con --only, solo las pruebas emitidas de los diseños pedidos.
+  const probesHere = only ? [] : PROBES;
+  for (const probes of probesHere) fs.cpSync(path.join(PROBES_DIR, probes), path.join(root, probes), { recursive: true });
   // Las sondas encuentran los props comunes subiendo desde su carpeta: les vale los de cualquier fixture.
-  for (const shared of ['Directory.Build.props', 'Directory.Packages.props']) fs.copyFileSync(path.join(root, fixtures[0], shared), path.join(root, shared));
-  const lines = [...projects, ...PROBES.map((probes) => `${probes}/${probes}.csproj`)].map((p) => `  <Project Path="${p}" />`);
+  for (const shared of ['Directory.Build.props', 'Directory.Packages.props']) fs.copyFileSync(path.join(root, designs[0].name, shared), path.join(root, shared));
+  const lines = [...projects, ...probesHere.map((probes) => `${probes}/${probes}.csproj`)].map((p) => `  <Project Path="${p}" />`);
   fs.writeFileSync(path.join(root, 'Fixtures.slnx'), ['<Solution>', ...lines, '</Solution>', ''].join('\n'));
   const built = dotnet(root, ['build', 'Fixtures.slnx', '-c', 'Release']);
   // Que la solución compile no basta: tiene que haber salido un ensamblado por proyecto declarado.
@@ -516,7 +528,7 @@ function compileAllFixtures() {
     return fs.existsSync(path.join(dir, 'bin', 'Release', 'net10.0', `${path.basename(project, '.csproj')}.dll`));
   });
   const detail = `${assemblies.length}/${projects.length} ensamblados`;
-  const title = `la solución de las ${fixtures.length} fixtures y ${DERIVED.length} variante(s) compila sin warnings`;
+  const title = only ? `la solución de ${designs.map((design) => design.name).join(', ')} compila sin warnings` : `la solución de las ${fixtures.length} fixtures y ${DERIVED.length} variante(s) compila sin warnings`;
   if (!step(title, built.ok && assemblies.length === projects.length, detail)) {
     const problems = new Set(built.output.split('\n').filter((line) => /(error|warning) [A-Za-z]+\d+/.test(line)));
     console.error([...problems].slice(0, 60).join('\n'));

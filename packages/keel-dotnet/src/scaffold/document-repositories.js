@@ -30,6 +30,8 @@ import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { defaultSortConstant, entityFinders, finderParameters, fixedValue, hasFilter, methodName, needsOrdering, resultType, sortConstants } from './finders.js';
 import { adapterClass, portClass, repositoriesNamespace, isPaginated, naturalKeyFinder, occupantFinders, uniqueFieldFinders, emitsEvents, credentialFinders, replicaOwnTransaction, replicaDependencies, naturalKeyBatchFinder } from './repositories.js';
 import { sortablePaths } from '@keel-system/keel-core/gen/document';
+import { listsUnscoped } from '@keel-system/keel-core/gen/features';
+import { DOCUMENT_SCOPE_LINE, readScopeDocumentMethods, scopedLoadsOf } from './read-scope.js';
 export { sortablePaths };
 
 // ─── Valores ─────────────────────────────────────────────────────────────────────────────────────
@@ -465,7 +467,8 @@ export function renderDocumentAdapter(model, entity) {
     }`);
   }
 
-  if (isPaginated(model, entity)) {
+  // Un listado acotado (DSL 2.27) no da el List(pageable) sin scope: la única puerta paginada es su finder.
+  if (listsUnscoped(model, entity)) {
     methods.push(`    public async Task<Page<${entity.name}>> List(Pageable pageable, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(pageable);
@@ -484,6 +487,9 @@ export function renderDocumentAdapter(model, entity) {
   // Los finders de las búsquedas (DSL 2.22): los filtros del diseño sobre el documento, y solo esos.
   methods.push(...documentFinderMethods(model, entity));
   if (entityFinders(model, entity).some((finder) => finder.criteria.some((criterion) => criterion.match !== 'exact'))) usings.push('System.Text.RegularExpressions');
+  // La lectura acotada (DSL 2.27): las cargas y el predicado que los finders acotados suman a su filtro.
+  if (scopedLoadsOf(model, entity).length > 0) usings.push(namespaceOf(model, 'errors'));
+  methods.push(...readScopeDocumentMethods(model, entity, { idWrite: (expr) => (idField ? writeScalar(idField, expr) : `BsonValues.Of(${expr})`) }));
 
   // Los reclamos de barrido y de reconciliación (incremento 12c): el puerto es el mismo en los dos modelos.
   const sweeps = documentSweepClaimMethods(model, entity);
@@ -595,6 +601,8 @@ function documentFinderMethods(model, entity) {
       }
     }
     lines.push('        var query = conditions.Count == 0 ? FilterDefinition<BsonDocument>.Empty : Builders<BsonDocument>.Filter.And(conditions);');
+    // El alcance se SUMA a los criterios (D4), y la misma consulta da el total.
+    if (finder.scope) lines.push(DOCUMENT_SCOPE_LINE);
     const guards = [hasFilter(finder) ? '        ArgumentNullException.ThrowIfNull(filter);' : null, finder.result === 'page' ? '        ArgumentNullException.ThrowIfNull(pageable);' : null].filter(Boolean);
     const tail =
       finder.result === 'page'

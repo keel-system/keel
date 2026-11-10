@@ -57,7 +57,7 @@ import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { sampleFor } from '../../../keel-nest/scripts/lib/samples.js';
 import { domainMembers } from '../../src/scaffold/entities.js';
 import { csLocal, csMember, csString, entityPlace, namespaceOf, solution, typeUsings } from '../../src/scaffold/render.js';
-import { repositoryRoots, portClass, repositoriesNamespace, isPaginated, credentialFinders } from '../../src/scaffold/repositories.js';
+import { repositoryRoots, portClass, repositoriesNamespace, credentialFinders } from '../../src/scaffold/repositories.js';
 import { enumMember } from '../../src/lib/cs-projection.js';
 import { securityNamespace, usesHttpSecurity } from '../../src/scaffold/security.js';
 import { usesCorrelation } from '../../src/scaffold/rest-support.js';
@@ -69,6 +69,8 @@ import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { FINDER_PROBE_TEXT, findersOf, finderTextProbes } from '@keel-system/keel-core/gen/query-filters';
 import { driverNamespace, usesMySql, valueAlias } from '../../src/scaffold/relational-engine.js';
 import { loadsExpecting } from '../../src/scaffold/conditional-writes.js';
+import { listsUnscoped } from '@keel-system/keel-core/gen/features';
+import { readScopeProbes, readScopeSampleCount } from './read-scope-probes.js';
 import { RELAY_WAKE_USINGS, relayWakeBlock } from './relay-wake-probes.js';
 
 /**
@@ -397,7 +399,9 @@ function probesCs(model, namespace, harness = null) {
     const beforeInverse = beforeRank + rankSampleCount(model, root);
     // Las de la escritura condicional (api.concurrency), detrás de todas.
     const beforeConditional = beforeInverse + inverseSampleCount(model, root);
-    const total = beforeConditional + conditionalSampleCount(model, root);
+    // Y las de la lectura acotada (DSL 2.27), detrás de todas.
+    const beforeReadScope = beforeConditional + conditionalSampleCount(model, root);
+    const total = beforeReadScope + readScopeSampleCount(model, root);
     for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
@@ -559,7 +563,7 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
         });`);
     }
 
-    if (isPaginated(model, root)) {
+    if (listsUnscoped(model, root)) {
       tests.push(`    [Fact]
     public async Task ${root.name}_UnaPaginaYElBorradoDelGrafo() =>
         await InScope(async services =>
@@ -585,6 +589,9 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
     tests.push(...rankProbes(model, root, { state, first: beforeRank + 1, port, members: allNames, id, usings: ctx.usings }));
     tests.push(...inverseFinderProbes(model, root, { state, first: beforeInverse + 1, port, id, members: allNames, ctx }));
     tests.push(...conditionalWriteProbes(model, root, { state, first: beforeConditional + 1, port, id, concurrency }));
+    // La lectura acotada (DSL 2.27): RS-1 a RS-8 contra el adaptador, con su siembra.
+    const scoped = readScopeProbes(model, root, { state, first: beforeReadScope + 1, port, id, ctx, index: roots.indexOf(root) + 1 });
+    tests.push(...scoped.members, ...scoped.tests);
     tests.push(...credentialProbes(model, root, { state, sample: 16, port }));
     tests.push(...authorshipProbe(model, root, {
       state,
@@ -1023,10 +1030,12 @@ export function finderProbes(model, root, { state, first, port, members, id, usi
       `new ${finder.filterType}(${finder.criteria
         .map((criterion, position) => (criterion === probed ? value : criterion.required ? `v${position}` : 'null'))
         .join(', ')})`;
+    // Un finder acotado (DSL 2.27) lleva su scope; aquí se miden los filtros, así que sin alcance (lo miden las sondas RS).
+    const unscoped = finder.scope ? 'ReadScope.Unrestricted(), ' : '';
     const call = (filter) =>
       finder.result === 'page'
-        ? `(await InScope(other => other.GetRequiredService<${port}>().${csMember(finder.method)}(${filter ? `${filter}, ` : ''}new Pageable(0, 1000, []), Cancel))).Items`
-        : `await InScope(other => other.GetRequiredService<${port}>().${csMember(finder.method)}(${filter ? `${filter}, ` : ''}Cancel))`;
+        ? `(await InScope(other => other.GetRequiredService<${port}>().${csMember(finder.method)}(${filter ? `${filter}, ` : ''}new Pageable(0, 1000, []), ${unscoped}Cancel))).Items`
+        : `await InScope(other => other.GetRequiredService<${port}>().${csMember(finder.method)}(${filter ? `${filter}, ` : ''}${unscoped}Cancel))`;
     const finds = (filter, target) => `(${call(filter)}).Any(found => found.${id} == ${target}.${id})`;
     const noFilter = finder.criteria.length > 0 ? filterOf(null, null) : null;
     const assertions = [`            Assert.True(${finds(noFilter, 's')}, "sin filtros no encuentra la fila");`];
@@ -1064,7 +1073,7 @@ ${locals.join('\n')}${locals.length > 0 ? '\n' : ''}${assertions.join('\n')}
  * declara sus valores, no por su nombre: `rankShadow` de keel-core), o null. Hacen falta dos valores para que haya orden.
  */
 function rankedSort(model, root) {
-  if (!isPaginated(model, root)) return null;
+  if (!listsUnscoped(model, root)) return null;
   const member = persistedMembers(model, root).find((candidate) => candidate.kind === 'scalar' && candidate.ranked);
   const enumDef = member && model.enums.find((candidate) => candidate.name === member.field.namedType);
   return enumDef && enumDef.values.length >= 2 ? { member, enumDef } : null;

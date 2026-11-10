@@ -93,7 +93,8 @@ export function roleCheckedOperation(model, operation) {
 /** Las operaciones cuyo handler recibe el alcance: las que declaran su error. */
 export function scopedOperation(model, operation) {
   const scoping = model.security?.scoping;
-  return Boolean(usesCallerScope(model) && scoping && (operation.errors ?? []).includes(scoping.error));
+  // Una lectura acotada (DSL 2.27) no: el alcance lo aplica el adaptador con el ReadScope del mensaje.
+  return Boolean(usesCallerScope(model) && scoping && (operation.errors ?? []).includes(scoping.error) && !operation.readScope);
 }
 
 export function securityNamespace(model) {

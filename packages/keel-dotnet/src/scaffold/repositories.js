@@ -31,6 +31,8 @@ import { csFile, csLocal, csMember, csString, isNullable, located, namespaceOf, 
 import { loadExpectingAdapter, loadExpectingPort, loadsExpecting } from './conditional-writes.js';
 import { filterRecordFiles, finderEnums, needsOrdering, portFinderMethods, relationalFinderMethods, sortConstants } from './finders.js';
 import { domainMembers } from './entities.js';
+import { readScopePortMethods, readScopeRelationalMethods, scopedLoadsOf } from './read-scope.js';
+import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import { relationalArming, timerDependencies } from './timer.js';
 import { sweepPassNamespace } from './timer.js';
 import { adapterClaimMethods, adapterGuardMethods, claimDependencies, claimUsings, guardDependencies, portClaimMethods, portGuardMethods } from './claim.js';
@@ -264,6 +266,8 @@ function renderPort(model, entity) {
   const methods = [`    Task<${entity.name}?> FindById(${idType} ${idName}, CancellationToken cancellationToken = default);`];
   // La carga que compara la versión (api.concurrency, D4): la de las raíces que escribe alguna escritura condicional.
   if (loadsExpecting(model, entity)) methods.push(loadExpectingPort(entity, idType, idName));
+  // La carga acotada (DSL 2.27, D5): por id o por la clave natural de la ruta (T7).
+  methods.push(...readScopePortMethods(model, entity));
   // La lectura POR LOTE por id (keel-core/gen/ref-targets.js): la raíz que embebe una página, o la que devuelve una query que
   // recibe la lista de sus ids. Sin ella, el camino de menor resistencia es un FindById por elemento.
   if (idBatchReason(model, entity)) {
@@ -325,7 +329,8 @@ function renderPort(model, entity) {
       )}    Task<${entity.name}?> ${credential.name}(string ${csLocal(credential.param)}, CancellationToken cancellationToken = default);`
     );
   }
-  if (isPaginated(model, entity)) {
+  // Un listado acotado (DSL 2.27) no da el List(pageable) sin scope: la única puerta paginada es su finder.
+  if (listsUnscoped(model, entity)) {
     methods.push(
       `${xmlDoc('Una página de agregados, en el orden pedido y con el id como desempate.', '    ')}    Task<Page<${entity.name}>> List(Pageable pageable, CancellationToken cancellationToken = default);`
     );
@@ -491,7 +496,7 @@ ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Gr
     }`);
   }
 
-  if (isPaginated(model, entity)) {
+  if (listsUnscoped(model, entity)) {
     methods.push(`    public async Task<Page<${entity.name}>> List(Pageable pageable, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(pageable);
@@ -504,6 +509,10 @@ ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Gr
   // Los finders de las búsquedas (DSL 2.22): los filtros del diseño sobre la fila, y solo esos.
   methods.push(...relationalFinderMethods(model, entity));
   if (finderEnums(model, entity)) usings.push(namespaceOf(model, 'enums'));
+  // La lectura acotada (DSL 2.27): las cargas y el predicado que los finders acotados suman a su consulta.
+  const scoped = readScopeRelationalMethods(model, entity);
+  if (scoped.length > 0 && scopedLoadsOf(model, entity).length > 0) usings.push(namespaceOf(model, 'errors'));
+  methods.push(...scoped);
 
   // Los reclamos de barrido (incremento 10c): SKIP LOCKED + UPDATE condicional por fila, en su propia transacción.
   methods.push(...adapterClaimMethods(model, entity));

@@ -200,6 +200,20 @@ al arnés de `tests/`) y el predicado se compara con `partialIndexSpecs` de keel
 **La corrida de control** del par del MVP en los tres generadores: 6×23/23 y huella 17
 (`docs/corridas/2026-10-18-*-control.md`).
 
+## Lectura acotada (DSL 2.27, inc. 3 de PLAN-DSL-227-LECTURA-ACOTADA.md)
+
+`src/scaffold/read-scope.js`, con el reparto de keel-spring y keel-nest y lo neutral de `keel-core/gen/read-scope.js`:
+`ReadScope` (Domain/Repository, con su `CacheKey()`), `ReadScopes` (Infrastructure/Security) que el LECTOR del endpoint
+estampa en el mensaje (`public required ReadScope ReadScope`), el predicado `Scoped(query, scope)` sumado tras los criterios
+del finder (la misma consulta da el total; el salto a otra raíz es una subconsulta de EF, un `IN` por salto) o
+`Scoped(filter, …)` con `ReadScopeFilter` en documental (resuelve los `_id` de la otra colección), y `LoadScoped`/
+`LoadScopedBy<Clave>` con `AdmittedOrMiss`, que pregunta al motor con el MISMO predicado. La prueba emitida
+`ReadScopeTests` lleva RS-9 (la clave de keel-core y la que compone `CachedOperations` con dos scopes), RS-10 y RS-11.
+Las sondas RS-1 a RS-8 (`scripts/lib/read-scope-probes.js`) son un `[Fact]` por caso con el id en el nombre, sobre una
+siembra estática por raíz; las de los finders (2.22) llaman al finder acotado con `Unrestricted`. **Medido**: RS-7 con
+«un valor del enum que ninguna fila tiene» salía rojo en MySQL con la suite entera y verde aislado (el filtro casaba con
+las filas de A: su estado no es estable entre sondas): RS-7 afirma ahora que, para CADA valor, todo lo que sale lo lleva.
+
 ## Redes y trampas medidas
 
 Sin SDK, `test/cs-syntax.test.js` (tree-sitter-c-sharp en WebAssembly, `test/helpers/cs-tree.js`) parsea el C# de todas

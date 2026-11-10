@@ -18,6 +18,8 @@ import { carriesEntryGate, dispatchNote, entryGateNote, ownershipNotes, schedule
 import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
 import { finderNote } from '@keel-system/keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
+import { READ_SCOPE_PROPERTY, readScopeHandlerCall } from './read-scope.js';
+import { readScopeNote } from '@keel-system/keel-core/gen/read-scope';
 import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { csFile, csMember, declType, fieldUsings, isNullable, located, namespaceOf, typeUsings, xmlDoc } from './render.js';
@@ -221,6 +223,16 @@ function renderMessage(model, operation) {
   }
   // La versión que el cliente leyó (api.concurrency): la estampa el endpoint desde If-Match; nula desde otra puerta.
   if (carriesExpectedVersions(model, operation)) properties.push(expectedVersionsProperty());
+  // El alcance de una lectura acotada (DSL 2.27, D1): lo estampa el endpoint desde el token. Obligatorio: nadie construye
+  // el mensaje sin decir qué filas ve quien lee.
+  if (operation.readScope) {
+    usings.push(namespaceOf(model, 'repositories'));
+    properties.push(`    /// <summary>
+    /// Qué filas ve quien lee (lectura acotada, DSL 2.27): lo estampa el endpoint generado desde el token; no se acepta del
+    /// cuerpo ni de la query. Pásalo tal cual al puerto: el adaptador filtra con él.
+    /// </summary>
+    public required ReadScope ${READ_SCOPE_PROPERTY} { get; init; }`);
+  }
   const scope = idempotencyScope(model, operation);
   if (scope && (operation.idempotency.partitionBy ?? []).length > 0) usings.push('System.Globalization');
   const members = scope ? [...properties, scope] : properties;
@@ -456,6 +468,12 @@ function handlerNotes(model, operation) {
   // La propiedad (DSL 2.23): nota neutral, la misma en los tres generadores.
   const ownerParam = operation.messageKind === 'query' ? 'query' : 'command';
   for (const note of ownershipNotes(model, operation, { read: (field) => `${ownerParam}.${field[0].toUpperCase()}${field.slice(1)}`, hasRole: (role) => `callerRoles.Has("${role}")` })) notes.push(note);
+  // La lectura acotada (DSL 2.27): el adaptador ya filtra; la nota neutral dice qué pasar y que no se filtre a mano.
+  const scopedRead = readScopeNote(operation.readScope, {
+    scope: `${ownerParam}.${READ_SCOPE_PROPERTY}`,
+    call: readScopeHandlerCall(model, operation, operation.finder ? finderCall(model, operation.finder) : '')
+  });
+  if (scopedRead) notes.push(scopedRead);
   const scoping = model.security?.scoping;
   if (scopedOperation(model, operation)) {
     const exempt = [...scoping.exemptRoles, ...(scoping.exemptClients ?? []).map((client) => `cliente ${client}`)];

@@ -66,6 +66,7 @@ import { RELAY_WAKE_SABOTAGES, isRelayWakeSabotage, relayWakeSabotageVerdict } f
 import { timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
 import { PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSabotage, purgeTimerSabotageVerdict, timerProbePatch, timerSabotageVerdict, timerSubject } from './lib/timer-probes.js';
 import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
+import { READ_SCOPE_SABOTAGE_SPECS, READ_SCOPE_SUBJECTS, isReadScopeSabotage, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
 import { resolveRuntime, startMongo, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const args = process.argv.slice(2);
@@ -106,15 +107,21 @@ const SUBJECTS = [
     }
   },
   // `optimisticLocking: declared` sobre documentos: la versión que declara el dominio (el MISMO parche que compila cs-check).
-  ...UNCOVERED_BRANCHES.filter((branch) => ['mailer-mongo-lock', 'jobs-mongo-finder', 'mailer-mongo-author', 'catalog-conditional-mongo'].includes(branch.name)).map((branch) => ({
+  ...UNCOVERED_BRANCHES.filter((branch) => ['mailer-mongo-lock', 'jobs-mongo-finder', 'mailer-mongo-author', 'catalog-conditional-mongo', ...READ_SCOPE_SUBJECTS.document].includes(branch.name)).map((branch) => ({
     name: branch.name,
     from: branch.from,
-    mutate: (manifest, layers) => branch.mutate(manifest, layers, branch.name)
+    mutate: (manifest, layers) => branch.mutate(manifest, layers, branch.name),
+    // conduit no era sujeto de doc-check: sus sondas GENERALES no saben de una clave natural de dos referencias (todas las
+    // muestras de Follow y Favorite apuntan a la misma raíz asegurada y chocan) ni del conflicto transitorio de Profile.
+    // Es un hueco de las sondas, no de la lectura acotada: aquí solo se juzgan las RS (PLAN-DSL-227, inc. 3).
+    readScopeOnly: branch.name === 'conduit-scoped'
   }))
 ].filter((subject) =>
   only
     ? subject.name === only
-    : isDrainSabotage(sabotage)
+    : isReadScopeSabotage(sabotage)
+      ? READ_SCOPE_SUBJECTS.document.includes(subject.name)
+      : isDrainSabotage(sabotage)
       ? subject.name === 'job-dispatch-mongo'
       : isPurgeTimerSabotage(sabotage) || isRelayWakeSabotage(sabotage)
       ? subject.name === 'notification-mailer-mongo'
@@ -197,7 +204,9 @@ const SABOTAGES = {
   // El drenaje del schedule (DSL 2.26, inc. 8): sobre job-dispatch-mongo, caen DR1 o DR3 del bloque del reclamo.
   ...Object.fromEntries(Object.entries(DRAIN_SABOTAGES).map(([id, spec]) => [id, spec.document])),
   // El relay por réplica (DSL 2.26, inc. 9): sobre notification-mailer-mongo, caen RW1 o RW3.
-  ...Object.fromEntries(Object.entries(RELAY_WAKE_SABOTAGES).map(([id, spec]) => [id, spec.document]))
+  ...Object.fromEntries(Object.entries(RELAY_WAKE_SABOTAGES).map(([id, spec]) => [id, spec.document])),
+  // La lectura acotada (DSL 2.27): sobre vault-scoped-mongo y conduit-scoped, cada uno cae en exactamente sus casos RS.
+  ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document]))
 };
 // El sabotaje del uuid tiene que cambiar las DOS direcciones (si no, la ida y vuelta lo cazaría sola): también al escribir.
 // Y el del clasificador, sus DOS vías: la etiqueta y el código 112 dicen lo mismo, así que quitar una sola es una mutación
@@ -297,6 +306,11 @@ try {
   for (const subject of subjects) {
     const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
     const ran = tested.output.includes(`${subject.probes.name}.dll`);
+    if (isReadScopeSabotage(sabotage)) {
+      const verdict = readScopeSabotageVerdict(mine, sabotage, subject.model);
+      step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
     if (isRelayWakeSabotage(sabotage)) {
       const verdict = relayWakeSabotageVerdict(mine, sabotage);
       step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
@@ -315,6 +329,11 @@ try {
     if (isTimerSabotage(sabotage) && timerSubject(subject.model)) {
       const verdict = timerSabotageVerdict(mine, sabotage, 'document');
       step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
+    if (subject.readScopeOnly) {
+      const scoped = mine.filter((line) => /_RS\d+_/.test(line));
+      step(`${subject.name}: la lectura acotada (RS-*) contra MongoDB`, ran && scoped.length === 0, ran ? scoped.join('; ') : 'las sondas no se ejecutaron');
       continue;
     }
     step(`${subject.name}: los adaptadores guardan, leen y traducen contra MongoDB`, ran && mine.length === 0, ran ? mine.join('; ') : 'las sondas no se ejecutaron');

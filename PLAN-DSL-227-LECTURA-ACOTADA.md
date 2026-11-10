@@ -325,7 +325,7 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
 | 0. keel-core | hecho (2026-11-10) | suites de los cinco paquetes en verde; `design-matrix`: los 8 ids nuevos falsados (205), ningún co-disparado nuevo, ningún `sin-mutacion` |
 | 1. keel-spring | hecho (2026-11-10) | `read-scope-check` en los cuatro sujetos (PostgreSQL, MySQL y MongoDB) y los siete sabotajes, cada uno en exactamente sus casos; suites de keel-core y keel-spring |
 | 2. keel-nest | hecho (2026-11-10) | `db-check` (PostgreSQL y MySQL) y `doc-check` en los cuatro sujetos, con los siete sabotajes cada uno en exactamente sus casos; RS-9 a RS-11 ejecutando lo emitido; `ts-check`; suites de los cinco paquetes |
-| 3. keel-dotnet | pendiente | |
+| 3. keel-dotnet | hecho (2026-11-10) | `db-check` (PostgreSQL y MySQL) y `doc-check` en los cuatro sujetos, con los siete sabotajes cada uno en exactamente sus casos; RS-9 a RS-11 en la prueba emitida `ReadScopeTests` con `cs-check --fixtures --only`, falsada con `rs-cache-key` y `rs-empty-is-all`; suite de keel-dotnet |
 | 4. keel-go | pendiente | |
 | 5. `level: optional` | pendiente | |
 | 6. derivados y docs | pendiente | |
@@ -393,5 +393,27 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
   de errores). La paridad va en `test/read-scope.test.js` y no en un archivo aparte. **Dos cosas medidas**: `doc-check`
   cazó un error de tipos que ts-syntax no ve (la colección de la otra raíz sin tipar), y con `rs-path` la carga de la fila
   propia lanza el 403, así que la sonda lo cuenta como «no cargó» en vez de morir.
-- Siguiente: **incremento 3, keel-dotnet**. Las sondas de keel-nest (`scripts/lib/read-scope-probes.js`) son el modelo
-  para su `db-check` y `doc-check`.
+- **Incremento 3 hecho (2026-11-10).** keel-dotnet genera la lectura acotada entera (`src/scaffold/read-scope.js`):
+  `ReadScope` (Domain/Repository, con `CacheKey()`, la forma de keel-core); `ReadScopes` (Infrastructure/Security), que el
+  LECTOR del endpoint estampa en el mensaje (`public required ReadScope ReadScope`; con resolvedBy, el dueño es la
+  identidad ya resuelta); el finder acotado con el scope obligatorio y `Scoped(query, scope)` sumado tras sus criterios
+  —el salto, una subconsulta de EF (un `IN` por salto)— o `Scoped(filter, …)` con `ReadScopeFilter` en documental, que
+  resuelve los `_id` de la otra colección; `LoadScoped` y `LoadScopedBy<Clave>` con `AdmittedOrMiss` sobre el MISMO
+  predicado; el scope en la clave de caché. Redes: `db-check` (vault-scoped y shop-scoped, PostgreSQL y MySQL) y
+  `doc-check` (vault-scoped-mongo y conduit-scoped) con `scripts/lib/read-scope-probes.js`, un `[Fact]` por caso con el id
+  en el nombre, y `--sabotage=rs-*`; RS-9 a RS-11, la prueba emitida `ReadScopeTests` (la clave de keel-core y la que
+  compone `CachedOperations` con dos scopes, ReadScopes desde un principal, el 403 por el `ApiErrorMiddleware`), ejecutada
+  por `cs-check --fixtures --only=<diseños>` (opción nueva: las sondas comunes de cs-check no caben con un subconjunto) y
+  falsada con `rs-cache-key` (RS-9) y la mitad del borde de `rs-empty-is-all` (RS-10). Paridad con keel-spring y keel-nest
+  en `test/read-scope.test.js`.
+- **Desviaciones del inc. 3**: RS-9 a RS-11 no van por `cache-check` ni `security-check`, sino en la prueba emitida que
+  ejecuta `cs-check` (la misma pieza sin contenedores, como en keel-nest). **Tres cosas medidas**: (1) RS-7 con «un valor
+  del enum que ninguna fila tiene» salía rojo en MySQL con la suite entera y verde aislado —el estado de las filas sembradas
+  no es estable entre sondas—, y ahora afirma que, para CADA valor, todo lo que sale lo lleva; (2) un sabotaje que no toca
+  a un sujeto (`rs-path` sin salto, los del listado en conduit-scoped) no tiene que caer en nada, y el veredicto solo
+  traduce RS-1/RS-2 a RS-8 si hay un listado acotado; (3) **abierto**: conduit no era sujeto de `doc-check`, y sus sondas
+  GENERALES fallan (la clave natural de dos referencias de Follow y Favorite, con todas las muestras apuntando a la misma
+  raíz asegurada, y el conflicto transitorio de Profile). Es un hueco de las sondas, no de la lectura acotada: en
+  conduit-scoped `doc-check` juzga solo los RS (`readScopeOnly`) hasta que alguien lo cierre.
+- Siguiente: **incremento 4, keel-go**. Las sondas de keel-dotnet y keel-nest (`scripts/lib/read-scope-probes.js`) son el
+  modelo; recordar el veredicto con sujetos a los que un sabotaje no toca.

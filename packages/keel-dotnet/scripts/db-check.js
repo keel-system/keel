@@ -84,6 +84,7 @@ import { RELAY_WAKE_SABOTAGES, isRelayWakeSabotage, relayWakeSabotageVerdict } f
 import { timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
 import { PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSabotage, purgeTimerSabotageVerdict, timerProbePatch, timerSabotageVerdict, timerSubject } from './lib/timer-probes.js';
 import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
+import { READ_SCOPE_SABOTAGE_SPECS, READ_SCOPE_SUBJECTS, isReadScopeSabotage, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
 import { resolveRuntime, startDatabase, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const args = process.argv.slice(2);
@@ -183,7 +184,9 @@ const SABOTAGES = {
   // El drenaje del schedule (DSL 2.26, inc. 8): sobre job-dispatch, caen DR1 o DR3 del bloque del reclamo.
   ...Object.fromEntries(Object.entries(DRAIN_SABOTAGES).map(([id, spec]) => [id, spec.relational])),
   // El relay por réplica (DSL 2.26, inc. 9): sobre notification-mailer, caen RW1 o RW3.
-  ...Object.fromEntries(Object.entries(RELAY_WAKE_SABOTAGES).map(([id, spec]) => [id, spec.relational]))
+  ...Object.fromEntries(Object.entries(RELAY_WAKE_SABOTAGES).map(([id, spec]) => [id, spec.relational])),
+  // La lectura acotada (DSL 2.27): sobre vault-scoped y shop-scoped, cada uno cae en exactamente sus casos RS.
+  ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
 };
 
 /** El sabotaje para un motor: [sufijo, texto, sustituto], o null si no aplica a ese motor. */
@@ -232,7 +235,9 @@ const DERIVED = {
   // El finder de una LISTA con un subcampo de value object y el texto por prefijo (DSL 2.22).
   ...uncoveredBranch('product-catalog-finder'),
   // La escritura condicional (api.concurrency): LoadExpecting y la versión que devuelve Save (CW-1 a CW-5).
-  ...uncoveredBranch('catalog-conditional')
+  ...uncoveredBranch('catalog-conditional'),
+  // La lectura acotada (DSL 2.27): RS-1 a RS-8, con el salto como subconsulta (vault-scoped) y la propiedad sobre la fila.
+  ...Object.assign({}, ...READ_SCOPE_SUBJECTS.relational.map((name) => uncoveredBranch(name)))
 };
 
 function uncoveredBranch(name) {
@@ -242,7 +247,9 @@ function uncoveredBranch(name) {
 // Un sabotaje del cronómetro solo tiene sujeto en el par de los plazos: sin --only, solo ese.
 const SUBJECTS = only
   ? [only]
-  : isTimerSabotage(sabotage)
+  : isReadScopeSabotage(sabotage)
+    ? READ_SCOPE_SUBJECTS.relational
+    : isTimerSabotage(sabotage)
     ? ['verification-codes']
     : isPurgeTimerSabotage(sabotage) || isRelayWakeSabotage(sabotage)
       ? ['notification-mailer']
@@ -347,6 +354,11 @@ async function checkEngine(engine) {
       // Con el espacio delante: `Catalog.DbProbes.` es subcadena de `ProductCatalog.DbProbes.`.
       const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
       const ran = tested.output.includes(`${subject.probes.name}.dll`);
+      if (isReadScopeSabotage(sabotage)) {
+        const verdict = readScopeSabotageVerdict(mine, sabotage, subject.model);
+        step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+        continue;
+      }
       if (isRelayWakeSabotage(sabotage)) {
         const verdict = relayWakeSabotageVerdict(mine, sabotage);
         step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);

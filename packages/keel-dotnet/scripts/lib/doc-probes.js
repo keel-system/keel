@@ -23,7 +23,9 @@ import { documentShape, documentValueObjects, valueObjectShape } from '@keel-sys
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { domainMembers } from '../../src/scaffold/entities.js';
 import { csMember, csString, namespaceOf, solution, typeUsings } from '../../src/scaffold/render.js';
-import { repositoryRoots, portClass, repositoriesNamespace, isPaginated } from '../../src/scaffold/repositories.js';
+import { repositoryRoots, portClass, repositoriesNamespace } from '../../src/scaffold/repositories.js';
+import { listsUnscoped } from '@keel-system/keel-core/gen/features';
+import { readScopeProbes, readScopeSampleCount } from './read-scope-probes.js';
 import { isNullable } from '../../src/scaffold/render.js';
 import { enumMember } from '../../src/lib/cs-projection.js';
 import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
@@ -254,7 +256,9 @@ function probesCs(model, namespace) {
     const beforeInverse = beforeRank + rankSampleCount(model, root);
     // Las de la escritura condicional (api.concurrency), detrás de todas: las mismas sondas que db-check.
     const beforeConditional = beforeInverse + inverseSampleCount(model, root);
-    const total = beforeConditional + conditionalSampleCount(model, root);
+    // Y las de la lectura acotada (DSL 2.27), detrás de todas.
+    const beforeReadScope = beforeConditional + conditionalSampleCount(model, root);
+    const total = beforeReadScope + readScopeSampleCount(model, root);
     for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
@@ -424,7 +428,7 @@ function probesCs(model, namespace) {
         });`);
     }
 
-    if (isPaginated(model, root)) {
+    if (listsUnscoped(model, root)) {
       const property = sortProperty(model, root);
       tests.push(`    [Fact]
     public async Task ${root.name}_UnaPaginaOrdenadaYElBorrado() =>
@@ -454,6 +458,9 @@ function probesCs(model, namespace) {
     tests.push(...rankProbes(model, root, { state, first: beforeRank + 1, port, members: allNames, id, usings: ctx.usings }));
     tests.push(...inverseFinderProbes(model, root, { state, first: beforeInverse + 1, port, id, members: allNames, ctx }));
     tests.push(...conditionalWriteProbes(model, root, { state, first: beforeConditional + 1, port, id, concurrency }));
+    // La lectura acotada (DSL 2.27): RS-1 a RS-8 contra el adaptador, con su siembra (las MISMAS sondas que db-check).
+    const scoped = readScopeProbes(model, root, { state, first: beforeReadScope + 1, port, id, ctx, index: roots.indexOf(root) + 1 });
+    tests.push(...scoped.members, ...scoped.tests);
     tests.push(...authorshipProbe(model, root, {
       state,
       sample: 19,

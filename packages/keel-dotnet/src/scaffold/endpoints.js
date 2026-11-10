@@ -28,6 +28,7 @@ import { repositoriesNamespace } from './repositories.js';
 import { pageableDefaults } from '@keel-system/keel-core/gen/pagination';
 import { callerResolution, securityNamespace } from './security.js';
 import { EXPECTED_VERSIONS, carriesExpectedVersions, readerLine, returnsVersioned } from './conditional-writes.js';
+import { READ_SCOPE_PROPERTY, readScopeStamp } from './read-scope.js';
 
 // Los tipos base que en C# son tipos de VALOR: un ausente se escribe `T?` (Nullable<T>), no una referencia nula.
 const VALUE_BASES = new Set(['int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json']);
@@ -174,6 +175,11 @@ ${readers.join('\n\n')}
   return { path, content: csFile({ namespace, usings, body }) };
 }
 
+/** ¿Construye el dueño de una lectura acotada con la identidad resuelta contra varias credenciales (resolvedBy)? */
+function scopeResolvesCaller(model, operation) {
+  return operation.readScope?.kind === 'ownership' && callerResolution(model) != null;
+}
+
 /** ¿Resuelve esta operación la identidad del llamante contra las credenciales del recurso (resolvedBy)? */
 export function resolvesCaller(model, operation) {
   return callerResolution(model) != null && messageComponents(operation, model).some((component) => component.resolvedIdentity);
@@ -211,7 +217,7 @@ function renderEndpoint(model, operation, usings) {
   const { asBody } = shapeOf(operation);
   // resolvedBy: la identidad del llamante se resuelve al recurso DESPUÉS de leer y validar la entrada (como keel-nest):
   // una petición malformada es 400 sin tocar la base. El lector recibe la resolución como función y la llama al final.
-  const resolving = resolvesCaller(model, operation);
+  const resolving = resolvesCaller(model, operation) || scopeResolvesCaller(model, operation);
   if (resolving) usings.push(securityNamespace(model));
   const callerArg = resolving ? ', () => http.RequestServices.GetRequiredService<CallerIdentityResolver>().Resolve(CallerIdentity.Resolve(), http.RequestAborted)' : '';
   const read = `${asBody || resolving || operation.multipart ? 'await ' : ''}Read${csMember(operation.name)}(http.Request${callerArg})`;
@@ -377,11 +383,17 @@ function renderReader(model, operation, usings) {
   const paramChecks = [...pathChecks, ...queryChecks];
   if (paramChecks.length > 0) lines.push('        var paramChecks = new InputViolations(ViolationSource.Params);', ...paramChecks, '        paramChecks.ThrowIfAny();');
   if (carriesExpectedVersions(model, operation)) assigns.push(`            ${EXPECTED_VERSIONS} = expectedVersions,`);
+  // La lectura acotada (DSL 2.27, D1): el ReadScope desde el token, estampado en el mensaje. Con resolvedBy, el dueño es
+  // la identidad ya resuelta al recurso, como en el resto del endpoint.
+  if (operation.readScope) {
+    usings.push(securityNamespace(model));
+    assigns.push(`            ${READ_SCOPE_PROPERTY} = ${readScopeStamp(operation, scopeResolvesCaller(model, operation) ? 'resolvedCaller' : null)},`);
+  }
   // La puerta, si el mensaje la lleva (keel-core/gen/entry-gates.js): por aquí entra siempre por HTTP.
   const gate = entryGateAssignment(model, operation.name, 'HTTP');
   if (gate) assigns.push(`            ${gate},`);
   const construct = assigns.length > 0 ? `new ${operation.messageClass}\n        {\n${assigns.join('\n')}\n        }` : `new ${operation.messageClass}()`;
-  const resolving = resolvesCaller(model, operation);
+  const resolving = resolvesCaller(model, operation) || scopeResolvesCaller(model, operation);
   const resolved = resolving ? ', Func<Task<string?>> resolveCaller' : '';
   if (resolving) lines.push('        // La identidad, resuelta al recurso solo cuando la entrada ya es válida.', '        var resolvedCaller = await resolveCaller();');
   const signature = asBody || resolving || multipart

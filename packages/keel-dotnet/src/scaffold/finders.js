@@ -7,6 +7,7 @@ import { persistedMembers } from '@keel-system/keel-core/gen/relational';
 import { memberOf } from './enums.js';
 import { csFile, csLocal, csMember, csString, fieldUsings, located, namespaceOf, xmlDoc } from './render.js';
 import { screamingSnake } from '@keel-system/keel-core/gen/naming';
+import { RELATIONAL_SCOPE_LINE, READ_SCOPE_PROPERTY } from './read-scope.js';
 
 /** Los finders de la raíz, en el orden de las operaciones. */
 export function entityFinders(model, entity) {
@@ -51,6 +52,8 @@ function criterionDoc(criterion) {
 export function finderParameters(finder) {
   const params = hasFilter(finder) ? [`${finder.filterType} filter`] : [];
   if (finder.result === 'page') params.push('Pageable pageable');
+  // En una lectura acotada (DSL 2.27, D2) el scope es OBLIGATORIO: el compilador obliga al handler a pasarlo.
+  if (finder.scope) params.push('ReadScope scope');
   params.push('CancellationToken cancellationToken = default');
   return params.join(', ');
 }
@@ -153,9 +156,11 @@ export function relationalFinderMethods(model, entity) {
             `        var rows = await Ordered(query, ${defaultSortConstant(finder)}).ToListAsync(cancellationToken);`,
             '        return [.. rows.Select(ToDomain)];'
           ];
+    // El alcance se SUMA a los criterios (D4): la misma consulta da las filas y el total.
+    const scoped = finder.scope ? [RELATIONAL_SCOPE_LINE] : [];
     return `    public async Task<${resultType(finder, entity)}> ${methodName(finder)}(${finderParameters(finder)})
     {
-${[...guards, start, ...relationalFilterLines(model, entity, finder), ...tail].join('\n')}
+${[...guards, start, ...relationalFilterLines(model, entity, finder), ...scoped, ...tail].join('\n')}
     }`;
   });
 }
@@ -188,6 +193,7 @@ export function finderCall(model, finder) {
   const args = [];
   if (hasFilter(finder)) args.push(`new ${finder.filterType}(${finder.criteria.map((criterion) => `query.${csMember(criterion.name)}`).join(', ')})`);
   if (finder.result === 'page') args.push('query.Pageable');
+  if (finder.scope) args.push(`query.${READ_SCOPE_PROPERTY}`);
   args.push('cancellationToken');
   return `await ${repository}.${methodName(finder)}(${args.join(', ')})`;
 }
