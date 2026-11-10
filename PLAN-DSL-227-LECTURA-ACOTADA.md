@@ -533,4 +533,10 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
 - **Pendiente del inc. 7, al 8**: `keel-recover characterize` de los flujos tocados (FL-ART-009, FL-ORD-005 y FL-ACC-009) contra los sandboxes, y `keel-recover
   parity` de shop-api y conduit contra los servicios regenerados: sin las dos fronteras, las diferencias de `favorited` y
   `following` y la del listado tienen que salir iguales.
+- **Incremento 8 preparado (2026-11-10, `260c908c`)**: ocho workspaces en `D:\keel-example\` con `keel init`, el diseño en
+  `specs/`, su DESIGN.md en `docs/` (asset-vault), el `keel-stack.json` sembrado y `build` hecho:
+  `vault-227-<generador>-mongo-rabbit` (asset-vault v1.1.3: MongoDB, RabbitMQ, Keycloak, Redis y MinIO; `--ready` en verde)
+  y `shop-227-<generador>-postgre` (shop-api v0.1.1: PostgreSQL y Keycloak; con `--accept-unready`, estampado, por los
+  cinco criterios previos al plan). Cada corrida: `cd services/<servicio>-<generador>` y `/keel-generate-<generador>`; se
+  registra en `docs/corridas/` con la huella. La paridad de keel-recover (shop-api y conduit) se valida después.
 - Siguiente: **incremento 8, corridas de control** (las lanza el usuario).
