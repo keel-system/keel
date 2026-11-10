@@ -357,6 +357,13 @@ export const CHECKS = {
     title: 'una salida de varios elementos no declara sort',
     closes: "declarar 'sort' en la salida, aunque sea el orden por id"
   },
+  'CHK-USECASES-EXCLUDE-EMBED-LEAK': {
+    layer: 'use-cases',
+    severity: 'warning',
+    nature: 'undecided',
+    title: 'un campo que una proyección recorta con `exclude` viaja en otra que embebe la misma entidad',
+    closes: "añadir '<relación>.<campo>' al exclude de la operación que lo deja viajar, o aceptarlo en decisions.yaml"
+  },
   'CHK-USECASES-CHILD-NOT-IN-INPUT': {
     layer: 'use-cases',
     severity: 'warning',
@@ -1153,6 +1160,13 @@ export const CHECKS = {
     nature: 'incoherence',
     title: 'un `Then` afirma una posición en un listado ordenado por un campo que cambia con cada escritura',
     closes: 'que el Given diga en qué orden ocurre la ÚLTIMA escritura de cada fila, no solo en qué orden se crearon'
+  },
+  'CHK-SCEN-ORDER-UNDECLARED': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'un escenario o la convención de orden afirma un orden de colección que el `sort` de la salida no declara',
+    closes: "declarar ese orden en 'output.sort', o corregir el escenario para que afirme el orden declarado"
   },
   'CHK-SCEN-CONVENTION-UNBACKED': {
     layer: 'validation-scenarios',

@@ -1310,6 +1310,20 @@ export const MUTATIONS = [
     },
     expect: ['OBL-ENTITY-UNREACHABLE']
   },
+  {
+    id: 'M-OBL-ENTITY-UNREACHABLE-LOOSE',
+    title: 'una entidad persistida fuera de todo agregado que ninguna operación nombra',
+    mutate: (d) => {
+      d.layers.domain.entities.Tag = {
+        description: 'Etiqueta de clasificación.',
+        fields: { id: { type: 'uuid', id: true, generated: true }, label: { type: 'string', required: true } }
+      };
+      d.layers.persistence.entities.Tag = { indexes: [['label']] };
+    },
+    // Fuera de todo agregado la señala además CHK-DOMAIN-ENTITY-NO-AGGREGATE: es la misma
+    // entidad vista desde la forma y desde quién la escribe.
+    expect: ['CHK-DOMAIN-ENTITY-NO-AGGREGATE', 'OBL-ENTITY-UNREACHABLE']
+  },
 
   // ── storage ──
   {
@@ -1445,6 +1459,36 @@ export const MUTATIONS = [
         '## Convenciones de determinación\n\n**Ausencia.** Un campo sin valor no aparece en el cuerpo JSON.\n\n## Matriz de cobertura'
       ),
     expect: ['CHK-SCEN-CONVENTION-UNBACKED']
+  },
+  {
+    id: 'M-SCEN-CONVENTION-UNBACKED-NULL',
+    title: 'la convención promete el nulo en una lista y el manifiesto lo omite',
+    mutate: (d) => {
+      d.manifest.conventions = { nulls: 'omit' };
+      replaceIn(
+        d,
+        '## Matriz de cobertura',
+        '## Convenciones de determinación\n\n- **Ausencia vs nulo**: un campo sin valor viaja como nulo; nunca se omite.\n\n## Matriz de cobertura'
+      );
+    },
+    expect: ['CHK-SCEN-CONVENTION-UNBACKED']
+  },
+  {
+    id: 'M-SCEN-ORDER-UNDECLARED',
+    title: 'un Then afirma un orden que el sort de la salida no declara',
+    mutate: (d) => replaceIn(d, '**Then** llegan ordenados por asunto.', '**Then** llegan ordenados por `subject` descendente.'),
+    expect: ['CHK-SCEN-ORDER-UNDECLARED']
+  },
+  {
+    id: 'M-USECASES-EXCLUDE-EMBED-LEAK',
+    title: 'un campo recortado en una proyección embebida viaja en otra',
+    mutate: (d) => {
+      entity(d, 'Ticket').relations.queue = { entity: 'Queue', cardinality: 'many-to-one' };
+      // Embebida en todas las salidas de Ticket, para no disparar la asimetría del embed.
+      for (const name of ['createTicket', 'getTicket', 'listTickets', 'closeTicket']) ops(d)[name].output.embed = ['queue'];
+      ops(d).getTicket.output.exclude = ['queue.name'];
+    },
+    expect: ['CHK-USECASES-EXCLUDE-EMBED-LEAK']
   },
   {
     id: 'M-SCEN-AUDIT-NOT-EXPOSED',

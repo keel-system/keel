@@ -1,0 +1,9 @@
+# Obligaciones de diseño que este servicio deja abiertas a sabiendas.
+decisions:
+  - id: OBL-ENTITY-UNREACHABLE
+    scope: domain
+    reason: >
+      Los inspectores los da de alta el servicio de personal, que publica sus bajas
+      (InspectorDeactivated); aquí solo se referencian desde el informe. En las pruebas se siembran
+      en la base antes de cada flujo.
+    since: 1.0.0

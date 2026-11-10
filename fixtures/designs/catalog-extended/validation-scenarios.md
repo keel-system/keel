@@ -28,8 +28,9 @@
   forma**, nunca por valor literal.
 - **Identificadores**: `uuid` v4 en formato canónico. Se verifican por forma y por reutilización
   simbólica dentro del flujo (el `id` que devuelve un escenario es el que usa el siguiente).
-- **Ausencia vs nulo**: un campo sin valor **viaja como nulo** en el cuerpo JSON; nunca se omite.
-  Por eso el cuerpo completo es comparable campo a campo.
+- **Ausencia vs nulo**: un campo sin valor **no viaja** (`conventions.nulls: omit`): ni en las
+  respuestas ni en los payloads de evento. «Cuerpo completo» enumera los campos que llegan; uno sin
+  valor se afirma ausente.
 - **Orden de las colecciones**: `listProducts` ordena por `createdAt` descendente y, ante empate,
   por `sku` ascendente (orden total). `getProductsByIds` devuelve los productos en el **orden de
   los ids del request**. `Product.images` se proyecta ordenada por `position` ascendente.

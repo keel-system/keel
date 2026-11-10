@@ -25,3 +25,17 @@ decisions:
       Un `cancelled: false` de compliance se trata como el fallback: la retirada queda
       cancelada en el catálogo igualmente y el registro descuadrado lo concilia compliance.
     since: 1.1.0
+  - id: OBL-ENTITY-UNREACHABLE
+    scope: domain
+    reason: >
+      Las categorías son datos de arranque: las da de alta el equipo de catálogo con una migración
+      de datos, fuera de este servicio, y los escenarios las siembran en la base antes de cada flujo.
+      Lo destapó la serie de control de la 2.26, donde cada agente sembraba a su manera.
+    since: 1.1.0
+  - id: CHK-USECASES-EXCLUDE-EMBED-LEAK
+    scope: use-cases.Category.exclude.recordWithdrawalAwaitingSince
+    reason: >
+      A propósito: addProductImage recorta la marca de la categoría embebida y updateProduct no.
+      Dos proyecciones del mismo agregado con recortes distintos son lo que hace a build emitir
+      una variante <E>SummaryDto, y esta fixture es el sujeto que compila esa rama.
+    since: 1.1.0

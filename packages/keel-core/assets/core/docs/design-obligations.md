@@ -37,7 +37,7 @@ donde «aceptado» significaría dejársela al generador. Están marcadas como t
 | `OBL-IDEM-KEY-REQUIRED` | `use-cases`: alguna operación declara `idempotency` con `keySource: client-key` | no está decidido qué pasa si el cliente NO manda la cabecera | 4 | sí |
 | `OBL-CONCURRENCY-CODE` | `persistence`: `consistency.optimisticLocking` es `all` o `declared` | el conflicto de escritura concurrente no tiene `code` nombrado | 4 | sí |
 | `OBL-API-CONCURRENCY-UNDECIDED` | `api`: un PUT o PATCH sobre una raíz con versión que recibe su id, en un diseño sin `concurrency` | no está decidido si quien guarda un formulario viejo puede pisar el cambio de otro | 4 | sí |
-| `OBL-ENTITY-UNREACHABLE` | `domain`: una raíz de agregado a la que ninguna operación se refiere | una raíz de agregado que ninguna operación puede crear | 14 | sí |
+| `OBL-ENTITY-UNREACHABLE` | `domain`: una raíz de agregado —o una entidad persistida fuera de todo agregado— a la que ninguna operación se refiere | una raíz de agregado que ninguna operación puede crear | 14 | sí |
 | `OBL-CALLER-IDENTITY` | `security`: se declara `serviceAuth` (clientes máquina) y alguna operación recibe campos de entrada | con clientes máquina, no está decidido si la identidad del llamante entra en el trabajo | 9 | sí |
 | `OBL-DECIMAL-SCALE-POLICY` | `domain`/`use-cases`: un decimal con `scale` llega al `input` de alguna operación | no está decidido qué pasa con un importe de entrada con más decimales que su escala | 12 | sí |
 | `OBL-OUTCOME-NEGATIVE-UNDECIDED` | `dependencies`: una activación con `awaits: outcome` cuya llamada devuelve un campo booleano | el desenlace NEGATIVO de la llamada no está decidido | 13 | sí |

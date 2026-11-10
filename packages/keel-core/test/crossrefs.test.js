@@ -6454,6 +6454,28 @@ test('CHK-SCEN-CONVENTION-UNBACKED: una convención de determinación en prosa s
   assert.deepEqual(cerrado.errors, []);
 });
 
+test('CHK-SCEN-CONVENTION-UNBACKED: en una lista, la negación no es la promesa', () => {
+  const domain = {
+    entities: { Brand: { fields: { id: { type: 'uuid', id: true, generated: true }, name: { type: 'string', unique: true } } } }
+  };
+  const run = (conventions, manifest) =>
+    idsOf(
+      checkCrossRefs({
+        layers: { domain, 'use-cases': { operations: {} } },
+        scenarios: `# x\n\n## Convenciones de determinación\n\n${conventions}\n\n## Brands\n`,
+        manifest
+      }),
+      'CHK-SCEN-CONVENTION-UNBACKED'
+    ).length;
+  // Prometer el nulo con `include` (el default) es coherente, aunque diga «se omite» al negarlo.
+  assert.equal(run('- **Ausencia vs nulo**: un campo sin valor viaja como nulo; nunca se omite.'), 0);
+  assert.equal(run('- **Ausencia vs nulo**: un campo sin valor viaja como nulo; nunca se omite.', { conventions: { nulls: 'omit' } }), 1);
+  // Nombrar las mayúsculas para decir que se DISTINGUEN no es prometer que se ignoran.
+  assert.equal(run('- **Mayúsculas y acentos**: la unicidad de `name` distingue mayúsculas: `A` y `a` son dos.'), 0);
+  assert.equal(run('- **Mayúsculas**: el formato solo admite mayúsculas.'), 0);
+  assert.equal(run('- **Mayúsculas y acentos**: la unicidad de `name` ignora mayúsculas y acentos.'), 1);
+});
+
 test('OBL-DECIMAL-SCALE-POLICY: un decimal con escala en la entrada exige decidir qué pasa con los decimales de más', () => {
   const domain = (constraints) => ({
     types: { Price: { base: 'decimal', constraints } },

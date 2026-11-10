@@ -136,7 +136,7 @@ export const OBLIGATIONS = {
 
   'OBL-ENTITY-UNREACHABLE': {
     gapClass: 14,
-    when: 'domain: una raíz de agregado a la que ninguna operación se refiere',
+    when: 'domain: una raíz de agregado —o una entidad persistida fuera de todo agregado— a la que ninguna operación se refiere',
     kind: 'decision',
     // Exentable, y la razón importa: «se aprovisiona fuera de banda» es una respuesta legítima
     // —datos de referencia, un seed de despliegue— y aquí SÍ hay un default seguro, porque el

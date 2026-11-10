@@ -442,7 +442,9 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
   // value objects compuestos: cada segmento no terminal debe permitir descender y el terminal
   // debe existir. Cruzar a otro agregado (relación serializada por id, no anidada) es warning:
   // no hay campos anidados que excluir. Ruta plana (un solo segmento) = comportamiento previo.
-  const checkExcludePath = (rootEntity, rawPath, where) => {
+  // `embedded`: las relaciones que la salida resuelve con `embed`. Por ellas SÍ hay un agregado
+  // anidado que recortar, y cruzar a otro agregado no es aviso (dsl/use-cases.md § exclude).
+  const checkExcludePath = (rootEntity, rawPath, where, embedded = new Set()) => {
     const segments = rawPath.split('.');
     let ctx = { kind: 'entity', name: rootEntity };
     let crossedAggregate = false;
@@ -463,7 +465,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       // Segmento no terminal: tiene que permitir descender.
       if (relation) {
         if (!entities.has(relation.entity)) return; // relación rota: ya la reporta la validación de domain
-        if (!crossedAggregate && ctx.kind === 'entity') {
+        if (!crossedAggregate && ctx.kind === 'entity' && !(i === 0 && embedded.has(seg))) {
           const from = aggregateOf.get(ctx.name);
           const to = aggregateOf.get(relation.entity);
           if (from !== undefined && to !== undefined && from !== to) {
@@ -625,7 +627,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     }
     if (payload.entity && entities.has(payload.entity)) {
       for (const path of payload.exclude ?? []) {
-        checkExcludePath(payload.entity, path, where);
+        checkExcludePath(payload.entity, path, where, new Set(direction === 'output' ? payload.embed ?? [] : []));
       }
       for (const relName of payload.embed ?? []) {
         if (direction === 'input') {
@@ -1374,6 +1376,52 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           `mientras ${embedders.map((payload) => payload.opName).join(', ')} ` +
           `lo${embedders.length > 1 ? 's' : ''} resuelve${embedders.length > 1 ? 'n' : ''} con embed: [${relName}] — ` +
           'si es deliberado, ignóralo; si no, el consumidor recibe un id que le obliga a una segunda llamada'
+      );
+    }
+  }
+
+  // use-cases: un campo que el diseño recorta en una proyección de una entidad y deja viajar
+  // en otra que la EMBEBE. Un `exclude` dice «esto no es para el cliente»; si el mismo campo
+  // llega por la puerta de al lado (el agregado anidado en otra respuesta), el recorte no
+  // protege nada y el contrato depende de por dónde se pida. Lo vio la serie de control de la
+  // 2.26: `updateProduct` dejaba viajar `category.recordWithdrawalAwaitingSince`, que
+  // `addProductImage` recorta. Decisión y no errata: dos proyecciones con recortes distintos
+  // pueden ser deliberadas (una ficha más rica que otra), pero hay que tomarla.
+  const fieldViews = new Map(); // entidad → [{ opName, embeddedAs, excluded }]
+  const addView = (entityName, view) => {
+    if (!fieldViews.has(entityName)) fieldViews.set(entityName, []);
+    fieldViews.get(entityName).push(view);
+  };
+  for (const [opName, op] of Object.entries(operations)) {
+    const output = op.output;
+    if (!output || output === 'void' || !output.entity || !entities.has(output.entity)) continue;
+    const excludes = (output.exclude ?? []).map(String);
+    addView(output.entity, { opName, embeddedAs: null, excluded: new Set(excludes.filter((path) => !path.includes('.'))) });
+    for (const relName of output.embed ?? []) {
+      const target = domain.entities?.[output.entity]?.relations?.[relName]?.entity;
+      if (!target || !entities.has(target)) continue;
+      const nested = excludes.filter((path) => path.startsWith(`${relName}.`)).map((path) => path.slice(relName.length + 1));
+      addView(target, { opName, embeddedAs: relName, excluded: new Set(nested) });
+    }
+  }
+  for (const [entityName, views] of fieldViews) {
+    const direct = views.filter((view) => view.embeddedAs === null);
+    for (const [fieldName, field] of Object.entries(domain.entities?.[entityName]?.fields ?? {})) {
+      // Un campo `sensitive` ya sale de toda proyección, también anidada: no hay fuga posible.
+      if (field?.sensitive) continue;
+      const cutting = views.filter((view) => view.excluded.has(fieldName));
+      if (cutting.length === 0) continue;
+      // Si alguna proyección DIRECTA lo deja viajar, la entidad ya lo expone: recortarlo en
+      // otra es aligerar, no esconder.
+      if (direct.some((view) => !view.excluded.has(fieldName))) continue;
+      const leaking = views.filter((view) => view.embeddedAs !== null && !view.excluded.has(fieldName));
+      if (leaking.length === 0) continue;
+      const path = (view) => (view.embeddedAs ? `${view.embeddedAs}.${fieldName}` : fieldName);
+      warnIn(`use-cases.${entityName}.exclude.${fieldName}`, 'CHK-USECASES-EXCLUDE-EMBED-LEAK',
+        `use-cases: '${entityName}.${fieldName}' se recorta en ${cutting.map((view) => `${view.opName} (${path(view)})`).join(', ')} ` +
+          `y viaja anidado en ${leaking.map((view) => `${view.opName} (embed: [${view.embeddedAs}])`).join(', ')} — ` +
+          `si no es para el cliente, añade '${leaking[0].embeddedAs}.${fieldName}' al exclude de ${leaking.length > 1 ? 'esas operaciones' : 'esa operación'}; ` +
+          'si en esa respuesta sí lo es, acéptalo en decisions.yaml'
       );
     }
   }
@@ -3907,8 +3955,22 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         if (transition?.entity) referenced.add(transition.entity);
       }
     }
-    for (const [name, aggregate] of Object.entries(domain.aggregates)) {
-      const root = aggregate?.root ?? name;
+    // Las raíces declaradas y, además, las entidades persistidas que no están en ningún
+    // agregado (las que `CHK-DOMAIN-ENTITY-NO-AGGREGATE` señala): de hecho son raíz de su propio
+    // agregado. La serie de control de la 2.26 lo destapó con `Category` en `catalog-extended`:
+    // ninguna operación la crea, los escenarios la sembraban por SQL y cada agente decidía cómo.
+    const grouped = new Set(
+      Object.entries(domain.aggregates).flatMap(([name, aggregate]) => [aggregate?.root ?? name, ...(aggregate?.entities ?? [])])
+    );
+    // Una réplica tampoco: la escribe su `fedBy`, que no es una operación con entidad.
+    const replicas = new Set(
+      Object.values(dependencies?.dependencies ?? {}).flatMap((dependency) =>
+        Object.values(dependency?.needs ?? {}).map((need) => need?.replica?.entity).filter(Boolean)
+      )
+    );
+    const loose = [...entities].filter((name) => !grouped.has(name) && !replicas.has(name) && persistence.entities?.[name]);
+    const roots = [...Object.entries(domain.aggregates).map(([name, aggregate]) => aggregate?.root ?? name), ...loose];
+    for (const root of roots) {
       if (!entities.has(root) || referenced.has(root)) continue;
       obligation(
         'OBL-ENTITY-UNREACHABLE',
@@ -5188,11 +5250,26 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     const conventions = conventionsSection(scenarios);
     if (conventions) {
       const nulls = manifest?.conventions?.nulls ?? 'include';
-      if (conventions.ausencia && /(no\s+aparece|nunca\s+viaja|se\s+omite|no\s+viaja)/i.test(conventions.ausencia) && nulls !== 'omit') {
+      // Las dos promesas se leen por separado y la del nulo manda: «viaja como nulo; nunca se
+      // omite» casa también con «se omite», y no es la promesa de omitir.
+      const promisesNull = /((?<!\b(?:nunca|no)\s+)viaja\s+como\s+`?nul[lo]|nunca\s+se\s+omite|se\s+serializa\s+como\s+`?null)/i.test(conventions.ausencia ?? '');
+      const promisesOmit = !promisesNull && /(no\s+aparece|nunca\s+viaja|se\s+omite|no\s+viaja)/i.test(conventions.ausencia ?? '');
+      if (promisesOmit && nulls !== 'omit') {
         warn(
           'CHK-SCEN-CONVENTION-UNBACKED',
           `validation-scenarios.md: la convención de ausencia dice que un campo sin valor no viaja, y el manifiesto no lo declara ` +
             `(conventions.nulls: omit) — el generador serializará los nulos y el agente tendrá que corregirlo clase a clase`
+        );
+      }
+      // Y al revés: la prosa promete el nulo y el manifiesto lo omite. Lo vio la serie de
+      // control de la 2.26 en `catalog-extended`: los Then comparaban «cuerpo completo» con
+      // nulos que el servidor, con razón, no manda.
+      if (promisesNull && nulls === 'omit') {
+        warn(
+          'CHK-SCEN-CONVENTION-UNBACKED',
+          `validation-scenarios.md: la convención de ausencia dice que un campo sin valor viaja como nulo, y el manifiesto ` +
+            `declara conventions.nulls: omit — el servidor lo omitirá y los Then que comparan el cuerpo completo esperarán un ` +
+            `campo que no llega. Alinea la prosa con el manifiesto, o cambia la convención`
         );
       }
       if (conventions.numeros && /(no\s+se\s+(ajusta|redondea)|se\s+rechaza)/i.test(conventions.numeros)) {
@@ -5206,7 +5283,13 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           );
         }
       }
-      if (conventions.texto && /acentos?|may[uú]sculas/i.test(conventions.texto)) {
+      // Nombrar las mayúsculas no es prometer que se ignoran: «distingue mayúsculas», «tal cual»
+      // y «compare: exact» dicen lo contrario.
+      const ignoresCase =
+        /(acentos?|may[uú]sculas)/i.test(conventions.texto ?? '') &&
+        /(ignora|insensible|indistint|da\s+igual|sin\s+distinguir|no\s+distingue|plega)/i.test(conventions.texto ?? '') &&
+        !/((?<!no\s)distingue\s+may|sensible\s+a\s+may|tal\s+cual|compare:\s*exact)/i.test(conventions.texto ?? '');
+      if (ignoresCase) {
         if (!fieldSites.some(({ field }) => field?.compare && field.compare !== 'exact')) {
           warn(
             'CHK-SCEN-CONVENTION-UNBACKED',
@@ -5215,6 +5298,47 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           );
         }
       }
+    }
+
+    // (4b) El orden de una colección afirmado en prosa —en un Then o en la convención «Orden»—
+    // que el `sort` de la salida no declara, o declara distinto. Sin `sort` el contrato es el
+    // orden por id; un escenario que afirma otro sale rojo contra el servidor correcto, o
+    // empuja al agente a ordenar a mano desviándose del spec. Lo destapó la serie de control
+    // de la 2.26: keel-dotnet se paró en FL-PRD-003-B/-C con `culprit: design`, y keel-spring
+    // y keel-nest lo habían improvisado sin decirlo.
+    const orderClaims = [];
+    const orderPattern = /\bordena(?:d[oa]s?|n)?\s+por\s+`([A-Za-z_][A-Za-z0-9_.]*)`\s*(ascendente|descendente|asc|desc)?/gi;
+    for (const { id, when, then } of sections) {
+      const opName = [...when.matchAll(/`([a-z][A-Za-z0-9]*)`/g)].map((m) => m[1]).find((n) => operationNames.has(n));
+      if (!opName) continue;
+      const match = orderPattern.exec(then);
+      orderPattern.lastIndex = 0;
+      if (match) orderClaims.push({ where: id, opName, field: match[1], direction: match[2] });
+    }
+    for (const sentence of String(conventions?.orden ?? '').split(/(?<=\.)\s+/)) {
+      const opName = [...sentence.matchAll(/`([a-z][A-Za-z0-9]*)`/g)].map((m) => m[1]).find((n) => operationNames.has(n));
+      if (!opName) continue;
+      const match = orderPattern.exec(sentence);
+      orderPattern.lastIndex = 0;
+      if (match) orderClaims.push({ where: 'la convención de orden', opName, field: match[1], direction: match[2] });
+    }
+    const orderReported = new Set();
+    for (const { where, opName, field, direction } of orderClaims) {
+      const output = operations[opName]?.output;
+      if (!output || typeof output !== 'object' || !(output.list || output.paginated)) continue;
+      const claimed = /^desc/i.test(direction ?? '') ? 'desc' : direction ? 'asc' : null;
+      const [declaredField, declaredDir = 'asc'] = String(output.sort?.[0] ?? '').split(':');
+      if (output.sort?.length && declaredField === field && (claimed === null || claimed === declaredDir)) continue;
+      if (orderReported.has(opName)) continue;
+      orderReported.add(opName);
+      warn(
+        'CHK-SCEN-ORDER-UNDECLARED',
+        `validation-scenarios.md: ${where} afirma que ${opName} ordena por '${field}'${claimed ? ` ${claimed}` : ''}, y su output ` +
+          (output.sort?.length
+            ? `declara sort: [${output.sort.join(', ')}]`
+            : 'no declara sort (el contrato es el orden por id)') +
+          ` — el servidor seguirá al YAML. Declara ese orden en output.sort, o corrige el escenario`
+      );
     }
 
     // (5) Un Then que afirma en la RESPUESTA un dato que el YAML no pone en ningún contrato.
@@ -5630,11 +5754,13 @@ function conventionsSection(text) {
   const body = conventionsText(text);
   if (body === null) return null;
   const out = {};
-  for (const para of body.split(/\n\s*\n/)) {
-    const head = (/^\*\*([^*]+)\*\*/.exec(para.trim()) ?? [])[1] ?? '';
+  // Dos formas en uso: párrafos que empiezan en negrita y una lista (`- **Ausencia vs nulo**: …`).
+  for (const para of body.split(/\n\s*\n|\n(?=\s*[-*]\s+\*\*)/)) {
+    const head = (/^(?:[-*]\s+)?\*\*([^*]+)\*\*/.exec(para.trim()) ?? [])[1] ?? '';
     if (/ausencia|nulos?/i.test(head)) out.ausencia = para;
     else if (/n[uú]meros|decimal|escala/i.test(head)) out.numeros = para;
     else if (/may[uú]sculas|acentos|texto|colaci[oó]n/i.test(head)) out.texto = para;
+    else if (/orden/i.test(head)) out.orden = para;
   }
   return out;
 }
