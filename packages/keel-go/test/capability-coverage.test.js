@@ -30,9 +30,6 @@ const MOTIVOS = {
 };
 
 const EXCEPCIONES = new Map([
-  ['security.authentication.scoping.reads', { motivo: MOTIVOS.pendiente, porque: 'keel-go genera la lectura acotada (DSL 2.27) desde el incremento 4 de PLAN-DSL-227-LECTURA-ACOTADA.md y la miden db-check, doc-check y go-check --read-scope sobre los diseños derivados de keel-core/test/helpers/read-scope-designs.js, pero ninguna fixture la declara con lecturas hasta el incremento 7; entonces esta fila se borra.' }],
-  ['security.authentication.scoping.readMiss', { motivo: MOTIVOS.pendiente, porque: 'keel-go genera la lectura acotada (DSL 2.27) desde el incremento 4 de PLAN-DSL-227-LECTURA-ACOTADA.md y la miden db-check, doc-check y go-check --read-scope sobre los diseños derivados de keel-core/test/helpers/read-scope-designs.js, pero ninguna fixture la declara con lecturas hasta el incremento 7; entonces esta fila se borra.' }],
-  ['security.ownership.*.readMiss', { motivo: MOTIVOS.pendiente, porque: 'keel-go genera la lectura acotada (DSL 2.27) desde el incremento 4 de PLAN-DSL-227-LECTURA-ACOTADA.md y la miden db-check, doc-check y go-check --read-scope sobre los diseños derivados de keel-core/test/helpers/read-scope-designs.js, pero ninguna fixture la declara con lecturas hasta el incremento 7; entonces esta fila se borra.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     { motivo: MOTIVOS.informativo, porque: 'solo entra en el comentario del mensaje de la suscripción (messaging.js): ningún lector depende de él.' }

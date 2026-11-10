@@ -20,13 +20,11 @@ import {
   claimValues,
   isOptionalAuth,
   optionalAuthFrontierErrors,
-  optionalAuthPendingErrors,
   optionalIdentityNote,
   optionalAuthRules,
   ownedBy,
   readScopeFor,
   readScopeNote,
-  readScopePendingErrors,
   readScopesOfLayers,
   READ_SCOPE_KEY_CASES,
   readScopeCacheKey,
@@ -127,12 +125,9 @@ test('conduit-optional: las cuatro reglas optional, como un requisito propio del
 
 test('las fixtures: las preguntas abiertas son exactamente las aceptadas en su decisions.yaml', () => {
   const undecided = (fixture) => readScopesOfLayers(designOf(fixture).layers).undecided.map((u) => u.scope);
-  assert.deepEqual(undecided('asset-vault'), [
-    'security.authentication.scoping.reads.getAsset',
-    'security.authentication.scoping.reads.listAssets'
-  ]);
-  // getOrder está en ownership.operations (la nota de la 2.23): no es una pregunta abierta.
-  assert.deepEqual(undecided('shop-api'), ['security.ownership.OrderMain.reads.listOrders']);
+  // Desde el incremento 7 las lecturas de asset-vault y shop-api van en reads: no queda ninguna pregunta abierta.
+  assert.deepEqual(undecided('asset-vault'), []);
+  assert.deepEqual(undecided('shop-api'), []);
   // reads: [] cierra el bloque entero: listFeed devuelve artículos y no se acota por su autor.
   assert.deepEqual(undecided('conduit'), []);
 });
@@ -192,15 +187,6 @@ test('la nota del handler dice el predicado, los exentos y el desenlace de una f
   const list = readScopeNote(listAssets, { scope: 'query.readScope()', call: 'assets.listAssets(…, scope)' });
   assert.doesNotMatch(list, /loadScoped/);
   assert.equal(readScopeNote(null, { scope: 's', call: 'c' }), null);
-});
-
-test('la frontera: reads con lecturas y optional se rechazan hasta el incremento; reads: [] no pide nada', () => {
-  const vault = derived('vault-scoped').layers;
-  const [message] = readScopePendingErrors(vault, 'keel-go', 4);
-  assert.match(message, /^security\.authentication\.scoping\.reads \(lectura acotada, DSL 2\.27\): keel-go todavía no la genera — llega en el incremento 4/);
-  assert.deepEqual(readScopePendingErrors(designOf('conduit').layers, 'keel-go', 4), [], 'reads: [] no se rechaza');
-  assert.equal(optionalAuthPendingErrors(derived('conduit-optional').layers, 'keel-nest', 5).length, 4);
-  assert.deepEqual(optionalAuthPendingErrors(designOf('conduit').layers, 'keel-nest', 5), []);
 });
 
 test('level: optional en el modelo: la operación lo sabe, la regla de cierre cuenta y la cadena la deja pasar como pública', () => {

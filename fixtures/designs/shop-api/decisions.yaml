@@ -8,8 +8,8 @@
 #   - Alcance de listOrders (gaps clase 9, listOrders): un cliente (customer) solo ve los pedidos cuyo buyerEmail es el
 #     suyo; empleados (employee) y vendedores (manager) ven todos; una identidad autenticada sin ninguno de los tres
 #     roles recibe 403 ACCESS_DENIED. Está en security.access.rules.listOrders (roles: customer, employee, manager) y en
-#     las rules de listOrders. La acotación del cliente a sus pedidos no cabe en ownership (que acota una operación por
-#     un campo del recurso, no un listado según el rol) y sigue siendo la frontera F-ORDER-LIST-SCOPING de provenance.yaml.
+#     las rules de listOrders. La acotación del cliente a sus pedidos era la frontera F-ORDER-LIST-SCOPING; desde la
+#     v0.1.1 (DSL 2.27) la declara security.ownership.OrderMain.reads y la pone el adaptador generado.
 #   - Orden de las guardas: fijado para todas las operaciones (segunda vuelta del cierre, REV-USECASES-GUARD-ORDER,
 #     2026-10-23); ya no se acepta sin fijar en createProduct ni en updateProduct. Cuando una petición incumple varias a la
 #     vez sale la primera de esta lista: la forma de la petición (400), la propiedad (403), la existencia (404, con
@@ -28,14 +28,14 @@
 #     La autoría (authorship all) de esa carga es el valor centinela del generador (no nace de una petición).
 #   - CORS: el servicio se consume desde el navegador; security.cors lo declara y los orígenes permitidos son
 #     configuración de despliegue, no del diseño.
-#   - getProfile lleva el email en la ruta además de en el token: es la ruta del legacy (/profile/{email}) y el servicio
-#     comprueba que coincide con la identidad (PROFILE_NOT_OWNED). Aceptado.
+#   - getProfile lleva el email en la ruta además de en el token: es la ruta del legacy (/profile/{email}). Desde la
+#     v0.1.1 la carga va acotada (security.ownership.User.reads) y el perfil de otro es 404 PROFILE_NOT_FOUND, igual que
+#     un email sin perfil (fix-profile-other-404, 2026-11-10). Aceptado.
 #   - updateProfile y el bloqueo optimista: la edición concurrente del mismo perfil la frena el bloqueo optimista de la raíz
 #     (409 CONCURRENT_MODIFICATION); el cliente reintenta. El perfil no lleva versión en el input.
 decisions:
   - { id: OBL-IDEM-KEY-REQUIRED, scope: use-cases, since: 0.1.0, reason: "La cabecera Idempotency-Key del checkout es opcional (structural-3-2): el legacy acepta un checkout sin ella y exigirla rompería a todo cliente actual. Sin cabecera el checkout se ejecuta sin deduplicar, igual que hoy." }
   - { id: OBL-IDEM-RACE-CODE, scope: use-cases, since: 0.1.0, reason: "Se acepta IDEMPOTENCY_KEY_IN_PROGRESS (409) como contrato público de dos checkouts simultáneos con la misma clave; el legacy no tenía idempotencia y no hay un code propio que conservar." }
-  - { id: OBL-READ-SCOPE-UNDECIDED, scope: security.ownership.OrderMain.reads.listOrders, since: 0.1.0, reason: "La acotación del cliente a sus pedidos sigue siendo la frontera F-ORDER-LIST-SCOPING de provenance.yaml. Pasa a reads (con getOrder, readMiss forbidden y los roles exentos) en el incremento 7 de PLAN-DSL-227-LECTURA-ACOTADA.md, cuando los cuatro generadores la emitan: hasta entonces la rechazarían en su frontera." }
   - { id: OBL-API-CONCURRENCY-UNDECIDED, scope: api.concurrency.updateProduct, since: 0.1.0, reason: "Diseño recuperado: el legacy no responde ETag ni lee If-Match, y la paridad compara contra él; la edición del vendedor la arbitra el bloqueo optimista de la raíz (409). Pedir If-Match rompería a todo cliente actual." }
   - { id: OBL-IDEM-REUSE-CODE, scope: use-cases, since: 0.1.0, reason: "Se acepta IDEMPOTENCY_KEY_REUSED (409) como contrato público de la misma clave con un cuerpo distinto; el legacy no tenía idempotencia y no hay un code propio que conservar." }
 

@@ -95,4 +95,42 @@ flows:
   - { id: FL-SEL-020, sha256: 6ea56c948f7ae6bfda188af30498e35eb65e66293a23d76f36ab372ba808307c }
   - { id: FL-SEL-021, sha256: e8023866449976a6604dd8d2087a8d57cd3b9c8e1d10e14539440112c2a105e9 }
   - { id: FL-SEL-022, sha256: 09279a80b99f9ac51e9083e4913830a6b926e0487096a13c9d50c07a9a7912c2 }
-findings: []
+findings:
+  - flow: FL-ACC-009
+    step: "Then 1"
+    kind: other
+    artifact: security.ownership.User.readMiss
+    evidence: >-
+      v0.1.1 (DSL 2.27) pasa getProfile a ownership.reads con readMiss not-found: la carga acotada por email de un perfil
+      que existe pero no es del llamante es el 404 PROFILE_NOT_FOUND, y PROFILE_NOT_OWNED deja de estar entre los errores
+      de getProfile. El Then 1 afirmaba 403 PROFILE_NOT_OWNED, que el diseño ya no produce.
+    proposal: >-
+      Escenario: el Then 1 y el paso del keel-flow afirman 404 PROFILE_NOT_FOUND (fix-profile-other-404). Careado a mano
+      contra la v0.1.1 al migrar las fixtures (incremento 7 de PLAN-DSL-227-LECTURA-ACOTADA.md), con el presupuesto agotado.
+    resolution: scenario
+    sealAfter: eeb7861856348308738b7efcfc69fac382c0af5f71a8b2989cde889c55d00566
+  - flow: FL-ACC-017
+    step: "Then 2"
+    kind: other
+    artifact: security.ownership.User.readMiss
+    evidence: >-
+      Lo mismo que FL-ACC-009: n2 (bob@x.io) pide el perfil de Bob@x.io, que existe y no es suyo porque User.email compara
+      tal cual; con readMiss not-found es 404 PROFILE_NOT_FOUND, no el 403 que afirmaba el Then 2.
+    proposal: >-
+      Escenario: el Then 2 afirma 404 PROFILE_NOT_FOUND. Careado a mano contra la v0.1.1, con el presupuesto agotado.
+    resolution: scenario
+    sealAfter: f5c02b6f5e49acd34e978cffd63f7e6b5e1cd2fbcca9c5a62bc480539dea6663
+  - flow: FL-ORD-005
+    step: "Then 1"
+    kind: count
+    artifact: security.ownership.OrderMain.reads
+    evidence: >-
+      v0.1.1 (DSL 2.27) acota listOrders en el adaptador (ownership.reads, con employee y manager exentos), también el
+      conteo de la página, y retira la frontera F-ORDER-LIST-SCOPING: el flujo deja de ser frontier y pasa a keep (el legacy
+      ya lo hacía, R0-044). El Then 1 afirmaba totalElements 3 sin decir que los 5 de customer2 son los que faltan, y
+      CHK-SCEN-READ-SCOPE-UNCOVERED no lo reconocía como la prueba de la fila ajena.
+    proposal: >-
+      Escenario: Caracterización keep y el Then 1 dice que los pedidos de customer2 no aparecen ni cuentan en el total.
+      Careado a mano contra la v0.1.1, con el presupuesto agotado.
+    resolution: scenario
+    sealAfter: d3457e558263378213121e89fbf39330815fd918d22160a53453fc9c614ba233

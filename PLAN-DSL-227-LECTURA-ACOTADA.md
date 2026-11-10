@@ -329,7 +329,7 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
 | 4. keel-go | hecho (2026-11-10) | `db-check` (PostgreSQL y MySQL) y `doc-check` en los cuatro sujetos, con los seis sabotajes del adaptador cada uno en exactamente sus casos y en ninguna otra sonda; RS-9 a RS-11 en las pruebas emitidas con `go-check --read-scope`, falsadas con `rs-cache-key` y `rs-empty-is-all`; gofmt, vet, staticcheck y pruebas emitidas de los cuatro; suite de keel-go |
 | 5. `level: optional` | hecho (2026-11-10) | OA-1 a OA-3 sobre `conduit-optional` en los cuatro, con `oa-degrade` y `oa-ignore-token` cada uno en exactamente su caso: keel-spring `read-scope-check` (MockMvc con la cadena generada, 12/12); keel-nest `test/optional-auth.test.js` (el hook, las reglas, el JWT y el lector emitidos sobre Fastify); keel-dotnet la prueba emitida `OptionalAuthTests` con `cs-check --fixtures --only=conduit-optional`; keel-go `optional_auth_test.go` con `go-check --read-scope` (8/8); suites de los cinco paquetes |
 | 6. derivados y docs | hecho (2026-11-10) | `keel-nest/test/openapi.test.js` sobre los cinco sujetos: el mismo documento en los cuatro generadores, OA-4, el 404/403 de `readMiss` y el listado acotado, sin deriva para `CHK-DOCS-OPENAPI-DRIFT`; falsado (sin la alternativa vacía cae solo `conduit-optional`; sin la cláusula de `not-found`, solo `conduit-scoped`); `redocly lint` válido en los cinco (los avisos, los mismos que en las fixtures base); suites de los cinco paquetes |
-| 7. fixtures y keel-recover | pendiente | |
+| 7. fixtures y keel-recover | hecho, salvo la paridad en vivo (2026-11-10) | `keel validate --ready` de las tres fixtures con los mismos criterios que antes (asset-vault 12/13, el que falta es DESIGN.md fuera de un workspace; shop-api y conduit con los mismos rojos previos y FL-ART-009 sin ejecutar); `design-matrix` 206 falsados, ninguno `sin-mutacion`; suites de los seis paquetes; `db-check` de keel-go sobre shop-api en PostgreSQL y MySQL, con `rank-sort` cayendo en `TestOrderMain_SortsByOrderStatusRank`. La paridad de shop-api y conduit necesita los servicios regenerados en marcha: pasa al inc. 8 |
 | 8. corridas de control | pendiente | |
 
 ## Para retomar
@@ -492,6 +492,36 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
   `check-conditional-writes.sh` (una fila por lectura, la llamada fuera de un comentario). (2) La guía de Postman nombra
   `token_<rol>-other` para el segundo llamante; `auth-collection.json` es del equipo y no lo comprueba nadie
   (`CHK-DOCS-POSTMAN-DRIFT` no la mira).
-- Siguiente: **incremento 7, fixtures y keel-recover** (`asset-vault`, `shop-api` y `conduit` con `reads`/`optional`, se
-  borran las filas de `capability-coverage` y las aceptaciones de `OBL-READ-SCOPE-UNDECIDED`, y la paridad de `shop-api` y
-  `conduit` sin las dos fronteras).
+- **Incremento 7 hecho (2026-11-10), salvo la paridad en vivo.** Las tres fixtures declaran 2.27:
+  - `asset-vault` v1.1.3: `scoping.reads: [getAsset, listAssets]` con `readMiss: forbidden` (el 403 ASSET_OUT_OF_SCOPE de
+    siempre); fuera las dos aceptaciones de `OBL-READ-SCOPE-UNDECIDED` y la prosa de las rules. FL-AST-003-D y FL-AST-004-B
+    nombran la operación (sin eso `CHK-SCEN-READ-SCOPE-UNCOVERED` no los reconocía) y FL-AST-004-B afirma `totalElements` 0.
+    DESIGN.md al día.
+  - `shop-api` v0.1.1: `OrderMain.reads: [getOrder, listOrders]` con `forbidden` y los roles exentos; `User.reads:
+    [getProfile]` con **`not-found`** (decisión del usuario: con `forbidden`, el 404 de un email sin perfil frente al 403 de
+    uno con perfil revela qué emails tienen cuenta; antes el diseño daba 403 a todo email ajeno). Fix nuevo
+    `fix-profile-other-404`; FL-ACC-009 y FL-ACC-017 pasan a 404 PROFILE_NOT_FOUND. Fuera `callerEmail` de las tres
+    lecturas (T6), la frontera `F-ORDER-LIST-SCOPING` (FL-ORD-005 pasa a `keep`) y su aceptación.
+  - `conduit` v0.1.2: `optional` en `getProfile`, `listArticles`, `getArticle` y `listComments`, con `callerSubject` opcional;
+    fuera la frontera `F-OPTIONAL-AUTH`. Flujo nuevo FL-ART-009 (`keep`, R1-014): con token, las cuatro lecturas se
+    personalizan. En el laboratorio (`keel-recover-lab/realworld-node`): el flujo en `characterization.yaml` y fuera la
+    diferencia declarada de `favorited|following` en `contract-map.yaml`.
+  - Versiones de **patch** en las tres: un minor caduca `review.yaml`, el careo y las decisiones aceptadas, y reafirmarlas
+    era decidir por el diseñador. El careo de asset-vault y shop-api tenía el presupuesto agotado: los flujos tocados se
+    carearon a mano y se resellaron con hallazgos `resolution: scenario` + `sealAfter`.
+  - `CHK-SECURITY-OWNERSHIP-QUERY-IN-OPERATIONS` (error) con su mutación; la de `ERROR-UNDECLARED` usa ahora un command.
+  - Fuera: las filas de `capability-coverage` de los cuatro, `readScopePendingErrors` y `optionalAuthPendingErrors` (ya no
+    las llamaba nadie). Los sujetos de `read-scope-designs.js` siguen midiendo lo mismo: `shop-scoped` repone
+    `PROFILE_NOT_OWNED` para seguir con `forbidden` en las dos raíces, y `conduit-scoped` devuelve a `public` las otras
+    tres lecturas.
+  - Las pruebas de los generadores que daban por hecho las fixtures de antes (la nota de la 2.23 en `getOrder`/`getProfile`,
+    `CallerScope.Covers` en la ficha de asset-vault, conduit sin `optional`, la clave de caché sin el scope) parten ahora de
+    la fixture con el cambio deshecho, o afirman lo nuevo. El lector de la `SecurityConfig` de keel-spring
+    (`normalizeRequirement`) lee `optional` como `public`: en la cadena los dos son `permitAll`.
+  - **Medido**: en keel-go la sonda del orden por rango (`rankProbes` de `db-check`, el sabotaje `rank-sort`) solo existía
+    con `List(pageable)`, y OrderMain de shop-api ya no lo tiene: el orden por la posición del enum de `listOrders` se quedaba
+    sin medir. La sonda va ahora por la página acotada con `UnrestrictedScope()`.
+- **Pendiente del inc. 7, al 8**: `keel-recover characterize` de los flujos tocados (FL-ART-009, FL-ORD-005 y FL-ACC-009) contra los sandboxes, y `keel-recover
+  parity` de shop-api y conduit contra los servicios regenerados: sin las dos fronteras, las diferencias de `favorited` y
+  `following` y la del listado tienen que salir iguales.
+- Siguiente: **incremento 8, corridas de control** (las lanza el usuario).

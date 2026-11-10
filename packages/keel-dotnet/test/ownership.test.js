@@ -45,10 +45,11 @@ test('la nota sale en las operaciones que nombra ownership y solo en esas, en lo
       plan(generator, name)
         .flatMap((file) => [...flat(file.content).matchAll(NOTE)].map((m) => `${path.basename(file.path).replace(/[-.].*$/, '').toLowerCase()}:${m[1]}`))
         .sort();
-    // shop-api (recuperado de un legacy) acota por propietario el pedido y el perfil, con exentos en el pedido.
+    // shop-api (recuperado de un legacy) acota por propietario el pedido y el perfil, con exentos en el pedido. Sus
+    // lecturas van en reads desde la v0.1.1 (DSL 2.27): se acotan en el adaptador y no llevan esta nota.
     const EXPECTED = {
       conduit: ['deletearticlecommandhandler:Article', 'deletecommentcommandhandler:Comment', 'updatearticlecommandhandler:Article'],
-      'shop-api': ['cancelordercommandhandler:OrderMain', 'getorderqueryhandler:OrderMain', 'getprofilequeryhandler:User', 'updateprofilecommandhandler:User']
+      'shop-api': ['cancelordercommandhandler:OrderMain', 'updateprofilecommandhandler:User']
     };
     const expected = EXPECTED[name] ?? [];
     assert.deepEqual(noted(planDotnet), expected, `${name} (keel-dotnet)`);

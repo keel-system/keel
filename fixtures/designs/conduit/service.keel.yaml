@@ -1,7 +1,7 @@
 keel: "2.27"
 service:
   name: conduit
-  version: 0.1.1
+  version: 0.1.2
   description: >-
     Blog social (RealWorld/Conduit) recuperado del legacy node-express-realworld-example-app @ ba04b70:
     perfiles, artículos con etiquetas y favoritos, seguidores y comentarios. Identidad delegada en un

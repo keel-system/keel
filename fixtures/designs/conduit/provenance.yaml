@@ -233,7 +233,7 @@ elements:
       - security.access.rules.listComments
       - security.access.rules.listTags
     level: measured
-    evidence: postman round-0 'Articles' sin auth; R1-014
+    evidence: "postman round-0 'Articles' sin auth; R1-014 (con token, las cuatro primeras personalizan favorited y following: level optional desde la v0.1.2, FL-ART-009)"
 fixes:
   - id: fix-unique-409
     legacy: responde 422 a un username repetido
@@ -281,10 +281,6 @@ fixes:
       why: "es de arquitectura (dónde vive la credencial), no una respuesta distinta de una operación: la cubren los actores de contract-map.yaml en los dos lados (decidido por el humano el 2026-10-22)"
       proof: "decisión fix-identity; recordings/round-1/R1-001.json; FL-PRF-008 (mark new)"
 frontier:
-  - id: F-OPTIONAL-AUTH
-    what: lecturas públicas que con token personalizan la respuesta (favorited, author.following)
-    why: el DSL no tiene un nivel de acceso «opcional»; las lecturas quedan public y sin personalizar
-    evidence: R1-014 (RW-SEC-03)
   - id: F-METHOD-OVERRIDE
     what: X-HTTP-Method-Override
     why: no es contrato expresable ni deseable; se elimina (fix)

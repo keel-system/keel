@@ -159,7 +159,12 @@ test('la identidad del llamante y el alcance leen el principal de la petición e
 });
 
 test('el handler que declara el error del alcance recibe CallerScope inyectado, con su nota', () => {
-  const { files, model } = planFixture('asset-vault', { ...ASSET_VAULT, stack: { auth: 'keycloak' } });
+  // Sin reads (la v1.1.2 de la fixture): una lectura en reads se acota en el adaptador y su handler no compara.
+  const withoutReads = (layers) => {
+    delete layers.security.authentication.scoping.reads;
+    delete layers.security.authentication.scoping.readMiss;
+  };
+  const { files, model } = planFixture('asset-vault', { ...ASSET_VAULT, mutate: withoutReads, stack: { auth: 'keycloak' } });
   const scoped = model.services.flatMap((service) => service.operations).filter((op) => op.errors.includes(model.security.scoping.error));
   assert.ok(scoped.length > 0);
   const tree = byPath(files);

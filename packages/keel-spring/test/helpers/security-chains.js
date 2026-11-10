@@ -39,4 +39,9 @@ export function springChains(files) {
 }
 
 /** Una exigencia comparable: su clase y sus authorities ordenadas. */
-export const normalizeRequirement = (requirement) => ({ kind: requirement.kind, authorities: [...(requirement.authorities ?? [])].sort() });
+// `optional` (DSL 2.27) es `permitAll` en la cadena, igual que `public`: el bearer inválido ya es 401 en toda ruta, y lo que
+// cambia es el estampado de la identidad, que no es de la cadena. Desde la SecurityConfig de keel-spring no se distinguen.
+export const normalizeRequirement = (requirement) => ({
+  kind: requirement.kind === 'optional' ? 'public' : requirement.kind,
+  authorities: [...(requirement.authorities ?? [])].sort()
+});

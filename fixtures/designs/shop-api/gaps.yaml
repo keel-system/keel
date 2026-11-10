@@ -413,7 +413,7 @@ findings:
     what: "Alcance del listado: cliente solo lo suyo, resto de roles todo."
     severity: gap
     state: decided
-    reason: "El alcance está declarado en security (access.rules.listOrders exige customer, employee o manager, así que una identidad sin ninguno recibe 403 ACCESS_DENIED), en las rules de listOrders y en decisions.yaml; el cliente solo ve sus pedidos y empleados y vendedores ven todos, que sigue siendo la frontera F-ORDER-LIST-SCOPING porque ownership no acota listados (FL-ORD-005, FL-ORD-024). Decidido por el humano el 2026-10-23 (hueco 10)."
+    reason: "El alcance está declarado en security (access.rules.listOrders exige customer, employee o manager, así que una identidad sin ninguno recibe 403 ACCESS_DENIED), en las rules de listOrders y en decisions.yaml; el cliente solo ve sus pedidos y empleados y vendedores ven todos, desde la v0.1.1 por security.ownership.OrderMain.reads (DSL 2.27), que sustituye a la frontera F-ORDER-LIST-SCOPING (FL-ORD-005, FL-ORD-024). Decidido por el humano el 2026-10-23 (hueco 10)."
   - class: 9
     unit: updateProduct
     what: "El permiso product:edit autorizaba a crear por upsert."

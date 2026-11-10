@@ -56,8 +56,15 @@ test('lo reciben todos los handlers, también el listado que filtra sin declarar
 });
 
 test('la nota del handler dice lo mismo que la de keel-dotnet, con los nombres de Go', () => {
-  const handler = content(files, 'internal/application/get_asset_query_handler.go').replace(/\n\t\/\/\s+/g, ' ');
-  const dotnet = plan('asset-vault', planDotnet).files.find((file) => /GetAssetQueryHandler\.cs$/.test(file.path)).content.replace(/\n\s*\/\/\s+/g, ' ');
+  // Sin reads (la v1.1.2 de la fixture): una lectura en reads se acota en el adaptador y su nota es otra.
+  const withoutReads = () => {
+    const loaded = design('asset-vault');
+    delete loaded.layers.security.authentication.scoping.reads;
+    delete loaded.layers.security.authentication.scoping.readMiss;
+    return loaded;
+  };
+  const handler = content(planService({ ...withoutReads(), workspace: FIXTURES_DIR, stack: STACK }).files, 'internal/application/get_asset_query_handler.go').replace(/\n\t\/\/\s+/g, ' ');
+  const dotnet = planDotnet({ ...withoutReads(), workspace: FIXTURES_DIR, stack: STACK }).files.find((file) => /GetAssetQueryHandler\.cs$/.test(file.path)).content.replace(/\n\s*\/\/\s+/g, ' ');
   assert.match(dotnet, /comprueba callerScope\.Covers\(<Owner\.code del recurso>\) donde lo digan las reglas; fuera del alcance, ASSET_OUT_OF_SCOPE\. Exentos: vault-admin, cliente rendering-service\./);
   assert.match(handler, /comprueba h\.callerScope\.Covers\(ctx, <Owner\.code del recurso>\) donde lo digan las reglas; fuera del alcance, ASSET_OUT_OF_SCOPE\. Exentos: vault-admin, cliente rendering-service\./);
   assert.match(handler, /filtra por h\.callerScope\.ScopedValues\(ctx\) con un finder acotado que escribes tú/);

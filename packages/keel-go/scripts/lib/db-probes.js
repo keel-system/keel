@@ -45,6 +45,8 @@ import { keyFinders, naturalKeyBatchFinder, repositoryArgs } from '../../src/sca
 import { usesGoOutbox, usesGoProcessedEvents } from '../../src/scaffold/messaging.js';
 import { messagingProbes } from './messaging-probes.js';
 import { finderProbes } from './finder-probes.js';
+import { findersOf } from '@keel-system/keel-core/gen/query-filters';
+import { filterTypeName, finderMethod, hasFilter } from '../../src/scaffold/finders.js';
 import { purgeProbes } from './purge-probes.js';
 import { claimProbes } from './claim-probes.js';
 import { replicaProbes } from './replica-probes.js';
@@ -1122,7 +1124,16 @@ function childOrderProbes(model, root, { repo, id, members }) {
 }
 
 function rankProbes(model, root, { repo }) {
-  if (!listsUnscoped(model, root)) return [];
+  // Sin List(pageable) —todos sus listados acotados (DSL 2.27)—, por la página acotada sin filtro obligatorio, que honra
+  // pageable.Sort con el MISMO mapa de orden, y sin restringir el alcance.
+  const scopedPage = listsUnscoped(model, root)
+    ? null
+    : findersOf(model, root.name).find((finder) => finder.scope && finder.result === 'page' && !finder.criteria.some((criterion) => criterion.required));
+  if (!listsUnscoped(model, root) && !scopedPage) return [];
+  const listCall = (pageable) =>
+    scopedPage
+      ? `${repo}.${finderMethod(scopedPage)}(${['ctx', ...(hasFilter(scopedPage) ? [`domain.${filterTypeName(scopedPage)}{}`] : []), pageable, 'domain.UnrestrictedScope()'].join(', ')})`
+      : `${repo}.List(ctx, ${pageable})`;
   const name = root.name;
   const ranked = persistedMembers(model, root).filter((member) => member.kind === 'scalar' && member.ranked);
   return ranked.map((member) => {
@@ -1143,7 +1154,7 @@ function rankProbes(model, root, { repo }) {
 			t.Fatalf("Save: %v", err)
 		}
 	}
-	page, err := ${repo}.List(ctx, domain.Pageable{Size: 1000, Sort: []domain.SortOrder{{Property: ${goString(member.ranked.name)}, Direction: domain.SortAsc}}})
+	page, err := ${listCall(`domain.Pageable{Size: 1000, Sort: []domain.SortOrder{{Property: ${goString(member.ranked.name)}, Direction: domain.SortAsc}}}`)}
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}

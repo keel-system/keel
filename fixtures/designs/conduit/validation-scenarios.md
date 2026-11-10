@@ -1,7 +1,7 @@
 # conduit — Escenarios de validación
 
 > Escenarios de aceptación ejecutables (Given/When/Then) derivados de
-> specs/conduit v0.1.1. **Renderizados** desde
+> specs/conduit v0.1.2. **Renderizados** desde
 > `realworld-node/characterization.yaml` del laboratorio de keel-recover (no se editan a mano). Son
 > escenarios de **caracterización**: cada flujo dice si conserva el comportamiento del legacy (`keep`) o lo
 > corrige a propósito (`fix`, con su decisión). Los pasos de cada flujo van en su bloque `keel-flow`:
@@ -24,22 +24,22 @@
 
 | Operación | Flujos | Superficie |
 |-----------|--------|------------|
-| registerProfile | FL-PRF-002, FL-PRF-003, FL-PRF-008, FL-PRF-001, FL-PRF-004, FL-PRF-005, FL-PRF-006, FL-FOL-001, FL-FOL-002, FL-FOL-003, FL-FOL-004, FL-ART-001, FL-ART-002, FL-ART-004, FL-ART-005, FL-ART-006, FL-ART-007, FL-ART-008, FL-FAV-001, FL-FAV-002, FL-COM-001, FL-COM-002, FL-COM-003, FL-TAG-001 | usuarios |
+| registerProfile | FL-PRF-002, FL-PRF-003, FL-PRF-008, FL-PRF-001, FL-PRF-004, FL-PRF-005, FL-PRF-006, FL-FOL-001, FL-FOL-002, FL-FOL-003, FL-FOL-004, FL-ART-001, FL-ART-002, FL-ART-004, FL-ART-005, FL-ART-006, FL-ART-007, FL-ART-008, FL-ART-009, FL-FAV-001, FL-FAV-002, FL-COM-001, FL-COM-002, FL-COM-003, FL-TAG-001 | usuarios |
 | getMyProfile | FL-PRF-001, FL-PRF-004, FL-AUT-001, FL-AUT-002 | usuarios |
 | updateMyProfile | FL-PRF-004 | usuarios |
-| getProfile | FL-PRF-005, FL-PRF-006, FL-PRF-007 | usuarios |
-| followProfile | FL-FOL-001, FL-FOL-002, FL-FOL-003, FL-FOL-004 | usuarios |
+| getProfile | FL-PRF-005, FL-PRF-006, FL-PRF-007, FL-ART-009 | usuarios |
+| followProfile | FL-FOL-001, FL-FOL-002, FL-FOL-003, FL-FOL-004, FL-ART-009 | usuarios |
 | unfollowProfile | FL-FOL-001 | usuarios |
-| listArticles | FL-ART-006, FL-ART-007, FL-ART-008, FL-FAV-001 | usuarios |
+| listArticles | FL-ART-006, FL-ART-007, FL-ART-008, FL-FAV-001, FL-ART-009 | usuarios |
 | listFeed | FL-FOL-003, FL-FOL-004 | usuarios |
-| createArticle | FL-FOL-003, FL-FOL-004, FL-ART-001, FL-ART-002, FL-ART-004, FL-ART-005, FL-ART-006, FL-ART-007, FL-ART-008, FL-FAV-001, FL-FAV-002, FL-COM-001, FL-COM-002, FL-COM-003, FL-TAG-001, FL-AUT-001, FL-AUT-002 | usuarios |
-| getArticle | FL-ART-001, FL-ART-003, FL-ART-004, FL-ART-005, FL-FAV-002 | usuarios |
+| createArticle | FL-FOL-003, FL-FOL-004, FL-ART-001, FL-ART-002, FL-ART-004, FL-ART-005, FL-ART-006, FL-ART-007, FL-ART-008, FL-ART-009, FL-FAV-001, FL-FAV-002, FL-COM-001, FL-COM-002, FL-COM-003, FL-TAG-001, FL-AUT-001, FL-AUT-002 | usuarios |
+| getArticle | FL-ART-001, FL-ART-003, FL-ART-004, FL-ART-005, FL-FAV-002, FL-ART-009 | usuarios |
 | updateArticle | FL-ART-002, FL-ART-004 | usuarios |
 | deleteArticle | FL-ART-004, FL-ART-005 | usuarios |
-| favoriteArticle | FL-FAV-001, FL-FAV-002 | usuarios |
+| favoriteArticle | FL-FAV-001, FL-FAV-002, FL-ART-009 | usuarios |
 | unfavoriteArticle | FL-FAV-001 | usuarios |
-| listComments | FL-COM-001, FL-COM-002 | usuarios |
-| addComment | FL-COM-001, FL-COM-002, FL-COM-003 | usuarios |
+| listComments | FL-COM-001, FL-COM-002, FL-ART-009 | usuarios |
+| addComment | FL-COM-001, FL-COM-002, FL-COM-003, FL-ART-009 | usuarios |
 | deleteComment | FL-COM-002, FL-COM-003 | usuarios |
 | listTags | FL-TAG-001 | usuarios |
 
@@ -821,6 +821,115 @@ steps:
       status: ok
       body:
         totalElements: 0
+```
+
+#### FL-ART-009: con token, las lecturas se personalizan para su titular
+
+**Caracterización**: `keep`. Evidencia: round-1/R1-014.
+
+**Given**: `alice` con perfil, `bob` con perfil; ningún artículo.
+
+**When** (1): `createArticle` — `POST /api/v1/articles` con el token de `alice` y `{"title":"art uno"}`.
+
+**When** (2): `favoriteArticle` — `POST /api/v1/articles/<slug>/favorite` con el token de `bob`.
+
+**When** (3): `followProfile` — `POST /api/v1/profiles/alice/follow` con el token de `bob`.
+
+**When** (4): `addComment` — `POST /api/v1/articles/<slug>/comments` con el token de `alice` y `{"body":"uno"}`.
+
+**When** (5): `getArticle` — `GET /api/v1/articles/<slug>` con el token de `bob`.
+**Then**:
+1. Status `200`.
+2. `favorited` es `true`.
+3. `author.following` es `true`.
+
+**When** (6): `getArticle` — `GET /api/v1/articles/<slug>` sin token.
+**Then**:
+1. Status `200`.
+2. `favorited` es `false`.
+3. `author.following` es `false`.
+
+**When** (7): `listArticles` — `GET /api/v1/articles` con el token de `bob`.
+**Then**:
+1. Status `200`.
+2. `items.0.favorited` es `true`.
+3. `items.0.author.following` es `true`.
+
+**When** (8): `getProfile` — `GET /api/v1/profiles/alice` con el token de `bob`.
+**Then**:
+1. Status `200`.
+2. `following` es `true`.
+
+**When** (9): `listComments` — `GET /api/v1/articles/<slug>/comments` con el token de `bob`.
+**Then**:
+1. Status `200`.
+2. `items.0.author.following` es `true`.
+
+```keel-flow
+actors:
+  alice: profile
+  bob: profile
+steps:
+  - op: createArticle
+    as: alice
+    input:
+      title: art uno
+    save:
+      slug: slug
+  - op: favoriteArticle
+    as: bob
+    params:
+      slug: "{{slug}}"
+  - op: followProfile
+    as: bob
+    params:
+      username: alice
+  - op: addComment
+    as: alice
+    params:
+      slug: "{{slug}}"
+    input:
+      body: uno
+  - op: getArticle
+    as: bob
+    params:
+      slug: "{{slug}}"
+    expect:
+      status: ok
+      body:
+        favorited: true
+        author.following: true
+  - op: getArticle
+    params:
+      slug: "{{slug}}"
+    expect:
+      status: ok
+      body:
+        favorited: false
+        author.following: false
+  - op: listArticles
+    as: bob
+    expect:
+      status: ok
+      body:
+        items.0.favorited: true
+        items.0.author.following: true
+  - op: getProfile
+    as: bob
+    params:
+      username: alice
+    expect:
+      status: ok
+      body:
+        following: true
+  - op: listComments
+    as: bob
+    params:
+      slug: "{{slug}}"
+    expect:
+      status: ok
+      body:
+        items.0.author.following: true
 ```
 
 ## Favoritos

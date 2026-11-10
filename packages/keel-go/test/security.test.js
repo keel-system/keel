@@ -73,12 +73,13 @@ test('shop-api: los roles exentos de una regla de propiedad llegan al handler po
   assert.match(content(files, 'internal/application/caller_roles.go'), /HasRole\(ctx context\.Context, role string\) bool/);
   assert.match(content(files, 'internal/platform/security/principal.go'), /func \(CallerRoles\) HasRole/);
   assert.match(content(files, 'cmd/server/main.go'), /CallerRoles: +security\.CallerRoles\{\},/);
-  const handler = content(files, 'internal/application/get_order_query_handler.go');
+  // La escritura: la lectura del pedido va en reads desde la v0.1.1 de la fixture, y sus exentos los aplica el borde.
+  const handler = content(files, 'internal/application/cancel_order_command_handler.go');
   assert.match(handler, /callerRoles CallerRoles/);
   assert.match(handler, /h\.callerRoles\.HasRole\(ctx, "employee"\) \|\| h\.callerRoles\.HasRole\(ctx, "manager"\)/);
   assert.match(handler, /ORDER_NOT_OWNED \(403\)/);
   // Una operación sin exentos no lo recibe.
-  assert.doesNotMatch(content(files, 'internal/application/get_profile_query_handler.go'), /callerRoles/);
+  assert.doesNotMatch(content(files, 'internal/application/update_profile_command_handler.go'), /callerRoles/);
   // CORS con la semántica del DefaultCorsProcessor, antes de autenticar.
   assert.ok(content(files, 'internal/platform/security/cors.go'));
   assert.match(content(files, 'internal/httpapi/security.go'), /switch a\.cors\.Apply\(w, r\)/);

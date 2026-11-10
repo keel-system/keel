@@ -2,19 +2,6 @@
 # storage, autoría, idempotencia de petición y de consumo, compensación con llamada de vuelta,
 # reconciliación y clúster sobre Mongo) y está CERRADA: `keel validate --ready` sale en verde.
 decisions:
-  - id: OBL-READ-SCOPE-UNDECIDED
-    scope: security.authentication.scoping.reads.getAsset
-    reason: >-
-      La ficha se acota hoy en el handler (su rule y el 403 ASSET_OUT_OF_SCOPE, como en la 2.21). Pasa a reads con
-      readMiss en el incremento 7 de PLAN-DSL-227-LECTURA-ACOTADA.md, cuando los cuatro generadores la emitan: hasta
-      entonces la rechazarían en su frontera.
-    since: 1.1.2
-  - id: OBL-READ-SCOPE-UNDECIDED
-    scope: security.authentication.scoping.reads.listAssets
-    reason: >-
-      El listado se acota hoy en el handler (su rule). Pasa a reads en el incremento 7 de PLAN-DSL-227-LECTURA-ACOTADA.md,
-      cuando los cuatro generadores lo emitan: hasta entonces lo rechazarían en su frontera.
-    since: 1.1.2
   - id: CHK-MSG-RETRY-AFTER-CLAIM
     scope: messaging.subscriptions.ThumbnailDelivered
     reason: >-

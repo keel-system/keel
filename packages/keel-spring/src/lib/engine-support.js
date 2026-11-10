@@ -826,7 +826,7 @@ const SPRING_MECHANISMS = {
       'src/scaffold/read-scope.js · src/scaffold/finders.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js · src/scaffold/controllers.js · src/scaffold/services.js · src/scaffold/cache.js',
     why: 'Un listado que no suma el predicado, un total que cuenta filas ajenas, una carga por id que no compara, un claim ausente leído como «todo» o un camino que compara el campo equivocado compilan igual de bien y responden 200: su fallo es una fuga de datos (OWASP API1), no un error, y ningún escenario de un solo llamante lo ve.',
     parity: {
-      skip: 'ningún par byte a byte declara reads hasta el incremento 7 de PLAN-DSL-227-LECTURA-ACOTADA.md: los sujetos son los diseños derivados de keel-core/test/helpers/read-scope-designs.js (vault-scoped y vault-scoped-mongo, el mismo diseño salvo el modelo; shop-scoped y conduit-scoped), que medirán también keel-nest, keel-dotnet y keel-go; la forma la fija test/read-scope.test.js',
+      skip: 'ningún par byte a byte declara reads (asset-vault, documental, y shop-api, relacional, los declaran desde el incremento 7 de PLAN-DSL-227-LECTURA-ACOTADA.md, pero ninguna tiene gemelo con el otro modelo): los sujetos son los diseños derivados de keel-core/test/helpers/read-scope-designs.js (vault-scoped y vault-scoped-mongo, el mismo diseño salvo el modelo; shop-scoped y conduit-scoped), que medirán también keel-nest, keel-dotnet y keel-go; la forma la fija test/read-scope.test.js',
       test: 'test/read-scope.test.js'
     },
     coverage: {

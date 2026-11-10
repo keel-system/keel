@@ -80,10 +80,11 @@ findings:
     note: >-
       Alcance por recurso: getOrder y cancelOrder lo cubren con security.ownership (OrderMain.buyerEmail,
       exemptRoles employee y manager) y getProfile/updateProfile con ownership de User.email. El listado de
-      listOrders (un cliente solo ve los suyos) no cabe en ownership; el diseno lo declara en las rules de listOrders,
+      listOrders (un cliente solo ve los suyos) no cabia en ownership; el diseno lo declaraba en las rules de listOrders,
       en security.access.rules.listOrders (roles customer, employee, manager, 403 ACCESS_DENIED al resto), como
       frontera F-ORDER-LIST-SCOPING en provenance.yaml y en el bloque de decisions.yaml. Se acepta por esa
-      explicacion en prosa. El carrito se acota por callerEmail, tomado del claim email.
+      explicacion en prosa. El carrito se acota por callerEmail, tomado del claim email. v0.1.1 (DSL 2.27): getOrder,
+      listOrders y getProfile pasan a ownership.reads, sin la frontera.
   - id: REV-PERSIST-MISSING-INDEX
     scope: persistence
     verdict: ok

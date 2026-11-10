@@ -3,7 +3,7 @@ keel: "2.27"
 
 service:
   name: shop-api
-  version: 0.1.0
+  version: 0.1.1
   description: Tienda en línea de libros, ropa y comida - catálogo de productos, registro y perfil de clientes, carrito, pedidos y mantenimiento del catálogo por vendedores.
   domain: commerce
 

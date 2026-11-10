@@ -1,10 +1,11 @@
 # asset-vault — Documento de diseño
 
-> specs/asset-vault v1.1.2. Diseño cerrado al preparar la corrida del incremento 13 de keel-nest
+> specs/asset-vault v1.1.3. Diseño cerrado al preparar la corrida del incremento 13 de keel-nest
 > (2026-10-09); las decisiones las tomó quien la preparaba, por delegación del diseñador. La v1.1.1
 > (2026-10-11) cierra el único hueco real de esa corrida: qué pasa con un motivo de cuarentena largo. La v1.1.2
 > (DSL 2.21) declara dos cosas que solo estaban en prosa: el cliente máquina exento del alcance y que el barrido
-> despacha la cuarentena.
+> despacha la cuarentena. La v1.1.3 (DSL 2.27) acota por construcción la ficha y el listado
+> (`scoping.reads`): el filtro y el 403 los pone el adaptador generado, no una regla en prosa.
 
 ## 1. Propósito y alcance
 
@@ -58,7 +59,8 @@ Desde `published` también se pasa a `quarantined`. `quarantined` es terminal.
 - Alcance por recurso: el claim `vaults` enumera los `Owner.code` visibles y se compara distinguiendo mayúsculas.
   - `vault-admin` está exento, y es el único que escribe.
   - El cliente máquina `rendering-service` lee cualquier ficha.
-  - El listado se filtra por alcance.
+  - El listado se filtra por alcance, y su total cuenta solo lo visible.
+  - La ficha de otro propietario es `403 ASSET_OUT_OF_SCOPE` (`readMiss: forbidden`), también si estaba cacheada: la caché la guarda por alcance.
 
 ## 4. Qué hace
 

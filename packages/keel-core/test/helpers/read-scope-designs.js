@@ -1,8 +1,9 @@
 // Los diseños DERIVADOS con los que se mide la lectura acotada (DSL 2.27, `reads` y `readMiss`) y la identidad opcional
 // (`level: optional`) en los cuatro generadores, el mismo patrón que finder-designs.js y conditional-write-designs.js.
 //
-// Ninguna fixture declara `reads` ni `optional` hasta el incremento 7 de PLAN-DSL-227-LECTURA-ACOTADA.md: los
-// generadores que todavía no lo emiten la rechazarían. Hasta entonces, estos son los sujetos.
+// Desde el incremento 7 de PLAN-DSL-227-LECTURA-ACOTADA.md las fixtures asset-vault, shop-api y conduit declaran `reads`
+// y `optional`; los sujetos siguen siendo estos porque añaden lo que las fixtures no tienen: la rama relacional de
+// asset-vault, un filtro sumado al predicado (RS-7), el dueño por un camino de relación (RS-8) y `not-found`.
 
 const required = { level: 'required' };
 
@@ -44,16 +45,23 @@ export const READ_SCOPE_DESIGNS = [
       Object.assign(OrderMain, { operations: ['cancelOrder'], reads: ['getOrder', 'listOrders'], readMiss: 'forbidden' });
       Object.assign(User, { operations: ['updateProfile'], reads: ['getProfile'], readMiss: 'forbidden' });
       const operations = layers['use-cases'].operations;
-      delete operations.listOrders.input.fields.callerEmail;
-      delete operations.getOrder.input.fields.callerEmail;
-      delete operations.getProfile.input.fields.callerEmail;
+      // Ya fuera de la fixture desde su v0.1.1; el delete queda por si un diseño anterior lo trae.
+      for (const name of ['listOrders', 'getOrder', 'getProfile']) delete operations[name].input?.fields?.callerEmail;
       // Un filtro opcional en el listado acotado: el predicado tiene que SUMARSE a los criterios del finder (RS-7).
-      operations.listOrders.input.fields.orderStatus = { type: 'OrderStatus', description: 'Solo los pedidos en este estado.' };
+      operations.listOrders.input = { fields: { orderStatus: { type: 'OrderStatus', description: 'Solo los pedidos en este estado.' } } };
       operations.getOrder.errors = [
         ...(operations.getOrder.errors ?? []),
         ...((operations.getOrder.errors ?? []).some((e) => e.code === 'ORDER_NOT_OWNED')
           ? []
           : [{ code: 'ORDER_NOT_OWNED', when: 'El pedido no es del usuario autenticado.', http: 403 }])
+      ];
+      // La fixture acota el perfil con not-found desde su v0.1.1 (fix-profile-other-404); el sujeto mide forbidden en las
+      // dos raíces, como cuando se escribieron las sondas de los cuatro generadores.
+      operations.getProfile.errors = [
+        ...(operations.getProfile.errors ?? []),
+        ...((operations.getProfile.errors ?? []).some((e) => e.code === 'PROFILE_NOT_OWNED')
+          ? []
+          : [{ code: 'PROFILE_NOT_OWNED', when: 'El perfil pedido no es el del usuario autenticado.', http: 403 }])
       ];
     }
   },
@@ -66,6 +74,9 @@ export const READ_SCOPE_DESIGNS = [
     mutate(layers) {
       Object.assign(layers.security.ownership.Article, { reads: ['getArticle'], readMiss: 'not-found' });
       layers.security.access.rules.getArticle = { ...required };
+      // La fixture lee optional desde su v0.1.2: este sujeto mide solo la lectura acotada, y la identidad opcional es de
+      // conduit-optional.
+      for (const opName of ['getProfile', 'listArticles', 'listComments']) layers.security.access.rules[opName] = { level: 'public' };
     }
   },
   // R3c: las cuatro lecturas que el legacy personaliza si llega un token, con el campo de la identidad opcional.

@@ -78,7 +78,10 @@ test('cada caché se llama, dura y compone su clave como dice keel-core, igual q
       const block = emitted.slice(emitted.indexOf(`var ${cacheVar(cache.operation)} = `));
       assert.match(block, new RegExp(`^\\tName: ${JSON.stringify(cache.cacheName)},$`, 'm'), `${name}: ${cache.operation}`);
       assert.match(block, new RegExp(`^\\tTTL: +${cache.ttlSeconds} \\* time\\.Second,$`, 'm'), `${name}: ${cache.operation}`);
-      assert.match(block, new RegExp(`return CacheKey\\(${cache.keyFields.map((field) => `\\w+\\.${goExported(field)}`).join(', ')}\\)`), `${name}: la clave`);
+      // Una lectura acotada (DSL 2.27) lleva además el alcance del llamante en la clave (D6).
+      const scoped = operations(model).find((operation) => operation.name === cache.operation)?.readScope;
+      const keyParts = [...cache.keyFields.map((field) => `\\w+\\.${goExported(field)}`), ...(scoped ? ['\\w+\\.ReadScope\\.CacheKey\\(\\)'] : [])];
+      assert.match(block, new RegExp(`return CacheKey\\(${keyParts.join(', ')}\\)`), `${name}: la clave`);
       assert.ok(nest.includes(`name: '${cache.cacheName}'`), `${name}: keel-nest nombra igual ${cache.operation}`);
       assert.ok(dotnet.includes(`new(${JSON.stringify(cache.cacheName)}, ${cache.ttlSeconds}, `), `${name}: keel-dotnet nombra igual ${cache.operation}`);
     }
@@ -118,7 +121,7 @@ test('el handler que cachea recibe la caché y la nota con GetOrLoad; los demás
       if (cached.has(operation.name)) {
         assert.match(handler, /\toperationCache \*OperationCache\n/, `${name}: ${operation.name}`);
         assert.ok(handler.includes(`GetOrLoad(ctx, h.operationCache, ${cacheVar(operation.name)}, query, func(ctx context.Context)`), `${name}: la nota de ${operation.name}`);
-        assert.ok(handler.includes('Lo que depende de QUIÉN llama'), `${name}: la nota de keel-core`);
+        assert.ok(handler.includes(operation.readScope ? 'La clave lleva el scope del llamante' : 'Lo que depende de QUIÉN llama'), `${name}: la nota de keel-core`);
       } else {
         assert.doesNotMatch(handler, /operationCache/, `${name}: ${operation.name}`);
       }

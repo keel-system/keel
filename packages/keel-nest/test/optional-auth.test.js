@@ -127,7 +127,12 @@ test('conduit-optional: la regla concede, el controlador estampa resolveOptional
 });
 
 test('sin ninguna operación optional, CallerIdentity no gana resolveOptional', () => {
-  const { files } = planFixture('conduit');
+  // La fixture lee optional desde su v0.1.2: se vuelve a la v0.1.1, con las cuatro lecturas public.
+  const { files } = planFixture('conduit', {
+    mutate: (layers) => {
+      for (const opName of ['getProfile', 'listArticles', 'getArticle', 'listComments']) layers.security.access.rules[opName] = { level: 'public' };
+    }
+  });
   const identity = files.find((file) => file.path === `${SECURITY}/caller-identity.ts`).content;
   assert.doesNotMatch(identity, /resolveOptional/);
 });

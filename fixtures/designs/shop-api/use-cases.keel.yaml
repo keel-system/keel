@@ -70,11 +70,11 @@ operations:
     input:
       fields:
         email:       { type: string, required: true, constraints: { minLength: 1, maxLength: 255 } }
-        callerEmail: { type: string, required: true }
     output: { entity: User }
+    rules:
+      - El perfil de otro usuario responde igual que un email sin perfil, para no revelar qué emails tienen cuenta (security.ownership.User.readMiss).
     errors:
-      - { code: PROFILE_NOT_OWNED, when: El perfil pedido no es el del usuario autenticado., http: 403 }
-      - { code: PROFILE_NOT_FOUND, when: El usuario autenticado todavía no tiene perfil porque no ha llamado a register., http: 404 }
+      - { code: PROFILE_NOT_FOUND, when: "No hay un perfil con ese email que sea del usuario autenticado - el suyo todavía no existe porque no ha llamado a register, o el email es de otro.", http: 404 }
 
   updateProfile:
     description: Actualiza nombre, teléfono y dirección del propio usuario.
@@ -219,12 +219,10 @@ operations:
   listOrders:
     description: Lista los pedidos - los propios si quien pregunta es cliente, todos si es empleado o vendedor.
     kind: query
-    input:
-      fields:
-        callerEmail: { type: string, required: true }
+    input: "void"
     output: { entity: OrderMain, paginated: true, sort: [orderStatus:asc, createTime:desc, orderId:asc] }
     rules:
-      - Un cliente (rol customer) solo ve los pedidos cuyo buyerEmail es el suyo; empleados (employee) y vendedores (manager) ven todos (frontera F-ORDER-LIST-SCOPING).
+      - Un cliente (rol customer) solo ve los pedidos cuyo buyerEmail es el suyo, y el total cuenta solo esos; empleados (employee) y vendedores (manager) ven todos (security.ownership.OrderMain.reads).
       - Una identidad autenticada que no tiene ninguno de los tres roles conocidos (customer, employee, manager) no ve ningún pedido - responde 403 ACCESS_DENIED.
       - orderStatus ordena por la posición de declaración del enum (NEW, FINISHED, CANCELED) y no por su nombre; dos pedidos con el mismo estado y el mismo createTime se ordenan por orderId ascendente, así que el orden es total.
       - Las líneas (products) de cada pedido salen ordenadas por id ascendente.
@@ -235,10 +233,9 @@ operations:
     input:
       fields:
         orderId:     { type: long, required: true }
-        callerEmail: { type: string, required: true }
     output: { entity: OrderMain }
     rules:
-      - Un cliente solo puede ver un pedido cuyo buyerEmail es el suyo; empleados y vendedores ven cualquiera.
+      - Un cliente solo puede ver un pedido cuyo buyerEmail es el suyo; empleados y vendedores ven cualquiera (security.ownership.OrderMain.reads). Un pedido que no existe es 404 y el de otro, 403.
       - Las líneas (products) salen ordenadas por id ascendente.
     errors:
       - { code: ORDER_NOT_FOUND, when: No existe un pedido con ese id., http: 404 }

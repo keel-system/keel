@@ -1945,6 +1945,14 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           error('CHK-SECURITY-OWNERSHIP-OPERATION', `${where}.operations: '${opName}' no es una operación de use-cases`);
           continue;
         }
+        // Desde la 2.27 una lectura se acota en el adaptador (`reads`): en `operations` solo quedaría la nota del handler,
+        // que ni filtra un listado ni impide un findById que se la salte.
+        if (op.kind === 'query') {
+          error('CHK-SECURITY-OWNERSHIP-QUERY-IN-OPERATIONS',
+            `${where}.operations: '${opName}' es una query — una lectura va en ownership.${entityName}.reads, donde el adaptador generado la acota por construcción (con su readMiss); operations es para las escrituras`
+          );
+          continue;
+        }
         const inputFields = op.input && typeof op.input === 'object' ? (op.input.fields ?? {}) : {};
         if (callerField && !Object.hasOwn(inputFields, callerField)) {
           error('CHK-SECURITY-OWNERSHIP-CALLER-NOT-RECEIVED',

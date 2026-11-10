@@ -1,7 +1,7 @@
 # shop-api — Escenarios de validación
 
 > Escenarios de aceptación ejecutables (Given/When/Then) derivados de
-> specs/shop-api v0.1.0. Contrato de validación para la fase de generación.
+> specs/shop-api v0.1.1. Contrato de validación para la fase de generación.
 > Son escenarios de CARACTERIZACIÓN: cada flujo sale de una grabación de legacy/shop-api y lleva su marca (`keep`, `fix`, `frontier` o `new`).
 > Reescritos el 2026-10-23 tras aplicar las respuestas de legacy/shop-api/questions.yaml.
 > Revisados el 2026-10-23 al cerrar el diseño: los cuerpos de mergeCart y modifyCartItem son objetos del diseño, la ausencia de un
@@ -426,14 +426,14 @@ steps:
         active: true
 ```
 
-### FL-ACC-009: el perfil de otro usuario es un 403
+### FL-ACC-009: el perfil de otro usuario es un 404
 
-**Caracterización**: `fix` (`fix-ownership-403`: el legacy responde 400 sin cuerpo; recordings/round-0/R0-022.json y R0-023.json).
+**Caracterización**: `fix` (`fix-profile-other-404`: el legacy responde 400 sin cuerpo; recordings/round-0/R0-022.json y R0-023.json).
 
 **Given**: Los usuarios `customer1` y `manager1` del seed.
 **When**: `getProfile` con `email` `manager1@email.com` como `c1`, y sin credencial.
 **Then**:
-1. Como `c1` falla con status 403 y `code: PROFILE_NOT_OWNED` (el legacy responde 400).
+1. Como `c1` falla con status 404 y `code: PROFILE_NOT_FOUND` (el legacy responde 400): el perfil de otro responde igual que un email sin perfil, así que no se sabe si existe.
 2. Sin credencial falla con status 401 en los dos lados.
 
 ```keel-flow
@@ -444,8 +444,8 @@ steps:
     params: { email: manager1@email.com }
     legacy: { status: 400 }
     expect:
-      status: 403
-      code: PROFILE_NOT_OWNED
+      status: 404
+      code: PROFILE_NOT_FOUND
   - op: getProfile
     params: { email: manager1@email.com }
     expect:
@@ -642,7 +642,7 @@ steps:
 **When**: `register` como `n1` y como `n2`, y luego `getProfile` de `Bob@x.io` como `n2`.
 **Then**:
 1. Los dos altas responden 200 y crean dos perfiles distintos: `Bob@x.io` y `bob@x.io` no son el mismo email, así que no hay `EMAIL_ALREADY_EXISTS`.
-2. `getProfile` de `Bob@x.io` como `n2` falla con status 403 y `code: PROFILE_NOT_OWNED`: la propiedad también compara tal cual.
+2. `getProfile` de `Bob@x.io` como `n2` falla con status 404 y `code: PROFILE_NOT_FOUND`: la propiedad también compara tal cual, y el perfil de otro no es suyo.
 
 ## Carrito
 
@@ -1339,12 +1339,12 @@ steps:
 
 ### FL-ORD-005: un cliente solo ve sus pedidos
 
-**Caracterización**: `frontier` (`F-ORDER-LIST-SCOPING`: recordings/round-0/R0-044.json).
+**Caracterización**: `keep`. Evidencia: recordings/round-0/R0-044.json.
 
 **Given**: Los 3 pedidos de `customer1` y los 5 de `customer2` del seed.
 **When**: `listOrders` como `c1` con `size` 2.
 **Then**:
-1. Status 200 y `totalElements` 3.
+1. Status 200 y `totalElements` 3: los 5 pedidos de `customer2` no aparecen ni cuentan en el total.
 2. `items` tiene 2 elementos: `2147483648` y `2147483642`, ambos con `buyerEmail` `customer1@email.com`.
 
 ```keel-flow

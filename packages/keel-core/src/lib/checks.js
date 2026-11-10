@@ -161,6 +161,13 @@ export const CHECKS = {
     title: 'una regla de propiedad nombra una operación que use-cases no declara',
     closes: 'nombrar en ownership.<E>.operations operaciones de use-cases'
   },
+  'CHK-SECURITY-OWNERSHIP-QUERY-IN-OPERATIONS': {
+    layer: 'security',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una query listada en ownership.<E>.operations en vez de en reads',
+    closes: 'mover la query a ownership.<E>.reads (con su readMiss)'
+  },
   'CHK-SECURITY-OWNERSHIP-CALLER-NOT-RECEIVED': {
     layer: 'security',
     severity: 'error',

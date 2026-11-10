@@ -463,22 +463,6 @@ export function readMissMessage(model, read) {
 // ─── La frontera de los generadores ───────────────────────────────────────────────────────────────────────────────
 
 /**
- * El rechazo de un generador que todavía no genera la lectura acotada, con el mismo mensaje en los cuatro: llega por
- * incrementos (PLAN-DSL-227-LECTURA-ACOTADA.md) y, hasta el suyo, se rechaza entera, nunca a medias. Vacío si ningún
- * bloque declara `reads` con lecturas (una lista vacía no pide nada que generar).
- */
-export function readScopePendingErrors(layers, generator, increment) {
-  return scopeBlocks(layers)
-    .filter((block) => (block.declared ?? []).length > 0)
-    .map(
-      (block) =>
-        `${block.where}.reads (lectura acotada, DSL 2.27): ${generator} todavía no la genera — llega en el incremento ` +
-        `${increment} de PLAN-DSL-227-LECTURA-ACOTADA.md, y una lectura acotada a medias (el listado filtrado y su total no, ` +
-        'o la caché compartida entre llamantes) filtraría las filas que promete esconder. Quita reads para generar este diseño.'
-    );
-}
-
-/**
  * Lo que ningún generador genera de `level: optional`, con el mismo mensaje en los cuatro: una identidad que no es un
  * token. Con una clave de API, una clave equivocada no se distingue de no traer ninguna (el filtro la deja pasar sin
  * autenticar), así que la ruta la trataría como anónima: justo lo que OA-3 prohíbe.
@@ -491,16 +475,6 @@ export function optionalAuthFrontierErrors(layers, generator) {
       `security: access.${rule.default ? 'default' : `rules.${rule.operation}`} (level: optional, DSL 2.27): ${generator} solo ` +
       `la genera sobre una identidad de token (oidc o jwt), y el protocolo es ${protocol} — una credencial inválida no se ` +
       'distinguiría de no traer ninguna, y la operación la trataría como anónima en vez de responder 401. Decláralo public o required.'
-  );
-}
-
-/** Lo mismo para `level: optional` (R3c, incremento 5 en los cuatro). */
-export function optionalAuthPendingErrors(layers, generator, increment) {
-  return optionalAuthRules(layers).map(
-    (rule) =>
-      `security: access.${rule.default ? 'default' : `rules.${rule.operation}`} (level: optional, DSL 2.27): ${generator} todavía ` +
-      `no lo genera — llega en el incremento ${increment} de PLAN-DSL-227-LECTURA-ACOTADA.md, y a medias trataría un token ` +
-      'inválido como anónimo. Decláralo public o required para generar este diseño.'
   );
 }
 

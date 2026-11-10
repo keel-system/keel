@@ -60,6 +60,8 @@ test('conduit-optional: permitAll, el lector estampa optionalCallerIdentity y la
   }
   // Sin ninguna operación optional, ni la función ni la prueba.
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'conduit'));
+  // La v0.1.1 de la fixture, con las cuatro lecturas public.
+  for (const opName of ['getProfile', 'listArticles', 'getArticle', 'listComments']) layers.security.access.rules[opName] = { level: 'public' };
   const conduit = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: null }).files;
   assert.doesNotMatch(conduit.find((file) => file.path === 'internal/httpapi/security.go').content, /optionalCallerIdentity/);
   assert.ok(!conduit.some((file) => file.path.endsWith('optional_auth_test.go')));

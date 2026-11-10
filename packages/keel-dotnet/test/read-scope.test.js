@@ -44,8 +44,14 @@ test('conduit-optional: PermitAll, el lector estampa ResolveOptional() y la prue
   assert.match(content('UseCases/GetArticleQueryHandler.cs'), /Identidad opcional \(level: optional, DSL 2\.27\): sin token, query\.CallerSubject llega null/);
   const tests = content('OptionalAuthTests.cs');
   for (const id of ['OA1', 'OA2', 'OA3']) assert.match(tests, new RegExp(`public async Task ${id}_GetArticle_`));
-  // Sin ninguna operación optional, ni ResolveOptional ni la prueba.
-  const conduit = (await planFixture('conduit')).files;
+  // Sin ninguna operación optional (la v0.1.1 de la fixture, con las cuatro lecturas public), ni ResolveOptional ni la prueba.
+  const conduit = (
+    await planFixture('conduit', {
+      mutate: (_manifest, layers) => {
+        for (const opName of ['getProfile', 'listArticles', 'getArticle', 'listComments']) layers.security.access.rules[opName] = { level: 'public' };
+      }
+    })
+  ).files;
   assert.doesNotMatch(conduit.find((file) => file.path.endsWith('Security/CallerIdentity.cs')).content, /ResolveOptional/);
   assert.ok(!conduit.some((file) => file.path.endsWith('OptionalAuthTests.cs')));
 });

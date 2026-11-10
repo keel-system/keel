@@ -53,7 +53,8 @@ test('keel-spring: el handler de la operación cacheada recibe el puerto; la cla
   assert.ok(handler.includes('private final OperationCache operationCache;'), handler);
   assert.ok(handler.replace(/\n\s*\/\/\s*/g, ' ').includes('operationCache.getOrLoad(CachedOperations.GET_ASSET_CACHE, CachedOperations.getAssetKey(query), () -> ...)'), handler);
   const cached = read('/CachedOperations.java');
-  assert.ok(cached.includes('public static String getAssetKey(GetAssetQuery query) {\n        return key(query.id());'), cached);
+  // La ficha va en scoping.reads desde la v1.1.3: la clave lleva también el alcance del llamante (D6 de la 2.27).
+  assert.ok(cached.includes('public static String getAssetKey(GetAssetQuery query) {\n        return key(query.id(), query.readScope().cacheKey());'), cached);
   const adapter = read('/RedisOperationCache.java');
   assert.ok(adapter.includes('new TypeReference<GetAssetResponseDto>() {}'), adapter);
   assert.ok(adapter.includes('if (value != null && cacheable.test(value)) {'), adapter);

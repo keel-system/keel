@@ -53,12 +53,13 @@ operations:
     kind: query
     input:
       fields:
+        callerSubject: { type: string, description: Claim sub del token si llega uno. }
         username: { type: Username, required: true }
     output: { entity: Profile, exclude: [subject] }
     rules:
       - El username se busca en minúsculas.
       - Un perfil sin image devuelve la imagen por defecto https://static.productionready.io/images/smiley-cyrus.jpg.
-      - "following sale false, sin personalizar aunque llegue un token (frontera F-OPTIONAL-AUTH)."
+      - "following se calcula para el titular del token si llega uno; sin token, o con el de alguien sin perfil, sale false (level: optional)."
     errors:
       - { code: PROFILE_NOT_FOUND, when: No existe un perfil con ese username., http: 404 }
 
@@ -101,6 +102,7 @@ operations:
     kind: query
     input:
       fields:
+        callerSubject: { type: string, description: Claim sub del token si llega uno. }
         tag: { type: string, description: Solo artículos con esta etiqueta. }
         author: { type: Username, description: Solo artículos de este username. }
         favorited: { type: Username, description: Solo artículos que este username tiene en favoritos. }
@@ -110,7 +112,7 @@ operations:
       - Un favorited que no existe deja la lista vacía.
       - Los filtros presentes se combinan con AND.
       - "El author sin image devuelve la imagen por defecto https://static.productionready.io/images/smiley-cyrus.jpg (PARITY v0.1.0: salía null)."
-      - "Lectura pública: favorited y author.following salen false, sin personalizar aunque llegue un token (frontera F-OPTIONAL-AUTH)."
+      - "favorited y author.following se calculan para el titular del token si llega uno; sin token, o con el de alguien sin perfil, salen false (level: optional)."
 
   listFeed:
     description: Artículos de los perfiles que sigue el titular del token.
@@ -150,11 +152,12 @@ operations:
     kind: query
     input:
       fields:
+        callerSubject: { type: string, description: Claim sub del token si llega uno. }
         slug: { type: string, required: true }
     output: { entity: Article, embed: [author], exclude: [comments] }
     rules:
       - "El author sin image devuelve la imagen por defecto https://static.productionready.io/images/smiley-cyrus.jpg (PARITY v0.1.0: salía null)."
-      - "Lectura pública: favorited y author.following salen false, sin personalizar aunque llegue un token (frontera F-OPTIONAL-AUTH)."
+      - "favorited y author.following se calculan para el titular del token si llega uno; sin token, o con el de alguien sin perfil, salen false (level: optional)."
     errors:
       - { code: ARTICLE_NOT_FOUND, when: No existe un artículo con ese slug., http: 404 }
 
@@ -236,11 +239,12 @@ operations:
     kind: query
     input:
       fields:
+        callerSubject: { type: string, description: Claim sub del token si llega uno. }
         slug: { type: string, required: true }
     output: { entity: Comment, list: true, sort: [createdAt:desc], embed: [author] }
     rules:
       - "El author sin image devuelve la imagen por defecto https://static.productionready.io/images/smiley-cyrus.jpg (PARITY v0.1.0: salía null)."
-      - "Lectura pública: author.following sale false, sin personalizar aunque llegue un token (frontera F-OPTIONAL-AUTH)."
+      - "author.following se calcula para el titular del token si llega uno; sin token, o con el de alguien sin perfil, sale false (level: optional)."
     errors:
       - { code: ARTICLE_NOT_FOUND, when: No existe un artículo con ese slug., http: 404 }
 

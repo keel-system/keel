@@ -68,8 +68,7 @@ operations:
     output:
       entity: Asset
     rules:
-      - Primero se carga el archivo (ASSET_NOT_FOUND) y se comprueba el alcance (ASSET_OUT_OF_SCOPE); solo después se pide la miniatura al renderizador.
-      - El alcance del solicitante sobre el Owner.code del archivo se comprueba en cada respuesta, también en la que sale de la caché.
+      - Primero se carga el archivo dentro del alcance (ASSET_NOT_FOUND y después ASSET_OUT_OF_SCOPE, security.authentication.scoping.reads); solo después se pide la miniatura al renderizador.
       - El alcance es de los custodios - el cliente máquina rendering-service lee cualquier ficha (security.authentication.scoping.exemptClients), porque genera las miniaturas de todos los propietarios.
       - La ficha degradada (thumbnail nulo porque el renderizador no contestó) se sirve pero no se cachea.
     errors:
@@ -101,7 +100,7 @@ operations:
     kind: query
     input: "void"
     rules:
-      - El listado se acota al alcance del solicitante - solo los archivos de los propietarios que enumera su claim vaults (vault-admin ve todos). Un cliente máquina no lo alcanza - su regla de acceso no admite tokens de servicio.
+      - Un cliente máquina no lo alcanza - su regla de acceso no admite tokens de servicio. El alcance (solo los archivos de los propietarios que enumera el claim vaults; vault-admin ve todos) lo declara security.authentication.scoping.reads.
     output:
       entity: Asset
       paginated: true

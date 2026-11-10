@@ -53,6 +53,8 @@ test('conduit-optional: la ruta entra como pública y el controller estampa la i
 
 test('sin ninguna operación optional, CallerIdentity no gana resolveOptional', () => {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'conduit'));
+  // La fixture lee optional desde su v0.1.2: se vuelve a la v0.1.1, con las cuatro lecturas public.
+  for (const opName of ['getProfile', 'listArticles', 'getArticle', 'listComments']) layers.security.access.rules[opName] = { level: 'public' };
   const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: 'mongodb' } });
   assert.doesNotMatch(fileOf(files, '/security/CallerIdentity.java'), /resolveOptional/);
 });

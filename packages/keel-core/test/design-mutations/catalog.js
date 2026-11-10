@@ -2059,10 +2059,19 @@ export const MUTATIONS = [
     title: 'una operación acotada por propiedad no declara el error: su 403 ya no lo produce nada',
     extends: 'ownership',
     mutate: (d) => {
-      d.layers.security.ownership.Ticket.operations.push('getTicket');
-      d.layers['use-cases'].operations.getTicket.input.fields.callerSubject = { type: 'string', required: true, description: 'Claim sub del token.' };
+      d.layers.security.ownership.Ticket.operations.push('archiveQueue');
+      d.layers['use-cases'].operations.archiveQueue.input.fields.callerSubject = { type: 'string', required: true, description: 'Claim sub del token.' };
     },
     expect: ['CHK-SECURITY-OWNERSHIP-ERROR-UNDECLARED']
+  },
+  {
+    id: 'M-SECURITY-OWNERSHIP-QUERY-IN-OPERATIONS',
+    title: 'una lectura acotada por propiedad con la nota de la 2.23 en vez de en reads',
+    extends: 'ownership',
+    mutate: (d) => {
+      d.layers.security.ownership.Ticket.operations.push('getTicket');
+    },
+    expect: ['CHK-SECURITY-OWNERSHIP-QUERY-IN-OPERATIONS']
   },
   {
     id: 'M-SECURITY-OWNERSHIP-EXEMPT-ROLE-UNKNOWN',

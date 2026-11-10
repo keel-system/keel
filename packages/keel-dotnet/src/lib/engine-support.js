@@ -753,7 +753,7 @@ export const MECHANISMS = {
   },
   'read-scope': {
     parity: {
-      skip: 'ningún par byte a byte declara reads hasta el incremento 7 de PLAN-DSL-227-LECTURA-ACOTADA.md: los sujetos son los diseños de keel-core/test/helpers/read-scope-designs.js (vault-scoped y vault-scoped-mongo, el mismo diseño salvo el modelo; shop-scoped y conduit-scoped), los MISMOS que miden keel-spring y keel-nest; test/read-scope.test.js fija la forma y la compara con los dos',
+      skip: 'ningún par byte a byte declara reads (asset-vault, documental, y shop-api, relacional, los declaran desde el incremento 7 de PLAN-DSL-227-LECTURA-ACOTADA.md, pero ninguna tiene gemelo con el otro modelo): los sujetos son los diseños de keel-core/test/helpers/read-scope-designs.js (vault-scoped y vault-scoped-mongo, el mismo diseño salvo el modelo; shop-scoped y conduit-scoped), los MISMOS que miden keel-spring y keel-nest; test/read-scope.test.js fija la forma y la compara con los dos',
       test: 'test/read-scope.test.js'
     },
     emitter: 'src/scaffold/read-scope.js (ReadScope, ReadScopes, Scoped y ReadScopeFilter, LoadScoped y la prueba emitida ReadScopeTests) · finders.js · repositories.js y document-repositories.js · endpoints.js · services.js · cache.js',

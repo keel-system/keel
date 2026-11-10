@@ -9,16 +9,26 @@ authentication:
     field: callerEmail
     from: { source: claim, name: email }
 
+# Las lecturas se acotan por construcción (DSL 2.27): el adaptador generado suma «owner = callerEmail» al listado, a su
+# total y a la carga, y los roles exentos no reciben filtro. Las escrituras siguen como en la 2.23 (nota del handler).
 ownership:
   OrderMain:
     owner: buyerEmail
     error: ORDER_NOT_OWNED
-    operations: [getOrder, cancelOrder]
+    operations: [cancelOrder]
+    # El cliente solo ve sus pedidos; empleados y vendedores, todos. Era la frontera F-ORDER-LIST-SCOPING.
+    reads: [getOrder, listOrders]
+    # El pedido de otro es 403, como decidió el cierre (fix-ownership-403); uno que no existe, 404.
+    readMiss: forbidden
     exemptRoles: [employee, manager]
   User:
     owner: email
     error: PROFILE_NOT_OWNED
-    operations: [getProfile, updateProfile]
+    operations: [updateProfile]
+    reads: [getProfile]
+    # El perfil de otro es el mismo 404 que un email sin perfil: con 403 se sabría qué emails tienen cuenta
+    # (fix-profile-other-404, 2026-11-10).
+    readMiss: not-found
 
 roles:
   customer: { description: Cliente que compra. }

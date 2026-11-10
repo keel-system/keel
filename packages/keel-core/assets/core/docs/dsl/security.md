@@ -126,6 +126,7 @@ ownership:
 
 - `owner` dice dónde está el dueño **desde la entidad**: un campo suyo (`openedBy`), o relaciones `many-to-one`/`one-to-one` hasta un campo de otra (`author.subject`). Ese campo guarda el mismo valor que estampa `callerIdentity`, y es contra él con lo que se compara: nunca contra algo que mande el cliente.
 - Exige `authentication.callerIdentity`, y que cada operación de `operations` reciba su campo en el input: sin saber quién llama no hay nada que comparar.
+- `operations` es para las **escrituras**: una query ahí es un error (`CHK-SECURITY-OWNERSHIP-QUERY-IN-OPERATIONS`), porque la nota del handler no filtra un listado ni impide un `findById` que se la salte. Las lecturas van en `reads` (§ Lecturas acotadas).
 - `error` es un `code` que cada operación de la lista declara en sus `errors` con `http: 403`; ahí viven su `when` y su status, que son contrato público. Un 403 de propiedad así declarado cierra `OBL-RESOURCE-SCOPE` para esa operación.
 - `exemptRoles` se enumera uno a uno, como en `scoping`: la exención es la parte peligrosa.
 - **El orden lo deciden las reglas de la operación**: si el recurso no existe es su 404, y si existe y no es tuyo, este 403. La comprobación la escribe el handler; el generador le deja la nota con la entidad, el camino al dueño, el campo del llamante y el `code`.

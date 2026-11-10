@@ -37,6 +37,13 @@ authentication:
     # `vaults` —no representa a un custodio— y sin declararlo exento recibiría ASSET_OUT_OF_SCOPE en
     # toda ficha. Hasta el DSL 2.21 lo decía solo una regla de getAsset (v1.1.2).
     exemptClients: [rendering-service]
+    # Las dos lecturas se acotan por construcción (DSL 2.27): el adaptador generado suma el predicado «Owner.code en el
+    # claim vaults» al listado, a su total y a la carga de la ficha, y la caché lo lleva en la clave. Antes lo decía una
+    # rule de cada operación, y nada impedía que el handler se lo saltara.
+    reads: [getAsset, listAssets]
+    # La ficha de otro propietario es el 403 ASSET_OUT_OF_SCOPE, como hasta ahora (FL-AST-003-D): revela que el archivo
+    # existe, y se acepta porque los ids son uuid y quien los conoce ya los ha visto en otra parte.
+    readMiss: forbidden
     # Las escrituras (uploadAsset, publishAsset) solo las hace vault-admin, que está exento: por eso
     # no declaran el 403. Conceder asset:write a otro rol obliga a acotarlas antes.
     description: >-

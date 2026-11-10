@@ -62,7 +62,13 @@ test('la identidad del llamante la estampa el lector desde la credencial: no se 
 });
 
 test('el alcance por recurso: el puerto en Application, el adaptador en Infrastructure y el handler que declara su error lo recibe', async () => {
-  const { model, files } = await planFixture('asset-vault', { mutate: () => {} });
+  // Sin reads (la v1.1.2 de la fixture): una lectura en reads se acota en el adaptador y su handler no compara.
+  const { model, files } = await planFixture('asset-vault', {
+    mutate: (_manifest, layers) => {
+      delete layers.security.authentication.scoping.reads;
+      delete layers.security.authentication.scoping.readMiss;
+    }
+  });
   const scoping = model.security.scoping;
   assert.match(content(files, '/AssetVault.Application/Support/ICallerScope.cs'), /bool Covers\(string\? value\) => IsExempt\(\)/);
   assert.match(content(files, '/AssetVault.Infrastructure/Security/JwtCallerScope.cs'), new RegExp(`ScopingClaim = "${scoping.claim}"`));

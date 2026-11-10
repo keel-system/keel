@@ -96,3 +96,31 @@ findings:
       Escenario: o quitar el Then 3, o añadir al Given un sexto archivo publicado sin envejecer y afirmar que no recibe POST /scans (con lo que el «exactamente cinco» del Then 1 también lo discrimina).
     resolution: scenario
     sealAfter: eabb25010ec2885d88bec3c0eb15172ecd75bdbb8fccca35531a57b3c751eeeb
+  - flow: FL-AST-003-D
+    step: "When"
+    kind: other
+    artifact: security.authentication.scoping.reads
+    evidence: >-
+      v1.1.3 (DSL 2.27) acota getAsset en el adaptador (scoping.reads, readMiss forbidden). El Then 1 (403 ASSET_OUT_OF_SCOPE)
+      y el 2 (la ficha cacheada por vault-admin no se sirve) siguen deduciéndose: la clave de caché lleva el scope, el del
+      vault-admin es unrestricted y el del custodio within([OTRO]), así que no comparten entrada y la carga acotada da el
+      403. Pero el bloque nombraba la ruta y no la operación, y CHK-SCEN-READ-SCOPE-UNCOVERED no lo reconocía como la
+      prueba de la fila ajena.
+    proposal: >-
+      Escenario: el When nombra getAsset junto a su ruta. Careado a mano contra la v1.1.3 al migrar las fixtures
+      (incremento 7 de PLAN-DSL-227-LECTURA-ACOTADA.md), con el presupuesto agotado.
+    resolution: scenario
+    sealAfter: 579a2839a7b294e8a8d8a18d60342a7c32f5e06c977ea8d3cbf3d46f1b0b7cea
+  - flow: FL-AST-004-B
+    step: "Then 2"
+    kind: count
+    artifact: security.authentication.scoping.reads
+    evidence: >-
+      v1.1.3 (DSL 2.27) acota listAssets en el adaptador, también el conteo de la página (D4). El Then solo afirmaba la
+      página vacía, que pasa igual con un total que cuente los archivos ajenos y revele cuántos hay; y el bloque nombraba
+      la ruta y no la operación, así que CHK-SCEN-READ-SCOPE-UNCOVERED no lo reconocía.
+    proposal: >-
+      Escenario: el When nombra listAssets y un Then 2 afirma totalElements 0. Careado a mano contra la v1.1.3 al migrar
+      las fixtures (incremento 7 de PLAN-DSL-227-LECTURA-ACOTADA.md), con el presupuesto agotado.
+    resolution: scenario
+    sealAfter: 1a3153e1fc1c8782a86f094be01abd6586927fb2dd1e933895a834ea24744239

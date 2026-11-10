@@ -1,7 +1,7 @@
 # asset-vault — Escenarios de validación
 
 > Escenarios de aceptación ejecutables (Given/When/Then) derivados de
-> specs/asset-vault v1.1.2. Contrato de validación para la fase de generación.
+> specs/asset-vault v1.1.3. Contrato de validación para la fase de generación.
 
 > **v1.1.1 sin flujo nuevo, a sabiendas.** El parche decide que `quarantineAsset` **trunca** a 500
 > caracteres un `reason` más largo en vez de rechazar el hallazgo (regla de la operación). Ningún
@@ -394,7 +394,7 @@ política de reintentos declarada siendo más corta que la caída, y se arbitra 
 `ACME`, y su ficha está cacheada: un `vault-admin` acaba de pedir `GET /api/v1/assets/{a1}` con
 `rendering.getThumbnail` respondiendo `200 {url: "https://cdn/t/a1.png", width: 320}`.
 
-**When**: ese custodio pide `GET /api/v1/assets/{a1}`.
+**When**: ese custodio pide `getAsset` — `GET /api/v1/assets/{a1}`.
 **Then**:
 1. Status `403` con `code` = `"ASSET_OUT_OF_SCOPE"`.
 2. Ni la ficha cacheada se le sirve: el alcance se comprueba en cada respuesta, también en la que sale
@@ -416,10 +416,11 @@ política de reintentos declarada siendo más corta que la caída, y se arbitra 
 **Given**: los tres archivos de `ACME` de FL-AST-004 y un custodio `vault-reader` cuyo token
 enumera `vaults` = `["OTRO"]`.
 
-**When**: ese custodio pide `GET /api/v1/assets?page=0&size=20`.
+**When**: ese custodio pide `listAssets` — `GET /api/v1/assets?page=0&size=20`.
 **Then**:
 1. Status `200` y **ningún** archivo de `ACME` en la página: solo ve los de los propietarios que
    enumera su token.
+2. `totalElements` = `0`: los archivos ajenos tampoco cuentan en el total.
 
 ## Cuarentena: el escáner encuentra algo después
 

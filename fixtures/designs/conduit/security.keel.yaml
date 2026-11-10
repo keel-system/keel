@@ -15,13 +15,16 @@ cors:
   allowCredentials: false
   allowedHeaders: [Authorization, Content-Type]
 
+# Las cuatro lecturas que el legacy personaliza si llega un token (favorited, following; R1-014) son optional (DSL 2.27):
+# sin token se ejecutan como públicas, con uno válido hay titular, y uno inválido o caducado es 401, nunca anónimo. Era la
+# frontera F-OPTIONAL-AUTH.
 access:
   default: { level: required }
   rules:
-    getProfile:   { level: public }
-    listArticles: { level: public }
-    getArticle:   { level: public }
-    listComments: { level: public }
+    getProfile:   { level: optional }
+    listArticles: { level: optional }
+    getArticle:   { level: optional }
+    listComments: { level: optional }
     listTags:     { level: public }
 
 # Solo el autor edita o borra su artículo, y solo el autor borra su comentario (medido: R1-012, R1-013; los
