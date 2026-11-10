@@ -19,7 +19,7 @@ import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
 import { finderNote } from '@keel-system/keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
 import { READ_SCOPE_PROPERTY, readScopeHandlerCall } from './read-scope.js';
-import { readScopeNote } from '@keel-system/keel-core/gen/read-scope';
+import { readScopeNote, optionalIdentityNote } from '@keel-system/keel-core/gen/read-scope';
 import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { csFile, csMember, declType, fieldUsings, isNullable, located, namespaceOf, typeUsings, xmlDoc } from './render.js';
@@ -474,6 +474,11 @@ function handlerNotes(model, operation) {
     call: readScopeHandlerCall(model, operation, operation.finder ? finderCall(model, operation.finder) : '')
   });
   if (scopedRead) notes.push(scopedRead);
+  // La identidad opcional (DSL 2.27, R3c): null es «anónimo», el token roto ya fue un 401 en el borde.
+  const identityField = model.security?.callerIdentity?.field;
+  if (operation.optionalAuth && identityField && messageComponents(operation, model).some((component) => component.resolvedIdentity)) {
+    notes.push(optionalIdentityNote(`${ownerParam}.${identityField[0].toUpperCase()}${identityField.slice(1)}`));
+  }
   const scoping = model.security?.scoping;
   if (scopedOperation(model, operation)) {
     const exempt = [...scoping.exemptRoles, ...(scoping.exemptClients ?? []).map((client) => `cliente ${client}`)];

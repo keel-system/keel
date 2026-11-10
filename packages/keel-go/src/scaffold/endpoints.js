@@ -379,14 +379,23 @@ function renderReader(model, operation, plan) {
     // La identidad del llamante no viaja en la petición: la estampa el lector desde la credencial, DESPUÉS de leer y
     // validar la petición (en keel-spring la estampa el controller sobre el comando ya validado).
     if (component.resolvedIdentity) {
+      const pointer = isPointer(operation, component);
+      // Con level: optional (DSL 2.27), sin token no hay identidad: el campo se queda vacío y nada lanza.
+      const optional = operation.optionalAuth;
+      const credential = optional
+        ? ['\tcredential, identified, err := optionalCallerIdentity(r.Context())', '\tif err != nil {', '\t\treturn msg, err', '\t}']
+        : ['\tcredential, err := callerIdentity(r.Context())', '\tif err != nil {', '\t\treturn msg, err', '\t}'];
+      const onlyIdentified = (lines) => (optional ? ['\tif identified {', ...lines.map((line) => `\t${line}`), '\t}'] : lines);
       if (resolvesCaller(model, operation)) {
         // La credencial del token es UNA de las del recurso: se resuelve a su clave natural (vacía si no es de nadie).
-        identity.push('\tcredential, err := callerIdentity(r.Context())', '\tif err != nil {', '\t\treturn msg, err', '\t}');
-        if (isPointer(operation, component)) {
-          identity.push('\tresolved, err := resolve(r.Context(), credential)', '\tif err != nil {', '\t\treturn msg, err', '\t}', '\tif resolved != "" {', `\t\t${field} = &resolved`, '\t}');
-        } else identity.push(...returnErr(`${field}, err = resolve(r.Context(), credential)`));
-      } else if (usesCallerIdentity(model)) identity.push(...returnErr(`${field}, err = callerIdentity(r.Context())`));
-      else (asBody ? bodyChecks : queryLines).push(`\t// ${field}: la identidad del llamante no se lee de la petición (el diseño no autentica).`);
+        identity.push(...credential);
+        if (pointer) {
+          identity.push(...onlyIdentified(['\tresolved, err := resolve(r.Context(), credential)', '\tif err != nil {', '\t\treturn msg, err', '\t}', '\tif resolved != "" {', `\t\t${field} = &resolved`, '\t}']));
+        } else identity.push(...onlyIdentified(returnErr(`${field}, err = resolve(r.Context(), credential)`)));
+      } else if (usesCallerIdentity(model)) {
+        if (optional || pointer) identity.push(...credential, ...onlyIdentified([`\t${field} = ${pointer ? '&credential' : 'credential'}`]));
+        else identity.push(...returnErr(`${field}, err = callerIdentity(r.Context())`));
+      } else (asBody ? bodyChecks : queryLines).push(`\t// ${field}: la identidad del llamante no se lee de la petición (el diseño no autentica).`);
       continue;
     }
     // La página con persistencia: el Pageable de Spring Data (página, tamaño y orden), con el orden del diseño cuando

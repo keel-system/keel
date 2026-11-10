@@ -207,6 +207,8 @@ ${rules}
  */
 export type Requirement =
   | { readonly kind: 'public' }
+  /** level: optional (DSL 2.27): pasa como pública; con un token, hay identidad. El token inválido ya fue un 401. */
+  | { readonly kind: 'optional' }
   | { readonly kind: 'authenticated' }
   | { readonly kind: 'anyOf'; readonly authorities: readonly string[] };
 
@@ -271,7 +273,7 @@ export function decide(target: Target): Decision {
 
 /** El veredicto: concedida, falta credencial (401) o la credencial no basta (403). */
 export function verdict(requirement: Requirement, principal: Principal | null): 'granted' | 'unauthenticated' | 'denied' {
-  if (requirement.kind === 'public') return 'granted';
+  if (requirement.kind === 'public' || requirement.kind === 'optional') return 'granted';
   if (principal == null) return 'unauthenticated';
   if (requirement.kind === 'authenticated') return 'granted';
   return requirement.authorities.some((authority) => principal.authorities.has(authority)) ? 'granted' : 'denied';
@@ -763,6 +765,7 @@ ${authenticate}`;
 
 function callerIdentity(model) {
   const identity = model.security.callerIdentity;
+  const optionalOps = model.services.flatMap((group) => group.operations).some((operation) => operation.optionalAuth);
   const extract =
     identity.source === 'claim'
       ? `    const value = text(principal.claims[${tsString(identity.claim ?? 'sub')}]);`
@@ -794,7 +797,17 @@ ${extract}
       throw new UnauthorizedException('${FW.unauthenticated.message}', { code: '${FRAMEWORK_ERRORS.unauthenticated.code}', httpStatus: ${FW.unauthenticated.status} });
     }
     return value;
-  }
+  }${optionalOps ? `,
+
+  /**
+   * Lo mismo, en una operación con \`level: optional\` (DSL 2.27): null si la petición llegó sin token (anónima). Un
+   * token inválido o caducado no llega hasta aquí: el hook ya respondió 401. Es el resolveOptional() de keel-spring.
+   */
+  resolveOptional(): string | null {
+    const principal = SecurityContext.current();
+    if (principal == null || principal.kind !== 'token') return null;
+    return CallerIdentity.resolve();
+  }` : ''}
 };
 
 /** Un claim como texto, como getClaimAsString: un número o un booleano se convierten; lo demás no. */

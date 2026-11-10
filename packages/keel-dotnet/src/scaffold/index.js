@@ -68,6 +68,7 @@ import * as domainGuardsCheck from './domain-guards-check.js';
 import * as idempotencyCheck from './idempotency-check.js';
 import * as conditionalWrites from './conditional-writes.js';
 import * as readScope from './read-scope.js';
+import * as optionalAuth from './optional-auth.js';
 import { readScopeGenerationErrors } from '@keel-system/keel-core/gen/read-scope';
 import * as restSupport from './rest-support.js';
 import * as endpoints from './endpoints.js';
@@ -84,7 +85,7 @@ import * as generatorDocs from './generator-docs.js';
 // Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara. El primero es el contrato formal
 // de la API, derivado del modelo neutral (el mismo en los tres generadores), salvo que el workspace traiga el de
 // /keel-docs: keel-core/gen/openapi.js.
-const GENERATORS = [{ generate: derivedOpenapiFiles }, project, config, health, logging, telemetry, telemetryTests, wire, serviceParameters, enums, exceptions, valueTypes, longIds, entities, events, domainGuardsCheck, idempotencyCheck, conditionalWrites, readScope, dtos, mappers, services, mediator, persistence, persistenceRuntime, statementCount, documentPersistence, afterCommit, repositories, claim, reconciliationClaim, requestIdempotency, httpClients, mail, payments, cache, storage, projections, refResolvers, messaging, messagingStores, rabbitmq, kafka, snssqs, messagingTests, purge, scheduling, schedulingTests, timer, deadlinesCheck, security, restSupport, endpoints, api, tests, testCredential, apiTests, infra, integrationTests, schemaBaseline, observabilityAssets, deploy, loggingCheck, telemetryGate, readme, generatorDocs];
+const GENERATORS = [{ generate: derivedOpenapiFiles }, project, config, health, logging, telemetry, telemetryTests, wire, serviceParameters, enums, exceptions, valueTypes, longIds, entities, events, domainGuardsCheck, idempotencyCheck, conditionalWrites, readScope, dtos, mappers, services, mediator, persistence, persistenceRuntime, statementCount, documentPersistence, afterCommit, repositories, claim, reconciliationClaim, requestIdempotency, httpClients, mail, payments, cache, storage, projections, refResolvers, messaging, messagingStores, rabbitmq, kafka, snssqs, messagingTests, purge, scheduling, schedulingTests, timer, deadlinesCheck, security, restSupport, endpoints, api, tests, testCredential, apiTests, optionalAuth, infra, integrationTests, schemaBaseline, observabilityAssets, deploy, loggingCheck, telemetryGate, readme, generatorDocs];
 
 /**
  * Todo lo que hay que resolver para generar, SIN tocar disco: el stack normalizado, el modelo con sus

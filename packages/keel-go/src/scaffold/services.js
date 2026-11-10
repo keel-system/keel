@@ -29,6 +29,7 @@ import { sentinelOf } from './errors.js';
 import { idempotencyMethods, idempotencyNotes } from './request-idempotency.js';
 import { appType, applicationPath, docComment, domainPath, goFileName, goTypeName, isOptional, layout, packageFile } from './render.js';
 import { ownershipNotes } from '@keel-system/keel-core/gen/ownership';
+import { optionalIdentityNote } from '@keel-system/keel-core/gen/read-scope';
 import { compensationNote } from '@keel-system/keel-core/gen/compensation';
 import { callerScopeNote } from './caller-scope.js';
 import { CALLER_ROLES, roleCheckedOperation, usesCallerIdentity } from './security.js';
@@ -447,6 +448,10 @@ function handlerNotes(model, operation) {
   notes.push(...idempotencyNotes(model, operation));
   // La autorización por propietario (security.ownership, DSL 2.23): la nota neutral de keel-core.
   const variable = operation.messageKind === 'query' ? 'query' : 'cmd';
+  // La identidad opcional (DSL 2.27, R3c): el campo vacío es «anónimo», el token roto ya fue un 401 en el borde.
+  const identityField = model.security?.callerIdentity?.field;
+  const identity = operation.optionalAuth && identityField ? messageComponents(operation, model).find((component) => component.resolvedIdentity) : null;
+  if (identity) notes.push(optionalIdentityNote(`${variable}.${goExported(identityField)}`, { none: componentType(operation, identity).startsWith('*') ? 'nil' : '""' }));
   notes.push(
     ...ownershipNotes(model, operation, {
       read: (field) => `${variable}.${goExported(field)}`,

@@ -180,8 +180,8 @@ export const UNCOVERED_BRANCHES = [
     }
   })),
   // La lectura acotada (DSL 2.27, PLAN-DSL-227-LECTURA-ACOTADA.md): los diseños de keel-core/test/helpers/read-scope-designs.js,
-  // los MISMOS que miden keel-spring y keel-nest (conduit-optional es del incremento 5: hasta entonces se rechaza).
-  ...READ_SCOPE_DESIGNS.filter((design) => design.name !== 'conduit-optional').map((design) => ({
+  // los MISMOS que miden keel-spring y keel-nest, conduit-optional (level: optional) incluido.
+  ...READ_SCOPE_DESIGNS.map((design) => ({
     name: design.name,
     from: design.from,
     mutate(manifest, layers, name) {

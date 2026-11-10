@@ -15,7 +15,7 @@ import { resolveStack } from '@keel-system/keel-core/gen/stack';
 import { persistedMembers } from '@keel-system/keel-core/gen';
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
-import { optionalAuthPendingErrors } from '@keel-system/keel-core/gen/read-scope';
+import { optionalAuthFrontierErrors } from '@keel-system/keel-core/gen/read-scope';
 import { declaredDeadlines, modelDeadlines } from '@keel-system/keel-core/gen/deadlines';
 import { repositoryRoots } from '@keel-system/keel-core/gen/features';
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
@@ -75,9 +75,9 @@ export function checkSupportedFeatures(manifest, layers) {
   // La escritura condicional (DSL 2.25) se genera entera; lo que ningún generador genera todavía, con el motivo neutral (T3).
   errors.push(...conditionalWritesFrontierErrors(layers, 'keel-go'));
   // La lectura acotada (DSL 2.27, reads) se genera entera (scaffold/read-scope.js); lo que no se puede generar por
-  // construcción (T7, T8) lo rechaza planService con la frontera neutral, que necesita el modelo. level: optional llega en
-  // el incremento 5 de PLAN-DSL-227-LECTURA-ACOTADA.md: hasta entonces se rechaza entero, con el mismo mensaje en los cuatro.
-  errors.push(...optionalAuthPendingErrors(layers, 'keel-go', 5));
+  // construcción (T7, T8) lo rechaza planService con la frontera neutral, que necesita el modelo. level: optional también
+  // (permitAll y optionalCallerIdentity), salvo sobre una identidad que no es un token: la frontera neutral.
+  errors.push(...optionalAuthFrontierErrors(layers, 'keel-go'));
   // Los plazos de negocio (DSL 2.26) los genera el cronómetro (scaffold/timer.js). Lo que depende del motor elegido —solo
   // hay sentencias medidas para PostgreSQL, MySQL y MongoDB— y del status del rechazo tardío lo rechaza planService, que
   // sí conoce el stack; aquí, las formas que el handler generado del plazo no sabe despachar.

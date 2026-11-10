@@ -29,6 +29,7 @@ import * as domainGuardsCheck from './domain-guards-check.js';
 import * as idempotencyCheck from './idempotency-check.js';
 import * as conditionalWrites from './conditional-writes.js';
 import * as readScope from './read-scope.js';
+import * as optionalAuth from './optional-auth.js';
 import { readScopeGenerationErrors } from '@keel-system/keel-core/gen/read-scope';
 import * as dtos from './dtos.js';
 import * as services from './services.js';
@@ -105,6 +106,8 @@ const GENERATORS = [
   // La escritura condicional (DSL 2.25): Versioned, la comparación, el borde, sus pruebas y el gate.
   conditionalWrites,
   readScope,
+  // La identidad opcional (DSL 2.27, level: optional): su prueba emitida en el borde (OA-1 a OA-3).
+  optionalAuth,
   dtos,
   services,
   mappers,

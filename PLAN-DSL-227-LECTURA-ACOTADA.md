@@ -327,7 +327,7 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
 | 2. keel-nest | hecho (2026-11-10) | `db-check` (PostgreSQL y MySQL) y `doc-check` en los cuatro sujetos, con los siete sabotajes cada uno en exactamente sus casos; RS-9 a RS-11 ejecutando lo emitido; `ts-check`; suites de los cinco paquetes |
 | 3. keel-dotnet | hecho (2026-11-10) | `db-check` (PostgreSQL y MySQL) y `doc-check` en los cuatro sujetos, con los siete sabotajes cada uno en exactamente sus casos; RS-9 a RS-11 en la prueba emitida `ReadScopeTests` con `cs-check --fixtures --only`, falsada con `rs-cache-key` y `rs-empty-is-all`; suite de keel-dotnet |
 | 4. keel-go | hecho (2026-11-10) | `db-check` (PostgreSQL y MySQL) y `doc-check` en los cuatro sujetos, con los seis sabotajes del adaptador cada uno en exactamente sus casos y en ninguna otra sonda; RS-9 a RS-11 en las pruebas emitidas con `go-check --read-scope`, falsadas con `rs-cache-key` y `rs-empty-is-all`; gofmt, vet, staticcheck y pruebas emitidas de los cuatro; suite de keel-go |
-| 5. `level: optional` | en curso: keel-spring hecho (2026-11-10) | keel-spring: `read-scope-check conduit-optional` (OA-1 a OA-3, 12/12) con `oa-degrade` y `oa-ignore-token` cada uno en exactamente su caso; `vault-scoped` sigue 13/13; suites de keel-core y keel-spring |
+| 5. `level: optional` | hecho (2026-11-10) | OA-1 a OA-3 sobre `conduit-optional` en los cuatro, con `oa-degrade` y `oa-ignore-token` cada uno en exactamente su caso: keel-spring `read-scope-check` (MockMvc con la cadena generada, 12/12); keel-nest `test/optional-auth.test.js` (el hook, las reglas, el JWT y el lector emitidos sobre Fastify); keel-dotnet la prueba emitida `OptionalAuthTests` con `cs-check --fixtures --only=conduit-optional`; keel-go `optional_auth_test.go` con `go-check --read-scope` (8/8); suites de los cinco paquetes |
 | 6. derivados y docs | pendiente | |
 | 7. fixtures y keel-recover | pendiente | |
 | 8. corridas de control | pendiente | |
@@ -455,4 +455,20 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
   bifurca por modelo o por motor, y la identidad opcional no bifurca (cadena y controller, iguales en relacional y
   documental); la puerta de cierre que la pedía queda cubierta por los sabotajes `oa-*` de cada generador; (3) OA-4
   (el OpenAPI) es del inc. 6.
-- Siguiente: **incremento 5 en keel-nest** (`verdict`/`authenticate` y el estampado de la identidad), después keel-dotnet y keel-go.
+- **Incremento 5 hecho en los cuatro (2026-11-10).** keel-nest: la exigencia `optional` (concedida en `verdict`, como
+  `public`; el bearer inválido ya era 401 en `authenticate`), `CallerIdentity.resolveOptional()` en el lector y la nota; su
+  red EJECUTA lo emitido en `test/optional-auth.test.js` (Fastify real con `installSecurity`, `JwtAuthenticator` sobre una
+  clave de la prueba y el lector del controlador con un sustituto de `@nestjs/common`) y se falsa a sí misma. keel-dotnet:
+  `optional` caía en `Requirement.Authenticated` (la rama por defecto) y ahora es `PermitAll`; `CallerIdentity.ResolveOptional()`
+  (también delante del `CallerIdentityResolver`) y la prueba emitida `OptionalAuthTests` (el servidor en memoria con el
+  mediator sustituido por un doble que registra el mensaje y `TestCredential`), ejecutada por `cs-check`, con `oa-degrade` y
+  `oa-ignore-token` en `FIXTURE_SABOTAGES`. keel-go: `permitAll`, `optionalCallerIdentity` (el lector solo estampa si hay
+  identidad) y la prueba emitida `internal/httpapi/optional_auth_test.go` (`a.edge(a.secure(mux))` con el
+  `JWTAuthenticator` real y rutas que llaman al LECTOR emitido), sujeto nuevo de `go-check --read-scope`.
+- **Desviaciones y medidas del inc. 5 (los tres)**: (1) en keel-dotnet y keel-go `oa-degrade` tumba además la prueba de la
+  API del token roto en una ruta ABIERTA (`UnTokenQueNoValidaEs401TambienEnUnaRutaAbierta`): es la misma propiedad, y OA-3
+  es su caso optional; keel-go lo declara en `fails`; (2) keel-go destapó que un campo de identidad OPCIONAL (`*string`)
+  recibía un `string` (`msg.X, err = callerIdentity(...)`): no compilaba, y ninguna fixture tenía el campo opcional; el
+  lector lo estampa ahora con `&credential`, optional o no; (3) en keel-go el claim de la identidad puede ser el propio
+  `sub`, y el literal de los claims de la prueba no puede repetir clave (lo vio `go test`, no `go-syntax`).
+- Siguiente: **incremento 6, derivados y documentación** (OA-4 en el OpenAPI, la guía de Postman, las skills y los agentes).

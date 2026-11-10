@@ -219,7 +219,9 @@ function renderEndpoint(model, operation, usings) {
   // una petición malformada es 400 sin tocar la base. El lector recibe la resolución como función y la llama al final.
   const resolving = resolvesCaller(model, operation) || scopeResolvesCaller(model, operation);
   if (resolving) usings.push(securityNamespace(model));
-  const callerArg = resolving ? ', () => http.RequestServices.GetRequiredService<CallerIdentityResolver>().Resolve(CallerIdentity.Resolve(), http.RequestAborted)' : '';
+  // Con level: optional (DSL 2.27) sin token no hay credencial que resolver: ResolveOptional() da null, y el resolutor también.
+  const credential = operation.optionalAuth ? 'CallerIdentity.ResolveOptional()' : 'CallerIdentity.Resolve()';
+  const callerArg = resolving ? `, () => http.RequestServices.GetRequiredService<CallerIdentityResolver>().Resolve(${credential}, http.RequestAborted)` : '';
   const read = `${asBody || resolving || operation.multipart ? 'await ' : ''}Read${csMember(operation.name)}(http.Request${callerArg})`;
   // Lo que llama a la pasarela de pago va SIN transacción abarcadora (callsPaymentGateway, keel-core): su garantía
   // es registrar y confirmar ANTES de llamarla, como en keel-spring y keel-nest.
@@ -345,7 +347,8 @@ function renderReader(model, operation, usings) {
       // La estampa el servidor desde la credencial (security.authentication.callerIdentity), nunca el cuerpo: quien hace
       // la petición no elige en nombre de quién actúa.
       usings.push(securityNamespace(model));
-      value = 'CallerIdentity.Resolve()';
+      // Con level: optional (DSL 2.27), sin token no hay identidad: ResolveOptional() da null en vez de lanzar.
+      value = operation.optionalAuth ? 'CallerIdentity.ResolveOptional()' : 'CallerIdentity.Resolve()';
     } else if (component.file) {
       // El binario de su parte: la obligatoria ya no puede ser null (RequirePart), la opcional llega tal cual.
       value = local;

@@ -44,7 +44,7 @@ import { READ_SCOPE_EDGE_SABOTAGES, applyReadScopeSabotage } from '../test/helpe
 
 // Los diseños de la lectura acotada cuyas pruebas emitidas se ejecutan y se falsan: el alcance por claim con caché y la
 // propiedad con roles exentos y forbidden (RS-9 a RS-11). Los cuatro compilan además en go-check --fixtures.
-const READ_SCOPE_SUBJECTS = ['vault-scoped', 'shop-scoped'];
+const READ_SCOPE_SUBJECTS = ['vault-scoped', 'shop-scoped', 'conduit-optional'];
 import { TELEMETRY_SABOTAGES, TELEMETRY_SUBJECT, applyTelemetrySabotage } from '../test/helpers/telemetry-sabotages.js';
 import { fileURLToPath } from 'node:url';
 import { loadService } from '@keel-system/keel-core';

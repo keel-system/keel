@@ -27,14 +27,27 @@ const fileOf = (files, suffix) => {
 };
 const decap = (name) => `${name[0].toLowerCase()}${name.slice(1)}`;
 
-test('los sujetos pasan la frontera de keel-dotnet (salvo conduit-optional, que es del incremento 5)', () => {
+test('los sujetos pasan la frontera de keel-dotnet, conduit-optional incluido', () => {
   for (const { name, from, mutate } of READ_SCOPE_DESIGNS) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
     mutate(layers);
-    const { errors } = checkSupportedFeatures(manifest, layers);
-    if (name === 'conduit-optional') assert.ok(errors.some((message) => message.includes('level: optional')), name);
-    else assert.deepEqual(errors, [], name);
+    assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, [], name);
   }
+});
+
+test('conduit-optional: PermitAll, el lector estampa ResolveOptional() y la prueba emitida OptionalAuthTests', async () => {
+  const { files } = await plan('conduit-optional');
+  const content = (suffix) => files.find((file) => file.path.endsWith(suffix)).content;
+  assert.match(content('Security/AccessRules.cs'), /"\/api\/v1\/articles\/\{slug\}", Requirement\.PermitAll/);
+  assert.match(content('Security/CallerIdentity.cs'), /public static string\? ResolveOptional\(\) =>/);
+  assert.match(content('Endpoints/ArticleV1Endpoints.cs'), /CallerSubject = CallerIdentity\.ResolveOptional\(\),/);
+  assert.match(content('UseCases/GetArticleQueryHandler.cs'), /Identidad opcional \(level: optional, DSL 2\.27\): sin token, query\.CallerSubject llega null/);
+  const tests = content('OptionalAuthTests.cs');
+  for (const id of ['OA1', 'OA2', 'OA3']) assert.match(tests, new RegExp(`public async Task ${id}_GetArticle_`));
+  // Sin ninguna operación optional, ni ResolveOptional ni la prueba.
+  const conduit = (await planFixture('conduit')).files;
+  assert.doesNotMatch(conduit.find((file) => file.path.endsWith('Security/CallerIdentity.cs')).content, /ResolveOptional/);
+  assert.ok(!conduit.some((file) => file.path.endsWith('OptionalAuthTests.cs')));
 });
 
 test('vault-scoped: el finder pide el scope, el predicado se SUMA tras los criterios y el salto es una subconsulta', async () => {

@@ -232,7 +232,8 @@ public static class ClaimValues
 /** Una exigencia del plan como expresión C#. */
 export function requirementLiteral(requirement) {
   if (requirement.kind === 'anyOf') return `Requirement.AnyOf(${requirement.authorities.map(csString).join(', ')})`;
-  return requirement.kind === 'public' ? 'Requirement.PermitAll' : 'Requirement.Authenticated';
+  // level: optional (DSL 2.27) entra como pública: el token inválido ya es 401 en toda ruta (el middleware lo decide antes).
+  return requirement.kind === 'public' || requirement.kind === 'optional' ? 'Requirement.PermitAll' : 'Requirement.Authenticated';
 }
 
 function accessRulesBody(model) {
@@ -786,6 +787,7 @@ public sealed partial class CorsPolicy
 
 function callerIdentityBody(model) {
   const identity = model.security.callerIdentity;
+  const optionalOps = model.services.flatMap((group) => group.operations).some((operation) => operation.optionalAuth);
   const extract =
     identity.source === 'claim'
       ? `        var value = ClaimValues.Text(principal.Claims, ${csString(identity.claim ?? 'sub')});`
@@ -823,7 +825,14 @@ ${extract}
             throw new UnauthorizedException(${csString(FW.unauthenticated.message)}, ${csString(FRAMEWORK_ERRORS.unauthenticated.code)}, ${FW.unauthenticated.status});
         }
         return value;
-    }
+    }${optionalOps ? `
+
+    /// <summary>
+    /// Lo mismo, en una operación con <c>level: optional</c> (DSL 2.27): null si la petición llegó sin token (anónima). Un
+    /// token inválido o caducado no llega hasta aquí: el middleware ya respondió 401. Es el resolveOptional() de keel-spring.
+    /// </summary>
+    public static string? ResolveOptional() =>
+        SecurityContext.Get() is { Kind: PrincipalKind.Token } ? Resolve() : null;` : ''}
 }`;
 }
 

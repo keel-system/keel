@@ -51,7 +51,7 @@ import { projectorPath, readerPath, replicas } from './projections.js';
 import { repositoryOf, isPartialUpdate } from '@keel-system/keel-core/gen/features';
 import { VERSIONED_TS, carriesExpectedVersions, conditionalHandlerNote, returnsVersioned, versionedType } from './conditional-writes.js';
 import { readScopeHandlerCall, readScopeImport } from './read-scope.js';
-import { readScopeNote } from '@keel-system/keel-core/gen/read-scope';
+import { readScopeNote, optionalIdentityNote } from '@keel-system/keel-core/gen/read-scope';
 import { compensationNote } from '@keel-system/keel-core/gen/compensation';
 export { isPartialUpdate };
 
@@ -527,6 +527,11 @@ function handlerNotes(model, operation) {
     call: readScopeHandlerCall(model, operation, operation.finder ? finderCall(operation.finder) : '')
   });
   if (scopedRead) notes.push(scopedRead);
+  // La identidad opcional (DSL 2.27, R3c): null es «anónimo», el token roto ya fue un 401 en el borde.
+  const identityField = model.security?.callerIdentity?.field;
+  if (operation.optionalAuth && identityField && messageComponents(model, operation).some((component) => component.resolvedIdentity)) {
+    notes.push(optionalIdentityNote(`${ownerParam}.${identityField}`));
+  }
   const scoping = model.security?.scoping;
   if (scopedOperation(model, operation)) {
     notes.push(

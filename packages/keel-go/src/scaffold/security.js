@@ -884,7 +884,8 @@ type CallerRoles interface {
 /** Una exigencia del plan como expresión Go. */
 export function requirementLiteral(requirement) {
   if (requirement.kind === 'anyOf') return `anyOf(${requirement.authorities.map(goString).join(', ')})`;
-  return requirement.kind === 'public' ? 'permitAll' : 'authenticated';
+  // level: optional (DSL 2.27) entra como pública: el token inválido ya es 401 en toda ruta (el middleware lo decide antes).
+  return requirement.kind === 'public' || requirement.kind === 'optional' ? 'permitAll' : 'authenticated';
 }
 
 /**
@@ -894,7 +895,7 @@ export function requirementLiteral(requirement) {
 function requirementConstructors(plan) {
   const kinds = new Set(plan.chains.flatMap((chain) => [...chain.rules.map((rule) => rule.requirement.kind), chain.fallback.kind]));
   const vars = [
-    ...(kinds.has('public') ? [['permitAll', 'requirement{kind: permitAllKind}']] : []),
+    ...(kinds.has('public') || kinds.has('optional') ? [['permitAll', 'requirement{kind: permitAllKind}']] : []),
     ...(kinds.has('authenticated') ? [['authenticated', 'requirement{kind: authenticatedKind}']] : [])
   ];
   const parts = [];
@@ -1161,6 +1162,7 @@ export const UNIDENTIFIED_ERROR = 'errUnidentifiedCaller';
 
 function callerIdentityGo(model) {
   const identity = model.security.callerIdentity;
+  const optionalOps = model.services.flatMap((group) => group.operations).some((operation) => operation.optionalAuth);
   const extract =
     identity.source === 'claim'
       ? `	value, ok := security.ClaimText(principal.Claims, ${goString(identity.claim ?? 'sub')})`
@@ -1194,7 +1196,18 @@ ${extract}
 		return "", ${UNIDENTIFIED_ERROR}
 	}
 	return value, nil
-}`;
+}${optionalOps ? `
+
+// optionalCallerIdentity es callerIdentity en una operación con level: optional (DSL 2.27): sin token la petición es
+// anónima e identified es false. Un token inválido o caducado no llega hasta aquí: el middleware ya respondió 401. Con
+// uno válido, lo mismo que callerIdentity, también el 401 de un token sin la identidad.
+func optionalCallerIdentity(ctx context.Context) (value string, identified bool, err error) {
+	if principal, found := security.PrincipalFrom(ctx); !found || principal.Kind != security.TokenPrincipal {
+		return "", false, nil
+	}
+	value, err = callerIdentity(ctx)
+	return value, err == nil, err
+}` : ''}`;
 }
 
 /** La línea del errorResponse que responde 401 a una credencial que no identifica al llamante. */

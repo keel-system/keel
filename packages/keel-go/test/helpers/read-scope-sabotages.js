@@ -25,6 +25,28 @@ export const READ_SCOPE_EDGE_SABOTAGES = [
     replace: '\tif values := scope.ScopedValues(ctx); len(values) > 0 {\n\t\treturn domain.ScopeWithin(values)\n\t}\n\treturn domain.UnrestrictedScope()\n',
     packages: './internal/httpapi/',
     fails: 'TestRS10ReadScopeScopingElClaimAusenteEsElConjuntoVacioYSoloLaExencionLoVeTodo'
+  },
+  // level: optional (OPTIONAL_AUTH_SABOTAGES de keel-core), en la prueba emitida optional_auth_test.go.
+  {
+    id: 'oa-degrade',
+    what: 'un token que no vale se trata como anónimo',
+    subject: 'conduit-optional',
+    file: 'internal/httpapi/security.go',
+    find: '\t\tif errors.Is(err, security.ErrInvalidCredential) {\n\t\t\treject(w, r, http.StatusUnauthorized)\n\t\t\treturn\n\t\t}\n',
+    replace: '\t\tif errors.Is(err, security.ErrInvalidCredential) {\n\t\t\tprincipal, err = nil, nil\n\t\t}\n',
+    packages: './internal/httpapi/',
+    // También la prueba de la API del token roto en una ruta ABIERTA: es la misma propiedad, y OA-3 es su caso optional.
+    fails: 'TestOA3ConUnTokenInvalidoOCaducadoEs401 TestUnTokenQueNoValidaEs401TambienEnUnaRutaAbierta'
+  },
+  {
+    id: 'oa-ignore-token',
+    what: 'con optional nunca hay identidad',
+    subject: 'conduit-optional',
+    file: 'internal/httpapi/security.go',
+    find: '\treturn value, err == nil, err\n',
+    replace: '\treturn value, false, err\n',
+    packages: './internal/httpapi/',
+    fails: 'TestOA2ConUnTokenValidoLlegaLaIdentidad'
   }
 ];
 

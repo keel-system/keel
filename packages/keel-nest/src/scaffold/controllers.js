@@ -400,8 +400,9 @@ function renderReader(model, operation, name, imports) {
     let value;
     if (component.resolvedIdentity) {
       // La estampa el servidor desde la credencial (security.authentication.callerIdentity), nunca el
-      // cuerpo: quien hace la petición no elige en nombre de quién actúa.
-      value = 'CallerIdentity.resolve()';
+      // cuerpo: quien hace la petición no elige en nombre de quién actúa. Con `level: optional` (DSL 2.27), sin token
+      // no hay identidad: resolveOptional() da null en vez de lanzar.
+      value = operation.optionalAuth ? 'CallerIdentity.resolveOptional()' : 'CallerIdentity.resolve()';
       imports.push({ symbol: 'CallerIdentity', from: CALLER_IDENTITY_TS });
     } else if (component.file) {
       // El binario, por su nombre de parte. Uno vacío llega null, como el MultipartFile vacío de keel-spring.

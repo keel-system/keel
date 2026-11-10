@@ -38,14 +38,31 @@ const fileOf = (files, suffix) => {
 };
 const decap = (name) => `${name[0].toLowerCase()}${name.slice(1)}`;
 
-test('los sujetos pasan la frontera de keel-go (salvo conduit-optional, que es del incremento 5)', () => {
+test('los sujetos pasan la frontera de keel-go, conduit-optional incluido', () => {
   for (const { name, from, mutate } of READ_SCOPE_DESIGNS) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
     mutate(layers);
-    const { errors } = checkSupportedFeatures(manifest, layers);
-    if (name === 'conduit-optional') assert.ok(errors.some((message) => message.includes('level: optional')), name);
-    else assert.deepEqual(errors, [], name);
+    assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, [], name);
   }
+});
+
+test('conduit-optional: permitAll, el lector estampa optionalCallerIdentity y la prueba emitida OA-1 a OA-3', () => {
+  const { files } = plan('conduit-optional');
+  const security = fileOf(files, 'internal/httpapi/security.go');
+  assert.match(security, /func optionalCallerIdentity\(ctx context\.Context\) \(value string, identified bool, err error\)/);
+  assert.match(security, /\{"GET", "\/api\/v1\/articles\/\{slug\}", permitAll\}/);
+  const endpoints = fileOf(files, 'internal/httpapi/article_endpoints.go');
+  assert.match(endpoints, /credential, identified, err := optionalCallerIdentity\(r\.Context\(\)\)\n\tif err != nil \{\n\t\treturn msg, err\n\t\}\n\tif identified \{\n\t\tmsg\.CallerSubject = &credential\n\t\}/);
+  assert.match(fileOf(files, 'internal/application/get_article_query_handler.go'), /Identidad opcional \(level: optional, DSL 2\.27\): sin token, query\.CallerSubject llega nil/);
+  const tests = fileOf(files, 'internal/httpapi/optional_auth_test.go');
+  for (const name of ['TestOA1SinTokenLaOperacionOptionalEntraAnonima', 'TestOA2ConUnTokenValidoLlegaLaIdentidad', 'TestOA3ConUnTokenInvalidoOCaducadoEs401']) {
+    assert.ok(tests.includes(`func ${name}(t *testing.T)`), name);
+  }
+  // Sin ninguna operación optional, ni la función ni la prueba.
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'conduit'));
+  const conduit = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: null }).files;
+  assert.doesNotMatch(conduit.find((file) => file.path === 'internal/httpapi/security.go').content, /optionalCallerIdentity/);
+  assert.ok(!conduit.some((file) => file.path.endsWith('optional_auth_test.go')));
 });
 
 test('vault-scoped: el finder pide el scope, el predicado se SUMA tras los criterios y el salto es una subconsulta', () => {
@@ -132,7 +149,7 @@ test('los sabotajes rs-* de keel-core tienen su sitio en keel-go, con el mismo i
     assert.ok(file, `no se emite ${sabotage.file}`);
     assert.ok(applyReadScopeSabotage(sabotage, file.content), `${sabotage.file} ya no contiene lo que busca ${sabotage.id}`);
     const emitted = files.filter((candidate) => candidate.path.endsWith('_test.go')).map((candidate) => candidate.content).join('\n');
-    assert.match(emitted, new RegExp(`^func ${sabotage.fails}\\(t \\*testing\\.T\\)`, 'm'), sabotage.id);
+    for (const name of sabotage.fails.split(' ')) assert.match(emitted, new RegExp(`^func ${name}\\(t \\*testing\\.T\\)`, 'm'), `${sabotage.id}: ${name}`);
   }
 });
 

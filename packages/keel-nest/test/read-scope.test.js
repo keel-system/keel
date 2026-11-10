@@ -49,13 +49,11 @@ export class TypeORMError extends Error {}
 `;
 const stubs = { '@nestjs/common': NEST_STUB, typeorm: TYPEORM_STUB };
 
-test('los sujetos pasan la frontera de keel-nest (salvo conduit-optional, que es del incremento 5)', () => {
+test('los sujetos pasan la frontera de keel-nest, conduit-optional incluido', () => {
   for (const { name, from, mutate } of READ_SCOPE_DESIGNS) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
     mutate(layers);
-    const { errors } = checkSupportedFeatures(manifest, layers);
-    if (name === 'conduit-optional') assert.ok(errors.some((message) => message.includes('level: optional')), name);
-    else assert.deepEqual(errors, [], name);
+    assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, [], name);
   }
 });
 

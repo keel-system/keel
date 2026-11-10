@@ -136,6 +136,18 @@ const FIXTURE_SABOTAGES = {
   // cae en RS-9, y el claim ausente leído como todo, la mitad del borde de rs-empty-is-all, en RS-10.
   'rs-cache-key': ['vault-scoped/src/VaultScoped.Application/Support/CachedOperations.cs', 'CacheKey.Of(message.Id, message.ReadScope.CacheKey())', 'CacheKey.Of(message.Id)'],
   'rs-empty-is-all': ['vault-scoped/src/VaultScoped.Infrastructure/Security/ReadScopes.cs', 'ReadScope.Within(scope.ScopedValues())', 'ReadScope.Within(scope.ScopedValues()) is { Values.Count: 0 } ? ReadScope.Unrestricted() : ReadScope.Within(scope.ScopedValues())'],
+  // level: optional (DSL 2.27), en la prueba emitida OptionalAuthTests: un token que no vale pasa como anónimo (OA-3), o la
+  // identidad no llega nunca, ni con un token válido (OA-2).
+  'oa-degrade': [
+    'conduit-optional/src/ConduitOptional.Api/Rest/HttpSecurityMiddleware.cs',
+    'catch (InvalidCredentialException)\n        {\n            await Reject(context, StatusCodes.Status401Unauthorized);\n            return;\n        }',
+    'catch (InvalidCredentialException)\n        {\n            principal = null;\n        }'
+  ],
+  'oa-ignore-token': [
+    'conduit-optional/src/ConduitOptional.Infrastructure/Security/CallerIdentity.cs',
+    'SecurityContext.Get() is { Kind: PrincipalKind.Token } ? Resolve() : null;',
+    'SecurityContext.Get() is { Kind: PrincipalKind.Token } ? null : null;'
+  ],
   'telemetry-exemplar': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, 'span is { Recorded: true }', 'span is { Recorded: false }'],
   'telemetry-parent': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, 'return Source.StartActivity(name, kind, remote);', 'return Source.StartActivity(name, kind);'],
   'telemetry-host': [`${TELEMETRY_DIR}/KeelTelemetry.cs`, '            Activity.Current = null;\n', ''],
