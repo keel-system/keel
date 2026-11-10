@@ -521,6 +521,14 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
   - **Medido**: en keel-go la sonda del orden por rango (`rankProbes` de `db-check`, el sabotaje `rank-sort`) solo existía
     con `List(pageable)`, y OrderMain de shop-api ya no lo tiene: el orden por la posición del enum de `listOrders` se quedaba
     sin medir. La sonda va ahora por la página acotada con `UnrestrictedScope()`.
+- **Redes en vivo de las fixtures tocadas (2026-11-10, tras el commit del inc. 7)**: keel-nest `db-check` (PostgreSQL
+  140/140, MySQL 71/71) y `doc-check` (25/25); keel-dotnet `db-check --only=shop-api` (56 sondas por motor), `doc-check
+  --only=asset-vault` (58 sondas e índices vivos) y `security-check` (34/34); keel-go `doc-check` de asset-vault (55
+  sondas) y de conduit (24) y `security-check` (56/56). Todo en verde. **Hueco previo, ajeno al plan**: `security-check` de
+  keel-nest sale en rojo en su primer sujeto (profile-directory, no en asset-vault, que pasa entero) desde `7fcc7a99`:
+  `score-scenarios.sh` marca `AJENO` los flujos que el documento no declara, y su sonda escribe `FL-SEC-001-*` sin
+  declararlos, así que ni puntúan ni el sabotaje sale con 1. Hay que declarar los flujos de la sonda en el documento
+  montado, como hacen las sondas de keel-go y keel-dotnet, que salen en verde.
 - **Pendiente del inc. 7, al 8**: `keel-recover characterize` de los flujos tocados (FL-ART-009, FL-ORD-005 y FL-ACC-009) contra los sandboxes, y `keel-recover
   parity` de shop-api y conduit contra los servicios regenerados: sin las dos fronteras, las diferencias de `favorited` y
   `following` y la del listado tienen que salir iguales.
