@@ -7,13 +7,15 @@ import { findersOf, RANGE_OPERATORS } from '@keel-system/keel-core/gen';
 import { persistedMembers } from '@keel-system/keel-core/gen/relational';
 import { screamingSnake } from '@keel-system/keel-core/gen/naming';
 import { classPath, DIRS, fieldImports, tsString } from './render.js';
+import { RELATIONAL_SCOPE_LINE, readScopeImport } from './read-scope.js';
 
 export const entityFinders = (model, entity) => findersOf(model, entity.name);
 export const hasFilter = (finder) => finder.criteria.length > 0;
 const sortConstant = (finder) => `${screamingSnake(finder.method)}_SORT`;
 
 export function finderSignature(finder, entity) {
-  const params = [hasFilter(finder) ? `filter: ${finder.filterType}` : null, finder.result === 'page' ? 'pageable: Pageable' : null].filter(Boolean);
+  // En una lectura acotada (DSL 2.27, D2) el scope es OBLIGATORIO: el compilador obliga al handler a pasarlo.
+  const params = [hasFilter(finder) ? `filter: ${finder.filterType}` : null, finder.result === 'page' ? 'pageable: Pageable' : null, finder.scope ? 'scope: ReadScope' : null].filter(Boolean);
   const result = finder.result === 'page' ? `Page<${entity.name}>` : `${entity.name}[]`;
   return `${finder.method}(${params.join(', ')}): Promise<${result}>`;
 }
@@ -33,6 +35,7 @@ export function portFinderParts(model, entity, imports) {
   const declarations = [];
   const methods = [];
   for (const finder of finders) {
+    if (finder.scope) imports.push(readScopeImport());
     if (hasFilter(finder)) {
       for (const criterion of finder.criteria) imports.push(...fieldImports(model, criterion.input));
       declarations.push(`/**
@@ -106,6 +109,11 @@ export function relationalFinderMethods(model, entity, imports, { ormClass, hasR
       const statement = `and(${tsString(ormProperty(model, entity, criterion))}, ${condition});`;
       lines.push(criterion.required ? `    ${statement}` : `    if (filter.${criterion.name} != null) ${statement}`);
     }
+    // El alcance se SUMA a los criterios (D4): la misma condición da las filas y el total.
+    if (finder.scope) {
+      imports.push(readScopeImport());
+      lines.push(RELATIONAL_SCOPE_LINE);
+    }
     const order = finder.result === 'page' ? 'withStableOrder(pageable)' : `withStableOrder({ page: 0, size: 0, sort: ${sortConstant(finder)} })`;
     const options = `{
       where: where as FindOptionsWhere<${ormClass}>,
@@ -154,6 +162,7 @@ export function finderCall(finder) {
   const args = [];
   if (hasFilter(finder)) args.push(`{ ${finder.criteria.map((criterion) => `${criterion.name}: query.${criterion.name}`).join(', ')} }`);
   if (finder.result === 'page') args.push('query.pageable');
+  if (finder.scope) args.push('query.readScope');
   return `await ${repository}.${finder.method}(${args.join(', ')})`;
 }
 

@@ -60,6 +60,15 @@ export function isPaginated(model, entity) {
   return (model.services ?? []).some((group) => group.entity === entity.name && (group.operations ?? []).some((op) => op.paginated));
 }
 
+/**
+ * ¿Lleva el puerto de esta raíz el listado paginado SIN filtro (`list(pageable)`)? Solo si alguna operación paginada de su
+ * grupo no es una lectura acotada (DSL 2.27): si todas lo son, su única puerta paginada es el finder, que exige el
+ * scope, y dejar la otra al lado es dejar el camino que no filtra a un import de distancia.
+ */
+export function listsUnscoped(model, entity) {
+  return (model.services ?? []).some((group) => group.entity === entity.name && (group.operations ?? []).some((op) => op.paginated && !op.readScope));
+}
+
 /** ¿Es una actualización parcial (PATCH)? Un opcional del cuerpo tiene TRES estados. */
 export function isPartialUpdate(operation) {
   return operation.route?.method === 'PATCH';

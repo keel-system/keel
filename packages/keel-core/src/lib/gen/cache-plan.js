@@ -97,8 +97,12 @@ export function cacheNote(model, operation, { call }) {
   return (
     `Caché de lectura (use-cases.${operation.name}.cache, TTL ${cache.ttlSeconds} s): envuelve con ` +
     `${call.replaceAll('{cache}', cache.constant)} la parte que produce la respuesta; el puerto ya está inyectado. ` +
-    'Lo que depende de QUIÉN llama (el alcance, la propiedad) se comprueba FUERA de la carga, sobre cada respuesta, ' +
-    'también la que sale de la caché: la clave es la entrada de la operación, no el llamante. Lo que no debe servirse ' +
+    (operation.readScope
+      ? // Lectura acotada (DSL 2.27, D6): el alcance ya va en la clave y lo aplica la carga acotada, dentro de la carga.
+        'La clave lleva el scope del llamante (lectura acotada): la carga acotada va DENTRO de la carga, y dos llamantes ' +
+        'con alcances distintos no comparten entrada. Lo que no debe servirse '
+      : 'Lo que depende de QUIÉN llama (el alcance, la propiedad) se comprueba FUERA de la carga, sobre cada respuesta, ' +
+        'también la que sale de la caché: la clave es la entrada de la operación, no el llamante. Lo que no debe servirse ') +
     'durante el TTL —una respuesta degradada porque un proveedor no contestó— se sirve y no se guarda (cacheable). ' +
     (lastKnownNeedsOf(model, operation.name).length > 0
       ? `Tampoco la que sirvió el ÚLTIMO VALOR CONOCIDO de ${lastKnownNeedsOf(model, operation.name).map(({ dependency, need }) => `${dependency}.${need.name}`).join(', ')} ` +

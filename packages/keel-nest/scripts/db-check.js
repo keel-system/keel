@@ -33,6 +33,9 @@
 import fs from 'node:fs';
 import { CONDITIONAL_WRITE_DESIGNS } from '../../keel-core/test/helpers/conditional-write-designs.js';
 import { conditionalWriteBlock } from './lib/conditional-probes.js';
+import { READ_SCOPE_SABOTAGE_SPECS, isReadScopeSabotage, readScopeBlock, readScopeCases, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
+import { READ_SCOPE_DESIGNS } from '../../keel-core/test/helpers/read-scope-designs.js';
+import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import { DRAIN_SABOTAGES, drainSabotageVerdict, isDrainSabotage } from './lib/timer-probes.js';
 import { RELAY_WAKE_SABOTAGES, isRelayWakeSabotage, relayWakeBlock, relayWakeSabotageVerdict } from './lib/relay-wake-probes.js';
 import { scheduleTimerClass, scheduleTimerPath } from '../src/scaffold/timer.js';
@@ -123,7 +126,9 @@ const SABOTAGES = {
   // El drenaje del schedule (DSL 2.26, inc. 8): con --subject=job-dispatch, caen DR-1 o DR-3 del bloque del reclamo.
   ...Object.fromEntries(Object.entries(DRAIN_SABOTAGES).map(([id, { spec }]) => [id, spec])),
   // El relay por réplica (DSL 2.26, inc. 9): con --subject=notification-mailer, caen RW-1 o RW-3 del bloque del outbox.
-  ...Object.fromEntries(Object.entries(RELAY_WAKE_SABOTAGES).map(([id, { spec }]) => [id, spec]))
+  ...Object.fromEntries(Object.entries(RELAY_WAKE_SABOTAGES).map(([id, { spec }]) => [id, spec])),
+  // La lectura acotada (DSL 2.27): con --subject=shop-scoped o vault-scoped, cada uno cae en exactamente sus casos RS.
+  ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational]))
 };
 const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -147,7 +152,7 @@ const only = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ??
 const onlySubject = args.find((arg) => arg.startsWith('--subject='))?.split('=')[1] ?? null;
 const ENGINES = (only ? [only] : ['postgresql', 'mysql']).filter((engine) => DATABASES[engine]);
 // Las formas del esquema que cubre cada sujeto (ver la cabecera).
-const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional', 'verification-codes'];
+const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional', 'verification-codes', 'vault-scoped', 'shop-scoped'];
 // Los sujetos DERIVADOS, por nombre: los finders de las búsquedas (DSL 2.22) en la forma de lista con un subcampo de value
 // object, el MISMO diseño que mide keel-dotnet (keel-core/test/helpers/finder-designs.js); y la autoría, que ninguna
 // fixture relacional declara: por política sobre product-catalog y DECLARADA sobre notification-mailer (raíz e hija),
@@ -162,7 +167,9 @@ const DERIVED = {
   },
   'mailer-author': { from: 'notification-mailer', mutate: declaredAuthorship },
   // La escritura condicional (api.concurrency, CW-1 a CW-5): el MISMO diseño que mide keel-dotnet.
-  ...Object.fromEntries(CONDITIONAL_WRITE_DESIGNS.filter((design) => design.name === 'catalog-conditional').map((design) => [design.name, design]))
+  ...Object.fromEntries(CONDITIONAL_WRITE_DESIGNS.filter((design) => design.name === 'catalog-conditional').map((design) => [design.name, design])),
+  // La lectura acotada (DSL 2.27, RS-1 a RS-8): los MISMOS diseños relacionales que mide keel-spring.
+  ...Object.fromEntries(READ_SCOPE_DESIGNS.filter((design) => ['vault-scoped', 'shop-scoped'].includes(design.name)).map((design) => [design.name, design]))
 };
 const results = [];
 
@@ -421,7 +428,8 @@ function rootBlock(model, engine, root, index, ctx) {
   const second = sampleEntity(model, root, ctx, `${index}b`);
   const finder = naturalKeyFinder(model, root);
   const name = root.name;
-  const paginated = model.services.some((group) => group.entity === root.name && group.operations.some((op) => op.paginated));
+  // list(pageable) solo existe si la raíz tiene un listado sin acotar (DSL 2.27): el acotado va por su finder.
+  const paginated = listsUnscoped(model, root);
   // Lo que solo se ve en la fila cruda: el enum por su CONSTANTE y el decimal con su escala.
   const raw = [];
   for (const member of persistedMembers(model, root)) {
@@ -474,6 +482,7 @@ ${finder ? `  const found = await repository.${finder.name}(${finder.params.map(
 ${foldedBlock(model, root, index, ctx, finder)}
 ${filterFoldBlock(model, root, index, ctx)}
 ${finderBlock(model, root, index, ctx, { sampleEntity })}
+${readScopeBlock(model, root, index, ctx, { sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterCtorArgs(model, owner, ctx)})` })}
 ${rankBlock(model, root, index, ctx, { paginated, sampleEntity })}
 ${inverseBlock(model, root, index, ctx, { sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterCtorArgs(model, owner, ctx)})` })}
 ${idBatchReason(model, root) ? `  {
@@ -1613,6 +1622,13 @@ for (const engine of ENGINES) {
       }
       if (isDrainSabotage(sabotage) && checks.some((check) => /^DR-\d+:/.test(check.name))) {
         const verdict = drainSabotageVerdict(checks, sabotage);
+        step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+        continue;
+      }
+      // La lectura acotada (DSL 2.27): verde si caen EXACTAMENTE sus casos RS de este sujeto (y ningún otro RS).
+      if (isReadScopeSabotage(sabotage) && readScopeCases(model).length > 0) {
+        const verdict = readScopeSabotageVerdict(checks, sabotage, model);
+        for (const check of checks.filter((entry) => !entry.ok && /^RS-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
         step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
         continue;
       }

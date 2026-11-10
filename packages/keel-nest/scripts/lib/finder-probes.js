@@ -72,10 +72,13 @@ export function finderBlock(model, root, index, ctx, { sampleEntity }) {
 
       const filterOf = (probed, value) =>
         `{ ${finder.criteria.map((criterion, at) => `${criterion.name}: ${criterion === probed ? value : criterion.required ? `v${at}` : 'null'}`).join(', ')} }`;
+      // Un finder acotado (DSL 2.27) pide el scope: sin filtro, que lo que se mide aquí son los criterios.
+      if (finder.scope) ctx.imports.add('ReadScope|src/domain/repository/read-scope.ts');
+      const scope = finder.scope ? 'ReadScope.unrestricted()' : null;
       const call = (filter) =>
         finder.result === 'page'
-          ? `(await repository.${finder.method}(${filter ? `${filter}, ` : ''}{ page: 0, size: 1000, sort: [] })).items`
-          : `(await repository.${finder.method}(${filter ?? ''}))`;
+          ? `(await repository.${finder.method}(${[filter, '{ page: 0, size: 1000, sort: [] }', scope].filter(Boolean).join(', ')})).items`
+          : `(await repository.${finder.method}(${[filter, scope].filter(Boolean).join(', ')}))`;
       const finds = (filter, target) => `${call(filter)}.some((found) => found.${idName} === ${target}.${idName})`;
       const noFilter = finder.criteria.length > 0 ? filterOf(null, null) : null;
       const label = `${root.name}.${finder.method}`;

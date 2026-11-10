@@ -324,7 +324,7 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
 |---|---|---|
 | 0. keel-core | hecho (2026-11-10) | suites de los cinco paquetes en verde; `design-matrix`: los 8 ids nuevos falsados (205), ningún co-disparado nuevo, ningún `sin-mutacion` |
 | 1. keel-spring | hecho (2026-11-10) | `read-scope-check` en los cuatro sujetos (PostgreSQL, MySQL y MongoDB) y los siete sabotajes, cada uno en exactamente sus casos; suites de keel-core y keel-spring |
-| 2. keel-nest | pendiente | |
+| 2. keel-nest | hecho (2026-11-10) | `db-check` (PostgreSQL y MySQL) y `doc-check` en los cuatro sujetos, con los siete sabotajes cada uno en exactamente sus casos; RS-9 a RS-11 ejecutando lo emitido; `ts-check`; suites de los cinco paquetes |
 | 3. keel-dotnet | pendiente | |
 | 4. keel-go | pendiente | |
 | 5. `level: optional` | pendiente | |
@@ -373,6 +373,25 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
   `ApiExceptionHandler` generado, porque keel-spring no emite pruebas de la API: los casos de `api-cases.js` siguen
   pospuestos al inc. 2 (keel-nest). **Una trampa medida**: la siembra daba el mismo texto a todos los campos del dueño, y
   `rs-path` (comparar otro campo del camino) salía VERDE; el campo acotado se siembra ahora con un valor propio.
-- Siguiente: **incremento 2, keel-nest**. Las sondas de `read-scope-check` (`src/lib/read-scope-probes.js`) y sus
-  sabotajes son el modelo de `scripts/lib/read-scope-probes.js`; `test/read-scope-parity.test.js` compara con lo que
-  emite keel-spring.
+- **Incremento 2 hecho (2026-11-10).** keel-nest genera la lectura acotada entera (`src/scaffold/read-scope.js`):
+  `ReadScope` como unión discriminada en `domain/repository` (con `cacheKey`, la misma forma que keel-spring);
+  `ReadScopes` en `infrastructure/security`, que el controlador llama antes del lector y estampa en el mensaje (con
+  `resolvedBy`, el dueño es la identidad ya resuelta); el finder acotado con el scope obligatorio y el predicado sumado al
+  `where` de TypeORM —el salto, como subconsulta del QueryBuilder de la otra raíz dentro de un `Raw`, para que TypeORM ponga
+  nombres y comillas de cada motor— o al filtro del driver, resolviendo los ids de la otra colección; `loadScoped` y
+  `loadScopedBy<Clave>` con `count` sobre el MISMO predicado; el scope en la clave de caché. Neutral nuevo en keel-core:
+  `listsUnscoped` (`gen/features.js`, la raíz cuyos listados están todos acotados no da `list(pageable)`; keel-spring lo
+  usa también) y la nota de la caché, que con `reads` ya no dice «la clave no es el llamante». Redes: `db-check` (vault-scoped
+  y shop-scoped, PostgreSQL y MySQL) y `doc-check` (vault-scoped-mongo y conduit-scoped), con `scripts/lib/read-scope-probes.js`
+  y los sabotajes `rs-*` cada uno en exactamente sus casos; RS-9 a RS-11 EJECUTANDO lo emitido en `test/read-scope.test.js`
+  (la clave, ReadScopes con un principal y el 403 del `ApiExceptionFilter`), falsados con `rs-cache-key` y la mitad del
+  borde de `rs-empty-is-all`, que es además la comparación de paridad con keel-spring (cargas, constructores del borde y
+  lecturas). Los cuatro sujetos entran en `DERIVED_SILHOUETTES` (ts-syntax y ts-check).
+- **Desviaciones del inc. 2**: RS-9, RS-10 y RS-11 no van por `cache-check`, `security-check` y `ts-check`: ejecutar lo
+  emitido transpilado mide la misma pieza sin contenedores (la clave es una función pura; ReadScopes lee el principal del
+  `SecurityContext`, y el `JwtCallerScope` que lee el claim ya lo midió `security-check` contra Keycloak; el 403 es el filtro
+  de errores). La paridad va en `test/read-scope.test.js` y no en un archivo aparte. **Dos cosas medidas**: `doc-check`
+  cazó un error de tipos que ts-syntax no ve (la colección de la otra raíz sin tipar), y con `rs-path` la carga de la fila
+  propia lanza el 403, así que la sonda lo cuenta como «no cargó» en vez de morir.
+- Siguiente: **incremento 3, keel-dotnet**. Las sondas de keel-nest (`scripts/lib/read-scope-probes.js`) son el modelo
+  para su `db-check` y `doc-check`.

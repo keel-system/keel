@@ -50,6 +50,8 @@ import { portPath as clientPortPath } from './http-clients.js';
 import { projectorPath, readerPath, replicas } from './projections.js';
 import { repositoryOf, isPartialUpdate } from '@keel-system/keel-core/gen/features';
 import { VERSIONED_TS, carriesExpectedVersions, conditionalHandlerNote, returnsVersioned, versionedType } from './conditional-writes.js';
+import { readScopeHandlerCall, readScopeImport } from './read-scope.js';
+import { readScopeNote } from '@keel-system/keel-core/gen/read-scope';
 import { compensationNote } from '@keel-system/keel-core/gen/compensation';
 export { isPartialUpdate };
 
@@ -196,6 +198,18 @@ function renderMessage(model, operation) {
   readonly expectedVersions: readonly number[] | null;`);
     props.push('    readonly expectedVersions?: readonly number[] | null;');
     assigns.push('    this.expectedVersions = props.expectedVersions ?? null;');
+  }
+  // El alcance de una lectura acotada (DSL 2.27, D1): lo estampa el controlador desde el token. Obligatorio: nadie
+  // construye el mensaje sin decir qué filas ve quien lee.
+  if (operation.readScope) {
+    imports.push(readScopeImport());
+    declarations.push(`  /**
+   * Qué filas ve quien lee (lectura acotada, DSL 2.27): lo estampa el controlador generado desde el token; no se acepta
+   * del cuerpo ni de la query. Pásalo tal cual al puerto: el adaptador filtra con él.
+   */
+  readonly readScope: ReadScope;`);
+    props.push('    readonly readScope: ReadScope;');
+    assigns.push('    this.readScope = props.readScope;');
   }
   const scope = idempotencyScope(operation);
   const body = `${tsdoc(operation.description)}export class ${operation.messageClass} extends ${contract.base} {
@@ -507,6 +521,12 @@ function handlerNotes(model, operation) {
   // La propiedad (DSL 2.23): nota neutral, la misma en los tres generadores.
   const ownerParam = operation.messageKind === 'query' ? 'query' : 'command';
   for (const note of ownershipNotes(model, operation, { read: (field) => `${ownerParam}.${field}`, hasRole: (role) => `this.callerRoles.has('${role}')` })) notes.push(note);
+  // La lectura acotada (DSL 2.27): el adaptador ya filtra; la nota neutral dice qué pasar y que no se filtre a mano.
+  const scopedRead = readScopeNote(operation.readScope, {
+    scope: `${ownerParam}.readScope`,
+    call: readScopeHandlerCall(model, operation, operation.finder ? finderCall(operation.finder) : '')
+  });
+  if (scopedRead) notes.push(scopedRead);
   const scoping = model.security?.scoping;
   if (scopedOperation(model, operation)) {
     notes.push(

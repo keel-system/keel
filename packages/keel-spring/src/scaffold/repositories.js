@@ -19,6 +19,7 @@ import * as conditionalUniqueness from './conditional-uniqueness.js';
 import { textFoldImport } from './text-fold.js';
 import { entityFinders, finderFields, jpaFinderMethods, likePatternHelper, portFinderMethods } from './finders.js';
 import { isScopedRoot, readScopeJpaMethods, readScopePortMethods } from './read-scope.js';
+import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import { partialUniqueIndexes } from './persistence-members.js';
 import { collectInternalEntities, keyShadow, naturalKeyBatchReason, uniqueFields } from '@keel-system/keel-core/gen/relational';
 
@@ -35,9 +36,7 @@ export function generate(model) {
     );
     // Un listado acotado (DSL 2.27) no da el list(pageable) sin scope: la única puerta paginada de esa raíz es su
     // finder, que exige el ReadScope. Dejar la otra al lado es dejar el camino que no filtra a un import de distancia.
-    const listed = model.services.some(
-      (group) => group.entity === entity.name && group.operations.some((op) => op.paginated && !op.readScope)
-    );
+    const listed = listsUnscoped(model, entity);
     // Lectura por lote: solo las raíces que algún payload embebe (`embed`) la
     // necesitan, y solo ellas la reciben — un puerto no se ensancha con métodos
     // que nadie llama. Es lo que permite resolver los embeds de una página con

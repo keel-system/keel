@@ -756,10 +756,30 @@ export const MECHANISMS = {
           'catalog-conditional-mongo: CW-1 a CW-5 contra el adaptador del driver de MongoDB en un replica set real, con las MISMAS sondas que db-check. Falsado con --subject=catalog-conditional-mongo: cw-ignore-expected cae en CW-2, cw-stale-version en CW-4 y cw-collapse-409 en CW-5 (y en las sondas previas de la versión obsoleta)'
       }
     }
-  }
-,
+  },
   'read-scope': {
-    pending: 'la lectura acotada (DSL 2.27) llega en el incremento 2 de PLAN-DSL-227-LECTURA-ACOTADA.md: hasta entonces supported-features.js la rechaza entera (readScopePendingErrors)'
+    parity: {
+      skip: 'ningún par byte a byte declara reads hasta el incremento 7 de PLAN-DSL-227-LECTURA-ACOTADA.md: los sujetos son los diseños de keel-core/test/helpers/read-scope-designs.js (vault-scoped y vault-scoped-mongo, el mismo diseño salvo el modelo; shop-scoped y conduit-scoped), los MISMOS que mide keel-spring; test/read-scope.test.js fija la forma y la compara con keel-spring',
+      test: 'test/read-scope.test.js'
+    },
+    emitter: 'src/scaffold/read-scope.js (ReadScope, ReadScopes, el predicado en el where y en el filtro, loadScoped) · finders.js · repositories.js y document-repositories.js · controllers.js · services.js · cache.js',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'vault-scoped (el salto Asset.owner → Owner.code como subconsulta del QueryBuilder dentro de un Raw) y shop-scoped (la propiedad sobre la propia fila, forbidden, la carga por la clave de la ruta y un filtro sumado): RS-1 a RS-8 contra el adaptador de TypeORM en PostgreSQL y MySQL (scripts/lib/read-scope-probes.js). Falsado: rs-no-filter cae en RS-1, RS-2 y RS-6, rs-count-unscoped en RS-2, rs-get-leak en RS-5, rs-empty-is-all en RS-6, rs-finder-replace en RS-7 (shop-scoped); rs-path en RS-8 (vault-scoped). RS-9 a RS-11 (la clave de caché, ReadScopes desde un principal y el 403 del filtro de errores), ejecutando lo emitido en test/read-scope.test.js, falsados con rs-cache-key y la mitad del borde de rs-empty-is-all'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        falsified: true,
+        why:
+          'vault-scoped-mongo (el salto resuelve los ids de owners y filtra owner_id) y conduit-scoped (el dueño por Article.author → Profile.subject, not-found y la carga por slug) contra el driver de MongoDB en un replica set real, con las MISMAS sondas que db-check. Falsado con los mismos sabotajes, cada uno en exactamente sus casos'
+      }
+    }
   }
 };
 

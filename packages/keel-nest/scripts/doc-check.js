@@ -29,6 +29,9 @@
 import fs from 'node:fs';
 import { CONDITIONAL_WRITE_DESIGNS } from '../../keel-core/test/helpers/conditional-write-designs.js';
 import { conditionalWriteBlock } from './lib/conditional-probes.js';
+import { READ_SCOPE_SABOTAGE_SPECS, isReadScopeSabotage, readScopeBlock, readScopeCases, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
+import { READ_SCOPE_DESIGNS } from '../../keel-core/test/helpers/read-scope-designs.js';
+import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import os from 'node:os';
 import path from 'node:path';
 import { loadService } from '@keel-system/keel-core';
@@ -83,7 +86,9 @@ const SABOTAGES = {
   // El drenaje del schedule (DSL 2.26, inc. 8): con --subject=job-dispatch-mongo, caen DR-1 o DR-3 del bloque del reclamo.
   ...Object.fromEntries(Object.entries(DRAIN_SABOTAGES).map(([id, { spec }]) => [id, spec])),
   // El relay por réplica (DSL 2.26, inc. 9): con --subject=notification-mailer-mongo, caen RW-1 o RW-3 del bloque del outbox.
-  ...Object.fromEntries(Object.entries(RELAY_WAKE_SABOTAGES).map(([id, { spec }]) => [id, spec]))
+  ...Object.fromEntries(Object.entries(RELAY_WAKE_SABOTAGES).map(([id, { spec }]) => [id, spec])),
+  // La lectura acotada (DSL 2.27): con --subject=vault-scoped-mongo o conduit-scoped, cada uno cae en exactamente sus casos RS.
+  ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document]))
 };
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -141,6 +146,15 @@ const SUBJECTS = [
   // por patrón, plegado y sin plegar. El MISMO diseño que mide keel-dotnet (keel-core/test/helpers/finder-designs.js).
   // La escritura condicional sobre documentos (api.concurrency, CW-1 a CW-5): el MISMO diseño que mide keel-dotnet.
   ...CONDITIONAL_WRITE_DESIGNS.filter((design) => design.name === 'catalog-conditional-mongo').map((design) => ({ name: design.from, label: design.name, withoutLayers: [], mutate: design.mutate })),
+  // La lectura acotada sobre documentos (DSL 2.27, RS-1 a RS-8): los MISMOS diseños que mide keel-spring. El de vault, sin
+  // la autoría de política, como el sujeto asset-vault de arriba.
+  ...READ_SCOPE_DESIGNS.filter((design) => ['vault-scoped-mongo', 'conduit-scoped'].includes(design.name)).map((design) => ({
+    name: design.from,
+    label: design.name,
+    withoutLayers: [],
+    withoutAuthorship: design.from === 'asset-vault',
+    mutate: design.mutate
+  })),
   ...FINDER_DESIGNS.filter((design) => design.name === 'jobs-mongo-finder').map((design) => ({
     name: design.from,
     label: design.name,
@@ -338,7 +352,8 @@ function rootBlock(model, root, index, ctx) {
   const first = sampleEntity(model, root, ctx, `${index}a`);
   const second = sampleEntity(model, root, ctx, `${index}b`);
   const finder = naturalKeyFinder(model, root);
-  const paginated = model.services.some((group) => group.entity === root.name && group.operations.some((op) => op.paginated));
+  // list(pageable) solo existe si la raíz tiene un listado sin acotar (DSL 2.27): el acotado va por su finder.
+  const paginated = listsUnscoped(model, root);
   const policyAudit = model.audit?.timestamps === 'all';
   const partial = partialDocumentIndexSpecs(model).find((spec) => spec.entity === root.name && !spec.when.field.includes('.'));
   const occupant = partial ? occupantFinders(model, root).find((candidate) => candidate.state === partial.when.equals) : null;
@@ -431,6 +446,7 @@ ${claim.stampField ? `    check('${name}: ${claim.method} estampa ${claim.stampF
   }`).join('\n')}
 ${foldedBlock(model, root, index, ctx, finder)}
 ${finderBlock(model, root, index, ctx, { sampleEntity })}
+${readScopeBlock(model, root, index, ctx, { sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterArgs(model, owner)})` })}
 ${rankBlock(model, root, index, ctx, { paginated, sampleEntity })}
 ${inverseBlock(model, root, index, ctx, { sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterArgs(model, owner)})` })}
 ${credentialFinders(model, root).map((credential) => `  // La credencial que NO es la primera de la lista: resolver por la clave natural no la encontraría.
@@ -578,6 +594,13 @@ try {
     }
     if (isPurgeTimerSabotage(sabotage) && (timerPurges(model).length > 0 || timerSchedules(model).length > 0)) {
       const verdict = purgeTimerSabotageVerdict(checks, sabotage);
+      step(`${label}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
+    // La lectura acotada (DSL 2.27): verde si caen EXACTAMENTE sus casos RS de este sujeto (y ningún otro RS).
+    if (isReadScopeSabotage(sabotage) && readScopeCases(model).length > 0) {
+      const verdict = readScopeSabotageVerdict(checks, sabotage, model);
+      for (const check of checks.filter((entry) => !entry.ok && /^RS-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
       step(`${label}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
       continue;
     }

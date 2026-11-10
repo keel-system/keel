@@ -20,6 +20,7 @@ import { DIRS, classPath, fieldImports, tsModule, tsdoc, tsString } from './rend
 import { ENTRY_GATE_TS, MEDIATOR_TS } from './mediator.js';
 import { entryGateAssignment, messageComponents, messagePath, returnTypeOf, isPartialUpdate } from './services.js';
 import { CONDITIONAL_REQUESTS_TS, carriesExpectedVersions, controllerLine, returnsVersioned } from './conditional-writes.js';
+import { READ_SCOPES_TS, readScopeImport, readScopesMethod } from './read-scope.js';
 import { PAGED_RESPONSE_TS, FILE_UPLOAD_TS } from './dtos.js';
 import { MULTIPART_READING_TS } from './storage.js';
 import { REQUEST_READING_TS, ROUTES_TS, usesApi } from './rest-support.js';
@@ -186,7 +187,7 @@ function renderController(model, service, routed) {
   const readers = [];
   const methods = routed.map((operation) => renderMethod(model, operation, imports, readers));
   // Con resolvedBy, la identidad del llamante se resuelve al recurso antes de despachar (callerResolution).
-  const resolving = callerResolution(model) != null && routed.some((operation) => resolvesCaller(model, operation));
+  const resolving = callerResolution(model) != null && routed.some((operation) => resolvesCaller(model, operation) || scopeResolvesCaller(model, operation));
   if (resolving) imports.push({ symbol: 'CallerIdentityResolver', from: CALLER_IDENTITY_TS });
   const constructor = resolving
     ? `  constructor(\n    @Inject(UseCaseMediator) private readonly mediator: UseCaseMediator,\n    @Inject(CallerIdentityResolver) private readonly callerIdentity: CallerIdentityResolver\n  ) {}`
@@ -220,14 +221,22 @@ function renderMethod(model, operation, imports, readers) {
   // La escritura condicional (api.concurrency): If-Match se lee ANTES que el lector, porque el 428 va antes que todo 400
   // (D3), y llega al lector, que lo estampa en el mensaje.
   const conditional = carriesExpectedVersions(model, operation);
-  const extra = conditional ? ', expectedVersions' : '';
-  let call = `this.mediator.${dispatch}(${readerName}(params, query, body${extra}))`;
+  let extra = conditional ? ', expectedVersions' : '';
   let resolve = '';
   if (conditional) {
     imports.push({ symbol: 'Headers', from: '@nestjs/common' }, { symbol: 'readExpectedVersions', from: CONDITIONAL_REQUESTS_TS });
     params.push("@Headers('if-match') ifMatch: string | undefined");
     resolve = `${controllerLine(model)}\n`;
   }
+  // La lectura acotada (DSL 2.27, D1): el ReadScope desde el token, antes del lector, que lo estampa en el mensaje. Con
+  // resolvedBy, el dueño es la identidad ya resuelta al recurso, como en el resto del controlador.
+  if (operation.readScope) {
+    imports.push({ symbol: 'ReadScopes', from: READ_SCOPES_TS });
+    const identity = scopeResolvesCaller(model, operation) ? 'await this.callerIdentity.resolve()' : '';
+    resolve += `    const readScope = ReadScopes.${readScopesMethod(operation.readScope)}(${identity});\n`;
+    extra += ', readScope';
+  }
+  let call = `this.mediator.${dispatch}(${readerName}(params, query, body${extra}))`;
   // Una subida: el cuerpo es multipart/form-data. Los campos simples se leen como los de la query (el
   // @RequestParam de keel-spring lee los dos) y los binarios llegan por su nombre de parte.
   const needsRequest = Boolean(location) || operation.multipart;
@@ -455,8 +464,13 @@ function renderReader(model, operation, name, imports) {
   // La versión esperada (api.concurrency): la leyó el controlador de If-Match antes que nada.
   const conditional = carriesExpectedVersions(model, operation);
   if (conditional) assigns.push('    expectedVersions');
+  // El alcance de la lectura (DSL 2.27): lo construyó el controlador desde el token.
+  if (operation.readScope) {
+    imports.push(readScopeImport());
+    assigns.push('    readScope');
+  }
   const construct = assigns.length > 0 ? `new ${operation.messageClass}({\n${assigns.join(',\n')}\n  })` : `new ${operation.messageClass}()`;
-  const versions = conditional ? ', expectedVersions: readonly number[] | null' : '';
+  const versions = (conditional ? ', expectedVersions: readonly number[] | null' : '') + (operation.readScope ? ', readScope: ReadScope' : '');
   return `/** Lee ${operation.route.method} ${operation.route.path} (${operation.name}) al mensaje de su caso de uso. */
 function ${name}(params: Record<string, string>, query: Record<string, unknown>, body: unknown${versions}): ${operation.messageClass} {
 ${ordered.join('\n')}${ordered.length > 0 ? '\n' : ''}  return ${construct};
@@ -528,6 +542,11 @@ export function locationOf(request: FastifyRequest, template: string, value: unk
   return \`\${request.protocol}://\${request.host}\${template.replace(/\\{[^}]+\\}/, encodeURIComponent(String(value)))}\`;
 }`;
   return { path: ROUTES_TS, content: tsModule(ROUTES_TS, [{ symbol: 'FastifyRequest', from: 'fastify', type: true }], body) };
+}
+
+/** ¿Construye el dueño de una lectura acotada con la identidad resuelta contra varias credenciales (resolvedBy)? */
+function scopeResolvesCaller(model, operation) {
+  return operation.readScope?.kind === 'ownership' && callerResolution(model) != null;
 }
 
 /** ¿La operación recibe la identidad del llamante y el diseño la resuelve contra varias credenciales? */

@@ -31,6 +31,8 @@ import { documentGuardMethods, documentReconciliationMethods, documentSweepClaim
 import { sweepPassImport } from './timer.js';
 import { entityFinders, finderSignature, RANGE_OPERATORS, sortConstant, sortConstants } from './finders.js';
 import { AUDIT_ACTOR_TS } from './audit-actor.js';
+import { DOCUMENT_SCOPE_LINE, readScopeDocumentHelpers, readScopeDocumentMethods, readScopeImport } from './read-scope.js';
+import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import { sortablePaths } from '@keel-system/keel-core/gen/document';
 
 // ─── Valores ─────────────────────────────────────────────────────────────────
@@ -477,7 +479,8 @@ export function renderDocumentAdapter(model, entity) {
     return found == null ? null : toDomain${entity.name}(found);
   }`);
   }
-  if (isPaginated(model, entity)) {
+  // Un listado acotado (DSL 2.27) no da el list(pageable) sin scope: la única puerta paginada es su finder.
+  if (listsUnscoped(model, entity)) {
     imports.push({ symbol: 'Page', from: PAGE_TS, type: true }, { symbol: 'Pageable', from: PAGE_TS, type: true }, { symbol: 'pageOf', from: PAGE_TS });
     imports.push({ symbol: 'Sort', from: 'mongodb', type: true });
     methods.push(`  async list(pageable: Pageable): Promise<Page<${entity.name}>> {
@@ -501,6 +504,8 @@ export function renderDocumentAdapter(model, entity) {
     for (const finder of entityFinders(model, entity)) if (finder.criteria.length > 0) imports.push({ symbol: finder.filterType, from: portPath(entity), type: true });
   }
   methods.push(...searchFinders);
+  // La lectura acotada (DSL 2.27): las cargas y el predicado que los finders acotados suman a su filtro.
+  methods.push(...readScopeDocumentMethods(model, entity, imports, { documentId: DOCUMENT_ID, idWrite: (expr) => (id ? writeScalar(id, expr, use) : expr) }));
   const literalPatterns = entityFinders(model, entity).some((finder) => finder.criteria.some((criterion) => criterion.match !== 'exact'));
 
   // Los reclamos de los barridos que sacan documentos de esta raíz y los de las reconciliaciones que la esperan.
@@ -519,7 +524,8 @@ export function renderDocumentAdapter(model, entity) {
   const paginated =
     (isPaginated(model, entity) || searchFinders.length > 0 ? stableOrderHelper(model, entity) : '') +
     sortConstants(model, entity, imports, PAGE_TS) +
-    (literalPatterns ? LITERAL_PATTERN : '');
+    (literalPatterns ? LITERAL_PATTERN : '') +
+    readScopeDocumentHelpers(model, entity);
   const body = `/** La colección del agregado: el documento de la raíz, con sus hijas dentro. */
 const COLLECTION = ${tsString(entity.collectionName)};
 
@@ -605,6 +611,11 @@ function documentFinderMethods(model, entity, use, imports) {
             : `{ ${tsString(key)}: ${write(value)} }`;
       const statement = `conditions.push(${condition});`;
       lines.push(criterion.required ? `    ${statement}` : `    if (filter.${criterion.name} != null) ${statement}`);
+    }
+    // El alcance se SUMA a los criterios (D4), y la misma consulta da el total.
+    if (finder.scope) {
+      imports.push(readScopeImport());
+      lines.push(DOCUMENT_SCOPE_LINE);
     }
     lines.push('    const query: Filter<StoredDocument> = conditions.length === 0 ? {} : { $and: conditions };');
     if (finder.result === 'page') imports.push({ symbol: 'pageOf', from: PAGE_TS });

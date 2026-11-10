@@ -39,6 +39,7 @@ import { inverseAdapterMethods } from './repositories.js';
 import { refIdJava } from './persistence-members.js';
 import { finderFields, mongoFinderMethods } from './finders.js';
 import { readScopeMongoMethods } from './read-scope.js';
+import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import { textFoldImport } from './text-fold.js';
 
 export function generate(model) {
@@ -51,9 +52,7 @@ export function generate(model) {
     );
     // Un listado acotado (DSL 2.27) no da el list(pageable) sin scope: la única puerta paginada de esa raíz es su
     // finder, que exige el ReadScope. Dejar la otra al lado es dejar el camino que no filtra a un import de distancia.
-    const listed = model.services.some(
-      (group) => group.entity === entity.name && group.operations.some((op) => op.paginated && !op.readScope)
-    );
+    const listed = listsUnscoped(model, entity);
     const batchLookup = Boolean(idBatchReason(model, entity));
     files.push(renderPort(model, entity, listed, batchLookup));
     files.push(renderMongoRepository(model, entity));

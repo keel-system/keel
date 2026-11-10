@@ -32,6 +32,7 @@ import { VERSIONED_TS, returnsVersioned } from './conditional-writes.js';
 import { messageComponents, messagePath, returnTypeOf } from './services.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
 import { usesPersistence } from './persistence-entities.js';
+import { readScopeImport } from './read-scope.js';
 import { TRANSACTION_CONTEXT_TS } from './repositories.js';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
 import { cacheYaml } from '@keel-system/keel-core/gen/cache-config';
@@ -162,10 +163,14 @@ function cachedOperationsTs(model) {
         `use-cases.${cache.operation}.cache.keyFields: ${missing.join(', ')} no ${missing.length === 1 ? 'es un campo' : 'son campos'} del mensaje ${operation.messageClass}; la clave de la caché sale de la entrada de la operación.`
       );
     }
-    const key = cache.keyFields.length > 0 ? `cacheKey(${cache.keyFields.map((field) => `message.${field}`).join(', ')})` : "cacheKey('all')";
+    // Con una lectura acotada (DSL 2.27, D6) el scope del llamante es parte de la clave, con la forma de keel-spring: si
+    // no, la caché sirve a uno la fila de otro. Dos exentos comparten entrada (`all`).
+    const parts = [...cache.keyFields.map((field) => `message.${field}`), ...(operation.readScope ? ['ReadScope.cacheKey(message.readScope)'] : [])];
+    if (operation.readScope) imports.push(readScopeImport(false));
+    const key = parts.length > 0 ? `cacheKey(${parts.join(', ')})` : "cacheKey('all')";
     const by = invalidators.get(cache.cacheName) ?? [];
     const doc = [
-      `Caché de ${cache.operation}: TTL ${cache.ttlSeconds} s, clave por ${cache.keyFields.join(', ') || 'ningún campo (una sola entrada)'}.`,
+      `Caché de ${cache.operation}: TTL ${cache.ttlSeconds} s, clave por ${[...cache.keyFields, ...(operation.readScope ? ['el scope del llamante (lectura acotada)'] : [])].join(', ') || 'ningún campo (una sola entrada)'}.`,
       cache.invalidatedBy.length > 0
         ? `La invalidan ${cache.invalidatedBy.join(', ')}: la vacían ENTERA, al confirmar, ${by.length > 0 ? by.join(', ') : 'ninguna operación de este servicio (solo caduca por su TTL)'} (lo hace el UseCaseMediator).`
         : 'Ningún evento la invalida: solo caduca por su TTL.'
@@ -176,7 +181,7 @@ function cachedOperationsTs(model) {
 export const ${cache.constant}: CachedOperation<${returnTypeOf(operation, model)}, ${operation.messageClass}> = {
   name: ${tsString(cache.cacheName)},
   ttlSeconds: ${cache.ttlSeconds},
-  keyOf: (${cache.keyFields.length > 0 ? 'message' : '_message'}) => ${key}
+  keyOf: (${parts.length > 0 ? 'message' : '_message'}) => ${key}
 };`;
   });
   const body = `// Las cachés de lectura que declara use-cases.keel.yaml. El nombre y el TTL salen del diseño: cambiarlos aquí

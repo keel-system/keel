@@ -7,6 +7,7 @@
 
 import fs from 'node:fs';
 import { CONDITIONAL_WRITE_DESIGNS } from '../../../keel-core/test/helpers/conditional-write-designs.js';
+import { READ_SCOPE_DESIGNS } from '../../../keel-core/test/helpers/read-scope-designs.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './tmp.js';
@@ -131,7 +132,10 @@ export const DERIVED_SILHOUETTES = [
   })),
   // La escritura condicional (DSL 2.25): los diseños de keel-core/test/helpers/conditional-write-designs.js, los MISMOS que
   // mide keel-dotnet (relacional, documental y con seguridad y CORS).
-  ...CONDITIONAL_WRITE_DESIGNS.map((design) => ({ name: design.name, fixture: design.from, withoutLayers: [], mutate: design.mutate }))
+  ...CONDITIONAL_WRITE_DESIGNS.map((design) => ({ name: design.name, fixture: design.from, withoutLayers: [], mutate: design.mutate })),
+  // La lectura acotada (DSL 2.27): los diseños de keel-core/test/helpers/read-scope-designs.js, los MISMOS que mide
+  // keel-spring (conduit-optional es del incremento 5: hasta entonces se rechaza).
+  ...READ_SCOPE_DESIGNS.filter((design) => design.name !== 'conduit-optional').map((design) => ({ name: design.name, fixture: design.from, withoutLayers: [], mutate: design.mutate }))
 ];
 
 /** La autoría declarada por el dominio de Template y de su hija TemplateVariable (la misma que keel-dotnet). */

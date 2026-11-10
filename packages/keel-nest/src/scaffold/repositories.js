@@ -39,6 +39,8 @@ import {
   LIKE_PATTERN_TS
 } from './persistence-entities.js';
 import { entityFinders, portFinderParts, relationalFinderMethods, sortConstants } from './finders.js';
+import { readScopePortMethods, readScopeRelationalHelpers, readScopeRelationalMethods } from './read-scope.js';
+import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import { repositoryRoots, isPaginated, resolvedByOf } from '@keel-system/keel-core/gen/features';
 export { repositoryRoots, isPaginated };
 
@@ -271,6 +273,8 @@ function renderPort(model, entity) {
   const methods = [`  abstract findById(${id?.name ?? 'id'}: ${idType}): Promise<${entity.name} | null>;`];
   // La carga que compara la versión (api.concurrency, D4): la de las raíces que escribe alguna escritura condicional.
   if (loadsExpecting(model, entity)) methods.push(loadExpectingPort(entity, id?.name ?? 'id', idType));
+  // La carga acotada (DSL 2.27, D5): por id o por la clave natural de la ruta (T7).
+  methods.push(...readScopePortMethods(model, entity, imports));
   const idBatch = idBatchReason(model, entity);
   if (idBatch) {
     methods.push(
@@ -351,7 +355,8 @@ function renderPort(model, entity) {
   abstract ${credential.name}(${credential.param}: string): Promise<${entity.name} | null>;`
     );
   }
-  if (isPaginated(model, entity)) {
+  // Un listado acotado (DSL 2.27) no da el list(pageable) sin scope: la única puerta paginada es su finder.
+  if (listsUnscoped(model, entity)) {
     imports.push({ symbol: 'Page', from: PAGE_TS, type: true }, { symbol: 'Pageable', from: PAGE_TS, type: true });
     methods.push(`  /** Una página de agregados, en el orden pedido y con el id como desempate. */\n  abstract list(pageable: Pageable): Promise<Page<${entity.name}>>;`);
   }
@@ -498,7 +503,7 @@ function renderAdapter(model, entity) {
     return owner == null ? null : this.findById(owner.ownerId);
   }`);
   }
-  if (isPaginated(model, entity)) {
+  if (listsUnscoped(model, entity)) {
     imports.push({ symbol: 'Page', from: PAGE_TS, type: true }, { symbol: 'Pageable', from: PAGE_TS, type: true }, { symbol: 'pageOf', from: PAGE_TS });
     imports.push({ symbol: 'FindOptionsOrder', from: 'typeorm', type: true });
     methods.push(`  async list(pageable: Pageable): Promise<Page<${entity.name}>> {
@@ -518,6 +523,8 @@ function renderAdapter(model, entity) {
     for (const finder of entityFinders(model, entity)) imports.push(...(finder.criteria.length > 0 ? [{ symbol: finder.filterType, from: portPath(entity), type: true }] : []));
   }
   methods.push(...finders);
+  // La lectura acotada (DSL 2.27): las cargas y el predicado que los finders acotados suman a su where.
+  methods.push(...readScopeRelationalMethods(model, entity, imports, { ormClass, ormPath }));
 
   methods.push(...adapterClaimMethods(model, entity, imports, findOptions));
   methods.push(...adapterGuardMethods(model, entity, imports, findOptions, idType, idName));
@@ -532,7 +539,7 @@ function renderAdapter(model, entity) {
   }`);
 
   const sortable = sortableProperties(model, entity);
-  const body = `${hasRelations ? `/** El agregado entero: lo que se carga con la raíz y se borra con ella. */\nconst RELATIONS = ${literal(relations)} as const;\n\n` : ''}${isPaginated(model, entity) || entityFinders(model, entity).length > 0 ? stableOrderHelper(entity, sortable) : ''}${sortConstants(model, entity, imports, PAGE_TS)}/**
+  const body = `${hasRelations ? `/** El agregado entero: lo que se carga con la raíz y se borra con ella. */\nconst RELATIONS = ${literal(relations)} as const;\n\n` : ''}${isPaginated(model, entity) || entityFinders(model, entity).length > 0 ? stableOrderHelper(entity, sortable) : ''}${sortConstants(model, entity, imports, PAGE_TS)}${readScopeRelationalHelpers(model, entity)}/**
  * Adaptador del puerto ${portClass(entity)} sobre TypeORM. Toma el EntityManager de la transacción
  * abierta (la abre el UseCaseMediator); sin ella, cada lectura va sola y cada escritura abre la suya.
  */
