@@ -820,6 +820,32 @@ const SPRING_MECHANISMS = {
         why: 'catalog-conditional-mongo: CW-1 a CW-5 contra el adaptador de Spring Data MongoDB en un replica set real, con las MISMAS sondas que la rama relacional (aquí save ya devuelve la versión nueva y comprueba la que trae el documento). Falsado: cw-ignore-expected cae en CW-2, cw-stale-version en CW-4 y cw-collapse-409 en CW-5'
       }
     }
+  },
+  'read-scope': {
+    emitter:
+      'src/scaffold/read-scope.js · src/scaffold/finders.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js · src/scaffold/controllers.js · src/scaffold/services.js · src/scaffold/cache.js',
+    why: 'Un listado que no suma el predicado, un total que cuenta filas ajenas, una carga por id que no compara, un claim ausente leído como «todo» o un camino que compara el campo equivocado compilan igual de bien y responden 200: su fallo es una fuga de datos (OWASP API1), no un error, y ningún escenario de un solo llamante lo ve.',
+    parity: {
+      skip: 'ningún par byte a byte declara reads hasta el incremento 7 de PLAN-DSL-227-LECTURA-ACOTADA.md: los sujetos son los diseños derivados de keel-core/test/helpers/read-scope-designs.js (vault-scoped y vault-scoped-mongo, el mismo diseño salvo el modelo; shop-scoped y conduit-scoped), que medirán también keel-nest, keel-dotnet y keel-go; la forma la fija test/read-scope.test.js',
+      test: 'test/read-scope.test.js'
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'read-scope-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'vault-scoped (el salto Asset.owner → Owner.code como subconsulta, within con exentos y caché) y shop-scoped (la propiedad sobre la propia fila, roles exentos, forbidden, carga por la clave de la ruta y un filtro sumado), en PostgreSQL y MySQL: RS-1 a RS-8 contra el adaptador JPA, RS-9 a RS-11 en el borde. Medido aquí y no supuesto: la subconsulta por salto evita el IN de uuids binarios en MySQL (T4), y la siembra tiene que dar al campo acotado un valor que ningún otro campo del dueño repita, o comparar el campo equivocado del camino sale verde. Falsado: rs-no-filter cae en RS-1, RS-2 y RS-6, rs-count-unscoped en RS-2, rs-get-leak en RS-5, rs-empty-is-all en RS-6 (y RS-10 con scoping), rs-finder-replace en RS-7 (shop-scoped); rs-path en RS-8 y rs-cache-key en RS-9 (vault-scoped)'
+      },
+      document: {
+        state: 'verificado',
+        net: 'read-scope-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'vault-scoped-mongo (el salto resuelve los ids de Owner y filtra ownerId) y conduit-scoped (el dueño por Article.author → Profile.subject, not-found y carga por slug) contra Spring Data MongoDB en un replica set real, con las MISMAS sondas que la rama relacional. Falsado con los mismos sabotajes, cada uno en exactamente sus casos'
+      }
+    }
   }
 };
 

@@ -38,6 +38,7 @@ import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections
 import { inverseAdapterMethods } from './repositories.js';
 import { refIdJava } from './persistence-members.js';
 import { finderFields, mongoFinderMethods } from './finders.js';
+import { readScopeMongoMethods } from './read-scope.js';
 import { textFoldImport } from './text-fold.js';
 
 export function generate(model) {
@@ -48,10 +49,15 @@ export function generate(model) {
     const paginated = model.services.some(
       (group) => group.entity === entity.name && group.operations.some((op) => op.paginated)
     );
+    // Un listado acotado (DSL 2.27) no da el list(pageable) sin scope: la única puerta paginada de esa raíz es su
+    // finder, que exige el ReadScope. Dejar la otra al lado es dejar el camino que no filtra a un import de distancia.
+    const listed = model.services.some(
+      (group) => group.entity === entity.name && group.operations.some((op) => op.paginated && !op.readScope)
+    );
     const batchLookup = Boolean(idBatchReason(model, entity));
-    files.push(renderPort(model, entity, paginated, batchLookup));
+    files.push(renderPort(model, entity, listed, batchLookup));
     files.push(renderMongoRepository(model, entity));
-    files.push(renderAdapter(model, entity, paginated, batchLookup));
+    files.push(renderAdapter(model, entity, paginated, batchLookup, listed));
   }
   return files;
 }
@@ -114,7 +120,7 @@ function renderMongoRepository(model, entity) {
   };
 }
 
-function renderAdapter(model, entity, paginated, batchLookup) {
+function renderAdapter(model, entity, paginated, batchLookup, listed = paginated) {
   const imports = new Set([
     `${subPackage(model, PORT_PKG)}.${entity.name}Repository`,
     `${subPackage(model, DOC_PKG)}.${entity.name}Document`,
@@ -197,12 +203,13 @@ function renderAdapter(model, entity, paginated, batchLookup) {
     imports.add('org.springframework.data.domain.Pageable');
     imports.add('org.springframework.data.domain.PageRequest');
     imports.add('org.springframework.data.domain.Sort');
-    methods.push(`    @Override
+    if (listed) {
+      methods.push(`    @Override
     public Page<${entity.name}> list(Pageable pageable) {
         return ${repoField}.findAll(withStableOrder(pageable)).map(this::toDomain);
+    }`);
     }
-
-    /**
+    methods.push(`    /**
      * Añade el id como último criterio de orden si no está ya. Sin desempate, dos
      * páginas consecutivas de la misma consulta pueden repetir un documento y omitir
      * otro: cuando el orden empata, la base de datos no garantiza un orden estable
@@ -220,6 +227,9 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   // Los finders de las búsquedas (DSL 2.22): los filtros del diseño sobre el documento, con MongoTemplate.
   const searchFinders = mongoFinderMethods(model, entity, imports);
   methods.push(...searchFinders);
+  // La lectura acotada (DSL 2.27): las cargas y el predicado que los finders acotados suman a su Criteria.
+  const scopedReads = readScopeMongoMethods(model, entity, imports);
+  methods.push(...scopedReads);
 
   // Drenaje de eventos de dominio: save() es el único punto por el que pasa todo
   // cambio persistido del agregado. Va dentro de la transacción, que aquí es real
@@ -326,7 +336,7 @@ ${saveBody}
   }
   // MongoTemplate solo donde hay reclamo o búsqueda: ni findAndModify, ni una consulta acotada por la marca de espera,
   // ni los filtros de un finder (DSL 2.22) se expresan con un repositorio derivado.
-  if (claimMethods.length > 0 || searchFinders.length > 0) {
+  if (claimMethods.length > 0 || searchFinders.length > 0 || scopedReads.length > 0) {
     imports.add('org.springframework.data.mongodb.core.MongoTemplate');
     fields.push('    private final MongoTemplate mongoTemplate;');
     ctorParams.push('MongoTemplate mongoTemplate');

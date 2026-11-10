@@ -6,13 +6,22 @@
 
 const required = { level: 'required' };
 
+// Un filtro opcional en el listado acotado: el predicado tiene que SUMARSE a los criterios del finder (RS-7).
+function filterByStatus(layers) {
+  const listAssets = layers['use-cases'].operations.listAssets;
+  listAssets.input = { fields: { status: { type: 'AssetStatus', description: 'Solo los archivos en este estado.' } } };
+}
+
 export const READ_SCOPE_DESIGNS = [
-  // El alcance por claim (`within`), con un rol y un cliente exentos, la caché de la ficha y el camino Asset.owner → Owner.code.
+  // El alcance por claim (`within`), con un rol y un cliente exentos, la caché de la ficha y el camino Asset.owner → Owner.code,
+  // sobre tablas: asset-vault es documental, y su rama relacional es la que mide el salto como subconsulta.
   {
     name: 'vault-scoped',
     from: 'asset-vault',
     mutate(layers) {
       Object.assign(layers.security.authentication.scoping, { reads: ['getAsset', 'listAssets'], readMiss: 'forbidden' });
+      filterByStatus(layers);
+      layers.persistence.default = { ...layers.persistence.default, model: 'relational' };
     }
   },
   // Lo mismo sobre documentos.
@@ -21,6 +30,7 @@ export const READ_SCOPE_DESIGNS = [
     from: 'asset-vault',
     mutate(layers) {
       Object.assign(layers.security.authentication.scoping, { reads: ['getAsset', 'listAssets'], readMiss: 'forbidden' });
+      filterByStatus(layers);
       layers.persistence.default = { ...layers.persistence.default, model: 'document' };
     }
   },
@@ -37,6 +47,8 @@ export const READ_SCOPE_DESIGNS = [
       delete operations.listOrders.input.fields.callerEmail;
       delete operations.getOrder.input.fields.callerEmail;
       delete operations.getProfile.input.fields.callerEmail;
+      // Un filtro opcional en el listado acotado: el predicado tiene que SUMARSE a los criterios del finder (RS-7).
+      operations.listOrders.input.fields.orderStatus = { type: 'OrderStatus', description: 'Solo los pedidos en este estado.' };
       operations.getOrder.errors = [
         ...(operations.getOrder.errors ?? []),
         ...((operations.getOrder.errors ?? []).some((e) => e.code === 'ORDER_NOT_OWNED')
@@ -45,15 +57,15 @@ export const READ_SCOPE_DESIGNS = [
       ];
     }
   },
-  // El dueño a través de una relación (Article.author → Profile.subject) con `not-found`. Las lecturas pasan a required
-  // para tener a quién acotar (D8).
+  // El dueño a través de una relación (Article.author → Profile.subject) con `not-found`, cargando por la clave natural
+  // (slug, T7). La lectura pasa a required para tener a quién acotar (D8). listArticles no entra: sus filtros por autor y
+  // favoritos no enlazan, no tiene finder y la frontera neutral lo rechazaría (T8).
   {
     name: 'conduit-scoped',
     from: 'conduit',
     mutate(layers) {
-      Object.assign(layers.security.ownership.Article, { reads: ['getArticle', 'listArticles'], readMiss: 'not-found' });
+      Object.assign(layers.security.ownership.Article, { reads: ['getArticle'], readMiss: 'not-found' });
       layers.security.access.rules.getArticle = { ...required };
-      layers.security.access.rules.listArticles = { ...required };
     }
   },
   // R3c: las cuatro lecturas que el legacy personaliza si llega un token, con el campo de la identidad opcional.

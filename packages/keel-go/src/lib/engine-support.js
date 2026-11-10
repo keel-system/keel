@@ -658,6 +658,9 @@ export const MECHANISMS = {
           'catalog-conditional-mongo: CW-1 a CW-5 contra el adaptador del driver de MongoDB en un replica set real, con las MISMAS sondas que db-check. Falsado con --only=catalog-conditional-mongo: cw-ignore-expected cae en CW-2 y CW-3, cw-stale-version en CW-4 y cw-collapse-409 en CW-5'
       }
     }
+  },
+  'read-scope': {
+    pending: 'la lectura acotada (DSL 2.27) llega en el incremento 4 de PLAN-DSL-227-LECTURA-ACOTADA.md: hasta entonces supported-features.js la rechaza entera (readScopePendingErrors)'
   }
 };
 

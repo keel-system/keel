@@ -18,6 +18,7 @@ import * as reconciliationClaim from './reconciliation-claim.js';
 import * as conditionalUniqueness from './conditional-uniqueness.js';
 import { textFoldImport } from './text-fold.js';
 import { entityFinders, finderFields, jpaFinderMethods, likePatternHelper, portFinderMethods } from './finders.js';
+import { isScopedRoot, readScopeJpaMethods, readScopePortMethods } from './read-scope.js';
 import { partialUniqueIndexes } from './persistence-members.js';
 import { collectInternalEntities, keyShadow, naturalKeyBatchReason, uniqueFields } from '@keel-system/keel-core/gen/relational';
 
@@ -32,14 +33,19 @@ export function generate(model) {
     const paginated = model.services.some(
       (group) => group.entity === entity.name && group.operations.some((op) => op.paginated)
     );
+    // Un listado acotado (DSL 2.27) no da el list(pageable) sin scope: la única puerta paginada de esa raíz es su
+    // finder, que exige el ReadScope. Dejar la otra al lado es dejar el camino que no filtra a un import de distancia.
+    const listed = model.services.some(
+      (group) => group.entity === entity.name && group.operations.some((op) => op.paginated && !op.readScope)
+    );
     // Lectura por lote: solo las raíces que algún payload embebe (`embed`) la
     // necesitan, y solo ellas la reciben — un puerto no se ensancha con métodos
     // que nadie llama. Es lo que permite resolver los embeds de una página con
     // una consulta por agregado en vez de una por elemento (N+1).
     const batchLookup = Boolean(idBatchReason(model, entity));
-    files.push(renderPort(model, entity, paginated, batchLookup));
+    files.push(renderPort(model, entity, listed, batchLookup));
     files.push(renderJpaRepository(model, entity));
-    files.push(renderAdapter(model, entity, paginated, batchLookup));
+    files.push(renderAdapter(model, entity, paginated, batchLookup, listed));
   }
   return files;
 }
@@ -325,6 +331,8 @@ export function renderPort(model, entity, paginated, batchLookup) {
     imports.add('java.util.List');
     methods.push(loadExpectingPort(entity, id));
   }
+  // La carga acotada (DSL 2.27, D5): por id o por la clave natural de la ruta (T7).
+  methods.push(...readScopePortMethods(model, entity, imports));
   if (batchLookup) {
     imports.add('java.util.Collection');
     imports.add('java.util.List');
@@ -518,7 +526,7 @@ ${graph}    @Override
   if (claimMethods.length > 0) methods += `\n\n${claimMethods.join('\n\n')}`;
 
   // Los finders de las búsquedas (DSL 2.22) son Specification: el repositorio las ejecuta si las sabe ejecutar.
-  const specifications = entityFinders(model, entity).length > 0;
+  const specifications = entityFinders(model, entity).length > 0 || isScopedRoot(model, entity);
   if (specifications) imports.add('org.springframework.data.jpa.repository.JpaSpecificationExecutor');
   const body = `public interface ${entity.name}JpaRepository extends JpaRepository<${entity.name}Jpa, ${id.javaType}>${specifications ? `, JpaSpecificationExecutor<${entity.name}Jpa>` : ''} {${methods}\n}`;
 
@@ -530,7 +538,7 @@ ${graph}    @Override
 
 // Adaptador: implementa el puerto delegando en Spring Data y mapeando
 // domain↔JPA de forma explícita (sin reflexión ni mappers externos).
-function renderAdapter(model, entity, paginated, batchLookup) {
+function renderAdapter(model, entity, paginated, batchLookup, listed = paginated) {
   const imports = new Set([
     `${subPackage(model, PORT_PKG)}.${entity.name}Repository`,
     `${subPackage(model, JPA_PKG)}.${entity.name}Jpa`,
@@ -613,12 +621,13 @@ function renderAdapter(model, entity, paginated, batchLookup) {
     imports.add('org.springframework.data.domain.Pageable');
     imports.add('org.springframework.data.domain.PageRequest');
     imports.add('org.springframework.data.domain.Sort');
-    methods.push(`    @Override
+    if (listed) {
+      methods.push(`    @Override
     public Page<${entity.name}> list(Pageable pageable) {
         return ${jpaField}.findAll(withStableOrder(pageable)).map(this::toDomain);
+    }`);
     }
-
-    /**
+    methods.push(`    /**
      * Añade el id como último criterio de orden si no está ya. Sin desempate, dos
      * páginas consecutivas de la misma consulta pueden repetir una fila y omitir
      * otra: cuando el ORDER BY empata, la base de datos no garantiza un orden
@@ -635,6 +644,8 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   }
   // Los finders de las búsquedas (DSL 2.22): los filtros del diseño sobre el espejo JPA, y solo esos.
   methods.push(...jpaFinderMethods(model, entity, imports, jpaField));
+  // La lectura acotada (DSL 2.27): las cargas y el predicado que los finders acotados suman a su Specification.
+  methods.push(...readScopeJpaMethods(model, entity, imports, jpaField));
   const likePattern = likePatternHelper(model, entity);
   if (likePattern) methods.push(likePattern);
   methods.push(...claim.adapterMethods(model, entity, imports, jpaField));

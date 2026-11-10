@@ -28,6 +28,7 @@ import { INTERFACES_PKG, MEDIATOR_PKG } from './mediator.js';
 import { domainTypeImport } from './entities.js';
 import { elementAnnotatedType } from './services.js';
 import { uniqueConstraints } from './persistence-entities.js';
+import { READ_SCOPES_PKG, stampReadScope } from './read-scope.js';
 import { conditionalWritePolicy } from '@keel-system/keel-core/gen/conditional-writes';
 import {
   REST_PKG,
@@ -145,26 +146,22 @@ function renderController(model, service) {
   const validatesParams = [...imports].some((name) => name.startsWith('jakarta.validation.constraints.'));
   if (validatesParams) imports.add('org.springframework.validation.annotation.Validated');
 
-  const injectsIdentity = methods.some((method) => method.includes('callerIdentity.resolve()'));
+  // Los colaboradores que el controller inyecta además del mediator: la identidad cuando es un bean y ReadScopes con
+  // una lectura acotada (DSL 2.27).
+  const collaborators = [
+    ['UseCaseMediator', 'mediator'],
+    ...(methods.some((method) => method.includes('callerIdentity.resolve()')) ? [['CallerIdentity', 'callerIdentity']] : []),
+    ...(methods.some((method) => method.includes('readScopes.')) ? [['ReadScopes', 'readScopes']] : [])
+  ];
 
   const body = `@RestController
 ${validatesParams ? '@Validated\n' : ''}@RequestMapping("${model.api.routeBase}")
 @Tag(name = "${groupName}"${tagDescription})
 public class ${service.controllerClass} {
 ${constants.length > 0 ? '\n' + constants.join('\n') + '\n' : ''}
-${injectsIdentity
-    ? `    private final UseCaseMediator mediator;
-    private final CallerIdentity callerIdentity;
-
-    public ${service.controllerClass}(UseCaseMediator mediator, CallerIdentity callerIdentity) {
-        this.mediator = mediator;
-        this.callerIdentity = callerIdentity;
-    }`
-    : `    private final UseCaseMediator mediator;
-
-    public ${service.controllerClass}(UseCaseMediator mediator) {
-        this.mediator = mediator;
-    }`}
+${collaborators.map(([type, name]) => `    private final ${type} ${name};\n`).join('')}
+    public ${service.controllerClass}(${collaborators.map(([type, name]) => `${type} ${name}`).join(', ')}) {
+${collaborators.map(([, name]) => `        this.${name} = ${name};\n`).join('')}    }
 
 ${methods.join('\n\n')}
 }`;
@@ -284,8 +281,14 @@ function renderMethod(model, operation, imports) {
     return STAMP_EXPECTED_VERSIONS;
   };
   // Lo que el mensaje no lee del cuerpo ni de la query: lo estampa el servidor.
-  const stamped = (component) => component.resolvedIdentity || component.entryGate || component.expectedVersions;
-  const stampArg = (component) => (component.resolvedIdentity ? identityArg() : component.entryGate ? gateArg() : versionsArg());
+  // La lectura acotada (DSL 2.27, D1): el ReadScope desde el token, que ReadScopes construye; tampoco del cuerpo.
+  const scopeArg = () => {
+    imports.add(`${subPackage(model, READ_SCOPES_PKG)}.ReadScopes`);
+    return stampReadScope(operation);
+  };
+  const stamped = (component) => component.resolvedIdentity || component.entryGate || component.expectedVersions || component.readScope;
+  const stampArg = (component) =>
+    component.resolvedIdentity ? identityArg() : component.entryGate ? gateArg() : component.readScope ? scopeArg() : versionsArg();
 
   if (operation.multipart) {
     // Subida binaria: el endpoint es multipart/form-data, no JSON.

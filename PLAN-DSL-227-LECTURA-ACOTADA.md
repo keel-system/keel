@@ -165,7 +165,7 @@ Calcado de `conditional-writes.js` y `deadlines.js`:
 
 | Sabotaje | Qué rompe | Debe caer |
 |---|---|---|
-| `rs-no-filter` | El listado ignora el scope | RS-1 |
+| `rs-no-filter` | El listado ignora el scope | RS-1, RS-2 y RS-6 (las filas, el total y el vacío salen de la misma consulta) |
 | `rs-count-unscoped` | El conteo ignora el scope | RS-2 |
 | `rs-get-leak` | `loadScoped` no compara | RS-4/5 |
 | `rs-empty-is-all` | El claim ausente se trata como `unrestricted` | RS-6/10 |
@@ -189,11 +189,15 @@ Calcado de `conditional-writes.js` y `deadlines.js`:
 - **T6 · el filtro redundante.** `shop-api/listOrders` recibe hoy `callerEmail` como input. Con `reads`, el input
   sobra: si se deja, `queryFinder` lo une por nombre y duplica el predicado (sin daño). Se retira de la fixture.
 - **T7 · la lectura por clave natural.** `conduit/getArticle` carga por `slug` y `shop-api/getProfile` por `email`, no
-  por id: `loadScoped(id, scope)` no las cubre tal cual. Se decide en el incremento 1 (un `loadScoped` por la clave de la
-  ruta, o el finder de la clave con el scope).
+  por id: `loadScoped(id, scope)` no las cubre tal cual. **Decidido en el incremento 1**: un `loadScopedBy<Clave>(valor,
+  scope)` cuando la lectura recibe la clave natural de UN campo, y `loadScoped(id, scope)` cuando recibe el id de la raíz
+  (`scopedLoadOf`, neutral). Cualquier otra forma la rechaza la frontera neutral `readScopeGenerationErrors`, con el
+  mismo mensaje en los cuatro.
 - **T8 · el listado acotado sin finder.** Una query con un input que no enlaza (`finderGaps`) no tiene finder, y su
-  búsqueda la escribe el agente: el predicado no llegaría por construcción. Se rechaza en la frontera neutral o el
-  puerto lo exige; se decide en el incremento 1.
+  búsqueda la escribe el agente: el predicado no llegaría por construcción. **Decidido en el incremento 1**: se rechaza
+  en la frontera neutral (`readScopeGenerationErrors`), que rechaza también un salto por una entidad interna, un campo
+  acotado que no es texto y dos bloques que acotan la misma raíz. Por eso `conduit-scoped` acota solo `getArticle`:
+  los filtros de `listArticles` por autor y favoritos no enlazan.
 
 ## Sujetos
 
@@ -201,10 +205,10 @@ En `keel-core/test/helpers/read-scope-designs.js`, con el patrón de `finder-des
 
 | Sujeto | Base | Qué mide |
 |---|---|---|
-| `vault-scoped` | `asset-vault` | scoping, `within`, exentos y caché |
+| `vault-scoped` | `asset-vault`, pasado a relacional | scoping, `within`, exentos, caché, el salto como subconsulta y un filtro por `status` (RS-7) |
 | `vault-scoped-mongo` | `asset-vault`, documental | La rama documental de lo mismo |
-| `shop-scoped` | `shop-api` | ownership por rol, `forbidden` y paginado |
-| `conduit-scoped` | `conduit` | owner por camino de relación, `not-found` |
+| `shop-scoped` | `shop-api` | ownership por rol, `forbidden`, paginado, carga por `email` (T7) y un filtro por `orderStatus` (RS-7) |
+| `conduit-scoped` | `conduit` | owner por camino de relación, `not-found`, carga por `slug` (solo `getArticle`, por T8) |
 | `conduit-optional` | `conduit` | R3c |
 
 Ninguna fixture declara `reads` u `optional` hasta el incremento 7: los generadores que todavía no lo emitan la
@@ -319,7 +323,7 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
 | Incremento | Estado | Medido con |
 |---|---|---|
 | 0. keel-core | hecho (2026-11-10) | suites de los cinco paquetes en verde; `design-matrix`: los 8 ids nuevos falsados (205), ningún co-disparado nuevo, ningún `sin-mutacion` |
-| 1. keel-spring | pendiente | |
+| 1. keel-spring | hecho (2026-11-10) | `read-scope-check` en los cuatro sujetos (PostgreSQL, MySQL y MongoDB) y los siete sabotajes, cada uno en exactamente sus casos; suites de keel-core y keel-spring |
 | 2. keel-nest | pendiente | |
 | 3. keel-dotnet | pendiente | |
 | 4. keel-go | pendiente | |
@@ -346,5 +350,29 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
   `CHK-SECURITY-OWNERSHIP-QUERY-IN-OPERATIONS` pasa al inc. 7; sin `REV-*` nuevo. **Pospuesto a su consumidor**: los
   casos RS-11 y OA-* en `api-cases.js` (inc. 1 y 5, cuando una prueba emitida los ejecute) y la seguridad alternativa
   del OpenAPI (inc. 6). Abiertos para el inc. 1: T7 (lectura por clave natural) y T8 (listado acotado sin finder).
-- Siguiente: **incremento 1, keel-spring**. Empezar por `read-scope-check` (calcado de `precondition-check`) sobre
-  `vault-scoped`, `shop-scoped` y `conduit-scoped`, y decidir T7 y T8 antes de escribir el puerto.
+- **Incremento 1 hecho (2026-11-10).** keel-spring genera la lectura acotada entera (`src/scaffold/read-scope.js`):
+  `ReadScope` sellado en `domain.repository` (con su `cacheKey()`, la de `readScopeCacheKey` de keel-core); `ReadScopes`
+  en el borde, que construye el scope desde el token (scoping con `CallerScope`, propiedad con los roles exentos y
+  `CallerIdentity`) y el controller estampa en el mensaje (`@JsonIgnore`); el finder acotado con el scope obligatorio
+  como último parámetro y el predicado SUMADO a su Specification o su Criteria, que da también el total; el salto a otra
+  raíz como subconsulta (JPA) o resolviendo los ids de la otra colección (MongoDB); `loadScoped` y `loadScopedBy<Clave>`,
+  que cargan y preguntan al motor con el MISMO predicado (`exists`); el scope en la clave de caché; la nota neutral en el
+  handler. Una raíz cuyos listados paginados están todos acotados ya no tiene `list(Pageable)` sin scope en su puerto.
+  Neutral nuevo en keel-core: `scopedLoadOf` (T7), `readScopeGenerationErrors` (T7, T8 y compañía, que keel-spring llama
+  desde `planService` porque necesita el modelo), `readScopePath`, `readScopeCacheKey` con `READ_SCOPE_KEY_CASES` y
+  `readMissMessage` (el 403 sale con el `when` del error declarado). Red: `npm run read-scope-check` (sondas en
+  `src/lib/read-scope-probes.js`); fila `read-scope` en las cuatro matrices (`pending` en las otras tres) y la red en
+  el catálogo neutral.
+- **Desviaciones del inc. 1**: (1) `vault-scoped` pasa a relacional (asset-vault es documental: los dos sujetos de vault
+  medían la misma rama), y vault y shop ganan un filtro opcional para medir RS-7; (2) `conduit-scoped` acota solo
+  `getArticle` (T8); (3) en una raíz con salto, las aserciones que solo son verdad con el camino correcto (la fila
+  propia, la ajena, el total, `within` con varios valores) son RS-8, y `read-scope-check` traduce RS-1/RS-2 a RS-8 al
+  calcular qué tiene que caer; (4) RS-6 se mide en el listado (en la carga, el vacío es una fila ajena más, la de
+  RS-4/RS-5), y `rs-no-filter` cae en RS-1, RS-2 y RS-6, que salen de la misma consulta; (5) la mitad RS-10 de
+  `rs-empty-is-all` es el claim ausente, que solo existe con `scoping`; (6) RS-11 se mide con el
+  `ApiExceptionHandler` generado, porque keel-spring no emite pruebas de la API: los casos de `api-cases.js` siguen
+  pospuestos al inc. 2 (keel-nest). **Una trampa medida**: la siembra daba el mismo texto a todos los campos del dueño, y
+  `rs-path` (comparar otro campo del camino) salía VERDE; el campo acotado se siembra ahora con un valor propio.
+- Siguiente: **incremento 2, keel-nest**. Las sondas de `read-scope-check` (`src/lib/read-scope-probes.js`) y sus
+  sabotajes son el modelo de `scripts/lib/read-scope-probes.js`; `test/read-scope-parity.test.js` compara con lo que
+  emite keel-spring.

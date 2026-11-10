@@ -25,7 +25,12 @@ import {
   readScopeNote,
   readScopePendingErrors,
   readScopesOfLayers,
+  READ_SCOPE_KEY_CASES,
+  readScopeCacheKey,
+  readScopeGenerationErrors,
+  readScopePath,
   scopeAdmits,
+  scopedLoadOf,
   scopedLoadOutcome,
   toOnePaths,
   within
@@ -74,11 +79,14 @@ test('vault-scoped: el alcance por claim llega a Owner.code por la relación own
   assert.deepEqual(operationOf(model, 'getAsset').readScope, getAsset);
   assert.deepEqual(model.security.readScopes, reads);
   assert.equal(operationOf(model, 'uploadAsset').readScope, null);
-  // El listado acotado tiene finder aunque no filtre nada más: el predicado es su criterio (D4).
-  const finder = operationOf(model, 'listAssets').finder;
+  // El sujeto filtra además por estado (RS-7): el predicado se suma a ese criterio.
+  assert.deepEqual(operationOf(model, 'listAssets').finder.criteria.map((criterion) => criterion.name), ['status']);
+  // Y sin ningún filtro, el listado acotado tiene finder igual: el predicado es su criterio (D4).
+  const bare = designOf('asset-vault', (layers) => Object.assign(layers.security.authentication.scoping, { reads: ['listAssets'], readMiss: 'forbidden' }));
+  const finder = operationOf(bare.model, 'listAssets').finder;
   assert.equal(finder?.result, 'page');
   assert.deepEqual(finder.criteria, []);
-  assert.deepEqual(finder.scope, reads[1]);
+  assert.equal(finder.scope.operation, 'listAssets');
 });
 
 test('shop-scoped: la propiedad con roles exentos y forbidden; las escrituras siguen en operations', () => {
@@ -99,8 +107,7 @@ test('conduit-scoped: el dueño a través de una relación, con el 404 del dise�
   const { layers } = derived('conduit-scoped');
   const { reads } = readScopesOfLayers(layers);
   assert.deepEqual(reads.map(summary), [
-    { operation: 'getArticle', root: 'Article', shape: 'single', relations: ['author'], field: 'subject' },
-    { operation: 'listArticles', root: 'Article', shape: 'page', relations: ['author'], field: 'subject' }
+    { operation: 'getArticle', root: 'Article', shape: 'single', relations: ['author'], field: 'subject' }
   ]);
   assert.equal(reads[0].readMiss, 'not-found');
   assert.equal(reads[0].notFound, 'ARTICLE_NOT_FOUND');
@@ -202,4 +209,48 @@ test('los casos y los sabotajes: ids únicos, y cada sabotaje cae en casos que e
     assert.equal(new Set(ids).size, ids.length);
     for (const sabotage of sabotages) for (const id of sabotage.falls) assert.ok(ids.includes(id), `${sabotage.id} → ${id}`);
   }
+});
+
+test('la carga de una fila (T7): por el id de la raíz o por su clave natural de un campo', () => {
+  const load = (name, op) => scopedLoadOf(derived(name).model, operationOf(derived(name).model, op));
+  assert.deepEqual(load('vault-scoped', 'getAsset'), { by: 'id', input: 'id', field: 'id', method: 'loadScoped' });
+  assert.deepEqual(load('shop-scoped', 'getOrder'), { by: 'id', input: 'orderId', field: 'orderId', method: 'loadScoped' });
+  assert.deepEqual(load('shop-scoped', 'getProfile'), { by: 'key', input: 'email', field: 'email', method: 'loadScopedByEmail' });
+  assert.deepEqual(load('conduit-scoped', 'getArticle'), { by: 'key', input: 'slug', field: 'slug', method: 'loadScopedBySlug' });
+  assert.equal(load('vault-scoped', 'listAssets'), null, 'un listado no carga una fila');
+});
+
+test('el camino sobre el modelo: un salto a otra raíz por relación, y el campo acotado con su tipo', () => {
+  const { model } = derived('vault-scoped');
+  const path = readScopePath(model, operationOf(model, 'listAssets').readScope);
+  assert.deepEqual(path.hops.map((hop) => [hop.relation, hop.from, hop.to, hop.internal]), [['owner', 'Asset', 'Owner', false]]);
+  assert.equal(path.field.name, 'code');
+  const shop = derived('shop-scoped').model;
+  assert.deepEqual(readScopePath(shop, operationOf(shop, 'listOrders').readScope).hops, []);
+});
+
+test('la frontera neutral: los sujetos se generan enteros; sin carga por clave (T7) o sin finder (T8), rechazo', () => {
+  for (const design of READ_SCOPE_DESIGNS) assert.deepEqual(readScopeGenerationErrors(derived(design.name).model), [], design.name);
+  // T8: listArticles filtra por autor y favoritos, que no enlazan: no tiene finder.
+  const t8 = designOf('conduit', (layers) => {
+    Object.assign(layers.security.ownership.Article, { reads: ['listArticles'], readMiss: 'not-found' });
+    layers.security.access.rules.listArticles = { level: 'required' };
+  });
+  const [listing] = readScopeGenerationErrors(t8.model);
+  assert.match(listing, /^use-cases\.listArticles \(security\.ownership\.Article\.reads, lectura acotada, DSL 2\.27\): el listado no tiene finder de build/);
+  // T7: una lectura que recibe algo que no es ni el id ni la clave natural.
+  const t7 = designOf('asset-vault', (layers) => {
+    Object.assign(layers.security.authentication.scoping, { reads: ['getAsset'], readMiss: 'forbidden' });
+    const fields = layers['use-cases'].operations.getAsset.input.fields;
+    fields.reference = fields.id;
+    delete fields.id;
+    layers.api.endpoints.getAsset.path = layers.api.endpoints.getAsset.path.replace('{id}', '{reference}');
+  });
+  assert.ok(readScopeGenerationErrors(t7.model).some((message) => /getAsset .*sin su id ni una clave natural/.test(message)));
+});
+
+test('la clave de caché del alcance (D6): distinta por llamante, la misma entre exentos', () => {
+  for (const entry of READ_SCOPE_KEY_CASES) assert.equal(readScopeCacheKey(entry.scope), entry.key, entry.id);
+  assert.notEqual(readScopeCacheKey(within(['a,b'])), readScopeCacheKey(within(['a', 'b'])));
+  assert.equal(readScopeCacheKey(within(['b', 'a'])), readScopeCacheKey(within(['a', 'b'])));
 });

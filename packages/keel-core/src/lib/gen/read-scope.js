@@ -306,6 +306,141 @@ export function readScopeNote(read, { scope, call }) {
   return `${base} Carga con ${LOAD_SCOPED}: ${miss}.`;
 }
 
+// ─── Lo que generan los cuatro, sobre el modelo ───────────────────────────────────────────────────────────────────
+
+const TEXT_BASES = new Set(['string', 'text']);
+const decap = (name) => `${name[0].toLowerCase()}${name.slice(1)}`;
+const capital = (name) => `${name[0].toUpperCase()}${name.slice(1)}`;
+
+function modelEntity(model, name) {
+  return (model.entities ?? []).find((entity) => entity.name === name) ?? null;
+}
+
+/**
+ * Los saltos del camino de una lectura acotada sobre el modelo: `{ hops, target, field }`. Cada salto es una relación
+ * a-uno de la raíz (o del salto anterior) a otra raíz, `{ relation, from, to, internal }`, y `field` es el campo acotado
+ * de la última, con su tipo. El adaptador la recorre con una subconsulta por salto (relacional) o resolviendo los ids
+ * de cada salto (documental): la relación a otra raíz se guarda como su id (`<relación>Id`).
+ */
+export function readScopePath(model, read) {
+  let current = modelEntity(model, read.root);
+  const hops = [];
+  for (const name of read.relations) {
+    const relation = (current?.relations ?? []).find((candidate) => candidate.name === name);
+    const to = relation ? modelEntity(model, relation.entity) : null;
+    hops.push({ relation: name, from: current?.name ?? null, to: to?.name ?? null, internal: Boolean(relation?.internal), entity: to });
+    current = to;
+  }
+  const field = (current?.fields ?? []).find((candidate) => candidate.name === read.field) ?? null;
+  return { hops, target: current, field };
+}
+
+/**
+ * La lectura por id o por clave de una lectura acotada `single` (T7 del plan): `{ by: 'id' | 'key', input, field,
+ * method }`, o null si la operación no carga ni por el id de la raíz ni por una clave natural de un solo campo.
+ *
+ *   · Por id (`getAsset(id)`, `getOrder(orderId)`): `loadScoped(id, scope)`.
+ *   · Por clave natural de un campo (`getArticle(slug)`, `getProfile(email)`): `loadScopedBy<Campo>(valor, scope)`. La
+ *     ruta nombra la fila por su clave, y cargarla por id obligaría al handler a buscarla antes sin el alcance.
+ */
+export function scopedLoadOf(model, operation) {
+  const read = operation?.readScope;
+  if (!read || read.shape !== 'single') return null;
+  const root = modelEntity(model, read.root);
+  if (!root) return null;
+  const inputs = [...(operation.pathParams ?? []), ...(operation.bodyFields ?? [])].filter((input) => !input.resolvedIdentity);
+  const idNames = new Set(['id', `${decap(root.name)}Id`, root.idField?.name].filter(Boolean));
+  const byId = inputs.find((input) => idNames.has(input.name));
+  if (byId) return { by: 'id', input: byId.name, field: root.idField?.name ?? 'id', method: LOAD_SCOPED };
+  const key = root.naturalKey ?? [];
+  if (key.length === 1) {
+    const byKey = inputs.find((input) => input.name === key[0]);
+    if (byKey) return { by: 'key', input: byKey.name, field: key[0], method: `${LOAD_SCOPED}By${capital(key[0])}` };
+  }
+  return null;
+}
+
+/** Las lecturas acotadas del modelo con su operación, en el orden del diseño. */
+export function scopedReadsOf(model) {
+  return (model.services ?? []).flatMap((group) => group.operations ?? []).filter((operation) => operation.readScope);
+}
+
+/** Las raíces cuyo adaptador gana el predicado del alcance, cada una con la lectura que lo define (una por raíz). */
+export function scopedRootsOf(model) {
+  const roots = new Map();
+  for (const operation of scopedReadsOf(model)) if (!roots.has(operation.readScope.root)) roots.set(operation.readScope.root, operation.readScope);
+  return [...roots.entries()].map(([name, read]) => ({ entity: modelEntity(model, name), read }));
+}
+
+/**
+ * Lo que una lectura acotada declarada en el diseño no puede generar por construcción, con el MISMO mensaje en los
+ * cuatro generadores. Cada uno lo llama desde su `supported-features.js`. Nunca a medias: un predicado que no llega al
+ * adaptador lo tendría que escribir el agente, y es justo lo que `reads` existe para no dejarle.
+ *
+ *   · T7: una lectura de una fila que no carga por el id ni por una clave natural de un campo.
+ *   · T8: un listado sin finder de build (algún input no enlaza, `finderGaps`): su búsqueda la escribe el agente.
+ *   · Un salto del camino dentro del agregado: el camino va de raíz a raíz.
+ *   · Un campo acotado que no es texto: el claim y la identidad del llamante son texto.
+ *   · Dos bloques que acotan la misma raíz: el adaptador tiene un solo predicado.
+ */
+export function readScopeGenerationErrors(model) {
+  const errors = [];
+  const blocks = new Map();
+  for (const operation of scopedReadsOf(model)) {
+    const read = operation.readScope;
+    const at = `use-cases.${operation.name} (${read.block}.reads, lectura acotada, DSL 2.27)`;
+    if (read.shape === 'single' && !scopedLoadOf(model, operation)) {
+      errors.push(`${at}: carga la fila sin su id ni una clave natural de un campo, y la lectura acotada carga por una de las dos (loadScoped). Recibe el id de ${read.root} o su clave natural.`);
+    }
+    if (read.shape !== 'single' && !operation.finder) {
+      errors.push(
+        `${at}: el listado no tiene finder de build (${(operation.finderGaps ?? []).join('; ') || 'sin búsqueda'}), así que el predicado del alcance no llegaría por construcción a su consulta ni a su total. Declara los filtros con filter (DSL 2.22) o saca la operación de reads.`
+      );
+    }
+    const path = readScopePath(model, read);
+    if (path.hops.some((hop) => hop.internal || !hop.entity?.isAggregateRoot)) {
+      errors.push(`${at}: el camino ${[read.root, ...read.relations].join('.')} pasa por una entidad interna de un agregado; el alcance sigue relaciones a otra raíz.`);
+    }
+    if (!path.field || path.field.list || path.field.kind === 'composite' || !TEXT_BASES.has(path.field.base)) {
+      errors.push(`${at}: el campo acotado ${path.target?.name ?? '?'}.${read.field} no es texto, y se compara con el claim o con la identidad del llamante, que lo son.`);
+    }
+    const owner = blocks.get(read.root);
+    if (owner && owner !== read.block) {
+      errors.push(`${at}: ${read.root} ya lo acota ${owner}; un adaptador lleva un solo predicado de alcance.`);
+    }
+    blocks.set(read.root, read.block);
+  }
+  return [...new Set(errors)];
+}
+
+/**
+ * La parte del alcance en la clave de una caché (D6), la referencia ejecutable de la misma función en los cuatro:
+ * `all` sin filtro, `by:<valor>` para un dueño y `in:<v1>,<v2>` para un conjunto, ordenado y con la coma y la barra
+ * escapadas. Dos llamantes con scopes distintos nunca comparten entrada; dos exentos sí.
+ */
+export function readScopeCacheKey(scope) {
+  const escape = (value) => String(value).replaceAll('\\', '\\\\').replaceAll(',', '\\,');
+  if (scope.kind === 'unrestricted') return 'all';
+  if (scope.kind === 'ownedBy') return scope.value == null ? 'none' : `by:${escape(scope.value)}`;
+  return `in:${[...scope.values].sort().map(escape).join(',')}`;
+}
+
+/** Los casos de la clave, con el mismo id en los cuatro (RS-9 los recorre). */
+export const READ_SCOPE_KEY_CASES = [
+  { id: 'K-1', scope: UNRESTRICTED, key: 'all' },
+  { id: 'K-2', scope: ownedBy('ana@x.io'), key: 'by:ana@x.io' },
+  { id: 'K-3', scope: ownedBy(null), key: 'none' },
+  { id: 'K-4', scope: within(['b', 'a']), key: 'in:a,b' },
+  { id: 'K-5', scope: within([]), key: 'in:' },
+  { id: 'K-6', scope: within(['a,b']), key: 'in:a\\,b' }
+];
+
+/** El mensaje con que sale el 403 de un `readMiss: forbidden` desde el adaptador: el `when` del error declarado. */
+export function readMissMessage(model, read) {
+  const error = (model.errors ?? []).find((candidate) => candidate.code === read.error);
+  return error?.when ?? `${read.error}`;
+}
+
 // ─── La frontera de los generadores ───────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -361,7 +496,9 @@ export const OPTIONAL_AUTH_CASES = [
 
 /** Los sabotajes, con el mismo id en los cuatro: verde significa que cada uno cae en exactamente sus casos. */
 export const READ_SCOPE_SABOTAGES = [
-  { id: 'rs-no-filter', breaks: 'el listado ignora el scope', falls: ['RS-1'] },
+  // El listado y su total salen de la MISMA consulta acotada (D4): un finder que no suma el predicado los rompe a los dos,
+  // y el scope vacío del listado lo ve todo.
+  { id: 'rs-no-filter', breaks: 'el listado ignora el scope', falls: ['RS-1', 'RS-2', 'RS-6'] },
   { id: 'rs-count-unscoped', breaks: 'el conteo ignora el scope', falls: ['RS-2'] },
   { id: 'rs-get-leak', breaks: 'loadScoped no compara', falls: ['RS-4', 'RS-5'] },
   { id: 'rs-empty-is-all', breaks: 'el claim ausente se trata como unrestricted', falls: ['RS-6', 'RS-10'] },

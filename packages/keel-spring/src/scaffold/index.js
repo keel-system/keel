@@ -52,6 +52,7 @@ import * as httpIdempotency from './http-idempotency.js';
 import * as purge from './purge.js';
 import * as idempotencyCheck from './idempotency-check.js';
 import * as conditionalWrites from './conditional-writes.js';
+import * as readScope from './read-scope.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
 import * as deadlinesCheck from './deadlines-check.js';
 import * as loggingCheck from './logging-check.js';
@@ -81,6 +82,7 @@ import * as documentRepositories from './document-repositories.js';
 import * as documentIndexes from './document-indexes.js';
 import * as documentConfig from './document-config.js';
 import * as textFold from './text-fold.js';
+import { readScopeGenerationErrors } from '@keel-system/keel-core/gen/read-scope';
 
 const GENERATORS = [
   gradle,
@@ -171,6 +173,8 @@ const GENERATORS = [
   idempotencyCheck,
   // La escritura condicional (DSL 2.25): Versioned, las excepciones 412/428, el borde y el gate.
   conditionalWrites,
+  // La lectura acotada (DSL 2.27): el ReadScope y su construcción desde el token.
+  readScope,
   domainGuardsCheck,
   // El gate de los plazos (DSL 2.26): lo que el agente escribe para que caduquen de verdad.
   deadlinesCheck,
@@ -227,6 +231,9 @@ export function planService({ manifest, layers, fixtures = null, workspace, stac
   // Los plazos (DSL 2.26) necesitan un motor con las sentencias del cronómetro medidas.
   const timerErrors = timer.timerStackErrors(model);
   if (timerErrors.length > 0) throw new Error(timerErrors.join('\n'));
+  // La lectura acotada (DSL 2.27) que no se puede generar por construcción (T7, T8 y compañía): la frontera neutral.
+  const scopeErrors = readScopeGenerationErrors(model);
+  if (scopeErrors.length > 0) throw new Error(scopeErrors.join('\n'));
   return { model, stack: resolved, files: GENERATORS.flatMap((generator) => generator.generate(model)) };
 }
 

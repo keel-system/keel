@@ -8,6 +8,7 @@ import { persistedMembers } from '@keel-system/keel-core/gen/relational';
 import { screamingSnake } from '@keel-system/keel-core/gen/naming';
 import { subPackage } from './render.js';
 import { textFoldImport } from './text-fold.js';
+import { JPA_SCOPE_LINE, MONGO_SCOPE_LINES, readScopeImport } from './read-scope.js';
 
 export const entityFinders = (model, entity) => findersOf(model, entity.name);
 const hasFilter = (finder) => finder.criteria.length > 0;
@@ -22,9 +23,18 @@ function enumImport(model, field, imports) {
   if (field?.kind === 'enum' && field.namedType) imports.add(`${subPackage(model, 'domain.enums')}.${field.namedType}`);
 }
 
+// Los parámetros del finder: los filtros, la página y, en una lectura acotada (DSL 2.27, D2), el scope, OBLIGATORIO: el
+// compilador obliga al handler a pasarlo.
+function params(finder, qualify = '') {
+  return [
+    hasFilter(finder) ? `${qualify}${finder.filterType} filter` : null,
+    finder.result === 'page' ? 'Pageable pageable' : null,
+    finder.scope ? 'ReadScope scope' : null
+  ].filter(Boolean);
+}
+
 function signature(finder, entity, qualify = '') {
-  const params = [hasFilter(finder) ? `${qualify}${finder.filterType} filter` : null, finder.result === 'page' ? 'Pageable pageable' : null].filter(Boolean);
-  return `${finder.result === 'page' ? `Page<${entity.name}>` : `List<${entity.name}>`} ${finder.method}(${params.join(', ')})`;
+  return `${finder.result === 'page' ? `Page<${entity.name}>` : `List<${entity.name}>`} ${finder.method}(${params(finder, qualify).join(', ')})`;
 }
 
 /** Los records de los filtros y las firmas, para la interfaz del puerto. */
@@ -33,6 +43,7 @@ export function portFinderMethods(model, entity, imports) {
   for (const finder of entityFinders(model, entity)) {
     imports.add(finder.result === 'page' ? 'org.springframework.data.domain.Page' : 'java.util.List');
     if (finder.result === 'page') imports.add('org.springframework.data.domain.Pageable');
+    if (finder.scope) imports.add(readScopeImport(model));
     if (hasFilter(finder)) {
       for (const criterion of finder.criteria) {
         for (const name of criterion.input.imports ?? []) imports.add(name);
@@ -45,7 +56,7 @@ export function portFinderMethods(model, entity, imports) {
     }`);
     }
     methods.push(
-      `    /** La búsqueda de ${finder.operation} con los filtros del diseño y solo esos${finder.fixed.length > 0 ? ` (siempre: ${finder.fixed.map((entry) => `${entry.name} = ${entry.value}`).join(', ')})` : ''}. */\n    ${signature(finder, entity)};`
+      `    /** La búsqueda de ${finder.operation} con los filtros del diseño y solo esos${finder.fixed.length > 0 ? ` (siempre: ${finder.fixed.map((entry) => `${entry.name} = ${entry.value}`).join(', ')})` : ''}${finder.scope ? ', acotada al scope del llamante en las filas y en el total (DSL 2.27)' : ''}. */\n    ${signature(finder, entity)};`
     );
   }
   return methods;
@@ -116,13 +127,14 @@ export function jpaFinderMethods(model, entity, imports, jpaField) {
       }
       lines.push(`            if (filter.${criterion.name}() != null) {`, `                where.add(${predicate});`, '            }');
     }
-    const params = hasFilter(finder) ? `${entity.name}Repository.${finder.filterType} filter${finder.result === 'page' ? ', ' : ''}` : '';
+    // El alcance se SUMA a los criterios (D4): la misma Specification da las filas y el total.
+    if (finder.scope) lines.push(JPA_SCOPE_LINE);
     const call =
       finder.result === 'page'
         ? `return ${jpaField}.findAll(specification, withStableOrder(pageable)).map(this::toDomain);`
         : `return ${jpaField}.findAll(specification, ${sortConstant(finder)}).stream().map(this::toDomain).toList();`;
     return `    @Override
-    public ${finder.result === 'page' ? `Page<${entity.name}>` : `List<${entity.name}>`} ${finder.method}(${params}${finder.result === 'page' ? 'Pageable pageable' : ''}) {
+    public ${signature(finder, entity, `${entity.name}Repository.`)} {
         Specification<${mirror}> specification = (root, query, cb) -> {
             List<Predicate> where = new ArrayList<>();
 ${lines.join('\n')}
@@ -162,7 +174,8 @@ export function mongoFinderMethods(model, entity, imports) {
             : `Criteria.where("${property}").${MONGO_OPERATOR[criterion.op]}(${value})`;
       lines.push(`        if (filter.${criterion.name}() != null) {`, `            where.add(${condition});`, '        }');
     }
-    const params = hasFilter(finder) ? `${entity.name}Repository.${finder.filterType} filter${finder.result === 'page' ? ', ' : ''}` : '';
+    // El alcance se SUMA a los criterios (D4), y la misma consulta da el total.
+    if (finder.scope) lines.push(...MONGO_SCOPE_LINES);
     const tail =
       finder.result === 'page'
         ? `        long total = mongoTemplate.count(query, ${mirror}.class);
@@ -171,7 +184,7 @@ export function mongoFinderMethods(model, entity, imports) {
         : `        return mongoTemplate.find(query.with(${sortConstant(finder)}), ${mirror}.class).stream().map(this::toDomain).toList();`;
     if (finder.result === 'page') imports.add('org.springframework.data.domain.PageImpl');
     return `    @Override
-    public ${finder.result === 'page' ? `Page<${entity.name}>` : `List<${entity.name}>`} ${finder.method}(${params}${finder.result === 'page' ? 'Pageable pageable' : ''}) {
+    public ${signature(finder, entity, `${entity.name}Repository.`)} {
         List<Criteria> where = new ArrayList<>();
 ${lines.join('\n')}
         Query query = where.isEmpty() ? new Query() : new Query(new Criteria().andOperator(where));
@@ -212,5 +225,6 @@ export function finderCall(finder) {
   const args = [];
   if (hasFilter(finder)) args.push(`new ${finder.entity}Repository.${finder.filterType}(${finder.criteria.map((criterion) => `query.${criterion.name}()`).join(', ')})`);
   if (finder.result === 'page') args.push('query.pageable()');
+  if (finder.scope) args.push('query.readScope()');
   return `${repository}.${finder.method}(${args.join(', ')})`;
 }

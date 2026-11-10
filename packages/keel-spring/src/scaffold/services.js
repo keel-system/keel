@@ -43,6 +43,8 @@ import { callerResolution } from './security.js';
 import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { rawJsonAnnotations } from './jackson.js';
+import { readScopeNote } from '@keel-system/keel-core/gen/read-scope';
+import { readScopeComponent, readScopeHandlerCall } from './read-scope.js';
 import {
   carriesExpectedVersions,
   conditionalHandlerNote,
@@ -81,6 +83,8 @@ export function messageComponents(model, operation) {
   // Las versiones que valen (api.concurrency, D5): como la puerta, no llegan del cuerpo; las estampa el controller
   // desde If-Match y llegan nulas desde otra puerta.
   if (carriesExpectedVersions(model, operation)) components.push(expectedVersionsComponent(model));
+  // El alcance de una lectura acotada (DSL 2.27, D1): como la identidad, lo estampa el controller desde el token.
+  if (operation.readScope) components.push(readScopeComponent(model));
   return components;
 }
 
@@ -288,6 +292,12 @@ function renderMessage(model, operation) {
       return `        // La puerta por la que llegó este mensaje (keel-core/gen/entry-gates.js): la estampa quien lo construye,
         // el controller con HTTP. No se acepta del cuerpo.
         @JsonIgnore EntryGate entryGate`;
+    }
+    if (component.readScope) {
+      imports.add('com.fasterxml.jackson.annotation.JsonIgnore');
+      return `        // Qué filas ve quien lee (lectura acotada, DSL 2.27): lo estampa el controller generado desde el token. No se
+        // acepta del cuerpo ni de la query. Pásalo tal cual al puerto: el adaptador filtra con él.
+        @JsonIgnore ReadScope readScope`;
     }
     if (component.expectedVersions) {
       imports.add('com.fasterxml.jackson.annotation.JsonIgnore');
@@ -623,8 +633,14 @@ function renderHandler(model, service, operation) {
   const ownership = ownershipNotes(model, operation, { read: (field) => `${ownerParam}.${field}()`, hasRole: (role) => `callerRoles.has("${role}")` });
   for (const note of ownership) notes.push(note);
   if (ownership.some((note) => note.includes('callerRoles.has'))) notes.push('Inyecta CallerRoles (application.support) en este handler: es como se sabe el rol del llamante sin importar Spring Security.');
+  // La lectura acotada (DSL 2.27): el adaptador ya filtra; la nota neutral dice qué pasar y que no se filtre a mano.
+  const scopedRead = readScopeNote(operation.readScope, {
+    scope: `${ownerParam}.readScope()`,
+    call: readScopeHandlerCall(model, operation, operation.finder ? finderCall(operation.finder) : '')
+  });
+  if (scopedRead) notes.push(scopedRead);
   const scoping = model.security?.scoping;
-  if (scoping && operation.errors.includes(scoping.error)) {
+  if (scoping && operation.errors.includes(scoping.error) && !operation.readScope) {
     notes.push(
       `Alcance (security.authentication.scoping): inyecta CallerScope (application.support), que build ya ` +
         `generó con su adaptador JWT, y comprueba callerScope.covers(<${scoping.over} del recurso>) donde lo ` +

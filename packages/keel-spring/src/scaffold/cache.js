@@ -124,10 +124,13 @@ function renderCachedOperations(model, caches) {
     const operation = operations.get(cache.operation);
     imports.add(`${subPackage(model, messagePackage(operation))}.${operation.messageClass}`);
     const param = operation.messageKind === 'query' ? 'query' : 'command';
-    const keyExpr = cache.keyFields.length > 0 ? `key(${cache.keyFields.map((field) => `${param}.${field}()`).join(', ')})` : '"all"';
+    // Con una lectura acotada (DSL 2.27, D6) el scope del llamante es parte de la clave: si no, la caché sirve a uno la
+    // fila de otro. Dos exentos comparten entrada (`all`).
+    const parts = [...cache.keyFields.map((field) => `${param}.${field}()`), ...(operation.readScope ? [`${param}.readScope().cacheKey()`] : [])];
+    const keyExpr = parts.length > 1 ? `key(${parts.join(', ')})` : parts.length === 1 ? (operation.readScope && cache.keyFields.length === 0 ? parts[0] : `key(${parts[0]})`) : '"all"';
     const by = invalidators.get(cache.cacheName) ?? [];
     const doc = [
-      `Caché de ${cache.operation}: TTL ${cache.ttlSeconds} s, clave por ${cache.keyFields.join(', ') || 'ningún campo (una sola entrada)'}.`,
+      `Caché de ${cache.operation}: TTL ${cache.ttlSeconds} s, clave por ${[...cache.keyFields, ...(operation.readScope ? ['el scope del llamante (lectura acotada)'] : [])].join(', ') || 'ningún campo (una sola entrada)'}.`,
       cache.invalidatedBy.length > 0
         ? `La invalidan ${cache.invalidatedBy.join(', ')}: la vacían ENTERA, al confirmar, ${by.length > 0 ? by.join(', ') : 'ninguna operación de este servicio (solo caduca por su TTL)'} (lo hace el UseCaseMediator).`
         : 'Ningún evento la invalida: solo caduca por su TTL.'
@@ -138,7 +141,7 @@ function renderCachedOperations(model, caches) {
     public static final String ${cache.constant} = "${cache.cacheName}";
 
     /** La clave de una entrada de {@link #${cache.constant}}: los keyFields del diseño, en su orden. */
-    public static String ${operation.name}Key(${operation.messageClass} ${cache.keyFields.length > 0 ? param : 'ignored'}) {
+    public static String ${operation.name}Key(${operation.messageClass} ${parts.length > 0 ? param : 'ignored'}) {
         return ${keyExpr};
     }`;
   });

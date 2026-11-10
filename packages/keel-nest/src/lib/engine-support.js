@@ -757,7 +757,10 @@ export const MECHANISMS = {
       }
     }
   }
-
+,
+  'read-scope': {
+    pending: 'la lectura acotada (DSL 2.27) llega en el incremento 2 de PLAN-DSL-227-LECTURA-ACOTADA.md: hasta entonces supported-features.js la rechaza entera (readScopePendingErrors)'
+  }
 };
 
 /** Todas las celdas, aplanadas: { id, branch, cell } (sin las filas pendientes enteras). */
