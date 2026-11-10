@@ -13,8 +13,9 @@ cambia el DSL, pero sí el servidor generado de cualquier diseño con persistenc
 hechas el mismo día, la D (incremento 3, keel-spring) el 2026-11-08 y, de la fase E, la fase E entera ese mismo día
 (incrementos 4, 5 y 6: keel-nest, keel-dotnet y keel-go). De la fase F, el incremento 7 (las purgas) está hecho ese
 mismo día en los cuatro, y el 8 y el 9 el 2026-11-08 y el 2026-11-09. De la fase G, el 10 lo absorbió el 2b y el 11 (la
-telemetría del cronómetro) está hecho el 2026-11-09. De la fase H, el 12 (la fixture) está hecho el 2026-11-09; queda el 13
-(las corridas de control), que lanza el usuario. **Lo
+telemetría del cronómetro) está hecho el 2026-11-09. De la fase H, el 12 (la fixture) y el 13 (las corridas de control) están
+hechos el 2026-11-09: **el plan está cerrado**. Quedan los detectores de diseño que pidió el usuario a la vista de las
+corridas (§ Lo que dejó el incremento 13), fuera del plan. **Lo
 que queda se termina sin subagentes, todo desde `main` y en secuencia** (§ Cómo se ejecuta).
 
 ## Por qué
@@ -328,7 +329,7 @@ borra lo que no conoce: RC-5) y `relay-no-wake` (RC-7).
 | 10 | ~~Evolución~~: pasa al **2b** (§ Incremento 0: lo medido, punto 4) | — |
 | 11 | **Hecho (2026-11-09)** en los cuatro; ver las notas de abajo. Telemetría del cronómetro (vencidos sin reclamar, aparcados, duración del tick) y su entrada en el panel y las alertas | `telemetry-check` en los cuatro |
 | 12 | **Hecho (2026-11-09)**; ver la nota de abajo. Fixture `stock-reservation` con el plazo (versión nueva, escenarios con `ageForDeadline`) y su gemela documental si la hay | `--ready` en verde y las redes que la tienen de sujeto |
-| 13 | Corrida de control en los cuatro sobre `stock-reservation` **y** repetición de la serie de `catalog-extended` (outbox, purgas, barridos y reconciliación, todo sobre el cronómetro) | Mismo resultado en los cuatro, el guard tardío en el dominio, y la serie de `catalog-extended` igual que la de 2.25 (55/55) |
+| 13 | **Hecho (2026-11-09)** en los cuatro; ver la nota de abajo. Corrida de control en los cuatro sobre `stock-reservation` **y** repetición de la serie de `catalog-extended` (outbox, purgas, barridos y reconciliación, todo sobre el cronómetro) | Mismo resultado en los cuatro, el guard tardío en el dominio, y la serie de `catalog-extended` igual que la de 2.25 (55/55) |
 
 **Lo que dejó el incremento 2.** `gen/deadlines.js` (los plazos del modelo, la duración, `isDeadlineDue` con D3, `lateGuards`, `CLOCK_PORT`, las dos notas del handler, los casos DL y los sabotajes), `gen/timer-store.js` (`KEEL_TIMER` con la valla `claim_token` y el uuid nulo de los recurrentes, `TIMER_PARAMETERS`, los `kind`, las sentencias de PostgreSQL y MySQL con `bindNamed`/`expandList`, la forma documental y `CRON_UTC_CASES`, verificados contra la librería `cron`), `gen/timer-poller.js` (la referencia ejecutable: almacén en memoria con la semántica de las sentencias, `pollOnce`, `deadlineTick`, `recurringTick`) y la puerta `DEADLINE` de `entry-gates.js`, que no entra en el enum porque `by` es `internal`. Las pruebas: `test/timer-poller.test.js` (RC-1 a RC-6 y DL-5 a DL-10 con dos réplicas), `test/timer-store.test.js` y la red nueva `npm run timer-sql-check`, verde en los dos motores y falsada con tres sabotajes (`no-skip-locked`, `no-fence` y `park-order`, este solo en MySQL). Esa red destapó un defecto antes de que llegara a ningún generador: en MySQL, el upsert del recurrente con el alias de fila `new` dejaba `spec` ambigua (ERROR 1052). **Pasan al incremento 3**, porque dependen de cómo escribe cada generador: las filas del gate de la operación `by` (son patrones de cada lenguaje), los helpers documentales del arnés (scripts de `mongo-probes.js`) y la fila `timer` de `mechanisms.js`.
 
@@ -836,6 +837,41 @@ Lo demás, en verde a la primera: `compile-check` de keel-spring (tres brokers y
 `broker-check` no se repitió: el plazo no toca la mensajería. En las suites hubo que ajustar cinco pruebas: dos usaban
 `stock-reservation` sobre MariaDB como sujeto sin cronómetro (ahora `catalog-extended`) y tres fijaban firmas que ganan
 argumentos. Las líneas base golden de keel-spring y keel-nest se regeneraron: venían desfasadas desde el incremento 3.
+
+**Lo que dejó el incremento 13.** Ocho corridas del usuario, una a una (la `infra/` publica puertos fijos en el host),
+registradas en `docs/corridas/2026-11-09-*-control.md`:
+
+| Generador | `stock-reservation` v1.2.0 | Reescritos | `catalog-extended` | Reescritos (2.25) |
+|---|---|---|---|---|
+| keel-spring | 23/23 a la primera | 9 | 57/57 a la primera | 22 (22) |
+| keel-nest | 23/23 a la primera | 11 | 57/57 (51 en la primera, `culprit: test`) | 24 (24) |
+| keel-dotnet | 23/23 (21 en la primera, `culprit: test`) | 11 | 57/57 tras evolucionar a la v1.1.1 | 23 (23) |
+| keel-go | 23/23 a la primera | 11 | 57/57 (56 en la primera, `culprit: test`) | 23 (23) |
+
+La puerta se cumple: el mismo resultado en los cuatro; el rechazo tardío en el dominio tal como lo emite build (el agente
+solo rellena los métodos semánticos y el handler pasa reloj y plazos); FL-EXP-001/-B en verde con `ageForDeadline` y la
+disyunción 410/409; y nada del cronómetro, del relay, de las purgas ni del reclamo en ninguna huella. La serie de
+`catalog-extended` tiene 57 escenarios y no 55 porque la v1.1.0 de la fixture añadió dos; las huellas son las de la 2.25
+archivo por archivo en número. **Cero huecos del generador en las ocho.**
+
+Lo que destaparon, todo del diseño o del método:
+
+- **El orden de `listProducts` vivía en prosa.** Sin `sort` (`CHK-USECASES-COLLECTION-NO-SORT`, uno de los `undecided`
+  del `--accept-unready`) el contrato era el orden por id, y FL-PRD-003-B/-C afirmaban `createdAt` descendente. keel-dotnet
+  paró con `culprit: design`; keel-spring y keel-nest lo improvisaron en el handler sin reportarlo. La fixture lo declara
+  desde la v1.1.1 (`77a34775`) y keel-go se generó ya sobre ella.
+- **Estado de proceso que un flujo hereda de otro**: el circuito de compliance (dotnet, FL-PRD-005) y el token OAuth2 en
+  caché (go, FL-AUT-004). Y la misma carrera de prueba en FL-REC-* en spring y dotnet: contar las llamadas al proveedor
+  antes de que el servidor las haga. El arnés podría traer hecha la espera de N llamadas.
+- **Los `designGaps` de una corrida parada por `culprit: design` se pierden**: viven en el orquestador hasta el informe, y
+  la evolución solo ve el delta.
+- `noteStockCount` sobre una reserva terminal (`expired` es terminal nuevo) no declara rechazo (keel-go).
+
+**Lo siguiente, a petición del usuario**: detectores de diseño, cada uno con su id y su mutación, para cazar en la fase de
+diseño lo que hoy sale en las corridas: (1) un escenario que afirma un orden de colección distinto del `sort` declarado o
+sin `sort`; (2) prosa de los escenarios que contradice `conventions.nulls`; (3) un `exclude` que se escapa por un `embed`
+en otra salida; (4) si sale limpio, una raíz que otra operación exige y que ninguna crea. Después, llevar
+`catalog-extended` a `--ready`.
 
 El orden va del menor al mayor riesgo. Los incrementos 3-6 añaden un mecanismo sin tocar nada medido. Después se migra
 lo que menos redes toca (las purgas) y al final el relay, que toca los tres brokers en los cuatro generadores. Cada
