@@ -29,7 +29,7 @@ entero. Nada del cronómetro en la huella.
 
 FL-REC-002 y FL-REC-003, `culprit: test`: la misma carrera que en keel-spring, contar las llamadas al proveedor antes de
 que el servidor las haga (la liberación se confirma antes de llamar). `WaitForStubCalls` en esas pruebas, en FL-REC-001 y
-en FL-CLU-002; el servidor no cambió. Los tres generadores que la ven (spring, dotnet) la resuelven en la prueba: es una
+en FL-CLU-002; el servidor no cambió. Los dos agentes que la vieron (spring y dotnet) la resolvieron en la prueba: es una
 espera que el arnés podría ofrecer hecha.
 
 ## Lo que se contrastó
