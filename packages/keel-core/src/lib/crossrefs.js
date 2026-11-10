@@ -10,6 +10,7 @@ import { guardedByNaturalKey } from './gen/natural-key-guard.js';
 import { conditionalWritesOfLayers, undecidedConditionalWrites } from './gen/conditional-writes.js';
 import { domainGuardKind } from './gen/domain-guard.js';
 import { declaredDeadlines } from './gen/deadlines.js';
+import { readScopesOfLayers, optionalAuthRules } from './gen/read-scope.js';
 
 const BASE_TYPES = new Set(['string', 'text', 'int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json', 'file']);
 
@@ -1675,6 +1676,33 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         );
       }
     }
+    // level: optional (2.27) es «con identidad si la hay»: sin token la operación se ejecuta como pública, así que no hay
+    // a quién exigirle un rol, un permiso o un scope. Pedirlos convierte la regla en required con otro nombre.
+    for (const [where, rule] of [['access.default', security.access?.default], ...Object.entries(security.access?.rules ?? {}).map(([opName, rule]) => [`access.rules.${opName}`, rule])]) {
+      if (rule?.level !== 'optional') continue;
+      const named = ['roles', 'permissions', 'scopes'].filter((key) => rule[key] !== undefined);
+      if (named.length > 0) {
+        error('CHK-SECURITY-OPTIONAL-RULE',
+          `security: ${where}: level: optional con ${named.join(', ')} — sin token la operación se ejecuta como pública y no hay a quién ` +
+            'exigírselos. Si los exige, es required; si es para todos, quítalos'
+        );
+      }
+    }
+    const optionalCaller = security.authentication?.callerIdentity?.field;
+    if (optionalCaller) {
+      for (const entry of optionalAuthRules(layers)) {
+        const names = entry.default ? Object.keys(operations).filter((opName) => !security.access?.rules?.[opName]) : [entry.operation];
+        for (const opName of names) {
+          const field = operations[opName]?.input?.fields?.[optionalCaller];
+          if (field?.required === true) {
+            error('CHK-USECASES-OPTIONAL-CALLER-REQUIRED',
+              `use-cases: operations.${opName}.input.${optionalCaller} es required, y la operación es level: optional — sin token no hay ` +
+                'identidad que estampar, así que la petición anónima se rechazaría por un campo que el llamante no puede mandar. Decláralo opcional'
+            );
+          }
+        }
+      }
+    }
     // cors: política del canal HTTP entrante, sin sentido sin capa api. Y con el
     // token en cookie, el navegador no la enviaría cross-origin sin credenciales.
     if (security.cors) {
@@ -1942,6 +1970,55 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       }
     }
 
+    // La lectura acotada (2.27, `reads` y `readMiss`): el predicado va en el adaptador generado, así que se rechaza aquí
+    // exactamente lo que ningún generador sabría emitir. La derivación es la de los generadores (gen/read-scope.js).
+    const readPlan = readScopesOfLayers(layers);
+    for (const problem of readPlan.problems) {
+      const where = `security: ${problem.where.replace(/^security\./, '')}.reads '${problem.operation}'`;
+      if (problem.kind === 'operation') {
+        error('CHK-SECURITY-READS-OPERATION',
+          `${where}: no es una query expuesta por HTTP que devuelva ${problem.where.startsWith('security.ownership.') ? `'${problem.where.split('.').pop()}'` : 'una entidad'} (única, lista o página) — ` +
+            'el alcance de una lectura se aplica en el adaptador que carga esas filas, y sin ellas no hay qué acotar'
+        );
+      } else if (problem.kind === 'level') {
+        error('CHK-SECURITY-READS-LEVEL',
+          `${where}: su regla de acceso es level: ${problem.detail} — una lectura acotada necesita a quién acotar (required o admin); ` +
+            'con public u optional, sin token no hay identidad ni claim, y con service el llamante es una máquina'
+        );
+      } else if (problem.kind === 'path') {
+        error('CHK-SECURITY-SCOPING-READ-PATH',
+          `${where}: ${problem.detail === 0 ? 'no hay ningún camino' : `hay ${problem.detail} caminos`} de relaciones many-to-one o one-to-one ` +
+            `desde lo que devuelve hasta '${security.authentication.scoping.over}' — el filtro del adaptador necesita UNO, el que lleva al recurso acotado`
+        );
+      } else {
+        const rule = problem.where === 'security.authentication.scoping' ? security.authentication.scoping : security.ownership?.[problem.where.split('.').pop()];
+        error('CHK-SECURITY-READS-MISS-ERROR',
+          `${where}: carga una fila por id con readMiss: ${problem.detail}, y no declara ` +
+            (problem.detail === 'forbidden' ? `'${rule?.error}' con http 403` : 'un error con http 404') +
+            ' en sus errors — lo que recibe quien pide una fila ajena es contrato público, y vive ahí'
+        );
+      }
+    }
+    // Una lectura acotada con readMiss: forbidden produce su 403: lo cubre la regla, como las operaciones de ownership.
+    for (const read of readPlan.reads) {
+      if (read.kind !== 'ownership' || read.readMiss !== 'forbidden') continue;
+      if (!ownershipErrors.has(read.operation)) ownershipErrors.set(read.operation, new Set());
+      ownershipErrors.get(read.operation).add(read.error);
+    }
+    // La pregunta sin contestar: una lectura que alcanza la entidad acotada en un bloque que no dice si sus lecturas se
+    // acotan. Sin default seguro —el de no decidir es servir las filas de todos—, pero legítimo de aceptar por operación
+    // (un listado que de verdad es de todos). `reads: []` lo cierra para el bloque entero.
+    for (const candidate of readPlan.undecided) {
+      obligation(
+        'OBL-READ-SCOPE-UNDECIDED',
+        candidate.scope,
+        `security: ${candidate.operation} lee '${candidate.entity}', que ${candidate.where.replace(/^security\./, '')} acota, y ese bloque no ` +
+          'declara reads — si su alcance es una rule en prosa, el adaptador sirve a cualquier titular del rol las filas de todos y ' +
+          'nada lo hace fallar. Lista la lectura en reads (con readMiss), declara reads: [] si ninguna se acota por construcción, o ' +
+          'acéptalo en decisions.yaml con su motivo — ver docs/dsl/security.md § Lecturas acotadas'
+      );
+    }
+
     // Un 403 que nada de lo declarado puede producir.
     //
     // Roles, permissions y scopes son GLOBALES: quien tiene el rol lo tiene para todo, así
@@ -1971,7 +2048,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       // queda FUERA: ahí quien llama es el cliente máquina, y su identidad es por cliente,
       // no global — acotar por "los recursos de quien llama" es perfectamente producible
       // sin declarar ningún claim extra. El hueco es el de los roles humanos.
-      if (!rule || rule.level === 'public' || rule.level === 'service') continue;
+      if (!rule || rule.level === 'public' || rule.level === 'optional' || rule.level === 'service') continue;
       for (const error of forbidden) globallyScoped.add(`${error.code}\u0000${opName}`);
     }
     if (globallyScoped.size > 0) {
@@ -4060,6 +4137,31 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         `validation-scenarios.md: no encuentro ningún escenario FL- que nombre '${write.name}' y la ejercite con un If-Match viejo ` +
           `(412 / ${preconditionCode}) — la garantía de la escritura condicional es justo la que ningún escenario de una sola ` +
           'escritura distingue. Escribe uno con dos lecturas y dos escrituras separadas: la segunda, con el ETag de antes, da 412 y no cambia nada'
+      );
+    }
+  }
+  // La lectura acotada (2.27): su garantía es justo la que ningún escenario de un solo llamante distingue —con todo
+  // filtrado o nada filtrado, el dueño ve lo suyo igual—. Aviso, como toda regla sobre el documento de escenarios.
+  if (scenarios !== null && security) {
+    const FOREIGN = /ajen[oa]s?|de otr[oa]s?|fuera de(l| su) alcance|no (es|son) suy[oa]s?|no (ve|aparece|aparecen|incluye|devuelve)|solo (ve|devuelve|lista|aparece|aparecen)/i;
+    for (const read of readScopesOfLayers(layers).reads) {
+      // Solo lo que afirma el escenario: el Given ya describe la fila ajena, y casar con él daría por cubierto lo que no se mide.
+      const bodies = scenariosMentioning(read.operation)
+        .map(scenarioBody)
+        .map((body) => body.split(/\*\*Then\*\*/).slice(1).join(' ') || body);
+      const signal =
+        read.shape !== 'single'
+          ? (body) => FOREIGN.test(body)
+          : read.readMiss === 'forbidden'
+            ? (body) => new RegExp(`(?<![0-9])403(?![0-9])|(?<![A-Z0-9_])${read.error}(?![A-Z0-9_])`).test(body)
+            : (body) => FOREIGN.test(body) && /(?<![0-9])404(?![0-9])/.test(body);
+      if (bodies.some(signal)) continue;
+      warn('CHK-SCEN-READ-SCOPE-UNCOVERED',
+        `validation-scenarios.md: no encuentro ningún escenario FL- que nombre '${read.operation}' y la ejercite con una fila ajena ` +
+          (read.shape === 'single'
+            ? `(${read.readMiss === 'forbidden' ? `403 / ${read.error}` : '404 de una fila que existe pero no es suya'})`
+            : '(una fila de otro que no aparece en el listado ni cuenta en el total)') +
+          ' — la lectura acotada es justo la garantía que un escenario de un solo llamante no distingue. Escribe uno con dos llamantes'
       );
     }
   }

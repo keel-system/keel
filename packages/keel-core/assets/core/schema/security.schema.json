@@ -73,6 +73,8 @@
           "type": "object",
           "required": ["claim", "over", "error"],
           "additionalProperties": false,
+          "if": { "properties": { "reads": { "minItems": 1 } }, "required": ["reads"] },
+          "then": { "required": ["readMiss"] },
           "description": "Alcance por recurso: roles, permissions y scopes son GLOBALES —quien pasa la regla de acceso, pasa para todos los recursos—, así que un servicio multi-inquilino necesita además acotar al recurso concreto. Este bloque declara de dónde sale esa acotación. Sin él, un servicio cuyas operaciones actúan sobre un recurso concreto sirve a cualquier titular del rol los recursos de todos los inquilinos, y el 403 que su diseño promete no lo produce nada.",
           "properties": {
             "claim": {
@@ -100,6 +102,17 @@
               "uniqueItems": true,
               "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
               "description": "Clientes máquina (entradas de serviceClients) que NO se acotan: un servicio que lee cualquier recurso para hacer su trabajo (un renderizador que genera las miniaturas de todos los propietarios). Su token no lleva el claim del alcance —no representa a un inquilino—, así que sin declararlo aquí recibe el error del alcance en todo recurso acotado. La exención es solo del alcance: las reglas de acceso (scopes) se siguen aplicando. Uno a uno, como exemptRoles. (2.21)"
+            },
+            "reads": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+              "description": "Las lecturas acotadas POR CONSTRUCCIÓN (2.27): queries cuya salida es una entidad a la que se llega desde su raíz por relaciones a-uno hasta la entidad de over. El adaptador generado filtra por el claim —el listado, la página con su total y la lectura por id—, así que una fila fuera del alcance no la ve nadie aunque el handler lo olvide. Un claim ausente es un conjunto vacío: no se ve nada. Los exentos (exemptRoles, exemptClients) no reciben filtro. Lista vacía: el diseño decide que ninguna lectura se acota por construcción (la acotación, si la hay, es del handler). Sin esta clave, cada lectura que alcanza la entidad acotada abre OBL-READ-SCOPE-UNDECIDED."
+            },
+            "readMiss": {
+              "type": "string",
+              "enum": ["not-found", "forbidden"],
+              "description": "Qué recibe quien pide POR ID una fila fuera de su alcance (2.27): 'not-found', el 404 del diseño, que no revela que la fila existe; 'forbidden', el error del alcance (403). Sin default: las dos son legítimas (la paridad con un legacy frente a no filtrar la existencia). Obligatorio con reads no vacío."
             },
             "description": { "type": "string" }
           }
@@ -245,6 +258,8 @@
         "type": "object",
         "required": ["owner", "error", "operations"],
         "additionalProperties": false,
+        "if": { "properties": { "reads": { "minItems": 1 } }, "required": ["reads"] },
+        "then": { "required": ["readMiss"] },
         "properties": {
           "owner": {
             "type": "string",
@@ -261,6 +276,17 @@
             "uniqueItems": true,
             "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
             "description": "Las operaciones que solo el dueño puede ejecutar sobre un recurso de esta entidad. Cada una recibe la identidad del llamante en su input (el campo de callerIdentity)."
+          },
+          "reads": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+            "description": "Las lecturas acotadas POR CONSTRUCCIÓN (2.27): queries que devuelven esta entidad (única, lista o página). El adaptador generado solo ve las filas cuyo dueño es la identidad del llamante —el listado, la página con su total y la lectura por id—, así que una fila ajena no la ve nadie aunque el handler lo olvide. Los exemptRoles no reciben filtro. Lista vacía: el diseño decide que ninguna lectura de esta entidad se acota. Sin esta clave, cada lectura que la devuelve abre OBL-READ-SCOPE-UNDECIDED."
+          },
+          "readMiss": {
+            "type": "string",
+            "enum": ["not-found", "forbidden"],
+            "description": "Qué recibe quien pide POR ID una fila que no es suya (2.27): 'not-found', el 404 del diseño, que no revela que existe; 'forbidden', el error de esta regla (403). Sin default: las dos son legítimas. Obligatorio con reads no vacío."
           },
           "exemptRoles": {
             "type": "array",

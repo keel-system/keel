@@ -91,8 +91,11 @@ export function queryFinder({ operation, entities, valueObjects, persistence }) 
     gaps.push(`sort: ordena por ${embeddedSort.map((criterion) => criterion.path).join(', ')}, de otro agregado, que este no guarda`);
   }
   if (gaps.length > 0) return { finder: null, gaps };
-  // Sin nada que filtrar, la búsqueda es el listado entero: el List(pageable) que el puerto ya tiene.
-  if (criteria.length === 0 && fixed.length === 0) return none;
+  // Sin nada que filtrar, la búsqueda es el listado entero: el List(pageable) que el puerto ya tiene. Salvo que la lectura
+  // esté acotada (DSL 2.27, `reads`): entonces el predicado del alcance es el criterio, y se suma (AND) a los demás y al
+  // conteo de la página (D4).
+  const scope = operation.readScope ?? null;
+  if (criteria.length === 0 && fixed.length === 0 && !scope) return none;
   return {
     finder: {
       operation: operation.name,
@@ -102,6 +105,7 @@ export function queryFinder({ operation, entities, valueObjects, persistence }) 
       result: operation.paginated ? 'page' : 'list',
       criteria,
       fixed,
+      scope,
       sort: operation.sort ?? []
     },
     gaps: null

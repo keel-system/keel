@@ -182,6 +182,50 @@ export const CHECKS = {
     title: 'un rol exento de una regla de propiedad que no está en el catálogo de roles',
     closes: 'declarar el rol en roles, o quitarlo de ownership.<E>.exemptRoles'
   },
+  // La lectura acotada (2.27): errores, porque el generador escribe el predicado del adaptador con ellas, y con una pieza
+  // que no existe lo escribiría sobre nada.
+  'CHK-SECURITY-READS-OPERATION': {
+    layer: 'security',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una lectura acotada que no es una query expuesta que devuelva la entidad',
+    closes: 'listar en reads queries con endpoint cuya salida sea la entidad acotada (única, lista o página)'
+  },
+  'CHK-SECURITY-READS-LEVEL': {
+    layer: 'security',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una lectura acotada cuya regla de acceso no es required ni admin',
+    closes: 'dar a la lectura level required o admin, o sacarla de reads'
+  },
+  'CHK-SECURITY-READS-MISS-ERROR': {
+    layer: 'security',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una lectura acotada por id no declara el error que su readMiss promete',
+    closes: 'con readMiss forbidden, el error del bloque con http 403 en los errors de la lectura; con not-found, un error con http 404'
+  },
+  'CHK-SECURITY-SCOPING-READ-PATH': {
+    layer: 'security',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una lectura acotada por scoping no llega por un único camino a-uno a la entidad de over',
+    closes: 'una relación many-to-one o one-to-one (una sola cadena) desde lo que devuelve la lectura hasta la entidad de scoping.over'
+  },
+  'CHK-SECURITY-OPTIONAL-RULE': {
+    layer: 'security',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una regla level: optional que exige roles, permisos o scopes',
+    closes: 'quitar roles, permissions y scopes de la regla, o declararla required'
+  },
+  'CHK-USECASES-OPTIONAL-CALLER-REQUIRED': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'el campo de la identidad del llamante es required en una operación level: optional',
+    closes: 'declarar opcional el campo de callerIdentity en el input de esa operación'
+  },
   'CHK-USECASES-STALLED-AFTER-INVALID': {
     layer: 'use-cases',
     severity: 'error',
@@ -1111,6 +1155,13 @@ export const CHECKS = {
     nature: 'incoherence',
     title: 'una escritura condicional no tiene escenario `FL-` del 412',
     closes: 'un escenario que nombre la operación y la ejercite con un If-Match viejo: dos lecturas, dos escrituras separadas, la segunda con 412'
+  },
+  'CHK-SCEN-READ-SCOPE-UNCOVERED': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'una lectura acotada no tiene escenario `FL-` de la fila ajena',
+    closes: 'un escenario con dos llamantes que nombre la lectura: la fila del otro no aparece (ni cuenta en el total), o su readMiss por id'
   },
   'CHK-SCEN-UNOBSERVABLE-RETRY': {
     layer: 'validation-scenarios',

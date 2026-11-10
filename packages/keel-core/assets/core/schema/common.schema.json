@@ -253,7 +253,8 @@
     },
     "authLevel": {
       "type": "string",
-      "enum": ["public", "required", "admin", "service"]
+      "enum": ["public", "optional", "required", "admin", "service"],
+      "description": "public: sin identidad. optional (2.27): sin token se ejecuta como pública con la identidad nula; con un token válido hay identidad; con uno inválido o caducado, 401 —nunca anónimo—. No admite roles, permissions ni scopes. required: un token válido. admin: el rol admin (o los roles que nombre la regla). service: un cliente máquina."
     },
     "accessRule": {
       "type": "object",

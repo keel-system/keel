@@ -225,6 +225,8 @@ El hueco más caro y el que ninguna regla mecánica puede ver. **Ningún hallazg
 - ¿De dónde sale la relación "es suyo": un campo de la entidad (`ownerId`, `customerId`) que se compara con la identidad del token? Si esa relación no está modelada, no se puede implementar.
 - Y el síntoma que delata que este hallazgo se cerró sin decidir: un **error 403 declarado** en operaciones cuya regla de acceso solo exige roles o permissions. `keel validate` lo avisa, pero llega tarde a propósito — cuando aparece, el diseño ya escribió errores y escenarios contra un alcance que no existe. La pregunta se hace aquí, antes.
 - Las **queries de colección**: ¿devuelven todo, o solo lo del solicitante? Es el mismo hueco, y aquí se convierte en fuga de datos masiva.
+- Cada **lectura** sobre una entidad que `scoping` u `ownership` acota: ¿se acota por construcción? Entonces va en `reads` (DSL 2.27), con `readMiss` —¿quien pide por id una fila ajena recibe el 404, que no revela que existe, o el 403?—. Si ninguna se acota (un catálogo que lee cualquiera y donde la propiedad solo acota la edición), `reads: []`. Una acotación de lectura escrita solo como `rule` no la aplica el adaptador, y olvidarla no rompe ningún escenario de un solo llamante.
+- Una lectura pública que se **personaliza** si llega un token (favoritos, «lo sigo»): es `level: optional`, no `public`. Y con un token caducado, ¿401 o anónimo? El DSL fija 401.
 - ¿Hay campos que un rol ve y otro no dentro de la **misma** respuesta?
 - Operaciones de mutación con acceso `public`: ¿deliberado?
 

@@ -210,7 +210,9 @@ function withScoping(d) {
     claim: 'desks',
     over: 'Ticket.requesterEmail',
     error: 'TICKET_OUT_OF_SCOPE',
-    exemptClients: ['oncall-bot']
+    exemptClients: ['oncall-bot'],
+    // Ninguna lectura acotada por construcción (2.27): el 403 de getTicket lo produce su handler, como en la 2.21.
+    reads: []
   };
   ops(d).getTicket.errors.push({
     code: 'TICKET_OUT_OF_SCOPE',
@@ -239,7 +241,8 @@ function withOwnership(d) {
   ops(d).createTicket.input.fields.callerSubject = { ...caller };
   ops(d).closeTicket.input.fields.callerSubject = { ...caller };
   ops(d).closeTicket.errors.push({ code: 'TICKET_NOT_OWNED', when: 'Quien llama no abrió el ticket.', http: 403 });
-  d.layers.security.ownership = { Ticket: { owner: 'openedBy', error: 'TICKET_NOT_OWNED', operations: ['closeTicket'] } };
+  // `reads: []`: las lecturas de tickets son de todos los agentes (2.27); la propiedad solo acota el cierre.
+  d.layers.security.ownership = { Ticket: { owner: 'openedBy', error: 'TICKET_NOT_OWNED', operations: ['closeTicket'], reads: [] } };
   insertScenarioBefore(
     d,
     '### FL-ESC-001',
@@ -249,6 +252,47 @@ function withOwnership(d) {
 **When** el agente llama a \`closeTicket\`.
 **Then** responde 403 con \`code\` = \`"TICKET_NOT_OWNED"\`; el ticket sigue en \`open\`.`
   );
+}
+
+/**
+ * Lectura acotada por el alcance (2.27): un agente solo ve los tickets de los solicitantes que enumera su claim, en la
+ * ficha (403 fuera de alcance) y en el listado. Sobre la extensión scoping, que ya declara el claim y el 403.
+ */
+function withScopedReads(d) {
+  withScoping(d);
+  Object.assign(d.layers.security.authentication.scoping, { reads: ['getTicket', 'listTickets'], readMiss: 'forbidden' });
+  insertScenarioBefore(
+    d,
+    '### FL-ESC-001',
+    `### FL-SCP-002: el listado solo trae los tickets del alcance
+
+**Given** dos tickets, uno de un solicitante que el claim \`desks\` del agente enumera y otro fuera de su alcance.
+**When** el agente llama a \`listTickets\`.
+**Then** solo aparece el primero; el ticket fuera de su alcance no aparece.`
+  );
+}
+
+/**
+ * Lectura acotada por propiedad (2.27): cada agente solo ve los tickets que abrió; el de otro responde el mismo 404 que
+ * uno que no existe. Sobre la extensión ownership.
+ */
+function withOwnedReads(d) {
+  withOwnership(d);
+  Object.assign(d.layers.security.ownership.Ticket, { reads: ['getTicket', 'listTickets'], readMiss: 'not-found' });
+  insertScenarioBefore(
+    d,
+    '### FL-ESC-001',
+    `### FL-OWN-002: un agente solo ve sus tickets
+
+**Given** un ticket que abrió el agente y otro de otro agente.
+**When** el agente llama a \`listTickets\` y a \`getTicket\` con el id del ticket ajeno.
+**Then** el listado solo trae el suyo; \`getTicket\` del ajeno responde 404 con \`TICKET_NOT_FOUND\`, igual que uno que no existe.`
+  );
+}
+
+/** Identidad opcional (2.27, R3c): el listado de tickets se puede pedir sin token. */
+function withOptionalAuth(d) {
+  d.layers.security.access.rules = { ...(d.layers.security.access.rules ?? {}), listTickets: { level: 'optional' } };
 }
 
 /**
@@ -652,6 +696,9 @@ export const EXTENSIONS = {
   m2m: withM2m,
   scoping: withScoping,
   ownership: withOwnership,
+  scopedReads: withScopedReads,
+  ownedReads: withOwnedReads,
+  optionalAuth: withOptionalAuth,
   replica: withReplica,
   outbox: withOutbox,
   escalation: withEscalation,
@@ -2035,6 +2082,81 @@ export const MUTATIONS = [
       replaceIn(d, '503 con `DIRECTORY_UNAVAILABLE`.', '503 con `DIRECTORY_UNAVAILABLE`; si no lo abrió, 403 con `TICKET_NOT_OWNED`.');
     },
     expect: ['OBL-RESOURCE-SCOPE']
+  },
+  // ── lectura acotada y identidad opcional (2.27) ──
+  {
+    id: 'M-SECURITY-READS-OPERATION',
+    title: 'una escritura listada como lectura acotada',
+    extends: 'scopedReads',
+    mutate: (d) => {
+      d.layers.security.authentication.scoping.reads.push('closeTicket');
+    },
+    expect: ['CHK-SECURITY-READS-OPERATION']
+  },
+  {
+    id: 'M-SECURITY-READS-LEVEL',
+    title: 'una lectura acotada que es pública',
+    extends: 'scopedReads',
+    mutate: (d) => {
+      d.layers.security.access.rules.listTickets = { level: 'public' };
+    },
+    expect: ['CHK-SECURITY-READS-LEVEL']
+  },
+  {
+    id: 'M-SECURITY-READS-MISS-ERROR',
+    title: 'una lectura por id con readMiss forbidden que no declara el 403 de la regla',
+    extends: 'ownedReads',
+    mutate: (d) => {
+      d.layers.security.ownership.Ticket.readMiss = 'forbidden';
+    },
+    expect: ['CHK-SECURITY-READS-MISS-ERROR']
+  },
+  {
+    id: 'M-SECURITY-SCOPING-READ-PATH',
+    title: 'el alcance acota una entidad a la que las lecturas no llegan',
+    extends: 'scopedReads',
+    mutate: (d) => {
+      d.layers.security.authentication.scoping.over = 'Queue.name';
+    },
+    expect: ['CHK-SECURITY-SCOPING-READ-PATH', 'CHK-SECURITY-SCOPING-READ-PATH']
+  },
+  {
+    id: 'M-OBL-READ-SCOPE-UNDECIDED',
+    title: 'un alcance que no dice si sus lecturas se acotan',
+    extends: 'scoping',
+    mutate: (d) => {
+      delete d.layers.security.authentication.scoping.reads;
+    },
+    expect: ['OBL-READ-SCOPE-UNDECIDED', 'OBL-READ-SCOPE-UNDECIDED']
+  },
+  {
+    id: 'M-SCEN-READ-SCOPE-UNCOVERED',
+    title: 'un listado acotado sin escenario de la fila ajena',
+    extends: 'scopedReads',
+    mutate: (d) => {
+      replaceIn(d, '**Then** solo aparece el primero; el ticket fuera de su alcance no aparece.', '**Then** aparece el primero.');
+    },
+    expect: ['CHK-SCEN-READ-SCOPE-UNCOVERED']
+  },
+  {
+    id: 'M-SECURITY-OPTIONAL-RULE',
+    title: 'una regla optional que exige un rol',
+    extends: 'optionalAuth',
+    mutate: (d) => {
+      d.layers.security.access.rules.listTickets.roles = ['agent'];
+    },
+    expect: ['CHK-SECURITY-OPTIONAL-RULE']
+  },
+  {
+    id: 'M-USECASES-OPTIONAL-CALLER-REQUIRED',
+    title: 'una operación optional que exige el campo de la identidad del llamante',
+    extends: 'optionalAuth',
+    mutate: (d) => {
+      d.layers.security.authentication.callerIdentity = { field: 'callerSubject', from: { source: 'claim', name: 'sub' } };
+      d.layers.security.access.rules.getTicket = { level: 'optional' };
+      ops(d).getTicket.input.fields.callerSubject = { type: 'string', required: true, description: 'Claim sub del token.' };
+    },
+    expect: ['CHK-USECASES-OPTIONAL-CALLER-REQUIRED']
   },
   {
     id: 'M-USECASES-DISPATCH-UNKNOWN',

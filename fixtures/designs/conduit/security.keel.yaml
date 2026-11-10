@@ -31,7 +31,11 @@ ownership:
     owner: author.subject
     error: NOT_ARTICLE_AUTHOR
     operations: [updateArticle, deleteArticle]
+    # Los artículos los lee cualquiera (el feed es de los autores que sigues, no de los tuyos): ninguna lectura se acota
+    # por el autor (DSL 2.27).
+    reads: []
   Comment:
     owner: author.subject
     error: NOT_COMMENT_AUTHOR
     operations: [deleteComment]
+    reads: []

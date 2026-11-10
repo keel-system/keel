@@ -11,6 +11,7 @@
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
+import { readScopePendingErrors, optionalAuthPendingErrors } from '@keel-system/keel-core/gen/read-scope';
 import { declaredDeadlines } from '@keel-system/keel-core/gen/deadlines';
 
 /**
@@ -223,6 +224,10 @@ export function checkSupportedFeatures(manifest, layers) {
   errors.push(...messagingWithoutPersistenceErrors(manifest, layers, 'keel-spring'));
   // La escritura condicional (DSL 2.25) se genera entera; lo que ningún generador genera todavía, con el motivo neutral (T3).
   errors.push(...conditionalWritesFrontierErrors(layers, 'keel-spring'));
+  // La lectura acotada (DSL 2.27, reads) llega en el incremento 1 de PLAN-DSL-227-LECTURA-ACOTADA.md y level: optional en
+  // el 5: hasta entonces se rechazan enteros, con el mismo mensaje en los cuatro.
+  errors.push(...readScopePendingErrors(layers, 'keel-spring', 1));
+  errors.push(...optionalAuthPendingErrors(layers, 'keel-spring', 5));
   // Los plazos de negocio (DSL 2.26) los genera el cronómetro (scaffold/timer.js). Lo que depende del motor elegido
   // —solo hay sentencias medidas para PostgreSQL, MySQL y MongoDB— lo rechaza planService, que sí conoce el stack.
 

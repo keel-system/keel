@@ -45,6 +45,12 @@ export {
   CHECK_CONDITIONAL_WRITES_SH, conditionalWritesGateScript, corsExposedHeaders, corsAllowedHeaders,
   CW_CASES, CW_SABOTAGES
 } from './conditional-writes.js';
+export {
+  READ_MISS, SCOPABLE_LEVELS, READ_SCOPE_FIELD, READ_SCOPE_TYPE, READ_SCOPE_KINDS, LOAD_SCOPED, READ_MISS_ORDER, UNRESTRICTED, ownedBy, within,
+  claimValues, readScopeFor, scopeAdmits, scopedLoadOutcome, toOnePaths, readShapeOf, readScopesOfLayers, readScopeOfOperation, optionalAuthRules,
+  readScopeText, readScopeNote, readScopePendingErrors, optionalAuthPendingErrors, READ_SCOPE_CASES, OPTIONAL_AUTH_CASES, READ_SCOPE_SABOTAGES,
+  OPTIONAL_AUTH_SABOTAGES
+} from './read-scope.js';
 export { domainGuardKind } from './domain-guard.js';
 export { cronPeriodSeconds, fastestSchedulePeriod } from './cron-period.js';
 export { orphanInternalOperations, dispatchingOperations, usesCommandDispatcher, dispatchNote } from './dispatch.js';

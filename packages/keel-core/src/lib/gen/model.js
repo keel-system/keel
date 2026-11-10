@@ -30,6 +30,7 @@ import {
 } from './reconciliation-stores.js';
 import { assertProjection } from './projection.js';
 import { attachQueryFinders } from './query-filters.js';
+import { readScopesOfLayers, readScopeOfOperation } from './read-scope.js';
 import { guardedByNaturalKey } from './natural-key-guard.js';
 import { domainGuardKind } from './domain-guard.js';
 
@@ -116,6 +117,11 @@ function interpret({ manifest, layers, stack = null }) {
   const { services, errors } = collectOperations(layers, domainTypes, inlineEnumName, service, warnings, persistenceKind, entities);
   deriveFilterFolds(services, entities, warnings);
   derivePatchNotNull(services, entities);
+  // La lectura acotada de cada query (DSL 2.27, `reads`), antes del finder: el predicado es un criterio más del finder.
+  const readPlan = readScopesOfLayers(layers);
+  for (const group of services) {
+    for (const operation of group.operations) operation.readScope = readScopeOfOperation(readPlan, operation.name);
+  }
   // El finder de cada búsqueda con todos sus inputs enlazados (DSL 2.22), después de las sombras de los filtros.
   attachQueryFinders({ services, entities, valueObjects, persistence: hasPersistence });
   // DTOs de las entidades hijas proyectadas en algún payload de salida.
@@ -161,6 +167,8 @@ function interpret({ manifest, layers, stack = null }) {
   const audit = auditPolicies(persistence);
 
   const security = collectSecurity(layers, services, api.routeBase, warnings);
+  // Las lecturas acotadas (DSL 2.27), las mismas que lleva cada operación en `readScope`.
+  if (security) security.readScopes = readPlan.reads;
   // Qué se emula en local con Cognito, dicho ANTES de que nadie lea una matriz en
   // verde. No va en supported-features.js porque aquello corre antes de conocer el
   // stack: allí solo se sabe qué declara el diseño, y esto depende del proveedor

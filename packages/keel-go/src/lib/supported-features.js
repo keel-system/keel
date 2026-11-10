@@ -15,6 +15,7 @@ import { resolveStack } from '@keel-system/keel-core/gen/stack';
 import { persistedMembers } from '@keel-system/keel-core/gen';
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
+import { readScopePendingErrors, optionalAuthPendingErrors } from '@keel-system/keel-core/gen/read-scope';
 import { declaredDeadlines, modelDeadlines } from '@keel-system/keel-core/gen/deadlines';
 import { repositoryRoots } from '@keel-system/keel-core/gen/features';
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
@@ -73,6 +74,10 @@ export function checkSupportedFeatures(manifest, layers) {
   errors.push(...cacheErrors(layers));
   // La escritura condicional (DSL 2.25) se genera entera; lo que ningún generador genera todavía, con el motivo neutral (T3).
   errors.push(...conditionalWritesFrontierErrors(layers, 'keel-go'));
+  // La lectura acotada (DSL 2.27, reads) llega en el incremento 4 de PLAN-DSL-227-LECTURA-ACOTADA.md y level: optional en
+  // el 5: hasta entonces se rechazan enteros, con el mismo mensaje en los cuatro.
+  errors.push(...readScopePendingErrors(layers, 'keel-go', 4));
+  errors.push(...optionalAuthPendingErrors(layers, 'keel-go', 5));
   // Los plazos de negocio (DSL 2.26) los genera el cronómetro (scaffold/timer.js). Lo que depende del motor elegido —solo
   // hay sentencias medidas para PostgreSQL, MySQL y MongoDB— y del status del rechazo tardío lo rechaza planService, que
   // sí conoce el stack; aquí, las formas que el handler generado del plazo no sabe despachar.

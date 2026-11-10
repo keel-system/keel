@@ -26,12 +26,14 @@ export const TECHNICAL_OPEN_PATHS = ['/livez', '/readyz'];
  * para el scope de un cliente máquina. Varias a la vez son «cualquiera de».
  *
  *   · `public`                        → { kind: 'public' }
+ *   · `optional` (2.27)               → { kind: 'optional' }: sin token pasa con la identidad nula; con uno inválido, 401
  *   · con roles, permisos o scopes    → { kind: 'anyOf', authorities }
  *   · `admin` sin nada nombrado       → { kind: 'anyOf', authorities: ['ROLE_admin'] }
  *   · `required`/`service` sin nada   → { kind: 'authenticated' }
  */
 export function accessRequirement(rule) {
   if ((rule?.level ?? 'required') === 'public') return { kind: 'public', authorities: [] };
+  if (rule.level === 'optional') return { kind: 'optional', authorities: [] };
   const authorities = [
     ...(rule.roles ?? []).map((role) => `ROLE_${role}`),
     ...(rule.permissions ?? []),
@@ -175,7 +177,8 @@ export function closingCredentialOf(model) {
   if (!usesTokenProtocol(sec)) return sec.protocol === 'api-key' ? { kind: 'apiKey' } : null;
   const plan = accessPlan(model);
   const fallback = plan.chains[plan.chains.length - 1].fallback;
-  if (fallback.kind === 'public') return { kind: 'open' };
+  // Con `optional` el humo entra sin credencial igual que con `public`: lo que distingue a las dos es el token inválido.
+  if (fallback.kind === 'public' || fallback.kind === 'optional') return { kind: 'open' };
   const roles = sec.roles ?? [];
   const clients = sec.serviceAuth && sec.serviceAuth.protocol !== 'api-key' ? sec.serviceClients ?? [] : [];
   const asRole = (role) => (roles.includes(role) ? { kind: 'role', name: role } : null);

@@ -32,7 +32,7 @@ access:
 ```
 
 - `access.default` cubre toda operación sin regla explícita; `rules` la sobrescribe por operación.
-- `level`: `public` (sin token), `required` (token válido), `admin` (token + privilegio elevado), `service` (token de cliente máquina; ver más abajo).
+- `level`: `public` (sin token), `optional` (con identidad si llega un token; ver § Identidad opcional), `required` (token válido), `admin` (token + privilegio elevado), `service` (token de cliente máquina; ver más abajo).
 - `roles` y `permissions` son catálogos: toda referencia desde `access` o `roleGrants` debe existir en ellos.
 - Permisos en formato `recurso:accion` (`product:write`); roles en kebab-case.
 - Principio de mínimo privilegio: la skill `/keel-validate` revisa que ningún rol acumule permisos que no use.
@@ -99,7 +99,7 @@ authentication:
 - `exemptClients` (2.21) es lo mismo para los clientes máquina: cada entrada tiene que estar en `serviceClients`. Un cliente máquina no representa a un inquilino y su token no lleva el claim del alcance, así que si no lo declaras exento recibe el error del alcance en todo recurso acotado. La exención es **solo del alcance**: el cliente sigue pasando por las reglas de acceso (sus `scopes`). El generador lo reconoce en el token por el identificador del cliente de la credencial —el mismo criterio que `callerIdentity` con `source: serviceClient`—.
 - **Sin este bloque**, un 403 declarado sobre una operación protegida por rol describe una discriminación que nada evalúa: `keel validate` lo avisa, el generador emite el código igual, y el servidor acaba sirviendo a cualquier titular del rol los recursos de todos los inquilinos.
 - Qué recurso alcanza cada usuario **de prueba** no es del diseño: el generador siembra el proveedor de identidad con un valor convencional y lo publica para el arnés (en keel-spring, `AUTH_SCOPED_RESOURCE` de `infra/test-credentials.env`).
-- La comprobación en sí se escribe como `rule` en cada operación acotada — el DSL declara de dónde sale el alcance, no el algoritmo que lo aplica.
+- **Las lecturas** se acotan por construcción con `reads` y `readMiss` (2.27, § Lecturas acotadas). Las **escrituras** acotadas siguen comprobándose en el handler, con su `rule`: el DSL declara de dónde sale el alcance y el generador deja la nota.
 
 ## Autorización por propietario (`ownership`, 2.23)
 
@@ -176,10 +176,59 @@ cors:
 
 Requiere capa `api`: CORS sin HTTP entrante no significa nada (error de `keel validate`).
 
+## Lecturas acotadas (`reads` y `readMiss`, 2.27)
+
+`scoping` y `ownership` dicen quién puede **ejecutar** una operación sobre un recurso. Una lectura necesita además decir qué **filas** ve cada uno, y si eso queda en una `rule` en prosa, olvidarlo no rompe ninguna prueba de un solo llamante: el listado sirve a cualquier titular del rol las filas de todos (OWASP API1, BOLA). Con `reads`, el filtro va en el **adaptador generado** —el listado, la página con su total y la lectura por id—, y el handler solo pasa el alcance que construyó el borde:
+
+```yaml
+authentication:
+  scoping:
+    claim: vaults
+    over: Owner.code
+    error: ASSET_OUT_OF_SCOPE
+    exemptRoles: [vault-admin]
+    reads: [getAsset, listAssets]   # Asset.owner → Owner.code ∈ claim vaults
+    readMiss: forbidden             # not-found | forbidden, sin default
+
+ownership:
+  OrderMain:
+    owner: buyerEmail
+    error: ORDER_NOT_OWNED
+    operations: [cancelOrder]       # las escrituras, como en 2.23
+    reads: [getOrder, listOrders]   # OrderMain.buyerEmail = identidad del llamante
+    readMiss: forbidden
+    exemptRoles: [employee, manager]
+```
+
+- Cada entrada de `reads` es una **query expuesta** que devuelve la entidad acotada (única, lista o página). Con `ownership`, la de la regla; con `scoping`, cualquier entidad desde la que haya **un solo** camino de relaciones `many-to-one`/`one-to-one` hasta la entidad de `over` (se deriva: `Asset.owner → Owner.code`).
+- Su regla de acceso es `required` o `admin`: con `public` u `optional`, sin token no hay a quién acotar, y con `service` el llamante es una máquina.
+- **Un claim ausente es un conjunto vacío**, y entonces no se ve nada. Solo los exentos (`exemptRoles`, `exemptClients`) ven todo.
+- El filtro se suma a los filtros de la búsqueda (`filter`, `where`) y **también al conteo** de la página: el total no revela filas ajenas.
+- `readMiss` decide qué recibe quien pide **por id** una fila que no es suya: `not-found`, el 404 de la operación, que no revela que la fila existe; `forbidden`, el `error` del bloque con 403 (después del 404 de una fila inexistente). No tiene default porque las dos son legítimas, y la lectura declara en sus `errors` el que elija.
+- Una lectura en caché guarda una entrada por alcance: dos llamantes distintos no comparten la respuesta.
+- `reads: []` es una decisión: ninguna lectura de ese bloque se acota por construcción (un catálogo que lee cualquiera, donde la propiedad solo acota la edición). **Sin la clave**, cada query expuesta que alcanza la entidad acotada abre `OBL-READ-SCOPE-UNDECIDED`, que se cierra con `reads` o se acepta por operación en `decisions.yaml`.
+- Desde otra puerta (un evento, un despacho, el reloj) la lectura no se acota: el alcance es del llamante HTTP.
+
+## Identidad opcional (`level: optional`, 2.27)
+
+Una lectura pública que se **personaliza** si llega un token («¿lo tengo en favoritos?») no es `public` —que ignora el token— ni `required` —que rechaza al anónimo—:
+
+```yaml
+access:
+  rules:
+    getArticle: { level: optional }
+```
+
+- Sin token, la operación se ejecuta como pública y la identidad del llamante (el campo de `callerIdentity`) llega nula; por eso ese campo no puede ser `required` en su input.
+- Con un token válido, hay identidad.
+- Con un token **inválido o caducado**, `401`: nunca se degrada a anónimo, o un cliente con la sesión caducada recibiría en silencio la versión sin personalizar.
+- No admite `roles`, `permissions` ni `scopes`: sin token no hay a quién exigírselos. Si los exige, es `required`.
+
+
 Combinaciones válidas de `audience` (capa `api`) × `level`:
 
 | `audience` | Niveles válidos | Notas |
 |---|---|---|
-| `users` (default) | `public`, `required`, `admin` | `scopes` prohibido |
+| `users` (default) | `public`, `optional`, `required`, `admin` | `scopes` prohibido |
 | `services` | `service` (con `scopes`), `public` | `roles` prohibido con `service` |
 | `both` | `required` (opcionalmente `scopes` + `roles`/`permissions`, semántica "cualquiera de"), `public` | `service` sería error: excluiría a los usuarios |

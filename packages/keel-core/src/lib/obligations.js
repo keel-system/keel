@@ -160,6 +160,20 @@ export const OBLIGATIONS = {
     doc: 'framework-errors.md'
   },
 
+  'OBL-READ-SCOPE-UNDECIDED': {
+    gapClass: 9,
+    when: 'security: una query expuesta (required o admin) lee una entidad que scoping u ownership acota, en un bloque sin `reads`',
+    kind: 'decision',
+    // Exentable por operación, a diferencia de OBL-RESOURCE-SCOPE: aquí el 403 no está prometido, y un listado que de verdad
+    // es de todos (el de los empleados) es legítimo. Lo que no es legítimo es no haberlo decidido, porque el default no es
+    // neutro: el adaptador sirve las filas de todos y ningún escenario de un solo llamante lo ve (R3 de la evaluación 2.24).
+    waivable: true,
+    title: 'no está decidido si una lectura sobre una entidad acotada se acota por construcción',
+    closes:
+      '`reads` (con `readMiss`) en el bloque que acota la entidad, `reads: []` si ninguna lectura se acota por construcción, o exención razonada por operación',
+    doc: 'dsl/security.md'
+  },
+
   'OBL-API-CONCURRENCY-UNDECIDED': {
     gapClass: 4,
     when: 'api: un PUT o PATCH sobre una raíz con versión que recibe su id, en un diseño sin `concurrency`',

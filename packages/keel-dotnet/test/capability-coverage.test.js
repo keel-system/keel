@@ -32,6 +32,9 @@ const MOTIVOS = {
 };
 
 const EXCEPCIONES = new Map([
+  ['security.authentication.scoping.reads', { motivo: MOTIVOS.hueco, porque: 'la lectura acotada (DSL 2.27) la rechaza la frontera de keel-dotnet (readScopePendingErrors) hasta el incremento 3 de PLAN-DSL-227-LECTURA-ACOTADA.md, y ninguna fixture la declara con lecturas hasta el 7; entonces esta fila se borra.' }],
+  ['security.authentication.scoping.readMiss', { motivo: MOTIVOS.hueco, porque: 'la lectura acotada (DSL 2.27) la rechaza la frontera de keel-dotnet (readScopePendingErrors) hasta el incremento 3 de PLAN-DSL-227-LECTURA-ACOTADA.md, y ninguna fixture la declara con lecturas hasta el 7; entonces esta fila se borra.' }],
+  ['security.ownership.*.readMiss', { motivo: MOTIVOS.hueco, porque: 'la lectura acotada (DSL 2.27) la rechaza la frontera de keel-dotnet (readScopePendingErrors) hasta el incremento 3 de PLAN-DSL-227-LECTURA-ACOTADA.md, y ninguna fixture la declara con lecturas hasta el 7; entonces esta fila se borra.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     { motivo: MOTIVOS.informativo, porque: 'solo entra en la línea «Formato: …» del comentario de la clase del mensaje (messaging.js): ningún lector depende de él.' }
