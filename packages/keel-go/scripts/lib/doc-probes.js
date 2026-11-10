@@ -33,6 +33,7 @@ import { tablePurges } from '../../src/scaffold/purge.js';
 import { indexEntries } from '../../src/scaffold/document-persistence.js';
 import { sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
 import { parametersType, usesServiceParameters } from '../../src/scaffold/service-parameters.js';
+import { readScopeProbes } from './read-scope-probes.js';
 import { PROBE_HELPERS, concurrencyCode, dumpFunction, dumpValueObject, ensureFunction, patternTables, rootProbes, sampleFunction, usedValueObjects } from './db-probes.js';
 import { repositoryArgs } from '../../src/scaffold/repositories.js';
 import { claimDrains } from '@keel-system/keel-core/gen/timer-plan';
@@ -101,6 +102,8 @@ export function docProbeFile(model) {
     parts.push(shapeProbe(model, root));
     parts.push(...rootProbes(model, root, { document: true }).map((probe) => probe.replace(/New\w+Repository\(probeTx[^)]*\)/g, repository(model, root))));
   }
+  // La lectura acotada (DSL 2.27): RS-1 a RS-8 contra el adaptador, las MISMAS que db-check, con el repositorio documental.
+  roots.forEach((root, index) => parts.push(...readScopeProbes(model, root, { repoOf: (entity) => repository(model, entity), index: index + 1 })));
   parts.push(transactionProbes(model, roots.find((root) => root.usesOptimisticLocking) ?? roots[0]));
   if (usesRequestIdempotency(model)) parts.push(IDEMPOTENCY_PROBES);
   if (usesGoOutbox(model)) {

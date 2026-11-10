@@ -30,11 +30,22 @@ import { docProbeFile } from './lib/doc-probes.js';
 import { DOC_SABOTAGES, applyDocSabotage } from '../test/helpers/doc-sabotages.js';
 import { DRAIN_SABOTAGES, PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, drainBreaksCovered, isDrainSabotage, isPurgeTimerSabotage, isTimerSabotage, purgeTimerBreaksCovered, purgeTimerProbeFile, timerBreaksCovered, timerProbeFile, timerProbePatch, timerSabotageBreaks } from './lib/timer-probes.js';
 import { RELAY_WAKE_SABOTAGES } from './lib/relay-wake-probes.js';
+import { READ_SCOPE_SABOTAGE_SPECS, READ_SCOPE_SUBJECTS, isReadScopeSabotage, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
 
 // Los del cronómetro y los plazos (DSL 2.26) caen en EXACTAMENTE sus casos DL (scripts/lib/timer-probes.js).
-const SABOTAGES = { ...DOC_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES, ...RELAY_WAKE_SABOTAGES };
+// Los de la lectura acotada (DSL 2.27) caen en EXACTAMENTE sus casos RS (scripts/lib/read-scope-probes.js).
+const SABOTAGES = {
+  ...DOC_SABOTAGES,
+  ...TIMER_SABOTAGES,
+  ...PURGE_TIMER_SABOTAGES,
+  ...DRAIN_SABOTAGES,
+  ...RELAY_WAKE_SABOTAGES,
+  ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document]))
+};
 import { resolveRuntime, startMongo, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 
+// El nombre de una sonda de la lectura acotada (`TestAsset_RS8_…`).
+const RS_PROBE = /_RS\d+_/;
 const only = process.argv.find((arg) => arg.startsWith('--only='))?.slice('--only='.length) ?? null;
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.slice('--sabotage='.length) ?? null;
 const keep = process.argv.includes('--keep');
@@ -73,8 +84,10 @@ try {
     ...fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(path.join(FIXTURES_DIR, entry, 'service.keel.yaml'))).map((name) => ({ name, from: name, mutate: null })),
     ...AUTHORSHIP_DESIGNS,
     // Los finders sobre documentos (DSL 2.22), el MISMO diseño que miden keel-nest y keel-dotnet, y la versión declarada.
-    ...UNCOVERED_BRANCHES.filter((design) => ['jobs-mongo-finder', 'mailer-mongo-lock', 'catalog-conditional-mongo'].includes(design.name))
-  ];
+    ...UNCOVERED_BRANCHES.filter((design) => ['jobs-mongo-finder', 'mailer-mongo-lock', 'catalog-conditional-mongo'].includes(design.name)),
+    // La lectura acotada (DSL 2.27, RS-1 a RS-8): los MISMOS diseños que miden los otros tres (keel-core/test/helpers/read-scope-designs.js).
+    ...UNCOVERED_BRANCHES.filter((design) => READ_SCOPE_SUBJECTS.document.includes(design.name))
+  ].filter((design) => only || !isReadScopeSabotage(sabotage) || READ_SCOPE_SUBJECTS.document.includes(design.name));
   for (const { name, from, mutate } of designs) {
     if (only && name !== only) continue;
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
@@ -104,7 +117,7 @@ try {
       fs.writeFileSync(target, file.content);
     }
     if (probe.unsampled.length > 0) console.log(`  (${name}: sin muestra para ${probe.unsampled.join(', ')})`);
-    subjects.push({ name, dir, db: `${name.replace(/-/g, '_')}_doc_probes`, purgeTimer: Boolean(purgeTimerProbe), drain: probe.content.includes('TestDrain_DR1_') });
+    subjects.push({ name, dir, model: plan.model, db: `${name.replace(/-/g, '_')}_doc_probes`, purgeTimer: Boolean(purgeTimerProbe), drain: probe.content.includes('TestDrain_DR1_') });
   }
   const url = (db) => database.url.replace(/\/keel_db_check\?/, `/${db}?`);
   const outcomes = await pool(subjects, 2, async ({ dir, db }) => {
@@ -116,7 +129,7 @@ try {
     if (!built.ok) return { tidied, tested: built };
     return { tidied, tested: await runAsync(binary, ['-test.count=1', '-test.v'], { cwd: path.join(dir, storePath), env: { DOC_CHECK_URL: url(db) } }) };
   });
-  subjects.forEach(({ name, purgeTimer, drain }, index) => {
+  subjects.forEach(({ name, model, purgeTimer, drain }, index) => {
     const { tidied, tested } = outcomes[index];
     if (!step(`${name}: go mod tidy`, tidied.ok, tidied.ok ? '' : tidied.output.slice(0, 2000))) return;
     const failed = [...tested.output.matchAll(/^\s*--- FAIL: (\S+)/gm)].map((m) => m[1]).filter((test) => !test.includes('/'));
@@ -126,6 +139,18 @@ try {
       const ok = tested.ok && ran > 0;
       step(`${name}: los adaptadores documentales guardan, leen y traducen contra MongoDB (${passed.length} sondas)`, ok, ok ? '' : failed.join(', ') || tested.output.slice(-3000));
       if (!ok && failed.length > 0) console.error(failureLines(tested.output));
+      return;
+    }
+    if (isReadScopeSabotage(sabotage)) {
+      const verdict = readScopeSabotageVerdict(failed, sabotage, model);
+      // Y ninguna otra sonda: el sabotaje rompe la lectura acotada, no el resto del adaptador.
+      const stray = failed.filter((test) => !RS_PROBE.test(test));
+      step(
+        `falsado: ${sabotage} en ${name} cae en exactamente sus casos`,
+        ran > 0 && verdict.exact && stray.length === 0,
+        `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]${stray.length > 0 ? `; además ${stray.join(', ')}` : ''}`
+      );
+      if (verdict.exact && verdict.want.length > 0) results.at(-1).caught = true;
       return;
     }
     const { expect } = isTimerSabotage(sabotage) ? timerSabotageBreaks(sabotage, 'document') : SABOTAGES[sabotage];

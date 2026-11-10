@@ -12,6 +12,7 @@ import { enumConstant, goExported } from '../lib/go-projection.js';
 import { goString } from '../lib/go-source.js';
 import { sqlDialect } from '../lib/relational-engine.js';
 import { docComment, localName } from './render.js';
+import { READ_SCOPE_FIELD, RELATIONAL_SCOPE_LINE, isScopedRoot } from './read-scope.js';
 
 // Las columnas se citan como en el baseline del motor; `qFor` las cita para el modelo que se escribe.
 const qFor = (model) => (name) => sqlDialect(model).quote(name);
@@ -62,6 +63,8 @@ export function finderParams(finder, domain = '') {
   const params = [];
   if (hasFilter(finder)) params.push(`filter ${domain}${filterTypeName(finder)}`);
   if (finder.result === 'page') params.push(`pageable ${domain}Pageable`);
+  // En una lectura acotada (DSL 2.27, D2) el scope es OBLIGATORIO: el compilador obliga al handler a pasarlo.
+  if (finder.scope) params.push(`scope ${domain}ReadScope`);
   return params;
 }
 
@@ -139,7 +142,8 @@ export function adapterFinderMethods(model, entity, { type, root, sortable, writ
   return entityFinders(model, entity).map((finder) => {
     const name = finderMethod(finder);
     const signature = `func (r *${type}) ${name}(${['ctx context.Context', ...finderParams(finder, 'domain.')].join(', ')}) ${finderResult(finder, entity, 'domain.')}`;
-    const conditions = filterLines(model, entity, finder, writeValue);
+    // El alcance de una lectura acotada (DSL 2.27) se SUMA a los criterios (D4): la misma consulta da las filas y el total.
+    const conditions = [...filterLines(model, entity, finder, writeValue), ...(finder.scope ? [RELATIONAL_SCOPE_LINE] : [])];
     if (finder.result === 'page') {
       const zero = `domain.Page[*domain.${entity.name}]{}`;
       return `// ${name} implementa domain.${entity.name}Repository.
@@ -192,6 +196,12 @@ export function filtersUses(model, roots) {
       if (finder.criteria.some((criterion) => criterion.match === 'prefix')) uses.add('prefix');
       if (finder.result === 'page') uses.add('page');
     }
+    // La lectura acotada (DSL 2.27): el predicado de la raíz con su IN, y la carga, que compara el id.
+    if (isScopedRoot(model, entity)) {
+      uses.add('filters');
+      uses.add('add');
+      uses.add('in');
+    }
   }
   return uses;
 }
@@ -215,6 +225,21 @@ type filters struct {
 func (f *filters) add(column, op string, value any) {
 	f.args = append(f.args, value)
 	f.conditions = append(f.conditions, column+" "+op+${param})
+}`,
+    uses.has('in') &&
+      `// in restringe a que head esté entre values, y cierra con tail (los paréntesis de las subconsultas). Sin valores, ninguna
+// fila: un IN vacío no es SQL, y «nada» nunca puede volverse «todo».
+func (f *filters) in(head string, values []string, tail string) {
+	if len(values) == 0 {
+		f.conditions = append(f.conditions, "1 = 0")
+		return
+	}
+	marks := make([]string, len(values))
+	for i, value := range values {
+		f.args = append(f.args, value)
+		marks[i] = ${d.mysql ? '"?"' : '"$" + strconv.Itoa(len(f.args))'}
+	}
+	f.conditions = append(f.conditions, head+" IN ("+strings.Join(marks, ", ")+")"+tail)
 }`,
     uses.has('contains') &&
       `// contains restringe column a los textos que contienen text, LITERAL: sus comodines no lo son.
@@ -257,5 +282,6 @@ export function finderCall(finder, repository) {
   const args = ['ctx'];
   if (hasFilter(finder)) args.push(`domain.${filterTypeName(finder)}{${finder.criteria.map((criterion) => `${goExported(criterion.name)}: msg.${goExported(criterion.name)}`).join(', ')}}`);
   if (finder.result === 'page') args.push('msg.Pageable');
+  if (finder.scope) args.push(`msg.${READ_SCOPE_FIELD}`);
   return `h.${repository}.${finderMethod(finder)}(${args.join(', ')})`;
 }

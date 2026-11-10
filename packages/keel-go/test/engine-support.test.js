@@ -2,6 +2,7 @@
 // estados común y, en cada celda, una promesa que se pueda leer (una red que existe, y el sabotaje que la falsa).
 
 import { RELAY_WAKE_SABOTAGES } from '../scripts/lib/relay-wake-probes.js';
+import { READ_SCOPE_SABOTAGE_SPECS } from '../scripts/lib/read-scope-probes.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -36,8 +37,7 @@ test('cada motor relacional que la frontera admite tiene su celda en los mecanis
 });
 
 test('la puerta del incremento 16: nada pendiente, nada sin ejecutar y nada sin falsar', () => {
-  // Salvo la lectura acotada (DSL 2.27), que es de otro plan: llega en su incremento 4 (PLAN-DSL-227-LECTURA-ACOTADA.md).
-  assert.deepEqual(pending().map(({ id }) => id).filter((id) => id !== 'read-scope'), []);
+  assert.deepEqual(pending().map(({ id }) => id), []);
   assert.deepEqual(unverified().map(({ id, branch }) => `${id}/${branch}`), []);
   assert.deepEqual(unfalsified().map(({ id, branch }) => `${id}/${branch}`), []);
 });
@@ -86,11 +86,16 @@ const FALSIFIED_BY = {
   'timer-schedule/document': ['drain-no-signal', 'drain-no-budget', 'timer-every-replica-schedule'],
   'timer-telemetry/document': ['tl-lag', 'dl-no-lease'],
   'timer-relay/relational': ['relay-no-wake', 'relay-no-retry'],
-  'timer-relay/document': ['relay-no-wake', 'relay-no-retry']
+  'timer-relay/document': ['relay-no-wake', 'relay-no-retry'],
+  'read-scope/relational': ['rs-no-filter', 'rs-count-unscoped', 'rs-get-leak', 'rs-empty-is-all', 'rs-finder-replace', 'rs-path'],
+  'read-scope/document': ['rs-no-filter', 'rs-count-unscoped', 'rs-get-leak', 'rs-empty-is-all', 'rs-finder-replace', 'rs-path']
 };
 
 test('el sabotaje con que se falsa cada celda de db-check o doc-check existe de verdad', () => {
-  const known = { 'db-check': { ...DB_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES, ...RELAY_WAKE_SABOTAGES }, 'doc-check': { ...DOC_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES, ...RELAY_WAKE_SABOTAGES } };
+  const known = {
+    'db-check': { ...DB_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES, ...RELAY_WAKE_SABOTAGES, ...READ_SCOPE_SABOTAGE_SPECS },
+    'doc-check': { ...DOC_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES, ...RELAY_WAKE_SABOTAGES, ...READ_SCOPE_SABOTAGE_SPECS }
+  };
   for (const { id, branch, cell } of cells()) {
     if (!known[cell.net]) continue;
     const named = FALSIFIED_BY[`${id}/${branch}`];

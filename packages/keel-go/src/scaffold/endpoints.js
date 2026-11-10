@@ -35,6 +35,7 @@ import { goFileName, layout, packageFile } from './render.js';
 import { usesCallerIdentity } from './security.js';
 import { callerResolution } from './use-cases.js';
 import { EXPECTED_VERSIONS, carriesExpectedVersions, endpointPrelude, returnsVersioned } from './conditional-writes.js';
+import { readScopeEndpointLines } from './read-scope.js';
 
 /** ¿Resuelve esta operación la identidad del llamante contra las credenciales del recurso (resolvedBy)? */
 export function resolvesCaller(model, operation) {
@@ -152,6 +153,8 @@ function renderEndpoint(model, operation, plan) {
     '\t}'
   ];
   if (conditional) lines.push(`\t${variable}.${EXPECTED_VERSIONS} = expected`);
+  // La lectura acotada (DSL 2.27, D1): el scope desde el token, estampado en el mensaje cuando la entrada ya es válida.
+  lines.push(...readScopeEndpointLines(model, operation, variable));
   // La puerta, si el mensaje la lleva (keel-core/gen/entry-gates.js): por aquí entra siempre por HTTP, y no la elige el cliente.
   if (entryGateField(model, operation.name, 'HTTP')) lines.push(`\t${variable}.EntryGate = application.${entryGateConstant('HTTP')}`);
   // Con escritura condicional el handler devuelve Versioned[T] (D6): la versión va al ETag y el valor al cuerpo.

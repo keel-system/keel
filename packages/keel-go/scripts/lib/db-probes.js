@@ -33,7 +33,8 @@ import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { constraintErrors, declaredConcurrencyError, indexName, keyShadow, orderingFieldOf, partialUniqueIndexes } from '@keel-system/keel-core/gen';
 import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections';
 import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
-import { isPaginated, repositoryRoots } from '@keel-system/keel-core/gen/features';
+import { listsUnscoped, repositoryRoots } from '@keel-system/keel-core/gen/features';
+import { readScopeProbes } from './read-scope-probes.js';
 import { persistedMembers } from '@keel-system/keel-core/gen';
 import { sampleFor } from '../../../keel-nest/scripts/lib/samples.js';
 import { enumConstant, goExported } from '../../src/lib/go-projection.js';
@@ -116,6 +117,8 @@ export function probeFile(model, files = []) {
   for (const vo of usedValueObjects(model, [...sampled])) parts.push(dumpValueObject(model, vo));
   for (const root of roots) parts.push(ensureFunction(model, root));
   for (const root of roots) parts.push(...rootProbes(model, root));
+  // La lectura acotada (DSL 2.27): RS-1 a RS-8 contra el adaptador, con su siembra.
+  roots.forEach((root, index) => parts.push(...readScopeProbes(model, root, { repoOf: (entity) => repository(model, entity), index: index + 1 })));
   if (roots.length > 0) parts.push(transactionProbes(model, roots[0]));
   if (usesRequestIdempotency(model)) parts.push(idempotencyProbes(model));
   if (usesGoOutbox(model) || usesGoProcessedEvents(model)) parts.push(messagingProbes(model));
@@ -702,7 +705,8 @@ ${expect('state', 'read')}	if want, got := dump${name}(domain.Rehydrate${name}(s
 }`);
   }
 
-  if (isPaginated(model, root)) {
+  // Un listado acotado (DSL 2.27) no tiene List sin scope: sus filas las miden las sondas RS.
+  if (listsUnscoped(model, root)) {
     tests.push(`func Test${name}_PageAndDelete(t *testing.T) {
 	ctx := t.Context()
 	var ids []${root.idField?.goType ?? 'uuid.UUID'}
@@ -1118,7 +1122,7 @@ function childOrderProbes(model, root, { repo, id, members }) {
 }
 
 function rankProbes(model, root, { repo }) {
-  if (!isPaginated(model, root)) return [];
+  if (!listsUnscoped(model, root)) return [];
   const name = root.name;
   const ranked = persistedMembers(model, root).filter((member) => member.kind === 'scalar' && member.ranked);
   return ranked.map((member) => {

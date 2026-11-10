@@ -465,10 +465,13 @@ function cachedOperationsBody(model) {
       );
     }
     const variable = operation.messageKind === 'query' ? 'query' : 'cmd';
-    const key = cache.keyFields.length > 0 ? `CacheKey(${cache.keyFields.map((field) => `${variable}.${goExported(field)}`).join(', ')})` : 'CacheKey("all")';
+    // Con una lectura acotada (DSL 2.27, D6) el scope del llamante es parte de la clave, con la forma de keel-spring: si no,
+    // la caché sirve a uno la fila de otro. Dos exentos comparten entrada (`all`).
+    const parts = [...cache.keyFields.map((field) => `${variable}.${goExported(field)}`), ...(operation.readScope ? [`${variable}.ReadScope.CacheKey()`] : [])];
+    const key = parts.length > 0 ? `CacheKey(${parts.join(', ')})` : 'CacheKey("all")';
     const by = invalidators.get(cache.cacheName) ?? [];
     const doc = [
-      `${cacheVar(cache.operation)} es la caché de ${cache.operation}: TTL ${cache.ttlSeconds} s, clave por ${cache.keyFields.join(', ') || 'ningún campo (una sola entrada)'}.`,
+      `${cacheVar(cache.operation)} es la caché de ${cache.operation}: TTL ${cache.ttlSeconds} s, clave por ${[...cache.keyFields, ...(operation.readScope ? ['el scope del llamante (lectura acotada)'] : [])].join(', ') || 'ningún campo (una sola entrada)'}.`,
       cache.invalidatedBy.length > 0
         ? `La invalidan ${cache.invalidatedBy.join(', ')}: la vacían ENTERA, al confirmar, ${by.length > 0 ? by.join(', ') : 'ninguna operación de este servicio (solo caduca por su TTL)'} (lo cablea NewUseCases).`
         : 'Ningún evento la invalida: solo caduca por su TTL.'
@@ -477,7 +480,7 @@ function cachedOperationsBody(model) {
 var ${cacheVar(cache.operation)} = CachedOperation[${messageType(operation)}]{
 	Name: ${goString(cache.cacheName)},
 	TTL:  ${cache.ttlSeconds} * time.Second,
-	Key: func(${cache.keyFields.length > 0 ? variable : '_'} ${messageType(operation)}) string {
+	Key: func(${parts.length > 0 ? variable : '_'} ${messageType(operation)}) string {
 		return ${key}
 	},
 }`;

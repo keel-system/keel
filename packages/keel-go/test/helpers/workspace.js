@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpDir } from './tmp.js';
 import { FINDER_DESIGNS } from '../../../keel-core/test/helpers/finder-designs.js';
 import { CONDITIONAL_WRITE_DESIGNS } from '../../../keel-core/test/helpers/conditional-write-designs.js';
+import { READ_SCOPE_DESIGNS } from '../../../keel-core/test/helpers/read-scope-designs.js';
 
 const here = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.join(here, '..', '..', '..');
@@ -223,6 +224,16 @@ export const UNCOVERED_BRANCHES = [
         delete need.replica;
         need.strategy = 'on-demand';
       }
+    }
+  })),
+  // La lectura acotada (DSL 2.27, PLAN-DSL-227-LECTURA-ACOTADA.md): los diseños de keel-core/test/helpers/read-scope-designs.js,
+  // los MISMOS que miden keel-spring, keel-nest y keel-dotnet (conduit-optional es del incremento 5: hasta entonces se rechaza).
+  ...READ_SCOPE_DESIGNS.filter((design) => design.name !== 'conduit-optional').map((design) => ({
+    name: design.name,
+    from: design.from,
+    mutate(manifest, layers) {
+      manifest.service.name = design.name;
+      design.mutate(layers);
     }
   }))
 ];

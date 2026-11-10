@@ -660,7 +660,28 @@ export const MECHANISMS = {
     }
   },
   'read-scope': {
-    pending: 'la lectura acotada (DSL 2.27) llega en el incremento 4 de PLAN-DSL-227-LECTURA-ACOTADA.md: hasta entonces supported-features.js la rechaza entera (readScopePendingErrors)'
+    parity: {
+      skip: 'ningún par byte a byte declara reads hasta el incremento 7 de PLAN-DSL-227-LECTURA-ACOTADA.md: los sujetos son los diseños de keel-core/test/helpers/read-scope-designs.js (vault-scoped y vault-scoped-mongo, el mismo diseño salvo el modelo; shop-scoped y conduit-scoped), los MISMOS que miden los otros tres; test/read-scope.test.js fija la forma y la compara con ellos',
+      test: 'test/read-scope.test.js'
+    },
+    emitter: 'src/scaffold/read-scope.js (domain.ReadScope, el scope del borde en internal/httpapi/read_scope.go, scoped y admittedOrMiss en los dos adaptadores, LoadScoped y las pruebas emitidas) · finders.js · repositories.js y document-repositories.js · endpoints.js · services.js · cache.js',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'vault-scoped (el salto Asset.owner → Owner.code como subconsulta IN, sumada al filters del finder) y shop-scoped (la propiedad sobre la propia fila, forbidden, la carga por la clave de la ruta y un filtro sumado): RS-1 a RS-8 contra el adaptador de database/sql en PostgreSQL y MySQL (scripts/lib/read-scope-probes.js, una prueba por caso). Falsado con --sabotage=rs-*, cada uno en exactamente sus casos y en ninguna otra sonda: rs-no-filter, rs-count-unscoped, rs-get-leak, rs-empty-is-all, rs-finder-replace y rs-path. RS-9 a RS-11 (la clave de caché, el scope del borde y el 403 del cable) son pruebas emitidas, ejecutadas por go-check --read-scope y falsadas con rs-cache-key (RS-9) y la mitad del borde de rs-empty-is-all (RS-10) (test/helpers/read-scope-sabotages.js)'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        falsified: true,
+        why:
+          'vault-scoped-mongo (el salto resuelve los _id de owners y filtra owner_id con $in) y conduit-scoped (el dueño por Article.author → Profile.subject, not-found y la carga por slug) contra el driver de MongoDB en un replica set real, con las MISMAS sondas que db-check y las sondas generales en verde también sobre conduit-scoped. Falsado con los mismos sabotajes, cada uno en exactamente sus casos (a conduit-scoped, sin listado acotado, solo le tocan rs-get-leak, rs-path y, sin caso que caiga, rs-empty-is-all)'
+      }
+    }
   }
 };
 

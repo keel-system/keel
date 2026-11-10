@@ -326,7 +326,7 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
 | 1. keel-spring | hecho (2026-11-10) | `read-scope-check` en los cuatro sujetos (PostgreSQL, MySQL y MongoDB) y los siete sabotajes, cada uno en exactamente sus casos; suites de keel-core y keel-spring |
 | 2. keel-nest | hecho (2026-11-10) | `db-check` (PostgreSQL y MySQL) y `doc-check` en los cuatro sujetos, con los siete sabotajes cada uno en exactamente sus casos; RS-9 a RS-11 ejecutando lo emitido; `ts-check`; suites de los cinco paquetes |
 | 3. keel-dotnet | hecho (2026-11-10) | `db-check` (PostgreSQL y MySQL) y `doc-check` en los cuatro sujetos, con los siete sabotajes cada uno en exactamente sus casos; RS-9 a RS-11 en la prueba emitida `ReadScopeTests` con `cs-check --fixtures --only`, falsada con `rs-cache-key` y `rs-empty-is-all`; suite de keel-dotnet |
-| 4. keel-go | pendiente | |
+| 4. keel-go | hecho (2026-11-10) | `db-check` (PostgreSQL y MySQL) y `doc-check` en los cuatro sujetos, con los seis sabotajes del adaptador cada uno en exactamente sus casos y en ninguna otra sonda; RS-9 a RS-11 en las pruebas emitidas con `go-check --read-scope`, falsadas con `rs-cache-key` y `rs-empty-is-all`; gofmt, vet, staticcheck y pruebas emitidas de los cuatro; suite de keel-go |
 | 5. `level: optional` | pendiente | |
 | 6. derivados y docs | pendiente | |
 | 7. fixtures y keel-recover | pendiente | |
@@ -415,5 +415,26 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
   GENERALES fallan (la clave natural de dos referencias de Follow y Favorite, con todas las muestras apuntando a la misma
   raíz asegurada, y el conflicto transitorio de Profile). Es un hueco de las sondas, no de la lectura acotada: en
   conduit-scoped `doc-check` juzga solo los RS (`readScopeOnly`) hasta que alguien lo cierre.
-- Siguiente: **incremento 4, keel-go**. Las sondas de keel-dotnet y keel-nest (`scripts/lib/read-scope-probes.js`) son el
-  modelo; recordar el veredicto con sujetos a los que un sabotaje no toca.
+- **Incremento 4 hecho (2026-11-10).** keel-go genera la lectura acotada entera (`src/scaffold/read-scope.js`):
+  `domain.ReadScope` (con `CacheKey()`, la forma de keel-core) cuyo valor CERO es el conjunto vacío —Go no obliga a dar un
+  campo en un literal, así que un mensaje que nadie estampó no ve nada, que es la forma de D2 y D3 en Go—; el scope del
+  borde en `internal/httpapi/read_scope.go` (`readScopeScoping` sobre `security.CallerScope`, `readScopeOwnerOf<Entidad>`
+  con `callerIdentity` y los roles exentos; un token sin la identidad es el 401 de siempre), que el endpoint estampa en el
+  mensaje tras el lector; el finder acotado con el scope obligatorio y `scoped` sumado al `filters` tras sus criterios —el
+  salto, una subconsulta `IN` por salto; el `IN` sin valores es `1 = 0`— o a las condiciones del documento, resolviendo los
+  `_id` de la otra colección; `LoadScoped` y `LoadScopedBy<Clave>` con `admittedOrMiss` sobre el MISMO predicado (el 403 es
+  el centinela del error declarado, comparable con `errors.Is`); el scope en la clave de caché. Redes: `db-check`
+  (vault-scoped y shop-scoped, PostgreSQL y MySQL) y `doc-check` (vault-scoped-mongo y conduit-scoped) con
+  `scripts/lib/read-scope-probes.js` y `--sabotage=rs-*`, cada uno en exactamente sus casos y en ninguna otra sonda; RS-9 a
+  RS-11, las pruebas emitidas (`internal/domain/read_scope_test.go`, `internal/application/read_scope_cache_test.go`,
+  `internal/httpapi/read_scope_test.go`), con `go-check --read-scope` (opción nueva) y falsadas con `rs-cache-key` y la
+  mitad del borde de `rs-empty-is-all` (`test/helpers/read-scope-sabotages.js`). Paridad con los otros tres en
+  `test/read-scope.test.js`. La fila `read-scope` de las cuatro matrices queda `verificado` y falsada en las dos ramas.
+- **Desviaciones del inc. 4**: RS-9 a RS-11 no van por `cache-check` ni `security-check` (que hoy no monta vault-scoped),
+  sino en pruebas emitidas que ejecuta `go-check`, como en keel-nest y keel-dotnet. `rs-cache-key` y la mitad del borde de
+  `rs-empty-is-all` son de `go-check`; los demás, de `db-check`/`doc-check`. **Dos cosas medidas**: (1) `rs-finder-replace`
+  escrito como «el predicado sustituye a los criterios» tiraba además la sonda 2.22 del finder, que pide con
+  `UnrestrictedScope`; el veredicto de keel-go no admite sondas de más, así que el sabotaje sustituye solo con un scope;
+  (2) en Go, conduit-scoped pasa las sondas GENERALES de `doc-check`: el hueco que keel-dotnet anotó en el inc. 3 es de sus
+  sondas, no del diseño.
+- Siguiente: **incremento 5, `level: optional`** en los cuatro, keel-spring primero.

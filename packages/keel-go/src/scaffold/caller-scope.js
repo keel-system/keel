@@ -13,7 +13,8 @@ import { applicationPath, layout, packageFile } from './render.js';
 /** ¿Lleva la nota del 403? Las que declaran el error del alcance. El puerto lo reciben todas (use-cases.js). */
 export function scopedOperation(model, operation) {
   const scoping = model.security?.scoping;
-  return Boolean(usesCallerScope(model) && scoping && (operation.errors ?? []).includes(scoping.error));
+  // Una lectura acotada (DSL 2.27) no: el alcance lo aplica el adaptador con el ReadScope del mensaje.
+  return Boolean(usesCallerScope(model) && scoping && (operation.errors ?? []).includes(scoping.error) && !operation.readScope);
 }
 
 /** El campo de `application.Dependencies` y el parámetro del handler que llevan el alcance del llamante. */

@@ -39,6 +39,7 @@ import { deadlineNotes } from './timer.js';
 import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { cacheHandlerNote } from './cache.js';
 import { uploadHandlerNotes } from './storage.js';
+import { READ_SCOPE_FIELD, readScopeHandlerNote } from './read-scope.js';
 import { EXPECTED_VERSIONS, carriesExpectedVersions, conditionalHandlerNote, returnsVersioned, versionedType } from './conditional-writes.js';
 
 export function generate(model) {
@@ -331,6 +332,12 @@ function renderMessage(model, operation) {
     rows.push(...commentLines(doc, '\t').map((text) => ({ text })));
     rows.push({ indent: '\t', cells: [EXPECTED_VERSIONS, '[]int64', '`json:"-"`'] });
   }
+  // El alcance de una lectura acotada (DSL 2.27, D1): lo estampa el endpoint desde el token. No viaja en el cuerpo.
+  if (operation.readScope) {
+    const doc = 'Qué filas ve quien lee (lectura acotada, DSL 2.27): lo estampa el endpoint generado desde el\ntoken, nunca el cliente. Pásalo tal cual al puerto: el adaptador filtra con él. Su valor cero no ve nada.';
+    rows.push(...commentLines(doc, '\t').map((text) => ({ text })));
+    rows.push({ indent: '\t', cells:[READ_SCOPE_FIELD, 'domain.ReadScope', '`json:"-"`'] });
+  }
   const struct =rows.length > 0 ? `struct {\n${alignRows(rows).join('\n')}\n}` : 'struct{}';
   const parts = [`${docComment(name, operation.description, `el mensaje de ${operation.name}`)}type ${name} ${struct}`];
   const rounding = components.map((component) => scaleRounding(operation, component)).filter(Boolean);
@@ -348,7 +355,7 @@ ${rounding.join('\n')}
   // Con registro de idempotencia, su ámbito y su firma (request-idempotency.js).
   const idempotency = idempotencyMethods(model, operation, name, components, (component) => componentType(operation, component));
   if (idempotency) parts.push(idempotency.methods);
-  const imports = [...dataImports(components), 'encoding/json/v2', 'encoding/json/jsontext', ...(idempotency?.imports ?? [])];
+  const imports = [...dataImports(components), 'encoding/json/v2', 'encoding/json/jsontext', ...(idempotency?.imports ?? []), ...(operation.readScope ? ['internal/domain'] : [])];
   return { path: applicationPath(model, name), content: packageFile(model, application, { imports, body: `\n${parts.join('\n\n')}\n` }) };
 }
 
@@ -433,6 +440,9 @@ function handlerNotes(model, operation) {
   const entity = finder && model.entities.find((candidate) => candidate.name === finder.entity);
   const finderText = finderNote(operation, { call: finder ? finderCall(finder, repositoryParam(entity)) : '' });
   if (finderText) notes.push(finderText);
+  // La lectura acotada (DSL 2.27): el adaptador ya filtra; la nota neutral dice qué pasar y que no se filtre a mano.
+  const scopedRead = readScopeHandlerNote(model, operation, finder ? finderCall(finder, repositoryParam(entity)) : '');
+  if (scopedRead) notes.push(scopedRead);
   if (!finder) for (const note of textFilterNotes(model, operation)) notes.push(note);
   notes.push(...idempotencyNotes(model, operation));
   // La autorización por propietario (security.ownership, DSL 2.23): la nota neutral de keel-core.

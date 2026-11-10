@@ -20,7 +20,8 @@ import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { DOCUMENT_ID, documentShape, sortablePaths } from '@keel-system/keel-core/gen/document';
 import { claimOrderField, claimsForEntity, orderingFieldOf, persistedMembers, snakeCase } from '@keel-system/keel-core/gen';
 import { SYSTEM_ACTOR } from '@keel-system/keel-core/gen/relational';
-import { isPaginated, repositoryRoots, usesDocument } from '@keel-system/keel-core/gen/features';
+import { listsUnscoped, repositoryRoots, usesDocument } from '@keel-system/keel-core/gen/features';
+import { documentScopeLines, isScopedRoot, readScopeDocumentMethods, scopedLoadsOf } from './read-scope.js';
 import { enumConstant, goExported } from '../lib/go-projection.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { isDeclaredLockVersion } from './entities.js';
@@ -461,9 +462,13 @@ func (r *${type}) ${batch.name}(ctx context.Context, ${batch.plural} []${batch.p
 	return r.find(ctx, bson.D{{Key: ${goString(snakeCase(field.name))}, Value: bson.D{{Key: "$in", Value: each(${batch.plural}, ${writerFunc(field, uses)})}}}})
 }`);
   }
-  if (isPaginated(model, entity) || entityFinders(model, entity).length > 0) parts.push(sortableMap(model, entity));
-  if (isPaginated(model, entity)) parts.push(listMethod(entity, type, constant));
+  // Un listado acotado (DSL 2.27) no da el List sin scope: la única puerta paginada es su finder.
+  if (listsUnscoped(model, entity) || entityFinders(model, entity).length > 0) parts.push(sortableMap(model, entity));
+  if (listsUnscoped(model, entity)) parts.push(listMethod(entity, type, constant));
   parts.push(...documentFinderMethods(model, entity, type, constant, uses));
+  // La lectura acotada (DSL 2.27): las cargas y el predicado que los finders acotados suman a sus condiciones.
+  if (scopedLoadsOf(model, entity).length > 0) uses.add('matching');
+  if (isScopedRoot(model, entity)) parts.push(...readScopeDocumentMethods(model, entity, { type, constant, idWrite: writer(entity.idField ?? { goType: 'uuid.UUID', name: 'id' }, `found.${id.method}()`, uses) }));
   parts.push(...claimMethods(model, entity, type, constant, uses));
   parts.push(...documentReconciliationMethods(model, entity, type));
   parts.push(...documentGuardMethods(model, entity, type, constant, idWrite));
@@ -699,7 +704,7 @@ function documentFinderMethods(model, entity, type, constant, uses) {
     return `// ${finderMethod(finder)} implementa domain.${portName(entity)}.
 ${signature} {
 ${prelude}${lines.join('\n')}${encoded}
-${tail}
+${finder.scope ? `${documentScopeLines(zero).join('\n')}\n` : ''}${tail}
 }`;
   });
 }

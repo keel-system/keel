@@ -42,6 +42,7 @@ import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
 import { DB_SABOTAGES, applyDbSabotage } from '../test/helpers/db-sabotages.js';
 import { DRAIN_SABOTAGES, PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, drainBreaksCovered, isDrainSabotage, isPurgeTimerSabotage, isTimerSabotage, purgeTimerBreaksCovered, purgeTimerProbeFile, timerBreaksCovered, timerProbeFile, timerProbePatch, timerSabotageBreaks } from './lib/timer-probes.js';
 import { RELAY_WAKE_SABOTAGES } from './lib/relay-wake-probes.js';
+import { READ_SCOPE_SABOTAGE_SPECS, READ_SCOPE_SUBJECTS, isReadScopeSabotage, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
 import { resolveRuntime, startDatabase, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 import { ENGINE_LABELS, STORE_PACKAGES } from '../src/lib/relational-engine.js';
 import { SUPPORTED_DATABASES } from '../src/lib/supported-features.js';
@@ -60,7 +61,15 @@ const storePath = `internal/infrastructure/${STORE_PACKAGES[engine]}`;
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.slice('--sabotage='.length) ?? null;
 const keep = process.argv.includes('--keep');
 // Los del cronómetro y los plazos (DSL 2.26) caen en EXACTAMENTE sus casos DL (scripts/lib/timer-probes.js).
-const SABOTAGES = { ...DB_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES, ...RELAY_WAKE_SABOTAGES };
+// Los de la lectura acotada (DSL 2.27) caen en EXACTAMENTE sus casos RS (scripts/lib/read-scope-probes.js).
+const SABOTAGES = {
+  ...DB_SABOTAGES,
+  ...TIMER_SABOTAGES,
+  ...PURGE_TIMER_SABOTAGES,
+  ...DRAIN_SABOTAGES,
+  ...RELAY_WAKE_SABOTAGES,
+  ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
+};
 
 if (sabotage && !SABOTAGES[sabotage]) {
   console.error(`No hay ningún sabotaje '${sabotage}'. Los hay: ${Object.keys(SABOTAGES).join(', ')}.`);
@@ -119,8 +128,10 @@ try {
     ...AUTHORSHIP_DESIGNS.filter((design) => allRelational.includes(design.from) && (!only || design.name === only)).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) })),
     // La escritura condicional (DSL 2.25, CW-1 a CW-5): las siluetas relacionales, los MISMOS diseños que miden keel-dotnet y
     // keel-nest (keel-core/test/helpers/conditional-write-designs.js).
-    ...UNCOVERED_BRANCHES.filter((design) => ['catalog-conditional', 'shop-conditional'].includes(design.name) && (!only || design.name === only)).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) }))
-  ];
+    ...UNCOVERED_BRANCHES.filter((design) => ['catalog-conditional', 'shop-conditional'].includes(design.name) && (!only || design.name === only)).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) })),
+    // La lectura acotada (DSL 2.27, RS-1 a RS-8): los MISMOS diseños que miden los otros tres (keel-core/test/helpers/read-scope-designs.js).
+    ...UNCOVERED_BRANCHES.filter((design) => READ_SCOPE_SUBJECTS.relational.includes(design.name) && (!only || design.name === only)).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) }))
+  ].filter((subject) => only || !isReadScopeSabotage(sabotage) || READ_SCOPE_SUBJECTS.relational.includes(subject.name));
 
   // ─── El esquema ─────────────────────────────────────────────────────────────────────────────────
   if (!sabotage) {
@@ -177,7 +188,7 @@ try {
     // Una base que no se pudo crear daría un rojo de las sondas que no es del generador: se dice aquí.
     const created = recreate(db);
     if (!step(`${name}: base ${db} creada`, created.ok, created.ok ? '' : created.output.trim().slice(0, 300))) continue;
-    subjects.push({ name, dir, db, purgeTimer: Boolean(purgeTimerProbe), drain: probe.content.includes('TestDrain_DR1_') });
+    subjects.push({ name, dir, db, model: plan.model, purgeTimer: Boolean(purgeTimerProbe), drain: probe.content.includes('TestDrain_DR1_') });
   }
   const env = (db) =>
     engine === 'mysql'
@@ -195,7 +206,7 @@ try {
     if (!built.ok) return { tidied, tested: built };
     return { tidied, tested: await runAsync(binary, ['-test.count=1', '-test.v'], { cwd: path.join(dir, storePath), env: env(db) }) };
   });
-  subjects.forEach(({ name, purgeTimer, drain }, index) => {
+  subjects.forEach(({ name, model, purgeTimer, drain }, index) => {
     const { tidied, tested } = outcomes[index];
     if (!step(`${name}: go mod tidy`, tidied.ok, tidied.ok ? '' : tidied.output.slice(0, 2000))) return;
     const failed = [...tested.output.matchAll(/^\s*--- FAIL: (\S+)/gm)].map((m) => m[1]).filter((test) => !test.includes('/'));
@@ -207,6 +218,18 @@ try {
       const detail = ok ? (skipped.length > 0 ? `se saltan ${skipped.join(', ')}` : '') : failed.join(', ') || tested.output.slice(-3000);
       step(`${name}: los adaptadores guardan, leen y traducen contra ${label} (${passed.length} sondas)`, ok, detail);
       if (!ok && failed.length > 0) console.error(failureLines(tested.output));
+      return;
+    }
+    if (isReadScopeSabotage(sabotage)) {
+      const verdict = readScopeSabotageVerdict(failed, sabotage, model);
+      // Y ninguna otra sonda: el sabotaje rompe la lectura acotada, no el resto del adaptador.
+      const stray = failed.filter((test) => !/_RS\d+_/.test(test));
+      step(
+        `falsado: ${sabotage} en ${name} cae en exactamente sus casos`,
+        ran > 0 && verdict.exact && stray.length === 0,
+        `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]${stray.length > 0 ? `; además ${stray.join(', ')}` : ''}`
+      );
+      if (verdict.exact && verdict.want.length > 0) results.at(-1).caught = true;
       return;
     }
     const { expect } = isTimerSabotage(sabotage) ? timerSabotageBreaks(sabotage, 'relational') : SABOTAGES[sabotage];

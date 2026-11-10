@@ -28,6 +28,8 @@ import * as events from './events.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
 import * as idempotencyCheck from './idempotency-check.js';
 import * as conditionalWrites from './conditional-writes.js';
+import * as readScope from './read-scope.js';
+import { readScopeGenerationErrors } from '@keel-system/keel-core/gen/read-scope';
 import * as dtos from './dtos.js';
 import * as services from './services.js';
 import * as mappers from './mappers.js';
@@ -102,6 +104,7 @@ const GENERATORS = [
   idempotencyCheck,
   // La escritura condicional (DSL 2.25): Versioned, la comparación, el borde, sus pruebas y el gate.
   conditionalWrites,
+  readScope,
   dtos,
   services,
   mappers,
@@ -175,6 +178,9 @@ export function planService({ manifest, layers, fixtures = null, workspace, stac
   // Los plazos (DSL 2.26) necesitan un motor con las sentencias del cronómetro medidas: lo que depende del stack.
   const timerErrors = timer.timerStackErrors(model);
   if (timerErrors.length > 0) throw new Error(timerErrors.join('\n'));
+  // La lectura acotada (DSL 2.27) que no se puede generar por construcción (T7, T8 y compañía): la frontera neutral.
+  const scopeErrors = readScopeGenerationErrors(model);
+  if (scopeErrors.length > 0) throw new Error(scopeErrors.join('\n'));
   return { model, stack: resolved, files: GENERATORS.flatMap((generator) => generator.generate(model)) };
 }
 

@@ -121,7 +121,7 @@ export function finderProbes(model, root, { repo, id }) {
       return `domain.${filterTypeName(finder)}{${fields.join(', ')}}`;
     };
     const call = (filter) => {
-      const args = ['ctx', ...(hasFilter(finder) ? [filter] : []), ...(finder.result === 'page' ? ['domain.Pageable{Size: 1000}'] : [])];
+      const args = ['ctx', ...(hasFilter(finder) ? [filter] : []), ...(finder.result === 'page' ? ['domain.Pageable{Size: 1000}'] : []), ...(finder.scope ? ['domain.UnrestrictedScope()'] : [])];
       return `${repo}.${method}(${args.join(', ')})`;
     };
     const items = finder.result === 'page' ? 'page.Items' : 'page';

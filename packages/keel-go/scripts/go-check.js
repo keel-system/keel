@@ -40,6 +40,11 @@ import { NEEDS_SABOTAGES, NEEDS_SUBJECT, applyNeedsSabotage } from '../test/help
 import { SCOPE_SABOTAGES, SCOPE_SUBJECT, applyScopeSabotage } from '../test/helpers/scope-sabotages.js';
 import { STORAGE_SABOTAGES, STORAGE_SUBJECT, applySabotage as applyStorageSabotage } from '../test/helpers/storage-sabotages.js';
 import { CONDITIONAL_SABOTAGES, applySabotage as applyConditionalSabotage } from '../test/helpers/conditional-sabotages.js';
+import { READ_SCOPE_EDGE_SABOTAGES, applyReadScopeSabotage } from '../test/helpers/read-scope-sabotages.js';
+
+// Los diseños de la lectura acotada cuyas pruebas emitidas se ejecutan y se falsan: el alcance por claim con caché y la
+// propiedad con roles exentos y forbidden (RS-9 a RS-11). Los cuatro compilan además en go-check --fixtures.
+const READ_SCOPE_SUBJECTS = ['vault-scoped', 'shop-scoped'];
 import { TELEMETRY_SABOTAGES, TELEMETRY_SUBJECT, applyTelemetrySabotage } from '../test/helpers/telemetry-sabotages.js';
 import { fileURLToPath } from 'node:url';
 import { loadService } from '@keel-system/keel-core';
@@ -169,6 +174,14 @@ const version = go(process.cwd(), ['version']);
 const [, major, minor] = version.output.match(/go(\d+)\.(\d+)/) ?? [];
 if (!step('Go disponible', version.ok && (Number(major) > 1 || Number(minor) >= 27), version.ok ? version.output.trim() : 'instala Go: winget install GoLang.Go')) {
   process.exit(1);
+}
+
+// --read-scope: solo la lectura acotada (DSL 2.27), sus pruebas emitidas y sus sabotajes.
+if (process.argv.includes('--read-scope')) {
+  readScopeFalsification();
+  const failed = results.filter((result) => !result.ok).length;
+  console.log(failed === 0 ? `\ngo-check --read-scope: ${results.length}/${results.length} en verde.` : `\ngo-check --read-scope: ${failed} paso(s) en rojo.`);
+  process.exit(failed === 0 ? 0 : 1);
 }
 
 // El Go de TODAS las fixtures, no solo el del diseño de referencia: planService no pasa por la frontera, así que
@@ -605,6 +618,46 @@ for (const sabotage of API_SABOTAGES) {
       const failed = [...sabotaged.output.matchAll(/--- FAIL: (\S+)/g)].map((match) => match[1].split('/')[0]);
       const exact = [...new Set(failed)].sort().join(' ') === sabotage.fails;
       step(`escritura condicional falsada: ${sabotage.id} (${sabotage.what}) → ${sabotage.fails} en rojo, y solo eso`, !sabotaged.ok && exact, failed.join(' ').slice(0, 200) || sabotaged.output.slice(0, 300));
+    }
+  }
+}
+
+readScopeFalsification();
+
+/**
+ * La lectura acotada (DSL 2.27) se falsa sobre sus diseños (keel-core/test/helpers/read-scope-designs.js): las pruebas
+ * emitidas de la clave de caché, del borde y del cable en verde (RS-9 a RS-11), y cada sabotaje en rojo con su prueba, y
+ * solo ella. RS-1 a RS-8 son de db-check y doc-check.
+ */
+function readScopeFalsification() {
+  const packages = ['./internal/domain/', './internal/application/', './internal/httpapi/'];
+  for (const subject of READ_SCOPE_SUBJECTS) {
+    const branch = UNCOVERED_BRANCHES.find((candidate) => candidate.name === subject);
+    const dir = path.join(makeWorkspace('keel-go-read-scope-'), subject);
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, branch.from));
+    branch.mutate(manifest, layers);
+    for (const file of planService({ manifest, layers, workspace: dir }).files) {
+      const out = path.join(dir, file.path);
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      fs.writeFileSync(out, file.content);
+    }
+    const tidied = go(dir, ['mod', 'tidy']);
+    const baseline = tidied.ok ? go(dir, ['test', '-count=1', ...packages]) : tidied;
+    if (!step(`lectura acotada: las pruebas emitidas de ${subject} en verde`, baseline.ok, baseline.ok ? '' : baseline.output.slice(0, 600))) continue;
+    for (const sabotage of READ_SCOPE_EDGE_SABOTAGES.filter((candidate) => candidate.subject === subject)) {
+      const file = path.join(dir, sabotage.file);
+      const original = fs.readFileSync(file, 'utf8');
+      const mutated = applyReadScopeSabotage(sabotage, original);
+      if (!mutated) {
+        step(`lectura acotada falsada: ${sabotage.id}`, false, `el sabotaje ya no se aplica a ${sabotage.file}`);
+        continue;
+      }
+      fs.writeFileSync(file, mutated);
+      const sabotaged = go(dir, ['test', '-count=1', sabotage.packages]);
+      fs.writeFileSync(file, original);
+      const failed = [...sabotaged.output.matchAll(/--- FAIL: (\S+)/g)].map((match) => match[1].split('/')[0]);
+      const exact = [...new Set(failed)].sort().join(' ') === sabotage.fails;
+      step(`lectura acotada falsada: ${sabotage.id} (${sabotage.what}) → ${sabotage.fails} en rojo, y solo eso`, !sabotaged.ok && exact, failed.join(' ').slice(0, 200) || sabotaged.output.slice(0, 300));
     }
   }
 }

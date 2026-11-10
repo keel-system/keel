@@ -34,7 +34,8 @@ import {
   uniqueFields
 } from '@keel-system/keel-core/gen';
 import { SYSTEM_ACTOR } from '@keel-system/keel-core/gen/relational';
-import { isPaginated, repositoryRoots, resolvedByOf, usesPersistence, usesRelational } from '@keel-system/keel-core/gen/features';
+import { listsUnscoped, repositoryRoots, resolvedByOf, usesPersistence, usesRelational } from '@keel-system/keel-core/gen/features';
+import { readScopePortMethods, readScopeRelationalMethods } from './read-scope.js';
 import { enumConstant, goExported } from '../lib/go-projection.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { sqlDialect, storeDir } from '../lib/relational-engine.js';
@@ -265,6 +266,8 @@ function portBody(model, entity) {
   method(`el ${name} con ese id; found es false si no existe.`, `FindByID(ctx context.Context, ${id.name} ${id.type}) (*${name}, bool, error)`);
   // La carga que compara la versión (api.concurrency, D4): la de las raíces que escribe alguna escritura condicional.
   if (loadsExpecting(model, entity)) method(...loadExpectingPort(entity, id));
+  // La carga acotada (DSL 2.27, D5): por id o por la clave natural de la ruta (T7).
+  for (const [doc, signature] of readScopePortMethods(model, entity)) method(doc, signature);
   if (idBatchReason(model, entity)) {
     method('los agregados de varios id en UNA consulta; los que no existen no están. El orden no está garantizado.', `FindAllByID(ctx context.Context, ids []${id.type}) ([]*${name}, error)`);
   }
@@ -295,7 +298,8 @@ function portBody(model, entity) {
   for (const [doc, signature] of portClaimMethods(model, entity)) method(doc, signature);
   for (const [doc, signature] of portGuardMethods(model, entity)) method(doc, signature);
   for (const [doc, signature] of portReconciliationMethods(model, entity)) method(doc, signature);
-  if (isPaginated(model, entity)) {
+  // Un listado acotado (DSL 2.27) no da el List sin scope: la única puerta paginada es su finder.
+  if (listsUnscoped(model, entity)) {
     method('una página de agregados, en el orden pedido y con el id como desempate. Una propiedad de orden que no existe es un error.', `List(ctx context.Context, pageable Pageable) (Page[*${name}], error)`);
   }
   method(
@@ -739,9 +743,11 @@ ${batchLoad(model, batch.column, null, batch.plural, uses, batch.cast)}
 }`);
   }
   // El mapa de orden lo usan el listado y los finders; el List, solo una raíz paginada.
-  if (isPaginated(model, entity) || entityFinders(model, entity).length > 0) parts.push(sortableMap(model, entity));
-  if (isPaginated(model, entity)) parts.push(listMethod(model, entity, root, type));
+  if (listsUnscoped(model, entity) || entityFinders(model, entity).length > 0) parts.push(sortableMap(model, entity));
+  if (listsUnscoped(model, entity)) parts.push(listMethod(model, entity, root, type));
   parts.push(...adapterFinderMethods(model, entity, { type, root, sortable: `${lower(name)}Sortable`, writeValue }));
+  // La lectura acotada (DSL 2.27): las cargas y el predicado que los finders acotados suman a su consulta.
+  parts.push(...readScopeRelationalMethods(model, entity, { type, root, writeValue }));
   parts.push(...adapterClaimMethods(model, entity, type));
   parts.push(...relationalGuardMethods(model, entity, type));
   parts.push(...adapterReconciliationMethods(model, entity, type));
