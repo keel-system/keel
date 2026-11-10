@@ -169,6 +169,19 @@ Si el diseño declara `api.concurrency`, las escrituras listadas comparan la ver
 - El escenario del **412** manda un `ETag` viejo a propósito: guárdalo en otra variable antes de la escritura que lo deja
   obsoleto.
 
+### Lectura acotada e identidad opcional (`reads`, `level: optional`)
+
+- Una operación con **`level: optional`** se pide **sin** cabecera `Authorization` salvo que el Given del escenario nombre
+  un llamante: entonces lleva su `token_<rol>`. Nunca la cabecera con un global vacío: `Bearer ` sin token es una
+  credencial inválida, y el servidor responde **401** donde el escenario esperaba la respuesta anónima.
+- Una lectura en **`reads`** responde según quién la pide. El escenario que lee una fila **ajena** necesita dos llamantes
+  —el dueño, que la crea, y otro, que la lee—: si son del mismo rol, el segundo usa `token_<rol>-other`, y si la
+  `auth-collection.json` no lo trae, repórtalo en vez de reutilizar el token del dueño (la request pasaría sin probar
+  nada). El status lo decide `readMiss`: con `not-found`, **404** con el `code` de no encontrado, igual que una fila que no
+  existe; con `forbidden`, **403** con el error del bloque.
+- Un **listado** acotado devuelve solo las filas del llamante: su test asserta lo que diga el Then (las filas propias, el
+  total), nunca un recuento que dependa de lo que crearon otros flujos.
+
 ### Carpeta «Operaciones»
 
 Una request por endpoint de `api` (explícito o derivado de `auto`) que ningún

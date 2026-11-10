@@ -328,7 +328,7 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
 | 3. keel-dotnet | hecho (2026-11-10) | `db-check` (PostgreSQL y MySQL) y `doc-check` en los cuatro sujetos, con los siete sabotajes cada uno en exactamente sus casos; RS-9 a RS-11 en la prueba emitida `ReadScopeTests` con `cs-check --fixtures --only`, falsada con `rs-cache-key` y `rs-empty-is-all`; suite de keel-dotnet |
 | 4. keel-go | hecho (2026-11-10) | `db-check` (PostgreSQL y MySQL) y `doc-check` en los cuatro sujetos, con los seis sabotajes del adaptador cada uno en exactamente sus casos y en ninguna otra sonda; RS-9 a RS-11 en las pruebas emitidas con `go-check --read-scope`, falsadas con `rs-cache-key` y `rs-empty-is-all`; gofmt, vet, staticcheck y pruebas emitidas de los cuatro; suite de keel-go |
 | 5. `level: optional` | hecho (2026-11-10) | OA-1 a OA-3 sobre `conduit-optional` en los cuatro, con `oa-degrade` y `oa-ignore-token` cada uno en exactamente su caso: keel-spring `read-scope-check` (MockMvc con la cadena generada, 12/12); keel-nest `test/optional-auth.test.js` (el hook, las reglas, el JWT y el lector emitidos sobre Fastify); keel-dotnet la prueba emitida `OptionalAuthTests` con `cs-check --fixtures --only=conduit-optional`; keel-go `optional_auth_test.go` con `go-check --read-scope` (8/8); suites de los cinco paquetes |
-| 6. derivados y docs | pendiente | |
+| 6. derivados y docs | hecho (2026-11-10) | `keel-nest/test/openapi.test.js` sobre los cinco sujetos: el mismo documento en los cuatro generadores, OA-4, el 404/403 de `readMiss` y el listado acotado, sin deriva para `CHK-DOCS-OPENAPI-DRIFT`; falsado (sin la alternativa vacía cae solo `conduit-optional`; sin la cláusula de `not-found`, solo `conduit-scoped`); `redocly lint` válido en los cinco (los avisos, los mismos que en las fixtures base); suites de los cinco paquetes |
 | 7. fixtures y keel-recover | pendiente | |
 | 8. corridas de control | pendiente | |
 
@@ -471,4 +471,27 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
   recibía un `string` (`msg.X, err = callerIdentity(...)`): no compilaba, y ninguna fixture tenía el campo opcional; el
   lector lo estampa ahora con `&credential`, optional o no; (3) en keel-go el claim de la identidad puede ser el propio
   `sub`, y el literal de los claims de la prueba no puede repetir clave (lo vio `go test`, no `go-syntax`).
-- Siguiente: **incremento 6, derivados y documentación** (OA-4 en el OpenAPI, la guía de Postman, las skills y los agentes).
+- **Incremento 6 hecho (2026-11-10).** `gen/openapi.js`: con `level: optional`, `security: [{}, {bearerAuth: []}]` (OA-4)
+  y solo el 401 del token roto (sin `403 ACCESS_DENIED`: no exige permiso); la lectura de una fila amplía el error de su
+  `readMiss` (con `not-found`, el 404 es también el de la fila ajena sin revelar cuál; con `forbidden`, el 403 es el de la
+  ajena, después del 404 de la inexistente), y el listado acotado lo dice en su respuesta de éxito (y que el total cuenta
+  solo esas). Oráculo: un bloque nuevo en `keel-nest/test/openapi.test.js` sobre `READ_SCOPE_DESIGNS`, como el de la
+  escritura condicional. Docs: `/keel-docs` (el bullet del openapi y una sección de la guía de Postman: `optional` sin
+  cabecera —`Bearer ` vacío es un 401—, el segundo llamante `token_<rol>-other` para leer una fila ajena, el status de
+  `readMiss`), `/keel-design` (la pregunta de `reads`/`readMiss`/`optional` en el paso de security; `gap-analysis.md` ya
+  la tenía del inc. 0), `/keel-recover` (fuera la «autorización por propietario» de las fronteras, y dos filas de
+  evidencia: la sonda de las dos personas → `reads`/`readMiss`, la lectura que se personaliza → `optional`, con un token
+  inválido tratado como anónimo como `fix`), los agentes de código de los cuatro (pasar el scope, nunca `findById`) y los
+  de calidad (auditoría estática de la carga de la ficha, a `remaining`). `capability-coverage`: los motivos de las tres
+  filas puestos al día en los cuatro (keel-nest y keel-dotnet aún decían que su frontera la rechazaba); se borran en el
+  inc. 7. Fila de `CLAUDE.md` ampliada.
+- **Desviaciones del inc. 6**: (1) **sin gate** de la lectura acotada: el compilador obliga a pasar el scope al finder
+  acotado, pero no a cargar la ficha con `loadScoped`; un `findById` en el handler compila y pasa todo escenario de un
+  solo llamante. Lo cubren el escenario de la fila ajena (`CHK-SCEN-READ-SCOPE-UNCOVERED`) y la auditoría del agente de
+  calidad, sin clave de estado nueva en su reporte. Si una corrida del inc. 8 lo destapa, el gate es el de
+  `check-conditional-writes.sh` (una fila por lectura, la llamada fuera de un comentario). (2) La guía de Postman nombra
+  `token_<rol>-other` para el segundo llamante; `auth-collection.json` es del equipo y no lo comprueba nadie
+  (`CHK-DOCS-POSTMAN-DRIFT` no la mira).
+- Siguiente: **incremento 7, fixtures y keel-recover** (`asset-vault`, `shop-api` y `conduit` con `reads`/`optional`, se
+  borran las filas de `capability-coverage` y las aceptaciones de `OBL-READ-SCOPE-UNDECIDED`, y la paridad de `shop-api` y
+  `conduit` sin las dos fronteras).

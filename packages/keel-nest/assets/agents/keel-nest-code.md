@@ -61,6 +61,12 @@ corto a romper un escenario que ya estaba en verde.
      inyectado. Tú escribes el uso en el handler, con el algoritmo de la nota del stub y de `mapping.md` §
      La idempotencia de petición (reclamar PRIMERO, reproducir la respuesta sin re-ejecutar). No escribas
      otro registro ni toques el mediator o el controlador para esto.
+   - **Las lecturas acotadas** (`reads`, DSL 2.27): el alcance lo construye el borde desde el token y llega en
+     `query.readScope`; el adaptador ya filtra con él: el finder lo recibe como último parámetro y la ficha se
+     carga con `loadScoped(id, scope)` o `loadScopedBy<Clave>(valor, scope)`. Pásalo tal cual, como dice la
+     nota —nunca `findById` ni un filtro a mano: no llegaría al total de la página ni a la caché, y el 404 o el
+     403 de `readMiss` lo da el adaptador—. Con `level: optional`, el campo de la identidad llega null
+     sin token: es «anónimo», no un error, y el token roto ya fue un 401 en el borde.
    - **La mensajería**, si el diseño la declara: lee el SKILL.md de `{{keel:skills}}/keel-nest-<broker>/`
      (el broker de `keel-stack.json`). Escribes el envío —la implementación de `OutboxDispatcher` con
      `reliability: outbox`, o de cada `<Evento>Publisher` con `best-effort`— y los listeners (con RabbitMQ, uno

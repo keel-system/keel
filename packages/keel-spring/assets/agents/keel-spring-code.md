@@ -84,6 +84,13 @@ corto a romper un escenario que ya estaba en verde.
    If-Match la hace el adaptador— y, si devuelve su raíz, devuelve `Versioned<T>` con la versión
    del agregado que deja `save(...)`, no la del cargado. La lectura que da el ETag devuelve
    `Versioned<T>` con la del agregado leído. `infra/check-conditional-writes.sh` lo comprueba.
+   Con lecturas acotadas (`reads`, DSL 2.27), el alcance lo construye el borde desde el token y
+   llega en `query.readScope()`; el adaptador ya filtra con él: el finder lo recibe como último
+   parámetro y la ficha se carga con `loadScoped(id, scope)` o `loadScopedBy<Clave>(valor, scope)`.
+   Pásalo tal cual, como dice la nota —nunca `findById` ni un filtro a mano: no llegaría al total
+   de la página ni a la caché, y el 404 o el 403 de `readMiss` lo da el adaptador—. Con
+   `level: optional`, el campo de la identidad llega null sin token: es «anónimo», no un error,
+   y el token roto ya fue un 401 en el borde.
    Al crear un servicio de dominio sigue `{{keel:docs}}/conventions/domain-services.md`; antes de
    paralelizar I/O en un handler consulta `{{keel:docs}}/conventions/virtual-threads.md` (solo
    query handlers con 2+ operaciones independientes).

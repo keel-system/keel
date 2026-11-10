@@ -165,7 +165,7 @@ function responses(context, operation, inputs) {
   const { model } = context;
   const result = {};
   const status = String(operation.route.status);
-  const success = { description: operation.description ?? 'Éxito' };
+  const success = { description: successDescription(operation) };
   const dto = operation.responseDto;
   if (dto && operation.route.status !== 204) {
     const item = context.schema(dto.name, () => dtoSchema(context, dto.fields));
@@ -193,7 +193,10 @@ function responses(context, operation, inputs) {
   };
   const validated = inputs.length > 0 || (operation.pathParams ?? []).length > 0;
   if (validated) add(400, 'VALIDATION_ERROR', 'la entrada no cumple el contrato.');
-  if (operationSecurity(model, operation)?.length) {
+  if (operation.optionalAuth && operationSecurity(model, operation)?.length) {
+    // `level: optional` (DSL 2.27): sin credencial entra como anónima; solo una que no valida se rechaza, y no hay permiso que negar.
+    add(401, 'UNAUTHENTICATED', 'la credencial no valida o caducó (sin credencial, la operación se ejecuta como anónima).');
+  } else if (operationSecurity(model, operation)?.length) {
     add(401, 'UNAUTHENTICATED', 'sin credencial, o la credencial no valida.');
     add(403, 'ACCESS_DENIED', 'la credencial no tiene el permiso de esta operación.');
   }
@@ -218,7 +221,7 @@ function responses(context, operation, inputs) {
   for (const code of operation.errors ?? []) {
     const error = (model.errors ?? []).find((candidate) => candidate.code === code);
     if (!error) continue;
-    add(statusIn(error, operation.name), code, error.whenByOperation?.get(operation.name) ?? error.when);
+    add(statusIn(error, operation.name), code, `${error.whenByOperation?.get(operation.name) ?? error.when}${readMissClause(operation, code)}`);
   }
   for (const [http, lines] of [...errors.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     if (result[http]) continue;
@@ -228,6 +231,34 @@ function responses(context, operation, inputs) {
     };
   }
   return result;
+}
+
+/**
+ * La descripción de la respuesta de éxito. Un listado acotado (DSL 2.27, `reads`) lo dice: el cliente no puede
+ * deducirlo de la forma, y la página y su total cuentan solo lo que el llamante puede ver.
+ */
+function successDescription(operation) {
+  const base = operation.description ?? 'Éxito';
+  const read = operation.readScope;
+  if (!read || read.shape === 'single') return base;
+  return `${base}\n\nSolo las filas del alcance del llamante (${read.block}.reads)${read.shape === 'page' ? ': el total y las páginas cuentan solo esas' : ''}.`;
+}
+
+/**
+ * Lo que añade `readMiss` (DSL 2.27) al error con el que sale una fila fuera del alcance: con `not-found`, el 404 de la
+ * fila que no existe es también el de la que existe y es ajena (la respuesta no revela cuál); con `forbidden`, el error
+ * declarado es el de la fila que existe y es ajena, siempre después del 404 de la que no existe.
+ */
+function readMissClause(operation, code) {
+  const read = operation.readScope;
+  if (!read || read.shape !== 'single') return '';
+  if (read.readMiss === 'not-found' && code === read.notFound) {
+    return ` También una fila que existe y está fuera del alcance del llamante (${read.block}.readMiss: not-found): la respuesta no revela cuál de las dos.`;
+  }
+  if (read.readMiss === 'forbidden' && code === read.error) {
+    return ` La fila existe y está fuera del alcance del llamante (${read.block}.readMiss: forbidden); una que no existe sale antes con su 404.`;
+  }
+  return '';
 }
 
 /**
@@ -437,7 +468,10 @@ function securitySchemes(model) {
   return null;
 }
 
-/** Lo que exige la regla de la ruta (o la de por defecto): público → sin seguridad; si no, el esquema del protocolo. */
+/**
+ * Lo que exige la regla de la ruta (o la de por defecto): público → sin seguridad; `optional` (DSL 2.27) → la
+ * alternativa vacía y el esquema (`[{}, {bearerAuth: []}]`: sin credencial o con una válida); si no, el esquema.
+ */
 function operationSecurity(model, operation) {
   const schemes = securitySchemes(model);
   if (!schemes) return undefined;
@@ -445,7 +479,8 @@ function operationSecurity(model, operation) {
   const matcher = (model.security.matchers ?? []).find((candidate) => candidate.path === full && (!candidate.method || candidate.method === operation.route.method));
   const requirement = accessRequirement(matcher?.access ?? model.security.defaultRule);
   if (requirement.kind === 'public') return [];
-  return [Object.fromEntries(Object.keys(schemes).map((name) => [name, []]))];
+  const scheme = Object.fromEntries(Object.keys(schemes).map((name) => [name, []]));
+  return requirement.kind === 'optional' ? [{}, scheme] : [scheme];
 }
 
 // ─── Utilidades ──────────────────────────────────────────────────────────────

@@ -106,7 +106,7 @@ En este orden:
 
 1. Las herramientas de arriba, limpias.
 2. `bash infra/check-domain-guards.sh` (si existe): cada hallazgo es del agente de código → `remaining` y
-   `domainGuards: KO`. Y `bash infra/check-conditional-writes.sh` (si existe): igual, con `conditionalWrites: KO` —una escritura condicional que carga sin `LoadExpecting` pisa el cambio de otro sin 412, y ningún escenario de una sola escritura lo ve—. Y `bash infra/check-idempotency.sh` (si existe): igual, con `idempotency: KO` —es el único gate
+   `domainGuards: KO`. Y `bash infra/check-conditional-writes.sh` (si existe): igual, con `conditionalWrites: KO` —una escritura condicional que carga sin `LoadExpecting` pisa el cambio de otro sin 412, y ningún escenario de una sola escritura lo ve—. Las lecturas acotadas (`reads`, DSL 2.27) no tienen script: en cada handler cuya nota diga «Lectura acotada», la ficha se carga con `LoadScoped(…)`/`LoadScopedBy<Clave>(…)` y el listado con el finder que recibe `query.ReadScope`, fuera de un comentario; un `FindByID` ahí compila, pasa todo escenario de un solo llamante y deja leer la fila de otro → `remaining`. Y `bash infra/check-idempotency.sh` (si existe): igual, con `idempotency: KO` —es el único gate
    de lo que ningún escenario ve: un listener sin guarda pasa el camino feliz; un barrido que lee en vez de reclamar,
    también—. `bash infra/check-logging.sh` (si existe), con `logging: KO`, y `bash infra/check-telemetry.sh` (si existe), con
    `cardinality: KO`: los dos nacen verdes, así que un hallazgo es del código del agente, y tampoco lo ve ningún escenario.

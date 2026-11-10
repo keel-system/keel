@@ -391,6 +391,12 @@ con una fila por escritura condicional y comprueba que su handler **llame a `loa
 quien guarda un formulario viejo pise el cambio de otro sin 412. Vuelca cada hallazgo a `remaining` (es del agente de
 código: cambiar la carga cambia el comportamiento) y pon `conditionalWrites` en `KO`; sin el script, `N/A`.
 
+**Las lecturas acotadas** (`reads`, DSL 2.27) no tienen script: el compilador ya obliga a pasar el scope a un finder
+acotado, pero no a cargar la ficha con él. Por cada operación cuya nota diga «Lectura acotada», comprueba en el handler
+que la ficha se carga con `loadScoped(…)`/`loadScopedBy<Clave>(…)` y el listado con el finder que recibe
+`query.readScope()`, fuera de un comentario. Un `findById` ahí compila, pasa todo escenario de un solo llamante y deja
+leer la fila de otro: es del agente de código → `remaining`.
+
 **Ejecuta `bash infra/check-logging.sh`.** Se genera siempre y tiene cuatro reglas:
 
 - `concat`: concatenar dentro de un `log.*(`.

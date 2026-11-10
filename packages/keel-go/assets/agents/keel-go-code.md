@@ -65,6 +65,12 @@ escenario que ya estaba en verde.
      handler, con el algoritmo de su nota y de `flow-fidelity.md` § La idempotencia de petición (reclamar PRIMERO
      con `Save`, reproducir la respuesta sin re-ejecutar). No escribas otro registro ni toques `UseCases` o el
      endpoint para esto.
+   - **Las lecturas acotadas** (`reads`, DSL 2.27): el alcance lo construye el borde desde el token y llega en
+     `query.ReadScope`, cuyo valor cero no ve nada; el adaptador ya filtra con él: el finder lo recibe como último
+     parámetro y la ficha se carga con `LoadScoped(ctx, id, scope)` o `LoadScopedBy<Clave>(ctx, valor, scope)`. Pásalo
+     tal cual, como dice la nota —nunca `FindByID` ni un filtro a mano: no llegaría al total de la página ni a la caché,
+     y el 404 o el 403 de `readMiss` lo da el adaptador—. Con `level: optional`, el campo de la identidad llega vacío
+     sin token (`nil` o `""`, lo dice la nota): es «anónimo», no un error, y el token roto ya fue un 401 en el borde.
    - **Las operaciones por reloj** (`schedule`): la tarea (`internal/infrastructure/scheduler/<grupo>_tasks.go`), su
      cron con el segundo repartido y el reloj son de build; con persistencia, el arranque monta esa tarea en el
      cronómetro (`timer.NewSchedule`): cada tick lo ejecuta UNA réplica, al menos una vez, y el tick repite la pasada

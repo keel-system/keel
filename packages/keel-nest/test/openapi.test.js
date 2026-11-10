@@ -18,6 +18,7 @@ import { planService as planDotnet } from '../../keel-dotnet/src/scaffold/index.
 import { planService as planGo } from '../../keel-go/src/scaffold/index.js';
 import { conditionalWritesOf } from '@keel-system/keel-core/gen/conditional-writes';
 import { CONDITIONAL_WRITE_DESIGNS } from '../../keel-core/test/helpers/conditional-write-designs.js';
+import { READ_SCOPE_DESIGNS } from '../../keel-core/test/helpers/read-scope-designs.js';
 import { planFixture, transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 import { tmpDir } from './helpers/tmp.js';
@@ -180,6 +181,56 @@ for (const derived of CONDITIONAL_WRITE_DESIGNS) {
     }
 
     const docsDir = tmpDir('keel-openapi-cw-');
+    fs.writeFileSync(path.join(docsDir, 'openapi.yaml'), fromNest);
+    const { findings } = checkDerivedCoherence({ layers: { api: layers.api, 'use-cases': layers['use-cases'], domain: layers.domain }, manifest, docsDir });
+    assert.deepEqual(findings.filter((finding) => finding.id === 'CHK-DOCS-OPENAPI-DRIFT').map((finding) => finding.message), []);
+  });
+}
+
+// La lectura acotada y la identidad opcional (DSL 2.27): sus sujetos son los diseños derivados que miden los cuatro
+// generadores. El mismo documento en los cuatro; `optional` declara la alternativa anónima (OA-4) y solo el 401 del
+// token roto; el 404 o el 403 de `readMiss` dicen qué significan; y sin deriva para CHK-DOCS-OPENAPI-DRIFT.
+for (const derived of READ_SCOPE_DESIGNS) {
+  test(`${derived.name}: el openapi documenta la lectura acotada y la identidad opcional, el mismo en los cuatro generadores`, () => {
+    const load = () => {
+      const service = loadService(path.join(FIXTURES_DIR, derived.from));
+      derived.mutate(service.layers);
+      return service;
+    };
+    const { manifest, layers } = load();
+    const database = layers.persistence?.default?.model === 'document' ? 'mongodb' : 'postgresql';
+    const documents = [planSpring, planDotnet, planGo].map((plan) => {
+      const service = load();
+      return plan({ ...service, workspace: FIXTURES_DIR, stack: { database } }).files.find((f) => f.path === DOC)?.content;
+    });
+    const nest = planFixture(derived.from, { mutate: derived.mutate, stack: { database } });
+    const fromNest = nest.files.find((f) => f.path === DOC)?.content;
+    for (const other of documents) assert.equal(other, fromNest, 'el mismo contrato en los cuatro generadores');
+
+    const document = YAML.parse(fromNest);
+    const operations = nest.model.services.flatMap((s) => s.operations).filter((op) => op.route);
+    const find = (name) => Object.values(document.paths).flatMap((methods) => Object.values(methods)).find((op) => op.operationId === name);
+    for (const operation of operations.filter((op) => op.optionalAuth)) {
+      const op = find(operation.name);
+      assert.deepEqual(op.security, [{}, { bearerAuth: [] }], `${operation.name}: OA-4, sin credencial o con una válida`);
+      assert.match(op.responses['401'].description, /se ejecuta como anónima/, `${operation.name}: el 401 es el del token roto`);
+      assert.equal(op.responses['403'], undefined, `${operation.name}: optional no niega permisos`);
+    }
+    for (const operation of operations.filter((op) => op.readScope)) {
+      const read = operation.readScope;
+      const responses = find(operation.name).responses;
+      if (read.shape === 'single') {
+        const status = read.readMiss === 'forbidden' ? '403' : '404';
+        const code = read.readMiss === 'forbidden' ? read.error : read.notFound;
+        assert.match(responses[status].description, new RegExp(`\`${code}\`: [^\n]*readMiss: ${read.readMiss}`), `${operation.name}: ${status} de readMiss`);
+      } else {
+        const success = Object.entries(responses).find(([key]) => key.startsWith('2'))[1];
+        assert.match(success.description, /Solo las filas del alcance del llamante/, `${operation.name}: el listado acotado lo dice`);
+      }
+    }
+    assert.ok(operations.some((op) => op.optionalAuth || op.readScope), 'el sujeto mide algo');
+
+    const docsDir = tmpDir('keel-openapi-rs-');
     fs.writeFileSync(path.join(docsDir, 'openapi.yaml'), fromNest);
     const { findings } = checkDerivedCoherence({ layers: { api: layers.api, 'use-cases': layers['use-cases'], domain: layers.domain }, manifest, docsDir });
     assert.deepEqual(findings.filter((finding) => finding.id === 'CHK-DOCS-OPENAPI-DRIFT').map((finding) => finding.message), []);

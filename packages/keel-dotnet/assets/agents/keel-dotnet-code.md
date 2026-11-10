@@ -57,6 +57,12 @@ escenario que ya estaba en verde.
      inyectado. Tú escribes el uso en el handler, con el algoritmo de la nota del stub y de `mapping.md` § La
      idempotencia de petición (reclamar PRIMERO, reproducir la respuesta sin re-ejecutar). No escribas otro registro ni
      toques el mediator o el endpoint para esto.
+   - **Las lecturas acotadas** (`reads`, DSL 2.27): el alcance lo construye el borde desde el token y llega en
+     `query.ReadScope`; el adaptador ya filtra con él: el finder lo recibe como último parámetro y la ficha se carga con
+     `LoadScoped(id, scope, …)` o `LoadScopedBy<Clave>(valor, scope, …)`. Pásalo tal cual, como dice la nota —nunca
+     `FindById` ni un filtro a mano: no llegaría al total de la página ni a la caché, y el 404 o el 403 de `readMiss` lo
+     da el adaptador—. Con `level: optional`, el campo de la identidad llega null sin token: es «anónimo», no un
+     error, y el token roto ya fue un 401 en el borde.
    - **Los mappers**: los `Todo.Value<T>(...)` que build dejó donde no supo derivar un campo.
    - **Los puertos**: lo que pidan las `preconditions` y `rules` (un `ExistsBy…`, un contador) se añade al puerto
      de `Domain/Repository/` **y** a su adaptador de `Infrastructure/Persistence/Repositories/`, con el

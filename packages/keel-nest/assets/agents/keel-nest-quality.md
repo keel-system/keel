@@ -97,7 +97,7 @@ En este orden:
 
 1. `npm run build` en verde y `npm run check:architecture` en verde.
 2. `bash infra/check-domain-guards.sh` (si existe): cada hallazgo es del agente de código → `remaining`
-   y `domainGuards: KO`. Y `bash infra/check-conditional-writes.sh` (si existe): igual, con `conditionalWrites: KO` —una escritura condicional que carga sin `loadExpecting` pisa el cambio de otro sin 412, y ningún escenario de una sola escritura lo ve—. Y `bash infra/check-idempotency.sh` (si existe): igual, con `idempotency: KO` —
+   y `domainGuards: KO`. Y `bash infra/check-conditional-writes.sh` (si existe): igual, con `conditionalWrites: KO` —una escritura condicional que carga sin `loadExpecting` pisa el cambio de otro sin 412, y ningún escenario de una sola escritura lo ve—. Las lecturas acotadas (`reads`, DSL 2.27) no tienen script: en cada handler cuya nota diga «Lectura acotada», la ficha se carga con `loadScoped(…)`/`loadScopedBy<Clave>(…)` y el listado con el finder que recibe `query.readScope`, fuera de un comentario; un `findById` ahí compila, pasa todo escenario de un solo llamante y deja leer la fila de otro → `remaining`. Y `bash infra/check-idempotency.sh` (si existe): igual, con `idempotency: KO` —
    es el único gate de lo que ningún escenario ve (un listener sin guarda pasa el camino feliz; un barrido
    que lee en vez de reclamar, también)—. Y los dos gates de prohibición, que nacen verdes y solo se ponen
    rojos con código del agente: `bash infra/check-logging.sh` (`logging: KO`) y, con telemetría,
