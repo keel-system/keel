@@ -14,8 +14,9 @@ hechas el mismo día, la D (incremento 3, keel-spring) el 2026-11-08 y, de la fa
 (incrementos 4, 5 y 6: keel-nest, keel-dotnet y keel-go). De la fase F, el incremento 7 (las purgas) está hecho ese
 mismo día en los cuatro, y el 8 y el 9 el 2026-11-08 y el 2026-11-09. De la fase G, el 10 lo absorbió el 2b y el 11 (la
 telemetría del cronómetro) está hecho el 2026-11-09. De la fase H, el 12 (la fixture) y el 13 (las corridas de control) están
-hechos el 2026-11-09: **el plan está cerrado**. Quedan los detectores de diseño que pidió el usuario a la vista de las
-corridas (§ Lo que dejó el incremento 13), fuera del plan. **Lo
+hechos el 2026-11-09: **el plan está cerrado** (movido a `completed_plans/` el 2026-11-09). Los detectores de diseño que
+pidió el usuario a la vista de las corridas se hicieron ese mismo día (`87ee5700`); lo que queda abierto, fuera del plan,
+está en § Lo que queda fuera. **Lo
 que queda se termina sin subagentes, todo desde `main` y en secuencia** (§ Cómo se ejecuta).
 
 ## Por qué
@@ -320,9 +321,9 @@ borra lo que no conoce: RC-5) y `relay-no-wake` (RC-7).
 | 2 | **Hecho (2026-11-07)**, ver la nota de abajo. `keel-core/gen/deadlines.js` y `keel-core/gen/timer-store.js`: el guard como datos, **el reloj inyectable** del dominio y la aplicación (qué recibe el dominio y cómo lo sustituyen las pruebas emitidas; solo lo usa lo nuevo), la regla de T1 acotado (la hora de la base solo en `keel_timer`, y ninguna comparación que cruce de una fuente a otra), el cron en UTC (T7), la tabla `keel_timer` (como `messaging-stores.js`: columnas, índice, sentencias de armado, reclamo, revalidación y purga por motor, con la hora de la base), el algoritmo del sondeador como referencia ejecutable, las sentencias del arnés, la nota del handler, las filas del gate y los casos DL | Sus pruebas (la referencia del sondeador EJECUTADA con un reloj falso), y `buildModel` de todas las fixtures sin cambios |
 | 2b | **Hecho y medido en los cuatro (2026-11-07)**, ver la nota de abajo. **El paso de migración del generador**: un mecanismo para que build emita su propio paso de esquema en una base ya desplegada (Flyway `V<n>` en keel-spring, migración de TypeORM en keel-nest, migración de EF en keel-dotnet, paso de goose en keel-go), con un número que no choque con los pasos del agente, y su línea en `EVOLUTION.md`. En MongoDB no hace falta: los índices se aseguran al arrancar. Antes estaba en el 10; sin él, nada de lo que añade `keel_timer` se puede publicar | `test/design-evolution.test.js` de los cuatro y, en las redes de base, un proyecto con base desplegada que recibe la tabla por el paso: `db-check` de keel-go (como en el inc. 15), y el arranque en `develop` de los otros tres |
 | 3 | **Hecho (2026-11-08)**, ver la nota de abajo. El cronómetro con los plazos en keel-spring: la tabla, el sondeador (los dos modos), el armado, el guard tardío, el reloj inyectable y el interruptor `scheduling.enabled` (keel-spring no tenía ninguno: `contextLoads` con H2 arranca con el cronómetro apagado). Ningún reloj existente cambia todavía | `compile-check`, `claim-check` con los sabotajes `dl-*`, `harness`; matriz con las filas `deadline` y `timer` |
-| 4 | Lo mismo en keel-nest | `ts-check`, `db-check`, `doc-check`, `harness-check` |
-| 5 | Lo mismo en keel-dotnet | `cs-check`, `db-check`, `doc-check`, `harness-check` |
-| 6 | Lo mismo en keel-go | `go-check`, `db-check`, `doc-check`, `harness-check` |
+| 4 | **Hecho (2026-11-08)**; ver las notas de abajo. Lo mismo en keel-nest | `ts-check`, `db-check`, `doc-check`, `harness-check` |
+| 5 | **Hecho (2026-11-08)**; ver las notas de abajo. Lo mismo en keel-dotnet | `cs-check`, `db-check`, `doc-check`, `harness-check` |
+| 6 | **Hecho (2026-11-08)**; ver las notas de abajo. Lo mismo en keel-go | `go-check`, `db-check`, `doc-check`, `harness-check` |
 | 7 | **Hecho (2026-11-08)** en los cuatro; ver las notas de abajo. **Migrar las purgas** (las cuatro tablas) al modo clúster, en los cuatro | `store-check` en keel-spring y `db-check`/`doc-check` en los otros tres, con un sabotaje nuevo `timer-every-replica` (la purga vuelve a correr en todas: la sonda de dos réplicas la ve dos veces) |
 | 8 | **Hecho (2026-11-08)** en los cuatro; ver las notas de abajo. **Migrar el `schedule` de las operaciones** al modo clúster, con el drenaje, en los cuatro. Incluye `fireTimer(kind)` en el arnés de los cuatro (los flujos de rescate y reconciliación dejan de esperar un tick del cron), el rescate, la reconciliación, los pagos y la guarda del correo, que van montados en él | `claim-check` en keel-spring, `db-check`/`doc-check`, `harness-check` (el rescate y `ageForReconciliation` sobre el cronómetro) y `stub-check` (reconciliación de pagos); el gate de idempotencia con el registro nuevo, falsado |
 | 9 | **Hecho (2026-11-09)** en los cuatro; ver las notas de abajo y § La carga de partida. **Migrar el relay del outbox** al modo por réplica, con despertar al confirmar, en los cuatro, conservando la pausa del arnés con la misma API (en keel-spring ya no puede depender de `ScheduledAnnotationBeanPostProcessor`, y la purga del outbox sale del bean del relay) | `broker-check` contra los tres brokers en los cuatro generadores (el relay es lo que más redes toca), con un sabotaje `relay-no-wake` (sin despertar, la latencia vuelve al sondeo y la sonda de latencia lo ve). Y `clock-load.js`: en reposo, menos de 10 transacciones/min por réplica (hoy 122), y la salida de un evento en milisegundos (hoy media 0,5 s, p95 0,94 s) |
@@ -1071,3 +1072,17 @@ Todas con la propuesta, aceptada por el usuario el 2026-11-07.
 8. **El relay por réplica.** Propongo dejarlo por réplica y ganar el despertar al confirmar. La alternativa (modo
    clúster, una réplica relaya cada vez) ahorraría consultas en reposo, pero limitaría el ritmo de salida de eventos a
    una réplica.
+
+## Lo que queda fuera
+
+Al cerrar el plan (2026-11-09) quedan abiertas, sin incremento, tres cosas que salieron de las corridas y de revisar el
+cronómetro con un despliegue de hasta 50 réplicas en mente:
+
+- **Medir con más de dos réplicas.** Las redes en vivo prueban con dos. Con N réplicas el sondeo en reposo crece lineal
+  (unas 13 transacciones/min por réplica, medido con `clock-load.js`) y todas despiertan a la vez en el mismo vencimiento:
+  un pico de N reclamos simultáneos que `SKIP LOCKED` resuelve sin errores pero que ocupa N conexiones. Primero medirlo
+  con `clock-load.js` a unas 10 réplicas; **jitter** en el sueño (0-10 %) solo si la medición lo justifica, en los cuatro.
+- **La purga de `keel_timer` en lotes**, como las demás tablas del generador: hoy es un solo `DELETE`. Suele borrar pocas
+  filas (aparcados y `kind` huérfanos), pero sin lotes puede chocar con el tope de transacción.
+- **`catalog-extended` a `--ready`**, para que la serie de control deje de generarse con `--accept-unready`.
+
