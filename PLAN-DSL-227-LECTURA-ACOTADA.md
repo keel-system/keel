@@ -327,7 +327,7 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
 | 2. keel-nest | hecho (2026-11-10) | `db-check` (PostgreSQL y MySQL) y `doc-check` en los cuatro sujetos, con los siete sabotajes cada uno en exactamente sus casos; RS-9 a RS-11 ejecutando lo emitido; `ts-check`; suites de los cinco paquetes |
 | 3. keel-dotnet | hecho (2026-11-10) | `db-check` (PostgreSQL y MySQL) y `doc-check` en los cuatro sujetos, con los siete sabotajes cada uno en exactamente sus casos; RS-9 a RS-11 en la prueba emitida `ReadScopeTests` con `cs-check --fixtures --only`, falsada con `rs-cache-key` y `rs-empty-is-all`; suite de keel-dotnet |
 | 4. keel-go | hecho (2026-11-10) | `db-check` (PostgreSQL y MySQL) y `doc-check` en los cuatro sujetos, con los seis sabotajes del adaptador cada uno en exactamente sus casos y en ninguna otra sonda; RS-9 a RS-11 en las pruebas emitidas con `go-check --read-scope`, falsadas con `rs-cache-key` y `rs-empty-is-all`; gofmt, vet, staticcheck y pruebas emitidas de los cuatro; suite de keel-go |
-| 5. `level: optional` | pendiente | |
+| 5. `level: optional` | en curso: keel-spring hecho (2026-11-10) | keel-spring: `read-scope-check conduit-optional` (OA-1 a OA-3, 12/12) con `oa-degrade` y `oa-ignore-token` cada uno en exactamente su caso; `vault-scoped` sigue 13/13; suites de keel-core y keel-spring |
 | 6. derivados y docs | pendiente | |
 | 7. fixtures y keel-recover | pendiente | |
 | 8. corridas de control | pendiente | |
@@ -437,4 +437,22 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
   `UnrestrictedScope`; el veredicto de keel-go no admite sondas de más, así que el sabotaje sustituye solo con un scope;
   (2) en Go, conduit-scoped pasa las sondas GENERALES de `doc-check`: el hueco que keel-dotnet anotó en el inc. 3 es de sus
   sondas, no del diseño.
-- Siguiente: **incremento 5, `level: optional`** en los cuatro, keel-spring primero.
+- **Incremento 5, tramo keel-spring (2026-11-10).** Lo que se midió antes de escribir: en Spring un bearer inválido ya es 401
+  en una ruta `permitAll` (lo decide `BearerTokenAuthenticationFilter`, con los manejadores de error de la cadena), y
+  keel-nest hace lo mismo a propósito; así que en la cadena `optional` es `permitAll()` (`accessAuthority`) y lo único
+  que cambia es la identidad. Neutral nuevo en keel-core: `operation.optionalAuth` (`isOptionalAuth`, la regla de la
+  operación o la de cierre), `optionalIdentityNote` (la nota del handler, con el «vacío» de cada lenguaje) y
+  `optionalAuthFrontierErrors`, que rechaza `optional` sobre una identidad que no es un token: con `api-key`, una clave
+  equivocada pasa el filtro sin autenticar y la ruta la trataría como anónima, justo lo que OA-3 prohíbe. keel-spring:
+  `CallerIdentity.resolveOptional()` (null sin `JwtAuthenticationToken`; con un token, lo mismo que `resolve()`), que el
+  controller estampa en las operaciones optional, y la nota en el handler. Red: `read-scope-check conduit-optional`, sin
+  base, con una clase JUnit nueva (`OptionalAuthEdgeCheckTest` en `src/lib/read-scope-probes.js`): un contexto de Spring
+  con la `SecurityConfig`, los manejadores y los controllers GENERADOS, el mediator como doble y un `JwtDecoder` doble,
+  por MockMvc con `springSecurityFilterChain` delante. Sabotajes: `oa-degrade` (un `BearerTokenResolver` que da null si
+  el token no decodifica) y `oa-ignore-token` (`resolveOptional` siempre null).
+- **Desviaciones del inc. 5 (keel-spring)**: (1) sin `security-check` en keel-spring (no lo tiene): MockMvc con la cadena
+  real mide la misma pieza; (2) **sin fila `optional-auth` en las matrices de paridad**: la matriz es solo de lo que
+  bifurca por modelo o por motor, y la identidad opcional no bifurca (cadena y controller, iguales en relacional y
+  documental); la puerta de cierre que la pedía queda cubierta por los sabotajes `oa-*` de cada generador; (3) OA-4
+  (el OpenAPI) es del inc. 6.
+- Siguiente: **incremento 5 en keel-nest** (`verdict`/`authenticate` y el estampado de la identidad), después keel-dotnet y keel-go.

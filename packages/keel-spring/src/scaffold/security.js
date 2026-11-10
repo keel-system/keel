@@ -1127,6 +1127,25 @@ ${extract}
         }
         return value;`;
 
+  // `level: optional` (DSL 2.27): sin token la operación entra anónima, y el controller estampa la identidad con
+  // resolveOptional(), que da null en vez de lanzar. Un token presente e inválido no llega aquí: el resource server ya
+  // respondió 401. Con uno válido, lo mismo que resolve(), también el 401 de un token sin el claim de la identidad.
+  const optionalOps = model.services.flatMap((group) => group.operations).some((operation) => operation.optionalAuth);
+  const anonymousCheck = `
+        if (!(SecurityContextHolder.getContext().getAuthentication() instanceof JwtAuthenticationToken)) {
+            return null;
+        }`;
+  const optionalStatic = optionalOps
+    ? `
+
+    /**
+     * Lo mismo, en una operación con {@code level: optional}: {@code null} si la petición llegó sin token (anónima).
+     * Un token inválido o caducado no llega hasta aquí: el resource server ya respondió 401.
+     */
+    public static String resolveOptional() {${anonymousCheck}
+        return resolve();
+    }`
+    : '';
   const resolution = callerResolution(model);
   if (!resolution) {
     const body = `public final class CallerIdentity {
@@ -1142,7 +1161,7 @@ ${extract}
      * rechaza al no autenticado, así que llegar aquí sin token es un fallo de configuración.
      */
     public static String resolve() {${readCredential}
-    }
+    }${optionalStatic}
 }`;
     return { path: javaPath(model, SECURITY_PKG, 'CallerIdentity'), content: javaFile(pkg, imports, body) };
   }
@@ -1180,7 +1199,15 @@ public class CallerIdentity {
         return ${portField}.${resolution.finder}(credential())
                 .map(${resolution.entity}::${resolution.getter})
                 .orElse(null);
-    }
+    }${optionalOps ? `
+
+    /**
+     * Lo mismo, en una operación con {@code level: optional}: {@code null} también si la petición llegó sin token
+     * (anónima). Un token inválido o caducado no llega hasta aquí: el resource server ya respondió 401.
+     */
+    public String resolveOptional() {${anonymousCheck}
+        return resolve();
+    }` : ''}
 
     /** La credencial en crudo, tal como la trae el token: NO es la clave natural. */
     static String credential() {${readCredential}

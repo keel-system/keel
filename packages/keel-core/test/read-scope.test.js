@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadService } from '../src/index.js';
 import { checkCrossRefs } from '../src/lib/crossrefs.js';
-import { buildModel } from '../src/lib/gen/model.js';
+import { accessAuthority, buildModel } from '../src/lib/gen/model.js';
 import { STACK_DEFAULTS } from '../src/lib/gen/infra-catalog.js';
 import { accessRequirement } from '../src/lib/gen/access-plan.js';
 import {
@@ -18,7 +18,10 @@ import {
   READ_SCOPE_SABOTAGES,
   UNRESTRICTED,
   claimValues,
+  isOptionalAuth,
+  optionalAuthFrontierErrors,
   optionalAuthPendingErrors,
+  optionalIdentityNote,
   optionalAuthRules,
   ownedBy,
   readScopeFor,
@@ -198,6 +201,32 @@ test('la frontera: reads con lecturas y optional se rechazan hasta el incremento
   assert.deepEqual(readScopePendingErrors(designOf('conduit').layers, 'keel-go', 4), [], 'reads: [] no se rechaza');
   assert.equal(optionalAuthPendingErrors(derived('conduit-optional').layers, 'keel-nest', 5).length, 4);
   assert.deepEqual(optionalAuthPendingErrors(designOf('conduit').layers, 'keel-nest', 5), []);
+});
+
+test('level: optional en el modelo: la operación lo sabe, la regla de cierre cuenta y la cadena la deja pasar como pública', () => {
+  const { model, layers } = derived('conduit-optional');
+  const optional = model.services.flatMap((group) => group.operations).filter((operation) => operation.optionalAuth).map((operation) => operation.name);
+  assert.deepEqual(optional.sort(), ['getArticle', 'getProfile', 'listArticles', 'listComments']);
+  assert.equal(isOptionalAuth(layers, 'createArticle'), false);
+  // Sin regla propia, la de cierre.
+  assert.equal(isOptionalAuth({ security: { access: { default: { level: 'optional' }, rules: {} } } }, 'anything'), true);
+  assert.equal(isOptionalAuth({}, 'anything'), false);
+  // En la cadena, permitAll: el bearer inválido lo rechaza el resource server en toda ruta.
+  const article = model.security.matchers.find((matcher) => matcher.path.endsWith('/articles/{slug}') && matcher.method === 'GET');
+  assert.equal(article.authority, 'permitAll()');
+  assert.equal(accessAuthority({ level: 'optional' }), 'permitAll()');
+  // La nota dice qué significa el vacío, con el «vacío» de cada lenguaje.
+  assert.match(optionalIdentityNote('query.callerSubject()'), /sin token, query\.callerSubject\(\) llega null/);
+  assert.match(optionalIdentityNote('q.CallerSubject', { none: '""' }), /llega "" y la operación se ejecuta como pública/);
+});
+
+test('la frontera de optional: solo sobre una identidad de token', () => {
+  const layers = derived('conduit-optional').layers;
+  assert.deepEqual(optionalAuthFrontierErrors(layers, 'keel-spring'), []);
+  layers.security.authentication.protocol = 'api-key';
+  const errors = optionalAuthFrontierErrors(layers, 'keel-spring');
+  assert.equal(errors.length, 4);
+  assert.match(errors[0], /^security: access\.rules\.getProfile \(level: optional, DSL 2\.27\): keel-spring solo la genera sobre una identidad de token \(oidc o jwt\), y el protocolo es api-key/);
 });
 
 test('los casos y los sabotajes: ids únicos, y cada sabotaje cae en casos que existen', () => {

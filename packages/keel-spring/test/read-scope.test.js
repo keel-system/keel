@@ -28,14 +28,41 @@ const fileOf = (files, suffix) => {
   return found.content;
 };
 
-test('los sujetos pasan la frontera de keel-spring (salvo conduit-optional, que es del incremento 5)', () => {
+test('los sujetos pasan la frontera de keel-spring, conduit-optional incluido', () => {
   for (const { name, from, mutate } of READ_SCOPE_DESIGNS) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
     mutate(layers);
-    const { errors } = checkSupportedFeatures(manifest, layers);
-    if (name === 'conduit-optional') assert.ok(errors.some((message) => message.includes('level: optional')), name);
-    else assert.deepEqual(errors, [], name);
+    assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, [], name);
   }
+});
+
+test('conduit-optional: la ruta entra como pública y el controller estampa la identidad que puede faltar', () => {
+  const { files } = plan('conduit-optional');
+  const chain = fileOf(files, '/security/SecurityConfig.java');
+  assert.match(chain, /requestMatchers\(HttpMethod\.GET, "\/api\/v1\/articles\/\{slug\}"\)\.permitAll\(\)/);
+  // El bearer inválido es 401 en toda ruta: lo decide el resource server, con los mismos manejadores de error.
+  assert.match(chain, /oauth2ResourceServer\(oauth2 -> oauth2\.authenticationEntryPoint\(securityErrorHandlers\)/);
+  const identity = fileOf(files, '/security/CallerIdentity.java');
+  assert.match(identity, /public static String resolveOptional\(\) \{\s+if \(!\(SecurityContextHolder\.getContext\(\)\.getAuthentication\(\) instanceof JwtAuthenticationToken\)\) \{\s+return null;\s+\}\s+return resolve\(\);/);
+  const articles = fileOf(files, '/ArticleV1Controller.java');
+  assert.match(articles, /new GetArticleQuery\(slug, CallerIdentity\.resolveOptional\(\)\)/);
+  // Las que no son optional siguen con resolve(), que lanza sin identidad.
+  assert.match(articles, /CallerIdentity\.resolve\(\)/);
+  assert.match(fileOf(files, '/GetArticleQueryHandler.java'), /Identidad opcional \(level: optional, DSL 2\.27\): sin token, query\.callerSubject\(\) llega null/);
+});
+
+test('sin ninguna operación optional, CallerIdentity no gana resolveOptional', () => {
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'conduit'));
+  const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: 'mongodb' } });
+  assert.doesNotMatch(fileOf(files, '/security/CallerIdentity.java'), /resolveOptional/);
+});
+
+test('la frontera de optional: sobre una clave de API se rechaza, con el mensaje neutral', () => {
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'conduit'));
+  design('conduit-optional').mutate(layers);
+  layers.security.authentication.protocol = 'api-key';
+  const { errors } = checkSupportedFeatures(manifest, layers);
+  assert.ok(errors.some((message) => message.includes('keel-spring solo la genera sobre una identidad de token')), errors.join('\n'));
 });
 
 test('vault-scoped: puerto con el scope obligatorio, predicado con la subconsulta del salto y carga que compara', () => {
@@ -135,4 +162,5 @@ test('las sondas: los casos que ejecuta cada sujeto, y RS-8 solo donde hay un sa
   assert.deepEqual(cases('shop-scoped'), ['RS-1', 'RS-2', 'RS-3', 'RS-5', 'RS-6', 'RS-7', 'RS-10', 'RS-11']);
   assert.deepEqual(cases('vault-scoped'), ['RS-3', 'RS-5', 'RS-6', 'RS-7', 'RS-8', 'RS-9', 'RS-10', 'RS-11']);
   assert.deepEqual(cases('conduit-scoped'), ['RS-3', 'RS-4', 'RS-8', 'RS-10']);
+  assert.deepEqual(cases('conduit-optional'), ['OA-1', 'OA-2', 'OA-3']);
 });

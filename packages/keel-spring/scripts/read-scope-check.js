@@ -27,12 +27,15 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { loadService } from '@keel-system/keel-core';
-import { READ_SCOPE_SABOTAGES, readScopePath, scopedRootsOf } from '@keel-system/keel-core/gen/read-scope';
+import { OPTIONAL_AUTH_SABOTAGES, READ_SCOPE_SABOTAGES, readScopePath, scopedRootsOf } from '@keel-system/keel-core/gen/read-scope';
 import { tmpDir } from '../test/helpers/tmp.js';
 import { buildModel } from '../src/lib/model.js';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { databaseHealthProbe } from '../src/lib/stack-catalog.js';
-import { ADAPTER_CLASS, EDGE_CLASS, PACKAGE_LEAF, adapterTestClass, casesOf, edgeTestClass, namedTypes, probedEntities } from '../src/lib/read-scope-probes.js';
+import {
+  ADAPTER_CLASS, EDGE_CLASS, OPTIONAL_CLASS, PACKAGE_LEAF, adapterTestClass, casesOf, edgeTestClass, namedTypes, optionalAuthOperations,
+  optionalAuthTestClass, probedEntities
+} from '../src/lib/read-scope-probes.js';
 import { READ_SCOPE_DESIGNS } from '../../keel-core/test/helpers/read-scope-designs.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -91,7 +94,25 @@ const SABOTAGES = {
   'rs-cache-key': [
     ['CachedOperations.java', /, query\.readScope\(\)\.cacheKey\(\)\)/g, ')'],
     ['CachedOperations.java', 'return query.readScope().cacheKey();', 'return "all";']
-  ]
+  ],
+  // level: optional: un token que no se puede decodificar se trata como si no hubiera token (anónimo) en vez de 401.
+  'oa-degrade': [
+    [
+      'SecurityConfig.java',
+      '    private final SecurityErrorHandlers securityErrorHandlers;\n',
+      '    private final SecurityErrorHandlers securityErrorHandlers;\n\n' +
+        '    @org.springframework.beans.factory.annotation.Autowired\n' +
+        '    private org.springframework.security.oauth2.jwt.JwtDecoder sabotageDecoder;\n\n' +
+        '    private String sabotagedToken(jakarta.servlet.http.HttpServletRequest request) {\n' +
+        '        String token = new org.springframework.security.oauth2.server.resource.web.DefaultBearerTokenResolver().resolve(request);\n' +
+        '        if (token == null) return null;\n' +
+        '        try { sabotageDecoder.decode(token); return token; } catch (RuntimeException invalid) { return null; }\n' +
+        '    }\n'
+    ],
+    ['SecurityConfig.java', '.oauth2ResourceServer(oauth2 -> oauth2.authenticationEntryPoint(', '.oauth2ResourceServer(oauth2 -> oauth2.bearerTokenResolver(this::sabotagedToken).authenticationEntryPoint(']
+  ],
+  // level: optional: la identidad nunca llega, ni con un token válido.
+  'oa-ignore-token': [['CallerIdentity.java', '        return resolve();\n', '        return null;\n']]
 };
 
 function run(command, commandArgs, options = {}) {
@@ -142,12 +163,15 @@ function readResults(projectDir, className) {
   return cases;
 }
 
-/** El caso de una prueba por su prefijo: `rs8_Asset_…` → RS-8. */
-const caseOf = (testName) => `RS-${/^rs(\d+)_/.exec(testName)?.[1] ?? '?'}`;
+/** El caso de una prueba por su prefijo: `rs8_Asset_…` → RS-8, `oa2_getArticle_…` → OA-2. */
+const caseOf = (testName) => {
+  const match = /^(rs|oa)(\d+)_/.exec(testName);
+  return match ? `${match[1].toUpperCase()}-${match[2]}` : '?';
+};
 
 const design = READ_SCOPE_DESIGNS.find((candidate) => candidate.name === designName);
-if (!design || design.name === 'conduit-optional') {
-  console.error(`No hay ningún diseño de lectura acotada '${designName}'. Los hay: ${READ_SCOPE_DESIGNS.filter((d) => d.name !== 'conduit-optional').map((d) => d.name).join(', ')}.`);
+if (!design) {
+  console.error(`No hay ningún diseño de lectura acotada '${designName}'. Los hay: ${READ_SCOPE_DESIGNS.map((d) => d.name).join(', ')}.`);
   process.exit(2);
 }
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -173,7 +197,7 @@ const model = buildModel({ manifest: service.manifest, layers: service.layers, s
 const cases = casesOf(model);
 let expected = null;
 if (sabotage) {
-  const declared = READ_SCOPE_SABOTAGES.find((entry) => entry.id === sabotage);
+  const declared = [...READ_SCOPE_SABOTAGES, ...OPTIONAL_AUTH_SABOTAGES].find((entry) => entry.id === sabotage);
   // La mitad del borde de rs-empty-is-all es el claim AUSENTE, que solo existe con scoping: con la propiedad, sin
   // identidad no hay scope (CallerIdentity responde 401), así que ahí no tiene dónde caer.
   const scoping = scopedRootsOf(model).some(({ read }) => read.kind === 'scoping');
@@ -223,17 +247,25 @@ const optional = (name) => {
     return null;
   }
 };
-const anyRoot = probedEntities(model)[0];
+// Con lecturas acotadas, las sondas del adaptador (contra el motor) y del borde; con level: optional, las del borde OA.
+// conduit-optional no acota ninguna lectura: no levanta base.
+const anyRoot = probedEntities(model)[0] ?? null;
+const optionalOps = optionalAuthOperations(model);
 const pkgOf = (name) => classOf(projectDir, name).pkg;
 const packages = {
-  port: pkgOf(`${anyRoot}Repository`),
-  adapters: pkgOf(`${anyRoot}RepositoryImpl`),
+  port: anyRoot ? pkgOf(`${anyRoot}Repository`) : null,
+  adapters: anyRoot ? pkgOf(`${anyRoot}RepositoryImpl`) : null,
   errors: pkgOf('DomainException'),
   rest: pkgOf('ApiExceptionHandler'),
-  security: optional('ReadScopes'),
+  security: optional('ReadScopes') ?? optional('SecurityConfig'),
   support: optional('CachedOperations'),
   types: Object.fromEntries(namedTypes(model).map((name) => [name, pkgOf(name)])),
-  messages: Object.fromEntries(model.services.flatMap((group) => group.operations).filter((op) => op.readScope).map((op) => [op.name, pkgOf(op.messageClass)]))
+  messages: Object.fromEntries(
+    model.services
+      .flatMap((group) => group.operations)
+      .filter((op) => op.readScope || optionalOps.includes(op))
+      .map((op) => [op.name, pkgOf(op.messageClass)])
+  )
 };
 
 const collaborators = [];
@@ -251,29 +283,57 @@ for (const name of probedEntities(model)) {
 
 const testDir = path.join(projectDir, 'src/test/java', ...model.service.basePackage.split('.'), PACKAGE_LEAF);
 fs.mkdirSync(testDir, { recursive: true });
-fs.writeFileSync(path.join(testDir, `${ADAPTER_CLASS}.java`), adapterTestClass(model, { packages, document, datasource, collaborators }), 'utf8');
-fs.writeFileSync(path.join(testDir, `${EDGE_CLASS}.java`), edgeTestClass(model, { packages }), 'utf8');
+const classes = [];
+if (anyRoot) {
+  fs.writeFileSync(path.join(testDir, `${ADAPTER_CLASS}.java`), adapterTestClass(model, { packages, document, datasource, collaborators }), 'utf8');
+  fs.writeFileSync(path.join(testDir, `${EDGE_CLASS}.java`), edgeTestClass(model, { packages }), 'utf8');
+  classes.push(ADAPTER_CLASS, EDGE_CLASS);
+}
+if (optionalOps.length > 0) {
+  // El controller de cada operación optional: el que despacha su mensaje. Sus colaboradores, por su constructor.
+  const controllers = walk(path.join(projectDir, 'src/main/java'))
+    .filter((file) => file.endsWith('V1Controller.java'))
+    .map((file) => {
+      const name = path.basename(file, '.java');
+      const { text, pkg } = classOf(projectDir, name);
+      const ctor = new RegExp(`public ${name}\\(([^)]*)\\)`).exec(text);
+      const params = (ctor?.[1] ?? '').split(',').map((part) => part.trim().split(/\s+/)[0]).filter(Boolean).map((type) => ({ type, fqn: `${pkgOf(type)}.${type}` }));
+      return { name, pkg, params, text };
+    });
+  const opController = Object.fromEntries(
+    optionalOps.map((op) => {
+      const owner = controllers.find((controller) => controller.text.includes(`new ${op.messageClass}(`));
+      if (!owner) throw new Error(`read-scope-check: ningún controller despacha ${op.messageClass}`);
+      return [op.name, owner.name];
+    })
+  );
+  const securityTypes = ['SecurityConfig', 'SecurityErrorHandlers', 'CorsConfig'].filter((name) => optional(name));
+  fs.writeFileSync(path.join(testDir, `${OPTIONAL_CLASS}.java`), optionalAuthTestClass(model, { packages, controllers, opController, securityTypes }), 'utf8');
+  classes.push(OPTIONAL_CLASS);
+}
 
-console.log(`read-scope-check · ${designName} (${engine}) · ${runtime.runtime} · casos ${cases.join(', ')}`);
-const frontend = composeUp(runtime.frontends, projectDir);
-if (!frontend) {
+console.log(`read-scope-check · ${designName} (${anyRoot ? engine : 'sin base'}) · ${runtime.runtime} · casos ${cases.join(', ')}`);
+const frontend = anyRoot ? composeUp(runtime.frontends, projectDir) : null;
+if (anyRoot && !frontend) {
   console.error('No se pudo levantar la base de infra/.');
   process.exit(2);
 }
 let exitCode = 2;
 try {
-  const probe = databaseHealthProbe(engine, model.service.name.replaceAll('-', '_'));
-  const deadline = Date.now() + probe.budgetSeconds * 1000;
-  let ready = false;
-  while (!ready && Date.now() < deadline) {
-    ready = run(runtime.runtime, ['exec', `${service.manifest.service.name}-db`, ...probe.argv]).status === 0;
-    if (!ready) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, probe.intervalSeconds * 1000);
+  let ready = !anyRoot;
+  if (anyRoot) {
+    const probe = databaseHealthProbe(engine, model.service.name.replaceAll('-', '_'));
+    const deadline = Date.now() + probe.budgetSeconds * 1000;
+    while (!ready && Date.now() < deadline) {
+      ready = run(runtime.runtime, ['exec', `${service.manifest.service.name}-db`, ...probe.argv]).status === 0;
+      if (!ready) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, probe.intervalSeconds * 1000);
+    }
   }
   if (!ready) {
     console.error('El motor no aceptó conexiones a tiempo.');
   } else {
     const gradle = run('sh', ['gradlew', 'test', '--tests', `*.${PACKAGE_LEAF}.*`, '--console=plain', '--no-daemon'], { cwd: projectDir });
-    const results = [...readResults(projectDir, ADAPTER_CLASS), ...readResults(projectDir, EDGE_CLASS)];
+    const results = classes.flatMap((className) => readResults(projectDir, className));
     if (results.length === 0) {
       console.error('La suite no llegó a ejecutarse. Salida de Gradle:');
       console.error((gradle.stdout + gradle.stderr).split('\n').slice(-60).join('\n'));
@@ -295,7 +355,7 @@ try {
     }
   }
 } finally {
-  if (keep) console.log(`\n  --keep: el proyecto queda en ${projectDir} y la base en pie.`);
-  else run(frontend.command, [...frontend.prefix, '-f', 'infra/docker-compose.yaml', 'down', '-v'], { cwd: projectDir });
+  if (keep) console.log(`\n  --keep: el proyecto queda en ${projectDir}${frontend ? ' y la base en pie' : ''}.`);
+  else if (frontend) run(frontend.command, [...frontend.prefix, '-f', 'infra/docker-compose.yaml', 'down', '-v'], { cwd: projectDir });
 }
 process.exit(exitCode);

@@ -30,7 +30,7 @@ import {
 } from './reconciliation-stores.js';
 import { assertProjection } from './projection.js';
 import { attachQueryFinders } from './query-filters.js';
-import { readScopesOfLayers, readScopeOfOperation } from './read-scope.js';
+import { readScopesOfLayers, readScopeOfOperation, isOptionalAuth } from './read-scope.js';
 import { guardedByNaturalKey } from './natural-key-guard.js';
 import { domainGuardKind } from './domain-guard.js';
 
@@ -120,7 +120,11 @@ function interpret({ manifest, layers, stack = null }) {
   // La lectura acotada de cada query (DSL 2.27, `reads`), antes del finder: el predicado es un criterio más del finder.
   const readPlan = readScopesOfLayers(layers);
   for (const group of services) {
-    for (const operation of group.operations) operation.readScope = readScopeOfOperation(readPlan, operation.name);
+    for (const operation of group.operations) {
+      operation.readScope = readScopeOfOperation(readPlan, operation.name);
+      // `level: optional` (R3c): sin token entra anónima y el campo de la identidad llega vacío.
+      operation.optionalAuth = isOptionalAuth(layers, operation.name);
+    }
   }
   // El finder de cada búsqueda con todos sus inputs enlazados (DSL 2.22), después de las sombras de los filtros.
   attachQueryFinders({ services, entities, valueObjects, persistence: hasPersistence });
@@ -1950,6 +1954,9 @@ function emittersByEvent(services, rootOf) {
 // (roles prefijados ROLE_), semántica "cualquiera de".
 export function accessAuthority(rule) {
   if (rule.level === 'public') return 'permitAll()';
+  // `optional` (DSL 2.27) entra como pública: sin token, anónima. Lo que la distingue —un bearer inválido es 401— ya lo
+  // hace el resource server en TODA ruta, también en las de permitAll (BearerTokenAuthenticationFilter decide antes).
+  if (rule.level === 'optional') return 'permitAll()';
   const roles = rule.roles ?? [];
   const perms = rule.permissions ?? [];
   // Los scopes del diseño llegan como authorities SCOPE_<scope> (prefijo estándar

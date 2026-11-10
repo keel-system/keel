@@ -279,6 +279,25 @@ export function optionalAuthRules(layers) {
   return access?.default?.level === 'optional' ? [{ default: true }, ...rules] : rules;
 }
 
+/** ¿Entra la operación con `level: optional`? Su regla, o la de cierre si no tiene. Lo que el modelo pone en `operation.optionalAuth`. */
+export function isOptionalAuth(layers, opName) {
+  const access = layers?.security?.access;
+  if (!access) return false;
+  return (access.rules?.[opName] ?? access.default)?.level === 'optional';
+}
+
+/**
+ * La nota del campo de la identidad en una operación con `level: optional`, la misma en los cuatro generadores. `none`
+ * es cómo se dice «sin valor» en el lenguaje (`null`, `undefined`, la cadena vacía de Go).
+ */
+export function optionalIdentityNote(field, { none = 'null' } = {}) {
+  return (
+    `Identidad opcional (level: optional, DSL 2.27): sin token, ${field} llega ${none} y la operación se ejecuta como ` +
+    'pública; con un token válido llega la identidad. Un token inválido o caducado ya lo rechazó el borde con 401, así ' +
+    `que ${none} significa «anónimo», nunca «token roto»: no lo compruebes otra vez ni respondas 401 desde aquí.`
+  );
+}
+
 // ─── El handler ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Cómo se lee el predicado en prosa: `Asset.owner → Owner.code ∈ claim vaults`, `OrderMain.buyerEmail = el llamante`. */
@@ -457,6 +476,22 @@ export function readScopePendingErrors(layers, generator, increment) {
         `${increment} de PLAN-DSL-227-LECTURA-ACOTADA.md, y una lectura acotada a medias (el listado filtrado y su total no, ` +
         'o la caché compartida entre llamantes) filtraría las filas que promete esconder. Quita reads para generar este diseño.'
     );
+}
+
+/**
+ * Lo que ningún generador genera de `level: optional`, con el mismo mensaje en los cuatro: una identidad que no es un
+ * token. Con una clave de API, una clave equivocada no se distingue de no traer ninguna (el filtro la deja pasar sin
+ * autenticar), así que la ruta la trataría como anónima: justo lo que OA-3 prohíbe.
+ */
+export function optionalAuthFrontierErrors(layers, generator) {
+  const protocol = layers?.security?.authentication?.protocol ?? 'none';
+  if (protocol === 'oidc' || protocol === 'jwt') return [];
+  return optionalAuthRules(layers).map(
+    (rule) =>
+      `security: access.${rule.default ? 'default' : `rules.${rule.operation}`} (level: optional, DSL 2.27): ${generator} solo ` +
+      `la genera sobre una identidad de token (oidc o jwt), y el protocolo es ${protocol} — una credencial inválida no se ` +
+      'distinguiría de no traer ninguna, y la operación la trataría como anónima en vez de responder 401. Decláralo public o required.'
+  );
 }
 
 /** Lo mismo para `level: optional` (R3c, incremento 5 en los cuatro). */

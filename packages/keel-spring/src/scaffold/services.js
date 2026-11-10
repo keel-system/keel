@@ -43,7 +43,7 @@ import { callerResolution } from './security.js';
 import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { rawJsonAnnotations } from './jackson.js';
-import { readScopeNote } from '@keel-system/keel-core/gen/read-scope';
+import { readScopeNote, optionalIdentityNote } from '@keel-system/keel-core/gen/read-scope';
 import { readScopeComponent, readScopeHandlerCall } from './read-scope.js';
 import {
   carriesExpectedVersions,
@@ -639,6 +639,11 @@ function renderHandler(model, service, operation) {
     call: readScopeHandlerCall(model, operation, operation.finder ? finderCall(operation.finder) : '')
   });
   if (scopedRead) notes.push(scopedRead);
+  // La identidad opcional (DSL 2.27, R3c): null es «anónimo», el token roto ya fue un 401 en el borde.
+  const identityField = model.security?.callerIdentity?.field;
+  if (operation.optionalAuth && identityField && messageComponents(model, operation).some((component) => component.resolvedIdentity)) {
+    notes.push(optionalIdentityNote(`${ownerParam}.${identityField}()`));
+  }
   const scoping = model.security?.scoping;
   if (scoping && operation.errors.includes(scoping.error) && !operation.readScope) {
     notes.push(

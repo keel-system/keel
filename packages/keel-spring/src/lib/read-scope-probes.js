@@ -16,7 +16,8 @@ import { findersOf } from '@keel-system/keel-core/gen';
 import { READ_SCOPE_KEY_CASES, readMissMessage, readScopePath, scopedRootsOf, scopedReadsOf } from '@keel-system/keel-core/gen/read-scope';
 import { cachedOperations } from '@keel-system/keel-core/gen/cache-plan';
 import { operationError } from '@keel-system/keel-core/gen/declared-errors';
-import { DOMAIN_ERROR_RESPONSES } from '@keel-system/keel-core/gen/api-errors';
+import { DOMAIN_ERROR_RESPONSES, FRAMEWORK_RESPONSES } from '@keel-system/keel-core/gen/api-errors';
+import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { constructorArgs } from './finder-probes.js';
 import { conexionPerezosa } from './claim-probes.js';
 import { messageComponents } from '../scaffold/services.js';
@@ -25,6 +26,7 @@ import { scopedLoadsOf, readScopesMethod } from '../scaffold/read-scope.js';
 export const PACKAGE_LEAF = 'readscopecheck';
 export const ADAPTER_CLASS = 'ReadScopeAdapterCheckTest';
 export const EDGE_CLASS = 'ReadScopeEdgeCheckTest';
+export const OPTIONAL_CLASS = 'OptionalAuthEdgeCheckTest';
 
 const java = (text) => JSON.stringify(text);
 const capital = (name) => `${name[0].toUpperCase()}${name.slice(1)}`;
@@ -91,7 +93,10 @@ export function casesOf(model) {
   if (cachedScoped(model)) cases.add('RS-9');
   if (edgeReads(model).length > 0) cases.add('RS-10');
   if (scopedReadsOf(model).some((operation) => operation.readScope.readMiss === 'forbidden')) cases.add('RS-11');
-  return [...cases].sort((a, b) => Number(a.slice(3)) - Number(b.slice(3)));
+  // level: optional (R3c): OA-1 a OA-3 en el borde, con la cadena de seguridad real. OA-4 es del contrato (inc. 6).
+  if (optionalAuthOperations(model).length > 0) for (const id of ['OA-1', 'OA-2', 'OA-3']) cases.add(id);
+  const order = (id) => (id.startsWith('RS') ? 0 : 100) + Number(id.slice(3));
+  return [...cases].sort((a, b) => order(a) - order(b));
 }
 
 /** El primer criterio del finder con el que se puede pedir algo que ninguna fila sembrada cumple (RS-7). */
@@ -494,4 +499,191 @@ ${tests.join('\n')}
 function identityClaim(identity) {
   if (!identity) return '"sub", "rs10@x.io"';
   return identity.source === 'claim' ? `${java(identity.claim)}, "rs10@x.io"` : '"azp", "rs10@x.io"';
+}
+
+// ─── level: optional (R3c): OA-1 a OA-3 ─────────────────────────────────────────────────────────────────────────────
+
+/** Las operaciones con `level: optional` que reciben la identidad del llamante por HTTP: las que piden las sondas. */
+export function optionalAuthOperations(model) {
+  return (model.services ?? [])
+    .flatMap((group) => group.operations)
+    .filter((operation) => operation.optionalAuth && operation.route && messageComponents(model, operation).some((component) => component.resolvedIdentity));
+}
+
+/**
+ * La identidad opcional en el borde (OA-1 a OA-3), sin base: un contexto de Spring con la SecurityConfig, los manejadores
+ * de error y los controllers GENERADOS, el mediator sustituido por un doble y un JwtDecoder doble (un token vale, uno
+ * caducado y cualquier otro no). Por MockMvc con la cadena de seguridad delante: se mide lo que responde el servidor y
+ * lo que llega al caso de uso. `controllers` son `{ name, pkg, params: [{ type, fqn }] }`, `opController` el controller
+ * de cada operación y `securityTypes` las clases del paquete de seguridad que la cadena necesita.
+ */
+export function optionalAuthTestClass(model, { packages, controllers, opController, securityTypes }) {
+  const identity = model.security.callerIdentity;
+  const claim = identity.source === 'claim' ? identity.claim : 'azp';
+  const operations = optionalAuthOperations(model);
+  const imports = new Set([
+    'jakarta.servlet.Filter',
+    'java.time.Instant',
+    'java.util.List',
+    'org.junit.jupiter.api.BeforeEach',
+    'org.junit.jupiter.api.Test',
+    'org.mockito.Mockito',
+    'org.springframework.beans.factory.annotation.Autowired',
+    'org.springframework.beans.factory.annotation.Qualifier',
+    'org.springframework.context.annotation.Bean',
+    'org.springframework.context.annotation.Configuration',
+    'org.springframework.context.annotation.Import',
+    'org.springframework.security.oauth2.core.OAuth2Error',
+    'org.springframework.security.oauth2.jwt.BadJwtException',
+    'org.springframework.security.oauth2.jwt.Jwt',
+    'org.springframework.security.oauth2.jwt.JwtDecoder',
+    'org.springframework.security.oauth2.jwt.JwtValidationException',
+    'org.springframework.test.context.junit.jupiter.web.SpringJUnitWebConfig',
+    'org.springframework.test.web.servlet.MockMvc',
+    'org.springframework.test.web.servlet.request.MockMvcRequestBuilders',
+    'org.springframework.test.web.servlet.setup.MockMvcBuilders',
+    'org.springframework.web.context.WebApplicationContext',
+    'org.springframework.web.servlet.config.annotation.EnableWebMvc',
+    'org.springframework.web.servlet.config.annotation.WebMvcConfigurer',
+    'tools.jackson.databind.ObjectMapper',
+    'tools.jackson.databind.json.JsonMapper',
+    'static org.junit.jupiter.api.Assertions.assertEquals',
+    'static org.junit.jupiter.api.Assertions.assertNull',
+    'static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath',
+    'static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status'
+  ]);
+  const used = [...new Set(operations.map((operation) => opController[operation.name]))].map((name) => controllers.find((controller) => controller.name === name));
+  for (const controller of used) imports.add(`${controller.pkg}.${controller.name}`);
+  for (const type of securityTypes) imports.add(`${packages.security}.${type}`);
+  const mocks = new Map();
+  for (const controller of used) for (const param of controller.params) mocks.set(param.type, param.fqn);
+  if (!mocks.has('UseCaseMediator')) throw new Error('read-scope-check: los controllers de las operaciones optional no reciben UseCaseMediator');
+  for (const fqn of mocks.values()) imports.add(fqn);
+  const pageable = operations.some((operation) => messageComponents(model, operation).some((component) => component.javaType === 'Pageable'));
+  if (pageable) {
+    imports.add('org.springframework.data.web.PageableHandlerMethodArgumentResolver');
+    imports.add('org.springframework.web.method.support.HandlerMethodArgumentResolver');
+  }
+  const unauthenticated = FRAMEWORK_RESPONSES.unauthenticated;
+  const field = identity.field;
+  const tests = operations.map((operation) => {
+    imports.add(`${packages.messages[operation.name]}.${operation.messageClass}`);
+    const url = `${model.api.routeBase}${operation.route.path}`.replace(/\{[^}]+\}/g, 'oa-x');
+    const verb = { GET: 'get', POST: 'post', PUT: 'put', PATCH: 'patch', DELETE: 'delete' }[operation.route.method];
+    const body = ['POST', 'PUT', 'PATCH'].includes(operation.route.method) ? '.contentType("application/json").content("{}")' : '';
+    const request = (token) => `MockMvcRequestBuilders.${verb}(${java(url)})${body}${token ? `.header("Authorization", "Bearer " + ${token})` : ''}`;
+    const captured = `sent(${operation.messageClass}.class).${field}()`;
+    return `
+    @Test
+    void oa1_${operation.name}_sinTokenEntraAnonima() throws Exception {
+        mvc.perform(${request(null)}).andExpect(status().is(${operation.route.status}));
+        assertNull(${captured}, "OA-1: sin token, la identidad tiene que llegar null");
+    }
+
+    @Test
+    void oa2_${operation.name}_conUnTokenValidoLlegaLaIdentidad() throws Exception {
+        mvc.perform(${request('VALID')}).andExpect(status().is(${operation.route.status}));
+        assertEquals(SUBJECT, ${captured}, "OA-2: con un token válido, la identidad del llamante");
+    }
+
+    @Test
+    void oa3_${operation.name}_conUnTokenInvalidoOCaducadoEs401() throws Exception {
+        for (String token : List.of("oa-invalid", "oa-expired")) {
+            mvc.perform(${request('token')})
+                    .andExpect(status().is(${unauthenticated.status}))
+                    .andExpect(jsonPath("$.status").value(${unauthenticated.status}))
+                    .andExpect(jsonPath("$.error").value(${java(unauthenticated.error)}))
+                    .andExpect(jsonPath("$.code").value(${java(FRAMEWORK_ERRORS.unauthenticated.code)}))
+                    .andExpect(jsonPath("$.message").value(${java(unauthenticated.message)}));
+        }
+        // Rechazado en el borde: el caso de uso no se despacha, ni como anónimo.
+        Mockito.verifyNoInteractions(mediator);
+    }`;
+  });
+  const beans = [...mocks.keys()].map(
+    (type) => `
+        @Bean
+        ${type} ${decap(type)}() {
+            return Mockito.mock(${type}.class);
+        }`
+  );
+  const resolvers = pageable
+    ? `
+
+        @Override
+        public void addArgumentResolvers(List<HandlerMethodArgumentResolver> resolvers) {
+            resolvers.add(new PageableHandlerMethodArgumentResolver());
+        }`
+    : '';
+  return `package ${model.service.basePackage}.${PACKAGE_LEAF};
+
+${[...imports].sort().map((entry) => `import ${entry};`).join('\n')}
+
+/**
+ * La identidad opcional (DSL 2.27, level: optional) en el borde, sin base: OA-1 a OA-3. Lo escribe
+ * scripts/read-scope-check.js desde src/lib/read-scope-probes.js: no es parte del proyecto.
+ */
+@SpringJUnitWebConfig(${OPTIONAL_CLASS}.Context.class)
+class ${OPTIONAL_CLASS} {
+
+    static final String VALID = "oa-valid";
+    static final String SUBJECT = "oa-user";
+
+    @Configuration
+    @EnableWebMvc
+    @Import({ ${[...securityTypes, ...used.map((controller) => controller.name)].map((name) => `${name}.class`).join(', ')} })
+    static class Context implements WebMvcConfigurer {
+
+        @Bean
+        ObjectMapper objectMapper() {
+            return JsonMapper.builder().build();
+        }
+
+        /** Un token vale; uno caducado o cualquier otro no, con la excepción que da el decodificador real en cada caso. */
+        @Bean
+        JwtDecoder jwtDecoder() {
+            return token -> {
+                if (VALID.equals(token)) {
+                    return Jwt.withTokenValue(token).header("alg", "none").claim("sub", SUBJECT).claim(${java(claim)}, SUBJECT)
+                            .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
+                }
+                if ("oa-expired".equals(token)) {
+                    throw new JwtValidationException("El token caducó", List.of(new OAuth2Error("invalid_token", "Jwt expired", null)));
+                }
+                throw new BadJwtException("El token no es un JWT válido");
+            };
+        }
+${beans.join('\n')}${resolvers}
+    }
+
+    @Autowired
+    WebApplicationContext context;
+
+    @Autowired
+    UseCaseMediator mediator;
+
+    @Autowired
+    @Qualifier("springSecurityFilterChain")
+    Filter securityChain;
+
+    MockMvc mvc;
+
+    @BeforeEach
+    void setUp() {
+        Mockito.reset(mediator);
+        mvc = MockMvcBuilders.webAppContextSetup(context).addFilters(securityChain).build();
+    }
+
+    /** El único mensaje que el controller despachó al caso de uso. */
+    private <M> M sent(Class<M> type) {
+        List<Object> messages = Mockito.mockingDetails(mediator).getInvocations().stream()
+                .filter(invocation -> invocation.getMethod().getName().startsWith("dispatch"))
+                .map(invocation -> (Object) invocation.getArgument(0))
+                .toList();
+        assertEquals(1, messages.size(), "el controller tenía que despachar un mensaje");
+        return type.cast(messages.get(0));
+    }
+${tests.join('\n')}
+}
+`;
 }

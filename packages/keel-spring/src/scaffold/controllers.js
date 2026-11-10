@@ -150,7 +150,7 @@ function renderController(model, service) {
   // una lectura acotada (DSL 2.27).
   const collaborators = [
     ['UseCaseMediator', 'mediator'],
-    ...(methods.some((method) => method.includes('callerIdentity.resolve()')) ? [['CallerIdentity', 'callerIdentity']] : []),
+    ...(methods.some((method) => /\bcallerIdentity\.resolve(Optional)?\(\)/.test(method)) ? [['CallerIdentity', 'callerIdentity']] : []),
     ...(methods.some((method) => method.includes('readScopes.')) ? [['ReadScopes', 'readScopes']] : [])
   ];
 
@@ -264,7 +264,9 @@ function renderMethod(model, operation, imports) {
   // Con `resolvedBy` es un bean (busca al recurso por su credencial) y el controller lo inyecta.
   const identityArg = () => {
     imports.add(`${model.service.basePackage}.infrastructure.configurations.security.CallerIdentity`);
-    return callerResolution(model) ? 'callerIdentity.resolve()' : 'CallerIdentity.resolve()';
+    // Con `level: optional` (DSL 2.27) sin token no hay identidad: resolveOptional() da null en vez de lanzar.
+    const resolve = operation.optionalAuth ? 'resolveOptional()' : 'resolve()';
+    return callerResolution(model) ? `callerIdentity.${resolve}` : `CallerIdentity.${resolve}`;
   };
   // La puerta (keel-core/gen/entry-gates.js): por aquí entra siempre por HTTP, y como la identidad, no se acepta del
   // cuerpo (@JsonIgnore): se estampa en todas las ramas.
