@@ -184,15 +184,22 @@ try {
   const validate = bash(projectDir, 'infra/validate-infra.sh');
   step('bash infra/validate-infra.sh', validate.status === 0, validate.status === 0 ? '' : validate.output.slice(-1200));
 
+  // El documento de escenarios declara SOLO la sonda: un id que el documento no declara es AJENO (desde 7fcc7a99), no
+  // puntúa, y su FALLO no deja el script en 1 (sale con 2, arnés roto), así que el falsado no se podría leer. Sustituye
+  // al del diseño, y su línea sale del sello: specs.sha256 vigila lo que lista, y el documento sonda no lo escribió build.
+  // Lo mismo que el security-check de keel-dotnet.
+  fs.writeFileSync(path.join(projectDir, 'specs', 'validation-scenarios.md'), '#### FL-SEC-001 — sonda de la seguridad\n');
+  const seal = path.join(projectDir, 'specs.sha256');
+  if (fs.existsSync(seal)) {
+    fs.writeFileSync(seal, fs.readFileSync(seal, 'utf8').split('\n').filter((line) => !line.endsWith('specs/validation-scenarios.md')).join('\n'));
+  }
   const scored = bash(projectDir, 'infra/score-scenarios.sh');
   const lines = scored.output;
   for (const id of 'ABCDEFGHI') {
     const ok = new RegExp(`OK\\s+FL-SEC-001-${id}`).test(lines);
     step(`score: FL-SEC-001-${id}`, ok, ok ? '' : (lines.match(new RegExp(`.*FL-SEC-001-${id}.*`))?.[0] ?? 'sin fila'));
   }
-  // La sonda solo escribe los FL-SEC; los FL-CRD del diseño (la lógica de la ficha) no tienen prueba aquí y salen
-  // NO_EJERC, así que el script sale con 1 aunque todo lo medido esté en verde. Lo que se afirma es lo medido: el
-  // humo (con SMOKE-5, las credenciales), ningún FALLO y nada de la sonda sin ejercitar.
+  // Lo que se afirma es lo medido: el humo (con SMOKE-5, las credenciales), ningún FALLO y nada de la sonda sin ejercitar.
   const notExercised = [...lines.matchAll(/NO_EJERC\s+(FL-\S+)/g)].map((match) => match[1]);
   const measured = /Humo del arnés: OK/.test(lines) && !/^\s+FALLO\s/m.test(lines) && notExercised.every((id) => !id.startsWith('FL-SEC-'));
   step('score: el humo del arnés (con SMOKE-5, las credenciales) en verde, ningún FALLO y la sonda entera ejercitada', measured, measured ? '' : lines.slice(-2500));
@@ -208,9 +215,9 @@ try {
     fs.writeFileSync(rulesFile, weakened);
     const sabotaged = bash(projectDir, 'infra/score-scenarios.sh');
     step(
-      'falsado: con la regla rebajada, FL-SEC-001-C sale FALLO y el script con 1',
-      sabotaged.status === 1 && /FALLO\s+FL-SEC-001-C/.test(sabotaged.output),
-      `código ${sabotaged.status}`
+      'falsado: con la regla rebajada, FL-SEC-001-C sale FALLO (y solo él) y el script con 1',
+      sabotaged.status === 1 && /FALLO\s+FL-SEC-001-C/.test(sabotaged.output) && !/FALLO\s+FL-SEC-001-[ABDEFGHI]/.test(sabotaged.output),
+      `código ${sabotaged.status}\n${sabotaged.output.slice(-2000)}`
     );
     fs.writeFileSync(rulesFile, rules);
   }

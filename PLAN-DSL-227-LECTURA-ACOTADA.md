@@ -527,8 +527,9 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
   sondas) y de conduit (24) y `security-check` (56/56). Todo en verde. **Hueco previo, ajeno al plan**: `security-check` de
   keel-nest sale en rojo en su primer sujeto (profile-directory, no en asset-vault, que pasa entero) desde `7fcc7a99`:
   `score-scenarios.sh` marca `AJENO` los flujos que el documento no declara, y su sonda escribe `FL-SEC-001-*` sin
-  declararlos, así que ni puntúan ni el sabotaje sale con 1. Hay que declarar los flujos de la sonda en el documento
-  montado, como hacen las sondas de keel-go y keel-dotnet, que salen en verde.
+  declararlos, así que ni puntúan ni el sabotaje sale con 1. **Arreglado** como en keel-dotnet: el documento de escenarios
+  del proyecto declara solo la sonda y su línea sale del sello; el falsado exige además que caiga SOLO FL-SEC-001-C.
+  `security-check` de keel-nest: 32/32 en verde.
 - **Pendiente del inc. 7, al 8**: `keel-recover characterize` de los flujos tocados (FL-ART-009, FL-ORD-005 y FL-ACC-009) contra los sandboxes, y `keel-recover
   parity` de shop-api y conduit contra los servicios regenerados: sin las dos fronteras, las diferencias de `favorited` y
   `following` y la del listado tienen que salir iguales.
