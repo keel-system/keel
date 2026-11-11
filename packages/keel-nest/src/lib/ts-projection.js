@@ -168,7 +168,6 @@ export const TS_PROJECTION = {
         : 'skills/keel-nest-database/references/read-queries.md',
     pathParamFallback: (opName, path, name) =>
       `Operación '${opName}': la ruta ${path} declara {${name}} pero el input no tiene ese campo; se expone como @Param('${name}') de tipo uuid. Declara el campo en use-cases.keel.yaml o renombra el segmento.`,
-    cognitoEmulated: () =>
-      'stack auth: cognito — en local se emula el CONTRATO del token (un servidor OAuth2 que emite la forma de Cognito: cognito:groups, scopes prefijados por el resource server y tokens de máquina SIN aud), no Amazon Cognito. Eso permite ejercitar el diseño entero, superficie M2M incluida, que ningún emulador libre de la API de Cognito cubre. Lo que NO queda probado ahí: que el proveedor autentique de verdad (el emulador no valida contraseñas) y el alta de user pool, grupos y usuarios. Las dos se verifican contra Cognito real siguiendo la skill keel-nest-cognito.'
+    providerSkill: (auth) => `keel-nest-${auth}`
   }
 };

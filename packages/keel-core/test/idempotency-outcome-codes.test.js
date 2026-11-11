@@ -36,7 +36,7 @@ const PROBE = {
     lockVersionReserved: (entity) => `lockVersion reservado en ${entity}`,
     readQueriesRef: (kind) => `lecturas-${kind}`,
     pathParamFallback: (op, route, name) => `${op}: ${route} sin ${name}`,
-    cognitoEmulated: () => 'cognito emulado'
+    providerSkill: (auth) => `keel-probe-${auth}`
   }
 };
 

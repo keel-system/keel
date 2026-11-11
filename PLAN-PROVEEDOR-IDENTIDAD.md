@@ -62,7 +62,7 @@ emite `email`.
 - **Lo emitido con `auth: keycloak` no se mueve**, para no invalidar los proyectos ya generados. La suite lo fija
   (`test/golden/digests.json` y las paridades). Lo emitido con `auth: cognito` sí cambia, y es a propósito.
 - **Decir lo que queda sin medir.** Lo que solo se ha visto en el emulador se dice así en las skills y en la salida de `build`
-  (`messages.cognitoEmulated`).
+  (`emulationWarning`).
 
 ## Decisiones
 
@@ -165,7 +165,7 @@ El servidor puede estar bien y el pool mal configurado. Lo que el pool debe trae
   qué plan) y no soportado. `check` dice con qué proveedores sirve el diseño y `build` lo aplica, con el mismo texto en los
   cuatro. **Medido con:** una prueba por requisito.
 - **3.2 El documento de precondiciones** (`docs/keel/identity-contract.md`, emitido siempre, como `engine-limits.md`): grupos,
-  resource server, disparador, plan y variables. Con Cognito dice, igual que `build` (`messages.cognitoEmulated`), «verificado
+  resource server, disparador, plan y variables. Con Cognito dice, igual que `build` (`emulationWarning`), «verificado
   contra el contrato documentado y el emulador, no contra un pool real», y cómo debe llegar el claim que añade el disparador.
 - **3.3 Skills.** Las cuatro `keel-<tech>-cognito` remiten a ese documento en vez de repetirlo, y se corrige la referencia de T4.
   **Medido con:** `generator-docs.test.js` y `harness.test.js`.
@@ -289,7 +289,7 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
   `gen/token-cases.js` (`tokenCases(model)`, con `defect` en D1 a D4) y las tres redes de `keel-go/test/identity-providers.test.js`.
   El proveedor ficticio se registra añadiendo su entrada a `IDENTITY_PROVIDERS` y a `AUTH`.
 - `cognitoMockConfig` ya sale del descriptor, pero sigue escribiendo `client_id` igual al nombre: eso es T3, en la fase 4.
-  `messages.cognitoEmulated` sigue siendo un texto de Cognito en cada proyección: otro proveedor emulado necesitaría el suyo.
+  `messages.cognitoEmulated` era un texto de Cognito en cada proyección (resuelto al cerrar la fase 4: ver abajo).
 - `npm run golden -- --check` de keel-spring y keel-nest **ya estaba en rojo antes de empezar** (417 y 407 diferencias, las mismas
   con y sin la fase 1, en agentes y skills). Una `--check` no vale para la fase 2 hasta regenerarlas, y regenerarlas a ciegas
   tampoco: la fase 1 se midió con una línea base propia tomada antes de tocar nada.
@@ -377,7 +377,11 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
   sus logs, `D:/keel-nets/44-spring-{keycloak,cognito}.log`. Al lanzarla a mano contra el emulador desde Git Bash, ojo:
   `MSYS_NO_PATHCONV=1`, o `-e JSON_CONFIG_PATH=/c/...` llega como ruta de Windows y el emulador arranca SIN configuración
   (tokens válidos sin ningún claim del mapping: parece T1 y no lo es).
-- Queda del plan: el 1.5 (opcional) y la fase 5 (diferida). Fuera de él: `messages.cognitoEmulated` como texto de Cognito en cada proyección.
+- Queda del plan: el 1.5 (opcional) y la fase 5 (diferida).
+- El aviso de un proveedor emulado ya es del descriptor (2026-11-11): `provisioning.emulation` (qué emula, qué alcanza y qué queda
+  sin probar) y `emulationWarning(auth, skill)` en `gen/identity-providers.js`; la proyección solo da `providerSkill(auth)`. Lo
+  mide la prueba común de `keel-go/test/identity-providers.test.js`: el aviso de Cognito cita la skill que se instala en los
+  cuatro, Keycloak no avisa y un proveedor ficticio emulado avisa con lo suyo, sin nombrar Cognito.
 - RS-10 de keel-nest arreglado (2026-11-11): `test/read-scope.test.js` lo corre con Keycloak y con Cognito, el cliente exento
   con el claim y el id del descriptor y el mapa `security.client-ids` cargado como en el arranque; el sabotaje
   `client-translation` (comparar con el nombre declarado) lo tumba.

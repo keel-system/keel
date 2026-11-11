@@ -13,7 +13,7 @@
 //   · `provisioning`: cómo se levanta y se siembra el proveedor de prueba. Solo vale en local.
 //
 // Lo de Cognito sale de su documentación y de leer el código, no de un pool real: lo que eso no demuestra está en la
-// fase 5 de PLAN-PROVEEDOR-IDENTIDAD.md, y lo emitido lo dice (`emulationMessage`).
+// fase 5 de PLAN-PROVEEDOR-IDENTIDAD.md, y build lo dice (`provisioning.emulation`, `emulationWarning`).
 
 import { createHash } from 'node:crypto';
 
@@ -101,7 +101,8 @@ export const IDENTITY_PROVIDERS = {
       localIssuerNote: ['Keycloak de prueba del docker-compose; crea el realm y ajusta el nombre.'],
       console: { label: 'Keycloak (admin/admin)', url: 'http://localhost:${KEYCLOAK_PORT:-8180}' },
       adminEnv: { user: 'KC_BOOTSTRAP_ADMIN_USERNAME', password: 'KC_BOOTSTRAP_ADMIN_PASSWORD' },
-      emulationMessage: null
+      // El doble de prueba ES el producto: no hay nada que avisar.
+      emulation: null
     }
   },
   cognito: {
@@ -157,7 +158,13 @@ export const IDENTITY_PROVIDERS = {
       ],
       console: null,
       adminEnv: null,
-      emulationMessage: 'cognitoEmulated'
+      // El doble de prueba no es el producto: qué emula y qué queda sin probar, para el aviso de build (`emulationWarning`).
+      emulation: {
+        product: 'Amazon Cognito',
+        shape: 'cognito:groups, scopes prefijados por el resource server y tokens de máquina SIN aud',
+        reach: 'Eso permite ejercitar el diseño entero, superficie M2M incluida, que ningún emulador libre de la API de Cognito cubre.',
+        unproven: 'que el proveedor autentique de verdad (el emulador no valida contraseñas) y el alta de user pool, grupos y usuarios'
+      }
     }
   }
 };
@@ -181,12 +188,29 @@ const GENERIC_PROVIDER = {
   },
   verification: null,
   harness: { personaTokens: false, scopedTokens: false },
-  provisioning: { kind: null, ...OIDC_REALM_PATHS, internalPort: null, localIssuerNote: null, console: null, adminEnv: null, emulationMessage: null }
+  provisioning: { kind: null, ...OIDC_REALM_PATHS, internalPort: null, localIssuerNote: null, console: null, adminEnv: null, emulation: null }
 };
 
 /** El descriptor del proveedor elegido en el stack (`stack.auth`), o el genérico si no hay ninguno conocido. */
 export function identityProvider(auth) {
   return Object.hasOwn(IDENTITY_PROVIDERS, auth ?? '') ? IDENTITY_PROVIDERS[auth] : GENERIC_PROVIDER;
+}
+
+/**
+ * El aviso de build cuando el proveedor de prueba es un EMULADOR (`provisioning.emulation`): qué se emula en local y qué
+ * queda sin probar, con la skill del generador que dice cómo verificarlo. Null si el doble es el propio producto.
+ */
+export function emulationWarning(auth, skill) {
+  const { id, provisioning } = identityProvider(auth);
+  const emulation = provisioning.emulation;
+  if (!emulation) return null;
+  return [
+    `stack auth: ${id} — en local se emula el CONTRATO del token (un servidor OAuth2 que emite la forma de ${emulation.product}: ${emulation.shape}), no ${emulation.product}.`,
+    emulation.reach,
+    `Lo que NO queda probado ahí: ${emulation.unproven}. Se verifica contra ${emulation.product} real${skill ? ` siguiendo la skill ${skill}` : ''}.`
+  ]
+    .filter(Boolean)
+    .join(' ');
 }
 
 /** Lo que el servidor generado necesita saber del token del proveedor, sin preguntar por su nombre. */

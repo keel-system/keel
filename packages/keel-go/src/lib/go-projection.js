@@ -251,7 +251,6 @@ export const GO_PROJECTION = {
         : 'skills/keel-go-database/references/read-queries.md',
     pathParamFallback: (opName, path, name) =>
       `Operación '${opName}': la ruta ${path} declara {${name}} pero el input no tiene ese campo; se expone como parámetro de ruta '${name}' (r.PathValue) de tipo uuid. Declara el campo en use-cases.keel.yaml o renombra el segmento.`,
-    cognitoEmulated: () =>
-      'stack auth: cognito — en local se emula el CONTRATO del token (un servidor OAuth2 que emite la forma de Cognito: cognito:groups, scopes prefijados por el resource server y tokens de máquina SIN aud), no Amazon Cognito. Lo que NO queda probado ahí: que el proveedor autentique de verdad y el alta de user pool, grupos y usuarios; las dos se verifican contra Cognito real.'
+    providerSkill: (auth) => `keel-go-${auth}`
   }
 };

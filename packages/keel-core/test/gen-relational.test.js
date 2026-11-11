@@ -41,7 +41,7 @@ const PROBE = {
   replicaKey: () => ({}),
   errorBase: () => 'base',
   fieldDetails: () => ({ validation: [], numeric: null, inputValidation: [], inheritedPattern: null, columns: [], elementColumns: [], initializer: null }),
-  messages: { lockVersionReserved: () => '', readQueriesRef: () => '', pathParamFallback: () => '', cognitoEmulated: () => '' }
+  messages: { lockVersionReserved: () => '', readQueriesRef: () => '', pathParamFallback: () => '', providerSkill: () => '' }
 };
 
 function modelOf(name, database = null) {

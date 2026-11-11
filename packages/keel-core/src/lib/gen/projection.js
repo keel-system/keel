@@ -35,7 +35,7 @@ export const PROJECTION_MESSAGES = {
   lockVersionReserved: '(entity) → aviso: el diseño usa el nombre del campo de bloqueo optimista',
   readQueriesRef: '(persistenceKind) → la referencia de la skill de lecturas con join proyectado',
   pathParamFallback: '(opName, path, name) → aviso: un segmento de ruta sin campo en el input',
-  cognitoEmulated: '() → aviso: qué se emula en local con el stack de Cognito y qué no'
+  providerSkill: '(auth) → la skill del proveedor de identidad en este generador (la cita el aviso de un proveedor emulado)'
 };
 
 /**

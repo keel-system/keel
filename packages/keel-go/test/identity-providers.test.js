@@ -43,7 +43,7 @@ const pathOf = (file) => file.path.split(path.sep).join('/');
 
 // ─── El proveedor ficticio ───────────────────────────────────────────────────
 
-function fakeProvider(id, token) {
+function fakeProvider(id, token, emulation = null) {
   return {
     id,
     displayName: id,
@@ -60,7 +60,7 @@ function fakeProvider(id, token) {
       localIssuerNote: [`Emulador de ${id} en el docker-compose.`],
       console: null,
       adminEnv: null,
-      emulationMessage: null
+      emulation
     }
   };
 }
@@ -78,7 +78,7 @@ const PREFIXED = fakeProvider('acme-prefix', {
   audience: { via: 'scope-prefix' },
   client: { claims: ['cid'], valueIsDeclaredName: false },
   accepted: { claim: 'kind', value: 'at', rejected: 'it' }
-});
+}, { product: 'Acme IdP', shape: 'grupos anidados bajo acme', unproven: 'el alta de usuarios' });
 const FAKES = [PLAIN, PREFIXED];
 
 function catalogEntry({ id }) {
@@ -325,5 +325,25 @@ for (const [name, plan] of Object.entries(GENERATORS)) {
       assert.match(text, /docs\/keel\/identity-contract\.md/, `${pathOf(skill)}: no cita el documento`);
       assert.doesNotMatch(text, /disparador de pre-generación de tokens \(V2\)/, `${pathOf(skill)}: repite el disparador`);
     }
+  });
+}
+
+// El aviso de build con un proveedor EMULADO sale del descriptor (`provisioning.emulation`), no de un texto por proveedor
+// en cada proyección: la proyección solo pone el nombre de su skill, y esa skill es la que el proyecto instala.
+for (const [name, plan] of Object.entries(GENERATORS)) {
+  test(`${name}: el aviso de un proveedor emulado sale del descriptor y cita la skill que se instala`, () => {
+    const emulated = (model) => model.warnings.filter((warning) => warning.startsWith('stack auth:'));
+    const cognito = generate(plan, 'asset-vault', 'cognito');
+    const [warning] = emulated(cognito.model);
+    assert.match(warning ?? '', /^stack auth: cognito — .*no Amazon Cognito\./, `${name}: sin el aviso de Cognito`);
+    const skill = /siguiendo la skill (\S+)\.$/.exec(warning)?.[1];
+    assert.ok(skill && cognito.files.some((file) => pathOf(file).endsWith(`/skills/${skill}/SKILL.md`)), `${name}: el aviso cita ${skill}, que no se instala`);
+    assert.deepEqual(emulated(generate(plan, 'asset-vault', 'keycloak').model), [], `${name}: Keycloak no es un emulador`);
+    withFakes(() => {
+      const [fake] = emulated(generate(plan, 'asset-vault', PREFIXED.id).model);
+      assert.match(fake ?? '', /^stack auth: acme-prefix — .*forma de Acme IdP: grupos anidados bajo acme\), no Acme IdP\. Lo que NO queda probado ahí: el alta de usuarios\. Se verifica contra Acme IdP real\.$/, `${name}: ${fake}`);
+      assert.doesNotMatch(fake, /Cognito/, `${name}: el aviso del ficticio habla de Cognito`);
+      assert.deepEqual(emulated(generate(plan, 'asset-vault', PLAIN.id).model), [], `${name}: un proveedor sin emulación declarada no avisa`);
+    });
   });
 }
