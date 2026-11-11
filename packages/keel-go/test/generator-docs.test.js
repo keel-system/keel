@@ -182,8 +182,12 @@ test('las credenciales que enseñan la convención, el agente de pruebas y las s
   // ServiceCredential solo existe con clientes máquina: notification-mailer los declara.
   const machine = byPath(planWith('notification-mailer').files)['tests/integration/credentials_test.go'];
   assert.ok(machine.includes('func (s *Scenario) ServiceCredential(client string) string'));
-  // Con Cognito no hay personas (el emulador fija los claims en su configuración): la skill lo dice y build no lo emite.
-  assert.doesNotMatch(cognito['tests/integration/credentials_test.go'], /TokenAs|Persona/);
+  // Con Cognito las personas las da el emulador (incremento 4.3): el mismo TokenAs y el mismo Persona, sin la API de
+  // administración del realm.
+  for (const member of ['func (s *Scenario) TokenAs(p Persona) string', 'type Persona struct {']) {
+    assert.ok(cognito['tests/integration/credentials_test.go'].includes(member), `cognito: ${member}`);
+  }
+  assert.doesNotMatch(cognito['tests/integration/credentials_test.go'], /func adminToken/);
   // Y sin seguridad, ni el archivo.
   assert.equal('tests/integration/credentials_test.go' in files, false);
 });

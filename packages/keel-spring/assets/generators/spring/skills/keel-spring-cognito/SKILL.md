@@ -45,8 +45,11 @@ Build deja esto, y **no hay que crear ningún user pool**:
    pre-generación de tokens si el diseño lee un claim que Cognito no pone (el del alcance, `email`…),
    el plan que lo admite y las variables. Está en `{{keel:docs}}/identity-contract.md`, que build
    genera desde el diseño: no lo repitas, cítalo en el cierre. El emulador pone esos claims como si
-   el disparador existiera. Y `tokenWithScope` no existe aquí (el emulador no da de alta usuarios):
-   un escenario que necesite otro valor del claim es un `blocker`, no un parche al config.
+   el disparador existiera. Otro valor del claim lo da `tokenWithScope("<rol>", "<valor>")`, y si el
+   diseño identifica al llamante por un claim, `tokenAs("<sub>", Map.of())` da la persona: el emulador no
+   guarda usuarios y responde con la forma que pide la petición (hasta 4 valores del alcance, y solo los
+   claims que el diseño lee del token). Lo que el arnés rechaza con su motivo es un `blocker`, no un
+   parche al config.
 
 **Lo que sí queda probado, y es todo lo que este servicio consume**: la verificación por
 JWKS, el `iss`, la caducidad, el mapeo de `cognito:groups` a roles, el formato real de los

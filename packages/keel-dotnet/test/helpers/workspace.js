@@ -346,7 +346,8 @@ export const CS_VARIANTS = [
   // El contrato del token con Cognito (fase 2 de PLAN-PROVEEDOR-IDENTIDAD.md): la prueba emitida TokenContractTests con
   // los casos de D1 a D4. asset-vault (scopes prefijados, exentos y alcance), shop-api (identidad desde `email`),
   // notification-mailer (identidad del cliente con `resolvedBy`) y su silueta 1:1 de identity-designs.js.
-  ...['asset-vault', 'shop-api', 'notification-mailer'].map((from) => ({
+  // conduit, por las personas contra el emulador con la identidad en el `sub` (incremento 4.3).
+  ...['asset-vault', 'shop-api', 'notification-mailer', 'conduit'].map((from) => ({
     name: `${from}-cognito`,
     from,
     auth: 'cognito',

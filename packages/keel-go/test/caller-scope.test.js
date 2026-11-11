@@ -80,11 +80,13 @@ test('el arnés da ScopedResource y TokenWithScope con el mismo usuario que los 
   assert.match(dotnet, /\$"scoped-\{role\}-\{JavaStringHash\(string\.Join\('\\n', wanted\)\)\}"/);
 });
 
-test('con Cognito no hay TokenWithScope (el emulador no da de alta usuarios), y sin alcance no se emite nada', () => {
+test('con Cognito TokenWithScope lo da el emulador, sin administración del realm, y sin alcance no se emite nada', () => {
+  // La petición la ejecuta y la compara con la de referencia `npm run emulator-harness-check` (incremento 4.3).
   const cognito = plan('asset-vault', planService, { ...STACK, auth: 'cognito' }).files;
   const credentials = content(cognito, 'tests/integration/credentials_test.go');
   assert.match(credentials, /func ScopedResource\(\) string/);
-  assert.doesNotMatch(credentials, /TokenWithScope/);
+  assert.match(credentials, /func \(s \*Scenario\) TokenWithScope\(role string, values \.\.\.string\) string/);
+  assert.match(credentials, /"keel_scoped": +\{fmt\.Sprint\(len\(wanted\)\)\}/);
   assert.doesNotMatch(credentials, /func adminToken/);
   const other = plan('profile-directory', planService, { database: 'postgresql', auth: 'keycloak' }).files;
   assert.equal(content(other, 'internal/platform/security/caller_scope.go'), undefined);

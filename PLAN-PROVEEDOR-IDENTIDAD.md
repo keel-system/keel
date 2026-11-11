@@ -196,6 +196,15 @@ Un diseño con Cognito tiene que poder llegar a verde en el pipeline, y el emula
 - **4.3 Arnés.** `tokenAs` y `tokenWithScope` también con Cognito, con un mapping por forma de claims, en los cuatro generadores
   y por capacidad del descriptor. Lo que no se pueda, rechazado con su motivo. **Medido con:** humo del arnés con `auth: cognito`
   y un diseño con identidad en el `sub`.
+
+  Hecho el 2026-11-11. Cada arnés tiene su rama del emulador (`emulatorPersonaSection`/`emulatorScopedSection` en keel-spring,
+  keel-nest y keel-dotnet; en keel-go, `personaToken`/`scopedToken` como funciones libres detrás de `TokenAs`/`TokenWithScope`),
+  sin API de administración del realm (`usesRealmAdmin`), y el descriptor de Cognito dice `emulator`. La red de la petición es
+  común: los casos `EMU-F-*` de `keel-core/test/helpers/emulator-form-cases.js` (con la referencia `emulatorPersonaForm` y
+  `emulatorScopedForm`, el claim quitado, un claim fuera del diseño, la codificación, la aridad y el tope), ejecutando lo
+  emitido con el transporte sustituido: `npm run emulator-harness-check` en keel-spring (java), keel-dotnet (`dotnet run` de
+  un archivo) y keel-go (`go run`), y `test/emulator-harness.test.js` en keel-nest. 16/16 en `shop-api`, `conduit` y
+  `asset-vault` en los cuatro, y los sabotajes `persona-shape` y `scope-unsorted`, cada uno en exactamente sus casos.
 - **4.4 Red de extremo a extremo**, en el generador de P5, parametrizada por proveedor: infraestructura real, descubrimiento,
   JWKS y emisor, tokens reales del emulador, 401 y 403. Los otros generadores quedan cubiertos por la prueba emitida y por su
   `security-check` contra Keycloak, porque lo que cambia entre proveedores son los claims. **Medido con:** esa red en verde y
@@ -249,7 +258,7 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
 | 1. contrato del proveedor | hecha el 2026-11-10 (sin el 1.5, opcional) | Lo emitido, idéntico en 4 generadores × 19 fixtures × 3 valores de `auth`; `keel-core/test/token-cases.test.js` y `keel-go/test/identity-providers.test.js`, falsada con tres sabotajes; las seis suites |
 | 2. servidor equivalente | hecha: 2.1 y 2.2/2.3 en keel-spring y keel-nest (2026-11-10), keel-dotnet y keel-go (2026-11-11) | keel-spring: `token-check` (4 diseños) y sus 4 sabotajes. keel-nest: `test/token-contract.test.js` ejecuta lo emitido, 3 sabotajes, y `ts-check --auth=cognito` 13/13. keel-dotnet: `cs-check --fixtures` con cuatro variantes `*-cognito` y 3 sabotajes, cada uno en exactamente sus casos. keel-go: `go-check --token` (5 sujetos con gofmt, vet y staticcheck) 9/9 y 3 sabotajes, cada uno en exactamente sus casos. Lo emitido con `keycloak` y sin proveedor, idéntico salvo la prueba nueva |
 | 3. lo que debe cumplir el proveedor | hecha el 2026-11-11 | `keel-core/test/identity-support.test.js` (una prueba por exigencia, falsada con dos sabotajes), las redes de fase 3 de `keel-go/test/identity-providers.test.js` en los cuatro, `keel-recover/test/target.test.js`; las seis suites. Lo emitido con `keycloak`, idéntico salvo el documento nuevo |
-| 4. emulador fiel y arnés | en curso: 4.1, 4.2 y la mitad neutral del 4.3 hechos (2026-11-11) | 4.1: `identity-provisioning.test.js`, tres sabotajes cada uno en su caso, `compile-check asset-vault --auth=cognito`; lo emitido sin Cognito, idéntico. 4.2: medido contra mock-oauth2-server 6.0.1. 4.3 neutral: `npm run emulator-check --workspace packages/keel-core` 10/10 y tres sabotajes |
+| 4. emulador fiel y arnés | en curso: 4.1, 4.2 y 4.3 hechos (2026-11-11); falta el 4.4 | 4.1: `identity-provisioning.test.js`, tres sabotajes cada uno en su caso, `compile-check asset-vault --auth=cognito`; lo emitido sin Cognito, idéntico. 4.2: medido contra mock-oauth2-server 6.0.1. 4.3: `emulator-check` 10/10 y tres sabotajes; `emulator-harness-check` (keel-spring, keel-dotnet, keel-go) y `test/emulator-harness.test.js` (keel-nest) 16/16 con dos sabotajes cada uno en sus casos; las seis suites y las cuatro redes de sintaxis con shop-api, conduit y asset-vault en Cognito; lo emitido con `keycloak` y sin proveedor, idéntico en 4 × 19 |
 | 5. Cognito real | diferida (fuera del cierre) | |
 
 ## Para retomar
@@ -329,11 +338,17 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
   `ts-syntax`/`test/helpers/emitted.js`, `cs-syntax` y `go-syntax`, y el humo del arnés con `auth: cognito` sobre un diseño con la
   identidad en el `sub` (conduit) y otro en `email` (shop-api). La red de la petición es `emulator-check`: la de cada arnés tiene
   que mandar lo mismo que la referencia.
-- **En curso, SIN COMMIT (2026-11-11):** la rama del emulador de keel-spring está escrita en
-  `packages/keel-spring/src/scaffold/integration-tests.js` (`emulatorPersonaSection`, `emulatorScopedSection` y el `personaEncode` propio
-  en `keycloakAdminSection` cuando no hay `realm-admin`; esa sección ya se emite solo con `usesRealmAdmin`). El módulo carga, y
-  nada más: falta medirla. Como `cognito.harness` sigue en `false`, hoy no se emite; para medirla, activar `emulator` en un test
-  (como hace `emulator-check`) o ya en el descriptor cuando estén los cuatro. Comprobar que lo emitido con Keycloak no cambia
-  (`git diff` de esa sección y volcado de huellas), `java-syntax`, `compile-check --auth=cognito` sobre `shop-api` y `asset-vault`, y
-  que el formulario que arma el Java coincide con `emulatorPersonaForm`/`emulatorScopedForm`.
+- 4.3 hecho (2026-11-11, commits `55b2da15` a `ce61e98d` y el del cambio del descriptor): `cognito.harness` = `emulator`. Las
+  pruebas que fijaban «con Cognito no hay personas» (`caller-identity` de keel-spring, `scoped-token` de keel-nest, `security` de
+  keel-dotnet, `caller-scope` y `generator-docs` de keel-go) afirman ahora la rama del emulador, y las cuatro skills
+  `keel-<tech>-cognito` enseñan `tokenAs`/`tokenWithScope` con sus límites (hasta 4 valores del alcance, solo los claims que el
+  diseño lee). El volcado de huellas está en el scratchpad de la sesión (`dump.mjs`/`cmp.mjs`): no está en el repo.
+- **Redes que compilan, lanzadas al cerrar el 4.3 y SIN LEER al cortar el contexto**: sus logs están en `D:\keel-nets#-*.log`
+  (`spring-shop`, `spring-conduit`, `spring-vault` = `compile-check <fixture> --auth=cognito`; `nest-ts` = `ts-check --auth=cognito`;
+  `dotnet-cs` = `cs-check --fixtures --only=asset-vault-cognito,shop-api-cognito,conduit-cognito`; `go-token` = `go-check --token`,
+  que ahora incluye `conduit-cognito`; `core-emulator` = `emulator-check`). Lo primero al retomar: leer el final de cada log; si
+  alguno no terminó o salió en rojo, relanzarlo de uno en uno. Solo con las siete en verde el 4.3 está medido entero.
+- Lo que el 4.3 NO mide: el arnés de un generador pidiendo un token REAL al emulador. Está por transitividad (cada arnés manda la
+  petición de referencia, y `emulator-check` mide que con ella el emulador da el token pedido); lo medirá de extremo a extremo el 4.4.
+- Siguiente: **4.4**, la red de extremo a extremo en keel-spring (P5), parametrizada por proveedor.
 - 4.4: **P5 cerrada, keel-spring.** Queda RS-10 de keel-nest con `azp` a mano.

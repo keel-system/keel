@@ -464,7 +464,12 @@ test('sin identidad por claim no se emite: tokenFor sigue siendo lo único', () 
   assert.ok(!/AUTH_ADMIN_USER/.test(credentials), 'expone credenciales de administración sin necesitarlas');
 });
 
-test('con Cognito no se emite: el emulador no fija claims por petición', () => {
-  const { harness } = renderProfile({ auth: 'cognito' });
-  assert.ok(!/tokenAs/.test(harness), 'emite tokenAs contra un emulador que no puede servirlo');
+test('con Cognito, tokenAs pide la persona al emulador: sin API de administración ni credenciales de admin', () => {
+  // Incremento 4.3 de PLAN-PROVEEDOR-IDENTIDAD.md. La petición la ejecuta y la compara con la de referencia
+  // `npm run emulator-harness-check`.
+  const { harness, credentials } = renderProfile({ auth: 'cognito' });
+  assert.match(harness, /protected String tokenAs\(String sub, String role, Map<String, String> claims\)/);
+  assert.match(harness, /&keel_persona=/);
+  assert.ok(!/partialImport|personaAdmin/.test(harness), 'habla con la API de administración de Keycloak');
+  assert.ok(!/AUTH_ADMIN_USER/.test(credentials), 'expone credenciales de administración sin necesitarlas');
 });

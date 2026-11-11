@@ -141,7 +141,7 @@ export const IDENTITY_PROVIDERS = {
     },
     // Ni la forma del token ni el disparador se han ejecutado contra un pool real: fase 5 de PLAN-PROVEEDOR-IDENTIDAD.md.
     verification: { level: 'emulated', note: 'verificado contra el contrato documentado por AWS y el emulador del docker-compose, no contra un pool real' },
-    harness: { personaTokens: false, scopedTokens: false },
+    harness: { personaTokens: 'emulator', scopedTokens: 'emulator' },
     provisioning: {
       kind: 'token-emulator',
       issuerPath: '/{service}',

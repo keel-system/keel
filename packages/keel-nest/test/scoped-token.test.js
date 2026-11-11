@@ -132,10 +132,10 @@ test('keel-spring emite el mismo tokenWithScope, con el mismo nombre de usuario 
   assert.match(credentials, /^AUTH_ADMIN_USER=/m);
 });
 
-test('sin alcance, con Cognito o con todos los roles exentos no hay tokenWithScope', () => {
+test('sin alcance o con todos los roles exentos no hay tokenWithScope', () => {
+  // Con Cognito sí lo hay, contra el emulador (test/emulator-harness.test.js).
   const cases = [
     { stack: STACK, mutate: (layers) => delete layers.security.authentication.scoping },
-    { stack: { ...STACK, auth: 'cognito' } },
     { stack: STACK, mutate: (layers) => (layers.security.authentication.scoping.exemptRoles = Object.keys(layers.security.roles ?? {})) }
   ];
   for (const { stack, mutate } of cases) {

@@ -8,7 +8,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { IDENTITY_PROVIDERS } from '@keel-system/keel-core/gen/identity-providers';
 import { personaTokenMechanism, scopedTokenMechanism } from '@keel-system/keel-core/gen/identity-realm';
 import { identitySection } from '../src/scaffold/identity-harness.js';
 import { planFixture, transpileTree } from './helpers/emitted.js';
@@ -23,25 +22,11 @@ const BREAK = {
   'scope-unsorted': (source) => source.replace('const wanted = [...new Set(values)].sort();', 'const wanted = [...new Set(values)];')
 };
 
-/** Con el emulador activado en el descriptor mientras dura `run` (Cognito lo trae apagado hasta que estén los cuatro). */
-function withEmulator(run) {
-  const cognito = IDENTITY_PROVIDERS.cognito;
-  const saved = cognito.harness;
-  cognito.harness = { personaTokens: 'emulator', scopedTokens: 'emulator' };
-  try {
-    return run();
-  } finally {
-    cognito.harness = saved;
-  }
-}
-
 function plan(name) {
-  return withEmulator(() => {
-    const { model } = planFixture(name, { stack: STACK });
-    const persona = personaTokenMechanism(model) === 'emulator';
-    const role = scopedTokenMechanism(model) === 'emulator' ? model.security.roles.find((r) => !model.security.scoping.exemptRoles.includes(r)) : null;
-    return { model, section: identitySection(model), cases: emulatorFormCases(model, { persona, scoped: role ? { role } : null }) };
-  });
+  const { model } = planFixture(name, { stack: STACK });
+  const persona = personaTokenMechanism(model) === 'emulator';
+  const role = scopedTokenMechanism(model) === 'emulator' ? model.security.roles.find((r) => !model.security.scoping.exemptRoles.includes(r)) : null;
+  return { model, section: identitySection(model), cases: emulatorFormCases(model, { persona, scoped: role ? { role } : null }) };
 }
 
 async function runCases(section, cases) {

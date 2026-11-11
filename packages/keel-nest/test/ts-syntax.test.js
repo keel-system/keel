@@ -55,6 +55,16 @@ for (const name of fs.readdirSync(FIXTURES_DIR)) {
   }
 }
 
+// Con Cognito, el arnés pide personas y titulares del alcance al emulador (incremento 4.3 de PLAN-PROVEEDOR-IDENTIDAD.md):
+// otra rama de flow.ts, con la identidad en un claim (shop-api), en el sub (conduit) y el alcance (asset-vault).
+for (const name of ['shop-api', 'conduit', 'asset-vault']) {
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
+  test(`${name} (cognito): el TypeScript emitido parsea y sus imports llevan a lo que exportan`, () => {
+    const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { auth: 'cognito' } });
+    assert.deepEqual(checkTree(files), []);
+  });
+}
+
 // El paso de esquema de build (inc. 2b del plan 2.26) solo se emite sobre un proyecto con baseline en disco, así que
 // ninguna fixture lo trae: se renderiza aquí con todas las tablas del generador, en los dos motores que tienen pasos.
 for (const engine of STEP_ENGINES) {

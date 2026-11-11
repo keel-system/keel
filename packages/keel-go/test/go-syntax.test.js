@@ -24,6 +24,16 @@ for (const fixture of fixtures) {
   });
 }
 
+// Con Cognito, el arnés pide personas y titulares del alcance al emulador (incremento 4.3 de PLAN-PROVEEDOR-IDENTIDAD.md):
+// otra rama de credentials_test.go, con la identidad en un claim (shop-api), en el sub (conduit) y el alcance (asset-vault).
+for (const fixture of ['shop-api', 'conduit', 'asset-vault']) {
+  test(`${fixture} (cognito): el Go emitido es sintaxis válida y sus imports se resuelven y se usan`, async () => {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, fixture));
+    const { model, files } = planService({ manifest, layers, workspace, stack: { auth: 'cognito' } });
+    assert.deepEqual(await checkGoTree(files, model.service.goModule), []);
+  });
+}
+
 for (const design of AUTHORSHIP_DESIGNS) {
   test(`${design.name} (autoría, derivado de ${design.from}): el Go emitido es sintaxis válida y sus imports se resuelven y se usan`, async () => {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, design.from));

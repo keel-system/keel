@@ -30,8 +30,9 @@ emulador no valida contraseñas) y el alta de user pool, grupos y usuarios (API 
 tokens si el diseño lee un claim que Cognito no pone (el del alcance, `email`…), el plan que lo admite y las
 variables— está en `{{keel:docs}}/identity-contract.md`, que build genera desde el diseño: no lo repitas, cítalo
 en el cierre. El emulador pone esos claims como si el disparador existiera (el del alcance, con el valor de
-`scopedResource()`). Y `tokenWithScope` no existe con Cognito (el emulador no da de alta usuarios): un escenario que necesite
-otro valor del claim es un `blocker`.
+`scopedResource()`). Otro valor del claim lo da
+`await tokenWithScope('<rol>', '<valor>')`: el emulador no guarda usuarios y responde con la forma que pide la petición, un
+mapping por cantidad de valores y hasta 4; con más, el arnés lo rechaza con su motivo, y ese escenario es un `blocker`.
 
 ## Las rarezas de Cognito, ya resueltas por build
 
@@ -49,7 +50,8 @@ Si algo no casa, el fallo está en otro sitio: no las arregles a mano.
 1. **Infraestructura**: `bash infra/up.sh` y `bash infra/validate-infra.sh`. No hay script de
    aprovisionamiento: el emulador arranca con su configuración.
 2. **Pruebas**: las credenciales salen del arnés (`bearer(await tokenFor('<rol>'))`,
-   `bearer(await serviceCredential('<cliente>'))`). `tokenAs` no existe con Cognito: el emulador fija los
-   claims en su configuración, no por petición.
+   `bearer(await serviceCredential('<cliente>'))`). Si el diseño identifica al llamante por un claim,
+   `await tokenAs('<sub>')` pide la persona al emulador con su `sub`; solo admite los claims que el diseño lee del
+   token, y otro lo rechaza con su motivo (ese escenario es un `blocker`).
 3. **Verificación**: sin token → 401 `UNAUTHENTICATED`; token sin el grupo → 403 `ACCESS_DENIED`; con él
    → 2xx. En un token de máquina, el `scope` con prefijo y sin `aud`.

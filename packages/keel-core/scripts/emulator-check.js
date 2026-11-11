@@ -73,13 +73,14 @@ const model = {
   }
 };
 
-// Cognito da personas y titulares por el emulador desde el 4.3; mientras un generador no lo implemente, el descriptor
-// puede decir otra cosa, y esta red mide el emulador igual.
-const cognito = IDENTITY_PROVIDERS.cognito;
-const harness = cognito.harness;
-cognito.harness = { personaTokens: 'emulator', scopedTokens: 'emulator' };
+// Cognito da personas y titulares por el emulador desde el 4.3: si el descriptor dijera otra cosa, la configuración
+// saldría sin sus mappings y esta red mediría los usuarios fijos.
+const { harness } = IDENTITY_PROVIDERS.cognito;
+if (harness.personaTokens !== 'emulator' || harness.scopedTokens !== 'emulator') {
+  console.error(`El descriptor de Cognito no da personas ni titulares por el emulador: ${JSON.stringify(harness)}.`);
+  process.exit(2);
+}
 const config = JSON.parse(cognitoMockConfig(model).content);
-cognito.harness = harness;
 if (sabotage) config.tokenCallbacks[0].requestMappings = SABOTAGES[sabotage].apply(config.tokenCallbacks[0].requestMappings);
 
 const freePort = () =>

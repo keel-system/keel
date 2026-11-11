@@ -14,6 +14,8 @@ export const TOKEN_SUBJECTS = [
   { name: 'asset-vault-keycloak', from: 'asset-vault', auth: 'keycloak' },
   { name: 'shop-api-cognito', from: 'shop-api', auth: 'cognito' },
   { name: 'notification-mailer-cognito', from: 'notification-mailer', auth: 'cognito' },
+  // Las personas contra el emulador con la identidad en el sub (incremento 4.3): su rama de credentials_test.go, con vet y staticcheck.
+  { name: 'conduit-cognito', from: 'conduit', auth: 'cognito' },
   ...IDENTITY_DESIGNS.map((design) => ({ name: `${design.name}-cognito`, from: design.from, auth: 'cognito', mutate: design.mutate }))
 ];
 

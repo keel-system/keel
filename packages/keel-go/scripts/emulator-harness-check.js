@@ -65,34 +65,37 @@ function call(testCase) {
   return `personaToken(ctx, Persona{Sub: ${go(testCase.sub)}, Claims: map[string]string{${claims.join(', ')}}, Without: []string{${without.join(', ')}}, Role: ${go(testCase.role ?? '')}})`;
 }
 
-const cognito = IDENTITY_PROVIDERS.cognito;
-const saved = cognito.harness;
-cognito.harness = { personaTokens: 'emulator', scopedTokens: 'emulator' };
+// Cognito da personas y titulares por el emulador desde el 4.3: si el descriptor dijera otra cosa, el arnés saldría sin
+// la rama que se mide.
+const { harness } = IDENTITY_PROVIDERS.cognito;
+if (harness.personaTokens !== 'emulator' || harness.scopedTokens !== 'emulator') {
+  console.error(`El descriptor de Cognito no da personas ni titulares por el emulador: ${JSON.stringify(harness)}.`);
+  process.exit(2);
+}
 let ok = true;
 let hits = 0;
-try {
-  for (const name of DESIGNS) {
-    const service = loadService(path.join(fixturesDir, name));
-    const { files, model } = planService({ manifest: service.manifest, layers: service.layers, workspace: '.', stack: { auth: 'cognito' } });
-    const persona = personaTokenMechanism(model) === 'emulator';
-    const scopedRole = scopedTokenMechanism(model) === 'emulator' ? model.security.roles.find((role) => !model.security.scoping.exemptRoles.includes(role)) : null;
-    const cases = emulatorFormCases(model, { persona, scoped: scopedRole ? { role: scopedRole } : null });
-    if (cases.length === 0) throw new Error(`${name}: el diseño no usa personas ni titulares del alcance`);
+for (const name of DESIGNS) {
+  const service = loadService(path.join(fixturesDir, name));
+  const { files, model } = planService({ manifest: service.manifest, layers: service.layers, workspace: '.', stack: { auth: 'cognito' } });
+  const persona = personaTokenMechanism(model) === 'emulator';
+  const scopedRole = scopedTokenMechanism(model) === 'emulator' ? model.security.roles.find((role) => !model.security.scoping.exemptRoles.includes(role)) : null;
+  const cases = emulatorFormCases(model, { persona, scoped: scopedRole ? { role: scopedRole } : null });
+  if (cases.length === 0) throw new Error(`${name}: el diseño no usa personas ni titulares del alcance`);
 
-    let source = files.find((file) => file.path.endsWith('/credentials_test.go')).content;
-    if (sabotage) source = BREAK[sabotage](source);
-    const pieces = [];
-    if (persona) {
-      pieces.push(declaration(source, 'type Persona struct'));
-      pieces.push(declaration(source, 'var personaClaimNames = []string'));
-      pieces.push(declaration(source, 'func personaToken('));
-    }
-    if (scopedRole) {
-      pieces.push(declaration(source, 'func scopedToken('));
-      pieces.push(declaration(source, 'func javaStringHash('));
-    }
+  let source = files.find((file) => file.path.endsWith('/credentials_test.go')).content;
+  if (sabotage) source = BREAK[sabotage](source);
+  const pieces = [];
+  if (persona) {
+    pieces.push(declaration(source, 'type Persona struct'));
+    pieces.push(declaration(source, 'var personaClaimNames = []string'));
+    pieces.push(declaration(source, 'func personaToken('));
+  }
+  if (scopedRole) {
+    pieces.push(declaration(source, 'func scopedToken('));
+    pieces.push(declaration(source, 'func javaStringHash('));
+  }
 
-    const program = `package main
+  const program = `package main
 
 import (
 	"context"
@@ -133,28 +136,25 @@ func main() {
 ${cases.map((testCase) => `\trun(${go(testCase.id)}, func() (string, error) { return ${call(testCase)} })`).join('\n')}
 }
 `;
-    const dir = tmpDir('keel-emulator-go-');
-    const file = path.join(dir, 'main.go');
-    fs.writeFileSync(file, program);
-    const run = spawnSync('go', ['run', file], { encoding: 'utf8', cwd: dir, env: { ...process.env, GO111MODULE: 'off' } });
-    if (run.status !== 0) {
-      console.error(`${name}: el Go no compila o no corre:\n${run.stderr}\n${program}`);
-      process.exit(1);
-    }
-    const results = Object.fromEntries(
-      run.stdout
-        .trim()
-        .split(/\r?\n/)
-        .map((line) => line.split('\t'))
-        .map(([id, kind, ...rest]) => [id, kind === 'form' ? { form: rest.join('\t') } : { error: rest.join('\t') }])
-    );
-    const verdict = judgeEmulatorForms(`${name} (${cases.length} casos)`, cases, results, sabotage);
-    console.log(verdict.lines.join('\n'));
-    ok &&= verdict.ok;
-    if (sabotage) hits += EMULATOR_FORM_SABOTAGES[sabotage].filter((id) => cases.some((c) => c.id === id)).length;
+  const dir = tmpDir('keel-emulator-go-');
+  const file = path.join(dir, 'main.go');
+  fs.writeFileSync(file, program);
+  const run = spawnSync('go', ['run', file], { encoding: 'utf8', cwd: dir, env: { ...process.env, GO111MODULE: 'off' } });
+  if (run.status !== 0) {
+    console.error(`${name}: el Go no compila o no corre:\n${run.stderr}\n${program}`);
+    process.exit(1);
   }
-} finally {
-  cognito.harness = saved;
+  const results = Object.fromEntries(
+    run.stdout
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => line.split('\t'))
+      .map(([id, kind, ...rest]) => [id, kind === 'form' ? { form: rest.join('\t') } : { error: rest.join('\t') }])
+  );
+  const verdict = judgeEmulatorForms(`${name} (${cases.length} casos)`, cases, results, sabotage);
+  console.log(verdict.lines.join('\n'));
+  ok &&= verdict.ok;
+  if (sabotage) hits += EMULATOR_FORM_SABOTAGES[sabotage].filter((id) => cases.some((c) => c.id === id)).length;
 }
 if (sabotage && hits === 0) {
   console.error(`Ningún diseño cubre los casos del sabotaje ${sabotage}.`);

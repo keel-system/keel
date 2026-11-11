@@ -69,99 +69,99 @@ function call(testCase) {
   return `h.tokenAs(${javaString(testCase.sub)}, ${javaString(testCase.role)}, claims(${claims.join(', ')}))`;
 }
 
-const cognito = IDENTITY_PROVIDERS.cognito;
-const saved = cognito.harness;
-cognito.harness = { personaTokens: 'emulator', scopedTokens: 'emulator' };
+// Cognito da personas y titulares por el emulador desde el 4.3: si el descriptor dijera otra cosa, el arnés saldría sin
+// la rama que se mide.
+const { harness } = IDENTITY_PROVIDERS.cognito;
+if (harness.personaTokens !== 'emulator' || harness.scopedTokens !== 'emulator') {
+  console.error(`El descriptor de Cognito no da personas ni titulares por el emulador: ${JSON.stringify(harness)}.`);
+  process.exit(2);
+}
 const quiet = { log: console.log, warn: console.warn };
 let ok = true;
 let hits = 0;
-try {
-  for (const name of DESIGNS) {
-    const service = loadService(path.join(fixturesDir, name));
-    const stack = { auth: 'cognito' };
-    console.log = () => {};
-    console.warn = () => {};
-    let model;
-    const workspace = keep ? fs.mkdtempSync(path.join(os.tmpdir(), 'keel-emulator-keep-')) : tmpDir('keel-emulator-harness-');
-    try {
-      model = planService({ manifest: service.manifest, layers: service.layers, workspace: '.', stack }).model;
-      scaffoldService({ manifest: service.manifest, layers: service.layers, workspace, force: true, stack });
-    } finally {
-      Object.assign(console, quiet);
-    }
-    const persona = personaTokenMechanism(model) === 'emulator';
-    const scopedRole = scopedTokenMechanism(model) === 'emulator' ? model.security.roles.find((role) => !model.security.scoping.exemptRoles.includes(role)) : null;
-    const cases = emulatorFormCases(model, { persona, scoped: scopedRole ? { role: scopedRole } : null });
-    if (cases.length === 0) throw new Error(`${name}: el diseño no usa personas ni titulares del alcance`);
+for (const name of DESIGNS) {
+  const service = loadService(path.join(fixturesDir, name));
+  const stack = { auth: 'cognito' };
+  console.log = () => {};
+  console.warn = () => {};
+  let model;
+  const workspace = keep ? fs.mkdtempSync(path.join(os.tmpdir(), 'keel-emulator-keep-')) : tmpDir('keel-emulator-harness-');
+  try {
+    model = planService({ manifest: service.manifest, layers: service.layers, workspace: '.', stack }).model;
+    scaffoldService({ manifest: service.manifest, layers: service.layers, workspace, force: true, stack });
+  } finally {
+    Object.assign(console, quiet);
+  }
+  const persona = personaTokenMechanism(model) === 'emulator';
+  const scopedRole = scopedTokenMechanism(model) === 'emulator' ? model.security.roles.find((role) => !model.security.scoping.exemptRoles.includes(role)) : null;
+  const cases = emulatorFormCases(model, { persona, scoped: scopedRole ? { role: scopedRole } : null });
+  if (cases.length === 0) throw new Error(`${name}: el diseño no usa personas ni titulares del alcance`);
 
-    const harnessFile = (function find(dir) {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          const found = find(full);
-          if (found) return found;
-        } else if (entry.name === 'AbstractFlowIT.java') return full;
-      }
-      return null;
-    })(workspace);
-    let source = fs.readFileSync(harnessFile, 'utf8');
-    if (sabotage) source = BREAK[sabotage](source);
-    const pieces = [method(source, 'private static String personaEncode(String value)')];
-    if (persona) {
-      pieces.push(method(source, 'protected String tokenAs(String sub, Map<String, String> claims)'));
-      pieces.push(method(source, 'protected String tokenAs(String sub, String role, Map<String, String> claims)'));
-      pieces.push(source.match(/private static final java\.util\.Set<String> PERSONA_CLAIMS = [^;]*;/)[0]);
+  const harnessFile = (function find(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        const found = find(full);
+        if (found) return found;
+      } else if (entry.name === 'AbstractFlowIT.java') return full;
     }
-    if (scopedRole) pieces.push(method(source, 'protected String tokenWithScope(String role, String... values)'));
+    return null;
+  })(workspace);
+  let source = fs.readFileSync(harnessFile, 'utf8');
+  if (sabotage) source = BREAK[sabotage](source);
+  const pieces = [method(source, 'private static String personaEncode(String value)')];
+  if (persona) {
+    pieces.push(method(source, 'protected String tokenAs(String sub, Map<String, String> claims)'));
+    pieces.push(method(source, 'protected String tokenAs(String sub, String role, Map<String, String> claims)'));
+    pieces.push(source.match(/private static final java\.util\.Set<String> PERSONA_CLAIMS = [^;]*;/)[0]);
+  }
+  if (scopedRole) pieces.push(method(source, 'protected String tokenWithScope(String role, String... values)'));
 
-    const program = `import java.util.*;
+  const program = `import java.util.*;
 
 public class EmulatorForm {
-    private String cachedToken(String key, java.util.function.Supplier<String> mint) { return mint.get(); }
-    private String requestToken(String form) { return form; }
-    private static String env(String name, String fallback) { return fallback; }
-    private static Map<String, String> claims(String... pairs) {
-        Map<String, String> map = new LinkedHashMap<>();
-        for (int i = 0; i < pairs.length; i += 2) map.put(pairs[i], pairs[i + 1]);
-        return map;
-    }
-    private interface Call { String run() throws Exception; }
-    private static void run(String id, Call call) {
-        String line;
-        try { line = "form\\t" + call.run(); } catch (Exception e) { line = "error\\t" + e.getMessage(); }
-        System.out.println(id + "\\t" + line.replace("\\n", " "));
-    }
+  private String cachedToken(String key, java.util.function.Supplier<String> mint) { return mint.get(); }
+  private String requestToken(String form) { return form; }
+  private static String env(String name, String fallback) { return fallback; }
+  private static Map<String, String> claims(String... pairs) {
+      Map<String, String> map = new LinkedHashMap<>();
+      for (int i = 0; i < pairs.length; i += 2) map.put(pairs[i], pairs[i + 1]);
+      return map;
+  }
+  private interface Call { String run() throws Exception; }
+  private static void run(String id, Call call) {
+      String line;
+      try { line = "form\\t" + call.run(); } catch (Exception e) { line = "error\\t" + e.getMessage(); }
+      System.out.println(id + "\\t" + line.replace("\\n", " "));
+  }
 
 ${pieces.map((piece) => `    ${piece}`).join('\n\n')}
 
-    public static void main(String[] args) {
-        EmulatorForm h = new EmulatorForm();
+  public static void main(String[] args) {
+      EmulatorForm h = new EmulatorForm();
 ${cases.map((testCase) => `        run(${javaString(testCase.id)}, () -> ${call(testCase)});`).join('\n')}
-    }
+  }
 }
 `;
-    const dir = tmpDir('keel-emulator-java-');
-    const file = path.join(dir, 'EmulatorForm.java');
-    fs.writeFileSync(file, program);
-    const run = spawnSync('java', ['-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8', file], { encoding: 'utf8' });
-    if (run.status !== 0) {
-      console.error(`${name}: el Java no compila o no corre:\n${run.stderr}\n${program}`);
-      process.exit(1);
-    }
-    const results = Object.fromEntries(
-      run.stdout
-        .trim()
-        .split(/\r?\n/)
-        .map((line) => line.split('\t'))
-        .map(([id, kind, ...rest]) => [id, kind === 'form' ? { form: rest.join('\t') } : { error: rest.join('\t') }])
-    );
-    const verdict = judgeEmulatorForms(`${name} (${cases.length} casos)`, cases, results, sabotage);
-    console.log(verdict.lines.join('\n'));
-    ok &&= verdict.ok;
-    if (sabotage) hits += EMULATOR_FORM_SABOTAGES[sabotage].filter((id) => cases.some((c) => c.id === id)).length;
+  const dir = tmpDir('keel-emulator-java-');
+  const file = path.join(dir, 'EmulatorForm.java');
+  fs.writeFileSync(file, program);
+  const run = spawnSync('java', ['-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8', file], { encoding: 'utf8' });
+  if (run.status !== 0) {
+    console.error(`${name}: el Java no compila o no corre:\n${run.stderr}\n${program}`);
+    process.exit(1);
   }
-} finally {
-  cognito.harness = saved;
+  const results = Object.fromEntries(
+    run.stdout
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => line.split('\t'))
+      .map(([id, kind, ...rest]) => [id, kind === 'form' ? { form: rest.join('\t') } : { error: rest.join('\t') }])
+  );
+  const verdict = judgeEmulatorForms(`${name} (${cases.length} casos)`, cases, results, sabotage);
+  console.log(verdict.lines.join('\n'));
+  ok &&= verdict.ok;
+  if (sabotage) hits += EMULATOR_FORM_SABOTAGES[sabotage].filter((id) => cases.some((c) => c.id === id)).length;
 }
 if (sabotage && hits === 0) {
   console.error(`Ningún diseño cubre los casos del sabotaje ${sabotage}.`);

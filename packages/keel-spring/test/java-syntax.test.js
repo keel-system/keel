@@ -219,6 +219,10 @@ const MATRIX = [
   // audiencia que mira el scope en vez de `aud`. Sin esta fila, ese Java no lo tokeniza
   // nadie — y es Java emitido por plantilla, que es justo donde se cuela un paréntesis.
   ['asset-vault', { broker: 'kafka', auth: 'cognito' }],
+  // Y las personas contra el emulador (incremento 4.3 de PLAN-PROVEEDOR-IDENTIDAD.md): la identidad en un claim que el
+  // proveedor no da de serie y en el `sub`. El titular del alcance ya lo trae la fila de asset-vault.
+  ['shop-api', { auth: 'cognito' }],
+  ['conduit', { auth: 'cognito' }],
   ['product-catalog', {}],
   // La silueta del correo: la ÚNICA que renderiza la sección de buzón de
   // AbstractFlowIT, el adaptador SMTP, el motor de plantillas y el appendix de

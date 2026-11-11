@@ -145,8 +145,12 @@ test('el arnés: credenciales del proveedor de prueba, solo lo que el diseño ha
   const cards = plan('profile-directory').files;
   assert.match(flowTest(cards), /protected static Task<string> TokenAs\(string sub/);
   assert.doesNotMatch(flowTest(cards), / ScopedResource\(/);
-  // Con Cognito no hay personas ni usuarios del alcance: el emulador fija los claims en su configuración.
-  assert.doesNotMatch(flowTest(plan('asset-vault', 'cognito').files), / TokenWithScope\(| TokenAs\(/);
+  // Con Cognito el titular del alcance lo da el emulador, sin API de administración (incremento 4.3: la petición la mide
+  // `npm run emulator-harness-check`).
+  const vaultCognito = plan('asset-vault', 'cognito').files;
+  assert.match(flowTest(vaultCognito), /protected static [^\n]* TokenWithScope\(/);
+  assert.match(content(vaultCognito, '/Support/Credentials.cs'), /\["keel_scoped"\]/);
+  assert.doesNotMatch(content(vaultCognito, '/Support/Credentials.cs'), /AdminToken/);
   // Sin capa security, nada.
   const catalog = plan('product-catalog').files;
   assert.equal(content(catalog, '/Support/Credentials.cs'), undefined);

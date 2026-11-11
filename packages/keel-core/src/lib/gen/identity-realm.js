@@ -146,9 +146,10 @@ export function userTestClient(model) {
  * escribió 300 líneas de soporte para suplirlo, y su primera pasada dejó 38 escenarios sin
  * ejercitar porque Keycloak 26 ignora el `id` de `POST /users`.
  *
- * Solo Keycloak: el emulador de Cognito (mock-oauth2-server) fija los claims en su configuración
- * con plantillas de valores conocidos (`${clientId}`, `${username}`), no por petición, así que
- * ahí el método no se emite. No hace falta ningún rol: un diseño sin roles cuya identidad es el `sub`
+ * Con Keycloak la persona se da de alta por la API de administración del realm; con un emulador
+ * (mock-oauth2-server, el de Cognito) viaja en la petición y cada forma es un mapping de su
+ * configuración (incremento 4.3 de PLAN-PROVEEDOR-IDENTIDAD.md: `personaTokenMechanism`). Un proveedor
+ * sin ninguno de los dos mecanismos no lo emite. No hace falta ningún rol: un diseño sin roles cuya identidad es el `sub`
  * (conduit, recuperado de RealWorld: «solo el autor edita su artículo») necesita dos personas
  * distintas más que nadie, y hasta el DSL 2.23 se quedaba sin cliente de usuario y sin `tokenAs` —
  * el agente de pruebas del inc. 1 de keel-recover escribió su propio emisor de personas a mano.
@@ -180,8 +181,8 @@ export function usesUserClient(model) {
  * que `tokenFor(rol)` puede dar. Los escenarios del alcance hablan además de un titular cuyo claim
  * enumera OTRO recurso, o varios, o ninguno («un custodio con vaults = ["OTRO"]»), y eso no se podía
  * pedir: las tres corridas de asset-vault (dos de keel-spring y una de keel-nest) lo dejaron como
- * hueco del arnés (`test-realm-claim-values`). Solo Keycloak, por lo mismo que `usesPersonaTokens`:
- * el emulador de Cognito fija los claims en su configuración, no por petición. Y hace falta un rol
+ * hueco del arnés (`test-realm-claim-values`). Con el mecanismo que diga el descriptor, como
+ * `usesPersonaTokens`: con el emulador, un mapping por cantidad de valores. Y hace falta un rol
  * no exento: con todos exentos el claim no acota nada.
  */
 export function usesScopedTokens(model) {
