@@ -1,169 +1,211 @@
-# El proveedor de identidad, sin acoplamiento a Keycloak
+# El proveedor de identidad: el mismo servidor con Keycloak o con Cognito
 
-Origen: la revisión del 2026-11-10 de qué pasa con la lectura acotada (DSL 2.27) sobre otro proveedor. Este plan es
-independiente de `PLAN-DSL-227-LECTURA-ACOTADA.md`, que conserva su alcance inicial. Regla de siempre: **cada pieza nueva
-tiene una red que la ejecuta y un sabotaje que demuestra que esa red la ve.**
+Origen: la revisión del 2026-11-10 de qué pasa con la lectura acotada (DSL 2.27) sobre otro proveedor, reorganizada el mismo
+día tras evaluar el plan contra el código. Es independiente de `PLAN-DSL-227-LECTURA-ACOTADA.md`. Regla de siempre: **cada
+pieza nueva tiene una red que la ejecuta y un sabotaje que demuestra que esa red la ve.**
 
-**Cuándo empieza:** al terminar las corridas de keel-spring del incremento 8 del plan 2.27
-(`vault-227-spring-mongo-rabbit` y `shop-227-spring-postgre`), sin esperar a las de los otros tres generadores.
+**Objetivo.** Dado un diseño que requiere un proveedor de identidad, keel genera un servidor equivalente con el proveedor
+elegido, y se puede afirmar que ese servidor funcionará con él. No hace falta generar todos los proyectos con Cognito: lo que
+se garantiza es el contrato entre el servidor y el token. Y queda un camino medido para añadir otro proveedor.
+
+**Cuándo empieza:** ya se cumple la condición (las corridas de keel-spring del inc. 8 del plan 2.27 terminaron: asset-vault
+32/32 y shop-api 92/92).
 
 ## Por qué
 
-El acoplamiento no está en el diseño ni en el servidor generado, sino en cómo se **prueba**. Medido el 2026-11-10 buscando
-en el código, no con una auditoría completa:
+El diseño no depende del proveedor y el servidor casi tampoco, pero **las garantías solo están demostradas con uno**, y un
+verde con el emulador prueba menos de lo que parece, porque el emulador se escribió con la forma que esperamos.
 
 | Capa | Acoplamiento | Qué hay |
 |---|---|---|
 | DSL y validación | Ninguno | Los schemas solo nombran Keycloak como ejemplo; `crossrefs.js`, `checks.js` y `obligations.js` no lo citan |
-| Servidor generado | Bajo | JWT y JWKS estándar; dónde van los roles es una tabla de datos (`TOKEN_CLAIMS`, `gen/access-plan.js`) |
+| Servidor generado | Medio | JWT y JWKS estándar, pero el contrato del token está repartido: roles y principal en `TOKEN_CLAIMS` (`gen/access-plan.js`), y scopes, audiencia y cliente en una rama `const cognito` o en literales de cada generador |
 | Arnés de pruebas | Alto | `tokenAs` y `tokenWithScope` solo con Keycloak (`usesPersonaTokens`, `usesScopedTokens`, `gen/identity-realm.js`) |
 | Redes en vivo | Alto | `security-check` de keel-nest, keel-dotnet y keel-go, contra Keycloak; keel-spring no tiene esa red. Cognito es un emulador (`mock-oauth2-server`) |
-| Corridas | Alto | 2 de los 98 registros de `docs/corridas/` mencionan Cognito |
-| keel-recover | Total | `target.js` busca una imagen `keycloak` y `parity-target.js` da de alta personas con `kcadm` |
-| Añadir un proveedor | Medio | El catálogo `AUTH` solo tiene `keycloak`, `cognito` y `none`, y hay unas 30 ramas `=== 'keycloak'` o `=== 'cognito'` (20 en keel-core, 9 en los generadores) |
-
-Lo que más pesa: **las garantías solo están demostradas con un proveedor**, y un verde con el emulador prueba menos de lo
-que parece, porque el emulador se escribió con la forma que esperamos.
+| Corridas | Alto | 2 de los 100 registros de `docs/corridas/` mencionan Cognito |
+| keel-recover | Total | `target.js` busca una imagen `keycloak` y `parity-target.js` da de alta personas con `kcadm`. Con Cognito omite el bloque `idp` sin decir nada |
+| Añadir un proveedor | Medio | El catálogo `AUTH` solo tiene `keycloak`, `cognito` y `none`, unas 33 ramas por nombre (21 en keel-core y 12 en los generadores, contadas el 2026-11-10) y una skill por generador y proveedor, que ya divergen: la de keel-spring tiene 89 líneas y tres referencias, las otras tres unas 52 y ninguna |
 
 ### Lo que falla hoy con un Cognito real
 
-El mecanismo de la lectura acotada no depende del proveedor, pero tres piezas dependen de claims que el access token de
-Cognito no trae. Los tres fallos son seguros (se deniega de más). Se deduce del código y de la documentación de AWS: **no
-se ha ejecutado contra Cognito real**.
+Se deduce del código y de la documentación de AWS: **no se ha ejecutado contra Cognito real**.
 
-| Pieza | Qué pasa | Estado hoy |
-|---|---|---|
-| `exemptClients` | Se compara el nombre declarado con `azp`/`client_id`, y Cognito genera ese id: el cliente no se reconoce y recibe el error del alcance en toda ficha | Hueco del generador |
-| `callerIdentity` desde un claim que no sea `sub` (`email` en shop-api) | Ese claim va en el ID token: 401 en toda operación que necesite la identidad | Sin documentar |
-| `scoping.claim` (`vaults` en asset-vault) | Sin disparador de pre-generación de tokens V2 no llega al access token: conjunto vacío, listados vacíos y error del alcance | La skill de keel-spring lo dice; sin aviso en `build` |
+| # | Pieza | Qué pasa | Falla |
+|---|---|---|---|
+| D1 | `token_use` | Ningún generador lo comprueba. Un ID token del mismo pool tiene el mismo emisor y firma y trae `cognito:groups`: se acepta como access token | **Concede de más** |
+| D2 | Prefijo del scope | Los cuatro cortan por la primera `/` sin comprobar que sea el del servicio: `otra-api/product:read` acaba siendo `SCOPE_product:read`, y un identificador con forma de URL no casa con ninguna regla | **Concede de más** o 403 |
+| D3 | `exemptClients` | Se compara el nombre declarado con `azp`/`client_id`, y Cognito genera ese id: el cliente no se reconoce | Deniega |
+| D4 | `callerIdentity` con `source: serviceClient` y correspondencia 1:1 | El mismo problema: el identificador del recurso sería el id opaco, no el nombre declarado. Con `resolvedBy` funciona (la lista guarda los ids) y **no debe traducirse**. Ninguna fixture cubre el 1:1 | Deniega |
+| D5 | `callerIdentity` desde un claim que no sea `sub` (`email` en shop-api) | Ese claim va en el ID token: 401 en toda operación que necesite la identidad | Deniega |
+| D6 | `scoping.claim` (`vaults` en asset-vault) | Sin disparador de pre-generación de tokens no llega al access token: conjunto vacío, listados vacíos y error del alcance | Deniega |
 
-El disparador V2 no está en todos los planes de Cognito: en Lite, solo con las funciones de seguridad avanzada; en
-Essentials y Plus, sí.
+El disparador V2 está en Essentials y Plus, y en Lite solo con las funciones de seguridad avanzada. Los tokens de máquina solo
+pasan por el disparador con V3, en Essentials y Plus (documentación de AWS, consultada el 2026-11-10). `aud` no sirve de
+alternativa: en un access token solo puede valer el id del app client.
 
-**El emulador esconde los tres**: pone `client_id` igual al nombre del cliente, añade el claim del alcance directamente y
-no emite `email` (shop-api con Cognito probablemente falle ya en local; sin medir).
+**El emulador esconde D3 a D6**: pone `client_id` igual al nombre del cliente, añade el claim del alcance directamente y no
+emite `email`.
 
 ## Principios
 
-- **El DSL no cambia.** El proveedor se elige al generar, como el broker. Si un diseño necesitara nombrarlo, el hueco es
-  del método.
-- **Lo que un proveedor sabe hacer se declara como datos**, no como una rama por nombre. Una carencia se rechaza con su
-  motivo en vez de quedar implícita.
+- **El DSL no cambia.** El proveedor se elige al generar, como el broker o la pasarela. Si un diseño necesitara nombrarlo, el
+  hueco es del método.
+- **Lo que un proveedor es y sabe hacer se declara como datos**, en un único descriptor, no como una rama por nombre. Una
+  carencia se rechaza o se avisa con su motivo en vez de quedar implícita.
+- **Se reutiliza el precedente de las pasarelas de pago**: el catálogo neutral, la matriz con `checkGatewaySupport`, el
+  veredicto en `check` y en `build`, y la prueba de que solo difiere lo permitido (`payment-parity.test.js`).
 - **Lo neutral primero**, en `keel-core/gen`, y keel-spring antes que los otros tres: sus pruebas de paridad comparan con lo
   que emite keel-spring.
 - **Lo emitido con `auth: keycloak` no se mueve**, para no invalidar los proyectos ya generados. La suite lo fija
-  (`keel-nest/test/golden/digests.json` y las paridades).
-- **Decir lo que queda sin medir.** Lo que solo se ha visto en el emulador se dice así en las skills y en la salida de
-  `build` (`messages.cognitoEmulated`).
+  (`test/golden/digests.json` y las paridades). Lo emitido con `auth: cognito` sí cambia, y es a propósito.
+- **Decir lo que queda sin medir.** Lo que solo se ha visto en el emulador se dice así en las skills y en la salida de `build`
+  (`messages.cognitoEmulated`).
 
-## Decisiones abiertas
+## Decisiones
 
-| # | Pregunta | Recomendación |
+| # | Pregunta | Estado |
 |---|---|---|
-| P1 | Forma de la traducción de `exemptClients` | Un mapa nombre → id en el `security.yaml` neutral (`gen/security-config.js`), con una variable de entorno por cliente; solo con proveedores cuyo `client_id` no sea el nombre declarado |
-| P2 | Si falta esa variable en producción | Que el servicio no arranque: un exento sin reconocer rompe en silencio a un consumidor, y el fallo se descubre tarde |
-| P3 | ¿Emite `email` el emulador? | No emitirlo por defecto, como el token real; si el diseño lo necesita, `build` avisa y el emulador lo añade representando un pool con el disparador desplegado |
-| P4 | Cuenta de AWS para la corrida real (incremento 7) | Del usuario. Sin ella, el incremento 7 no se hace y el plan lo dice |
+| P1 | Forma de la traducción del cliente | **Cerrada.** Un mapa nombre → id por configuración, con una variable de entorno por cliente, solo con proveedores cuyo `client_id` no sea el nombre declarado. Se aplica en el único punto que lee el cliente de la credencial. Va en `gen/security-config.js` y también en el `config.js` de keel-spring, que no usa ese módulo. No se aplica con `resolvedBy` |
+| P2 | Si falta esa variable en producción | **Cerrada.** El servicio no arranca, solo por los clientes de los que depende (exentos e identidad 1:1): un exento sin reconocer rompe en silencio a un consumidor |
+| P3 | ¿Emite `email` el emulador? | **Cerrada.** No por defecto, como el token real. Si el diseño lo necesita, el emulador lo añade representando un pool con el disparador desplegado, y `check`/`build` lo dicen |
+| P4 | Cuenta de AWS | **Abierta, del usuario.** La captura (incremento 1.5) y la fase 5 la necesitan. Sin ella no se hacen, y el plan lo dice |
+| P5 | Generador de la red de extremo a extremo (incremento 4.4) | **Abierta.** Recomendación: keel-spring, que es la referencia y la única sin `security-check` |
 
-## Trampas que hay que medir antes de suponerlas
+## Trampas
 
-- **T1 · personas por petición en el emulador.** El código dice que `mock-oauth2-server` fija los claims en su configuración
-  y no por petición, y por eso `tokenAs` no se emite. Hay que comprobarlo en su versión fijada (6.0.1): de ahí sale si basta
-  con configurarlo o hace falta otra pieza.
-- **T2 · `sub` en el emulador.** Es el nombre de usuario, y en Cognito real es un uuid: un escenario o una sonda que
-  dependa de su forma no se vería.
+- **T1 · personas por petición en el emulador. Medido en vivo con la 6.0.1 (2026-11-10).** Las plantillas funcionan por
+  petición: `sub`, `email` y un elemento de `cognito:groups` salieron del formulario. El comentario de `usesPersonaTokens` que
+  lo descarta está desactualizado. Tres límites medidos: un parámetro ausente deja el literal `${email}` en el token, así que
+  «un token sin ese claim» necesita su propio mapping; un parámetro repetido no devuelve token, así que varios valores no
+  entran por ahí; y un cliente sin mapping recibe un token válido sin `sub`. Sin medir: varios valores en un solo parámetro.
+- **T2 · `sub` en el emulador.** Es el nombre de usuario, y en Cognito real es un uuid: un escenario o una sonda que dependa de
+  su forma no se vería.
 - **T3 · `client_id` opaco.** Al dejar de ser el nombre, se mueven los mapeos del emulador (`requestParam: 'client_id'`), el
-  arnés y `test-credentials.env`. Con Keycloak no debe cambiar nada.
-- **T4 · `validateAudience`.** La skill de keel-spring dice que el filtro de audiencia «choca» con Cognito, y el código ya
-  tiene una variante por el prefijo del scope. Hay que ver cuál de los dos está al día.
-- **T5 · M2M con disparador.** Según AWS, los tokens de máquina solo pasan por el disparador con el evento V3, en Essentials
-  y Plus. Un `scoping.claim` en un cliente no exento no llegaría con V2.
+  arnés y `test-credentials.env`. Por lo medido en T1, un mapeo que se quede atrás no falla: da un token vacío. Con Keycloak no
+  debe cambiar nada.
+- **T4 · `validateAudience`. Resuelta.** La desactualizada es `references/configuration.md` de `keel-spring-cognito`, que dice
+  que el filtro de audiencia choca con Cognito; `renderAudienceFilter` ya mira el prefijo del scope.
+- **T5 · M2M con disparador. Confirmada en la documentación**: solo con V3. Un `scoping.claim` en un cliente no exento no llega
+  con V2.
+- **T6 · `SECURITY_AUDIENCE` solo existe con `validateAudience: true`.** Para quitar solo el prefijo propio (D2), un proveedor
+  con scopes prefijados la necesita también con scopes declarados sin esa validación.
 
-## Incrementos (secuenciales desde `main`, sin subagentes, un generador cerrado antes del siguiente)
+## Fases
 
-**0. Inventario y medidas.** Clasificar las unas 30 ramas por proveedor (capacidad, aprovisionamiento o forma del token) y
-resolver T1 a T4. Las decisiones P1 a P3 se cierran aquí. **Medido con:** la tabla escrita en este plan.
+Cada fase se implementa completa en un hilo de conversación. Dentro de una fase, los incrementos van en orden, y un generador
+se cierra antes de empezar el siguiente.
 
-**1. Las capacidades del proveedor, como datos.** Cada entrada de `AUTH` declara lo que sabe hacer (personas por petición,
-claims por usuario, `client_id` igual al nombre, identidad en el access token…), y `usesPersonaTokens`, `usesScopedTokens` y
-las demás ramas preguntan por la capacidad. Refactorización sin cambios: **medido con** lo emitido byte a byte igual con
-Keycloak y con Cognito, y las suites.
+### Fase 1 · El contrato del proveedor (solo keel-core, sin cambios en lo emitido)
 
-**2. `exemptClients` con un `client_id` opaco.** Lo neutral en `gen/security-config.js` y `gen/read-scope.js`, y después los
-cuatro generadores, keel-spring primero. **Medido con:** RS-10 con un `client_id` que no es el nombre, en los cuatro.
-**Sabotaje:** sin la traducción, el cliente exento cae en el error del alcance.
+Deja todo lo que un proveedor es en un solo sitio, y la forma de demostrar que un servidor lo cumple.
 
-**3. Los avisos y las skills.** `build` avisa si el diseño depende de un claim que el access token de ese proveedor no trae
-(`callerIdentity` que no sea `sub`, `scoping.claim`), con la capacidad del incremento 1 y el mismo texto en los cuatro.
-Las cuatro skills `keel-<tech>-cognito` explican el disparador y sus planes. **Medido con:** una prueba por caso y
-`generator-docs.test.js`.
+- **1.1 Inventario.** Recontar las ramas por nombre y clasificar cada una: contrato del token, capacidad del arnés o
+  aprovisionamiento. **Medido con:** la tabla escrita en este plan.
+- **1.2 El descriptor** (`gen/identity-providers.js`). Por proveedor: `token` (roles, permisos, principal, formato de los
+  scopes, cómo se expresa la audiencia, claims del cliente y si su valor es el nombre declarado, qué token se acepta, qué claims
+  no llegan al access token sin configuración), `harness` (personas por petición, valores del alcance) y `provisioning`.
+  Absorbe `TOKEN_CLAIMS` y las capacidades, y `usesPersonaTokens`, `usesScopedTokens` y las demás ramas preguntan al descriptor.
+  **Medido con:** lo emitido byte a byte igual con los dos proveedores, y las suites.
+- **1.3 Los casos del token como datos** (`gen/token-cases.js`, patrón de `wire.js`). Una tabla neutral `IDT-*`: dado un token
+  con la forma de ese proveedor, qué principal, qué authorities, qué identidad, qué exención y qué 401 o 403. Se derivan del
+  descriptor y del diseño. Incluye los casos de D1 a D4, que hasta la fase 2 ningún generador cumple. **Medido con:** una prueba
+  de la derivación por caso.
+- **1.4 Que el camino para otro proveedor exista de verdad.** Un proveedor ficticio registrado solo en los tests, que genera en
+  los cuatro sin tocar un generador (como `gen-model.test.js` con una proyección que no es Java); un test que prohíbe las ramas
+  por nombre fuera de los módulos del descriptor (como `gen-neutral.test.js`); y un test de paridad entre proveedores, con la
+  lista cerrada de lo que puede diferir (como `payment-parity.test.js`). **Sabotaje:** una rama nueva por nombre y un archivo
+  distinto fuera de la lista.
+- **1.5 Captura de tokens reales (si P4 está resuelta).** Un token de usuario y uno de máquina de un pool de verdad, saneados,
+  contrastados con los casos `IDT-*`. No bloquea la fase. Es la única medida que no depende de la forma que esperamos.
 
-**4. Un emulador que no esconde.** `client_id` opaco, `sub` con la forma real y `email` según P3. Si T1 lo permite,
-`tokenAs` y `tokenWithScope` también con Cognito; si no, quedan rechazados con su motivo. **Medido con:** `identity-provisioning.test.js`
-y el humo del arnés con `auth: cognito`. **Sabotaje:** volver al `client_id` igual al nombre deja de pasar la sonda del
-incremento 2.
+### Fase 2 · El servidor equivalente (los cuatro generadores)
 
-**5. Las redes en vivo con Cognito.** `security-check --auth=cognito` en keel-nest, keel-dotnet y keel-go, contra el
-emulador del incremento 4, con los casos que apliquen y sus sabotajes; en keel-spring, `read-scope-check` con los claims de
-Cognito. Los casos RS y OA de la 2.27 entran aquí. **Medido con:** esas redes en verde y falsadas.
+Lo único que cambia en producción. Orden: keel-spring, keel-nest, keel-dotnet, keel-go. Si el contexto no da, el corte natural
+es después de keel-nest.
 
-**6. keel-recover con un adaptador por proveedor.** `src/lib/idp/`, con el patrón de `src/lib/db/`: lo de Keycloak se muda
-sin cambios y un proveedor sin adaptador es un rechazo con motivo. Ata el registro a `target.schema.json`. Cognito queda
-rechazado hasta que lo pida un legacy. **Medido con:** `test/` de keel-recover y `target-db-check`.
+- **2.1 Neutral.** Parámetros de traducción del cliente (P1, P2) y `SECURITY_AUDIENCE` (T6) en `gen/security-config.js`, y la
+  referencia ejecutable de cada regla en el descriptor.
+- **2.2 La prueba emitida.** `build` escribe en el proyecto una prueba con los casos `IDT-*` del proveedor elegido, firmando sus
+  tokens con la clave del perfil `test` (como las que ya emite con `fullAccessClaims`). Es lo que hace que cada proyecto generado
+  demuestre su propio contrato sin necesitar el proveedor.
+- **2.3 Por generador.** D1 (rechazar lo que no sea un access token), D2 (quitar solo el prefijo propio; un scope de otro
+  resource server no da authority), D3 y D4 (traducción en el único lector del cliente, sin tocar `resolvedBy`). RS-10 deja de
+  llevar `azp` escrito a mano. **Medido con:** la prueba emitida ejecutada en cada generador (`compile-check` y una red de
+  keel-spring, `test/helpers/emitted.js` en keel-nest, `cs-check`, `go-check`). **Sabotaje:** uno por defecto (`token-use`,
+  `scope-prefix`, `client-translation`), cada uno cae en exactamente sus casos, en cada generador. Una fixture o silueta que
+  declare `serviceClient` 1:1.
 
-**7. Una corrida contra un Cognito real.** Requiere P4. `asset-vault` en keel-spring, con el disparador desplegado: mide
-`exemptClients`, el claim del alcance y T5. Se registra en `docs/corridas/`.
+### Fase 3 · Lo que el proveedor debe cumplir (sin red)
+
+El servidor puede estar bien y el pool mal configurado. Lo que el pool debe traer se declara y se comprueba por diseño.
+
+- **3.1 La matriz de soporte** (`checkIdentitySupport`, patrón de `gen/payment-gateways.js`). Cruza lo que pide el diseño (D5, D6,
+  claims en clientes máquina no exentos) con el descriptor. Estados: soportado, requiere configuración (con qué disparador y
+  qué plan) y no soportado. `check` dice con qué proveedores sirve el diseño y `build` lo aplica, con el mismo texto en los
+  cuatro. **Medido con:** una prueba por requisito.
+- **3.2 El documento de precondiciones** (`docs/keel/identity-contract.md`, emitido siempre, como `engine-limits.md`): grupos,
+  resource server, disparador, plan, variables y qué se ha medido solo en el emulador.
+- **3.3 Skills.** Las cuatro `keel-<tech>-cognito` remiten a ese documento en vez de repetirlo, y se corrige la referencia de T4.
+  **Medido con:** `generator-docs.test.js` y `harness.test.js`.
+- **3.4 keel-recover.** Con un proveedor distinto de Keycloak, `target` rechaza con su motivo en vez de omitir `idp`. **Medido
+  con:** `test/target.test.js`.
+
+### Fase 4 · El emulador fiel y el arnés
+
+Un diseño con Cognito tiene que poder llegar a verde en el pipeline, y el emulador no puede esconder lo que falla en real.
+
+- **4.1 Emulador.** `client_id` opaco y determinista, `sub` uuid y `email` según P3, con T3 resuelta. **Medido con:**
+  `identity-provisioning.test.js`. **Sabotaje:** volver al `client_id` igual al nombre deja de pasar.
+- **4.2 Medir lo que falta de T1**: varios valores del claim y lista vacía.
+- **4.3 Arnés.** `tokenAs` y `tokenWithScope` también con Cognito, con un mapping por forma de claims, en los cuatro generadores
+  y por capacidad del descriptor. Lo que no se pueda, rechazado con su motivo. **Medido con:** humo del arnés con `auth: cognito`
+  y un diseño con identidad en el `sub`.
+- **4.4 Red de extremo a extremo**, en el generador de P5, parametrizada por proveedor: infraestructura real, descubrimiento,
+  JWKS y emisor, tokens reales del emulador, 401 y 403. Los otros generadores quedan cubiertos por la prueba emitida y por su
+  `security-check` contra Keycloak, porque lo que cambia entre proveedores son los claims. **Medido con:** esa red en verde y
+  falsada.
+
+### Fase 5 · Cognito real
+
+Requiere P4.
+
+- **5.1 Corrida** de `asset-vault` en keel-spring contra un pool real con el disparador desplegado: mide la traducción de
+  `exemptClients`, el claim del alcance y T5. Se registra en `docs/corridas/`.
+- **5.2 Cierre.** Contrastar lo medido con los casos `IDT-*` y el emulador, corregir lo que no coincida, y pasar la puerta.
 
 ## Fuera de alcance
 
-- Un tercer proveedor (Auth0, Entra). Se añade cuando lo pida un diseño real; con el incremento 1 hecho, cuesta mucho menos.
+- Un tercer proveedor real (Auth0, Entra). Se añade cuando lo pida un diseño: un descriptor, sus casos y sus skills.
+- El adaptador por proveedor de keel-recover (`src/lib/idp/`). Hasta que un legacy lo pida, basta el rechazo con motivo.
+- `security-check --auth=cognito` en todos los generadores.
 - Probar contra Cognito el alta de pools, grupos y usuarios: el servicio generado es un resource server y no los usa.
 
 ## Puerta de cierre
 
 - Las suites de los seis paquetes en verde.
 - Lo emitido con `auth: keycloak`, igual que antes del plan.
-- Ninguna rama por nombre de proveedor fuera del aprovisionamiento y de la forma del token.
-- Cada sabotaje cae solo en sus casos, en cada generador.
+- El proveedor ficticio genera en los cuatro, y ningún test admite una rama por nombre fuera del descriptor.
+- Todo proyecto generado con proveedor lleva su prueba `IDT-*`, y cada sabotaje cae solo en sus casos, en cada generador.
 - La corrida real hecha, o escrito en este plan por qué no.
 
 ## Cómo se ejecuta
 
-- Desde `main`, sin subagentes ni worktrees, y keel-spring primero.
-- Cada incremento termina con «Para retomar» y un commit en `main`.
+- Una fase por hilo. Desde `main`, sin subagentes ni worktrees, y keel-spring primero.
+- Cada incremento termina con un commit en `main`, y cada fase con «Para retomar».
 - Las redes en vivo, de una en una. Los temporales en `D:`.
 
 ## Estado
 
-| Incremento | Estado | Medido con |
+| Fase | Estado | Medido con |
 |---|---|---|
-| 0. inventario y medidas | pendiente | |
-| 1. capacidades como datos | pendiente | |
-| 2. `exemptClients` con `client_id` opaco | pendiente | |
-| 3. avisos y skills | pendiente | |
-| 4. emulador que no esconde | pendiente | |
-| 5. redes en vivo con Cognito | pendiente | |
-| 6. keel-recover con adaptador | pendiente | |
-| 7. corrida contra Cognito real | pendiente | |
+| 1. contrato del proveedor | pendiente | |
+| 2. servidor equivalente | pendiente | |
+| 3. lo que debe cumplir el proveedor | pendiente | |
+| 4. emulador fiel y arnés | pendiente | |
+| 5. Cognito real | pendiente (requiere P4) | |
 
 ## Para retomar
 
-- Plan escrito el 2026-11-10. Las corridas de keel-spring del plan 2.27 ya terminaron (asset-vault 32/32, shop-api 92/92), así
-  que la condición de inicio se cumple. Se empieza en un contexto nuevo, por decisión del usuario.
-- **Adelantado del incremento 0, solo leyendo (2026-11-10). No está cerrado:**
-  - **T1, a medias.** La documentación de `mock-oauth2-server` dice que todos los parámetros de la petición de token están
-    disponibles como variables en los claims (`${clientId}` y los parámetros del formulario, sustituidos también dentro de
-    listas y mapas). El comentario de `usesPersonaTokens` (`gen/identity-realm.js`), que descarta `tokenAs` con Cognito porque
-    los claims van «fijos en la configuración», parece desactualizado. **Falta medirlo en vivo con la 6.0.1**: qué sale cuando
-    el parámetro no llega (un claim que debe faltar) y si un mapping puede dar un `sub` elegido por petición.
-  - **T4, resuelto.** La que está desactualizada es `references/configuration.md` de `keel-spring-cognito`: dice que el filtro
-    de audiencia choca con Cognito, y `renderAudienceFilter` (`keel-spring/src/scaffold/security.js`) ya mira el prefijo del
-    scope, como dice la tabla de rarezas del `SKILL.md`. Hay que corregir esa referencia.
-  - **T2 y T3, vistos en el código.** En `cognitoMockConfig` (`gen/identity-provisioning.js`), `sub` es el nombre de usuario y
-    `client_id` el nombre del cliente, en usuarios y en máquinas.
-  - **Las ramas, primera clasificación** (sin cerrar; volver a contarlas):
-    - Capacidades, las que el incremento 1 convierte en datos: `usesPersonaTokens` y `usesScopedTokens`.
-    - Forma del token: `access-plan.js`, el `const cognito` de `security.js` en los cuatro generadores y `tokenClaims`.
-    - Aprovisionamiento e infraestructura: `identity-provisioning.js`, `deploy.js`, `tokenUrl` e issuer en `identity-realm.js`,
-      `security-config.js`, `config.js` y `readme.js` de keel-spring. Parecen legítimas: es donde cada proveedor es distinto.
-- Siguiente: **incremento 0**: medir T1 y T5, cerrar la clasificación y decidir P1 a P3.
+- Plan reorganizado en fases el 2026-11-10 tras evaluarlo contra el código. Ya medido o resuelto: T1 (salvo varios valores), T4
+  y T5; P1 a P3 cerradas.
+- Siguiente: **fase 1, incremento 1.1**, en un contexto nuevo. Antes, el usuario decide P4; P5 puede esperar a la fase 4.
