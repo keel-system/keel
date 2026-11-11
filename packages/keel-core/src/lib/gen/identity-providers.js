@@ -48,7 +48,7 @@ export const IDENTITY_PROVIDERS = {
       claims: { type: 'nested', rolesParent: 'realm_access', rolesField: 'roles', permissionsClaim: 'permissions', principalClaim: 'preferred_username' },
       scopes: { format: 'plain' },
       audience: { via: 'aud' },
-      client: { claims: ['azp'], valueIsDeclaredName: true },
+      client: { claims: ['azp', 'client_id'], valueIsDeclaredName: true },
       accepted: null,
       // Cualquier claim llega al access token con un mapper del realm, que es lo que siembra el aprovisionamiento.
       accessTokenClaims: null,
@@ -115,7 +115,7 @@ const GENERIC_PROVIDER = {
     claims: { type: 'flat', rolesClaim: 'roles', permissionsClaim: 'permissions', principalClaim: 'sub' },
     scopes: { format: 'plain' },
     audience: { via: 'aud' },
-    client: { claims: ['azp'], valueIsDeclaredName: true },
+    client: { claims: ['azp', 'client_id'], valueIsDeclaredName: true },
     accepted: null,
     accessTokenClaims: null,
     customClaims: null
@@ -135,8 +135,64 @@ export function tokenContract(auth) {
   return {
     displayName,
     prefixedScopes: token.scopes.format === 'resource-server-prefix',
-    audienceInScopePrefix: token.audience.via === 'scope-prefix'
+    audienceInScopePrefix: token.audience.via === 'scope-prefix',
+    clientClaims: token.client.claims,
+    opaqueClients: !token.client.valueIsDeclaredName,
+    accepted: token.accepted
   };
+}
+
+/** El valor del claim del cliente para un cliente declarado en las pruebas: el nombre, o un id opaco si el proveedor lo genera. */
+export function credentialClientId(auth, clientName) {
+  return identityProvider(auth).token.client.valueIsDeclaredName ? clientName : `opaque-id-of-${clientName}`;
+}
+
+// ─── La referencia ejecutable de cada regla ──────────────────────────────────
+//
+// Lo que los cuatro servidores escriben en su lenguaje, escrito una vez y ejecutable: `token-cases.test.js` comprueba
+// contra estas funciones los casos IDT-*, y la prueba que build emite comprueba lo mismo contra el servidor generado.
+// `contract` es lo que devuelve tokenContract().
+
+/** D1. ¿Es este token del tipo que el proveedor marca como access token? Sin marca, todos lo son. */
+export function acceptsToken(contract, claims) {
+  return !contract.accepted || claims[contract.accepted.claim] === contract.accepted.value;
+}
+
+/**
+ * D2. El scope que da authority, o null. Con scopes prefijados solo cuenta el prefijo propio, que puede tener barras (un
+ * identificador con forma de URL): lo prefijado por otra API es un permiso de otra API, y lo que no lleva prefijo no es
+ * un scope de ningún resource server.
+ */
+export function grantedScope(contract, scope, resourceServer) {
+  if (!contract.prefixedScopes) return scope;
+  const prefix = `${resourceServer}/`;
+  return scope.startsWith(prefix) && scope.length > prefix.length ? scope.slice(prefix.length) : null;
+}
+
+/**
+ * El cliente de la credencial, tal como viene, o null. A falta del claim, el nombre de la autenticación solo vale si el
+ * proveedor usa el nombre declarado: con ids generados, un usuario que se llamase como un cliente pasaría por él.
+ */
+export function credentialClient(contract, claims, principalName) {
+  for (const claim of contract.clientClaims) {
+    if (typeof claims[claim] === 'string' && claims[claim].trim() !== '') return claims[claim];
+  }
+  return contract.opaqueClients ? null : principalName ?? null;
+}
+
+/** D3. ¿Es el cliente de la credencial uno de los exentos? Con ids generados se compara con el id configurado de cada uno. */
+export function isExemptClient(contract, client, exemptClients, clientIds = {}) {
+  if (client === null) return false;
+  return exemptClients.some((name) => client === (contract.opaqueClients ? clientIds[name] : name));
+}
+
+/**
+ * D4. La identidad de un cliente con correspondencia 1:1: el nombre que declara el diseño. Un id que no está en el mapa
+ * sigue crudo y no encuentra recurso, igual que un cliente desconocido con un proveedor que usa el nombre.
+ */
+export function declaredClient(contract, client, clientIds = {}) {
+  if (!contract.opaqueClients) return client;
+  return Object.entries(clientIds).find(([, id]) => id === client)?.[0] ?? client;
 }
 
 /** Los claims que llevan los roles de un usuario, con la forma del proveedor. */

@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { loadService } from '../src/index.js';
 import { buildModel } from '../src/lib/gen/model.js';
 import { STACK_DEFAULTS, defaultDatabaseFor } from '../src/lib/gen/infra-catalog.js';
-import { TOKEN_RULES, credentialClientId, tokenCases } from '../src/lib/gen/token-cases.js';
+import { TOKEN_RULES, tokenCases } from '../src/lib/gen/token-cases.js';
+import { acceptsToken, credentialClient, credentialClientId, declaredClient, grantedScope, isExemptClient, tokenContract } from '../src/lib/gen/identity-providers.js';
 import { PROBE } from './helpers/probe-projection.js';
 
 const FIXTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'fixtures', 'designs');
@@ -215,4 +216,73 @@ test('toda fixture con identidad por token da casos con los dos proveedores', ()
       assert.ok(tokenCases(modelOf(fixture, auth)).length > 0, `${fixture} con ${auth}`);
     }
   }
+});
+
+// ─── La referencia ejecutable ────────────────────────────────────────────────
+
+const AUDIENCE = 'vault-api';
+
+/** Lo que dice la referencia de un caso, en los términos de su `expect`. */
+function verdictOf(auth, entry) {
+  const contract = tokenContract(auth);
+  const accepted = acceptsToken(contract, entry.token);
+  const client = credentialClient(contract, entry.token, entry.token.sub);
+  const granted = (entry.token.scope ?? '').split(' ').filter(Boolean).map((scope) => grantedScope(contract, scope, AUDIENCE)).filter(Boolean);
+  return { contract, accepted, client, granted };
+}
+
+for (const auth of ['keycloak', 'cognito']) {
+  test(`la referencia ejecutable cumple cada caso con ${auth}`, () => {
+    const seen = new Set();
+    for (const security of [{}, { scoping: SCOPING }, { callerIdentity: SERVICE_CLIENT }, { callerIdentity: { ...SERVICE_CLIENT, resolvedBy: { entity: 'T', field: 'f' } } }]) {
+      for (const entry of casesFor(auth, security)) {
+        seen.add(entry.rule);
+        const { contract, accepted, client, granted } = verdictOf(auth, entry);
+        assert.equal(accepted, entry.expect.authenticated, `${entry.id}: tipo de token`);
+        if (entry.rule === 'scope-claim' || entry.rule === 'scope-foreign') {
+          const scopes = (entry.expect.authorities.includes ?? entry.expect.authorities.excludes).map((authority) => authority.slice('SCOPE_'.length));
+          assert.deepEqual(granted, entry.expect.authorities.includes ? scopes : [], entry.id);
+        }
+        if (entry.rule === 'identity-client') assert.equal(declaredClient(contract, client, entry.clientIds), entry.expect.identity, entry.id);
+        if (entry.rule === 'identity-client-resolved') assert.equal(client, entry.expect.identity, entry.id);
+        if (entry.rule === 'exempt-client' || entry.rule === 'scoped-client') {
+          assert.equal(isExemptClient(contract, client, SCOPING.exemptClients, entry.clientIds), entry.expect.exempt, entry.id);
+        }
+      }
+    }
+    for (const rule of ['identity-client', 'identity-client-resolved', 'exempt-client', 'scoped-client', 'scope-claim']) assert.ok(seen.has(rule), `sin caso de ${rule}`);
+  });
+}
+
+test('grantedScope: solo el prefijo propio, también con forma de URL; lo demás no da authority', () => {
+  const cognito = tokenContract('cognito');
+  assert.equal(grantedScope(cognito, 'vault-api/vault:write', 'vault-api'), 'vault:write');
+  assert.equal(grantedScope(cognito, 'https://api.x.io/vault/vault:write', 'https://api.x.io/vault'), 'vault:write');
+  assert.equal(grantedScope(cognito, 'otra-api/vault:write', 'vault-api'), null);
+  assert.equal(grantedScope(cognito, 'vault-api-2/vault:write', 'vault-api'), null);
+  assert.equal(grantedScope(cognito, 'vault:write', 'vault-api'), null);
+  assert.equal(grantedScope(cognito, 'vault-api/', 'vault-api'), null);
+  assert.equal(grantedScope(tokenContract('keycloak'), 'vault:write', 'vault-api'), 'vault:write');
+});
+
+test('acceptsToken: un token sin la marca del proveedor no es un access token', () => {
+  assert.equal(acceptsToken(tokenContract('cognito'), {}), false);
+  assert.equal(acceptsToken(tokenContract('cognito'), { token_use: 'id' }), false);
+  assert.equal(acceptsToken(tokenContract('keycloak'), {}), true);
+});
+
+test('credentialClient: con ids generados el nombre de la autenticación no sustituye al claim', () => {
+  assert.equal(credentialClient(tokenContract('keycloak'), {}, 'batch'), 'batch');
+  assert.equal(credentialClient(tokenContract('keycloak'), { client_id: 'b' }, 'batch'), 'b');
+  assert.equal(credentialClient(tokenContract('cognito'), {}, 'batch'), null);
+  assert.equal(credentialClient(tokenContract('cognito'), { client_id: ' ' }, 'batch'), null);
+});
+
+test('un usuario que se llame como un cliente no se exime ni toma su identidad', () => {
+  const cognito = tokenContract('cognito');
+  assert.equal(isExemptClient(cognito, 'batch', ['batch'], { batch: 'x1' }), false);
+  assert.equal(isExemptClient(cognito, null, ['batch'], { batch: 'x1' }), false);
+  assert.equal(isExemptClient(cognito, 'x1', ['batch'], { batch: 'x1' }), true);
+  assert.equal(declaredClient(cognito, 'x1', { batch: 'x1' }), 'batch');
+  assert.equal(declaredClient(cognito, 'desconocido', { batch: 'x1' }), 'desconocido');
 });

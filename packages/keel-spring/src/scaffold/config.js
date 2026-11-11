@@ -4,7 +4,8 @@
 // (local literal → develop ${VAR:default} → production ${VAR} obligatoria).
 // El perfil activo se elige con la variable de entorno PROFILE (default local).
 
-import { identityProvider } from '@keel-system/keel-core/gen/identity-providers';
+import { identityProvider, tokenContract } from '@keel-system/keel-core/gen/identity-providers';
+import { SCOPE_PREFIX_AUDIENCE_COMMENT, clientIdLines, needsAudience, translatedClients } from '@keel-system/keel-core/gen/security-config';
 import { localIssuer } from '@keel-system/keel-core/gen/identity-realm';
 import { DENIED_ADDRESSES_ENV, usesOutboundPolicy } from './outbound-address.js';
 import { DATABASES, HTTP_STUB, TELEMETRY_INFRA, collectorHostEndpoint } from '../lib/stack-catalog.js';
@@ -1322,16 +1323,12 @@ function securityApplies(model) {
   if (!sec) return false;
   if (sec.cors) return true;
   if (sec.protocol === 'api-key') return true;
-  if (!sec.serviceAuth) return false;
-  const jwt = sec.protocol === 'oidc' || sec.protocol === 'jwt';
-  const audience = jwt && sec.serviceAuth.validateAudience === true;
-  const apiKeys = sec.serviceAuth.protocol === 'api-key' && (sec.serviceClients?.length ?? 0) > 0;
-  return audience || apiKeys;
+  const apiKeys = sec.serviceAuth?.protocol === 'api-key' && (sec.serviceClients?.length ?? 0) > 0;
+  return needsAudience(model) || translatedClients(model).length > 0 || apiKeys;
 }
 
 function securityYaml(model, profile) {
   const sec = model.security;
-  const jwt = sec.protocol === 'oidc' || sec.protocol === 'jwt';
   const lines = ['security:'];
   // Clave única del servicio (protocolo api-key). En local sale con valor real
   // para que los escenarios de validación autentiquen sin editar el YAML:
@@ -1344,11 +1341,12 @@ function securityYaml(model, profile) {
     );
     lines.push(`  api-key: ${envFor('SECURITY_API_KEY', profile)}`);
   }
-  if (jwt && sec.serviceAuth?.validateAudience === true) {
-    const audience = sec.serviceAuth.audience ?? model.service.artifactId;
-    lines.push('  # Audiencia que debe traer el claim aud de los tokens de clientes máquina.');
+  if (needsAudience(model)) {
+    const audience = sec.serviceAuth?.audience ?? model.service.artifactId;
+    lines.push(tokenContract(model.stack.auth).prefixedScopes ? SCOPE_PREFIX_AUDIENCE_COMMENT : '  # Audiencia que debe traer el claim aud de los tokens de clientes máquina.');
     lines.push(`  audience: ${envFor('SECURITY_AUDIENCE', profile, audience)}`);
   }
+  lines.push(...clientIdLines(model, profile));
   if (sec.serviceAuth?.protocol === 'api-key' && (sec.serviceClients?.length ?? 0) > 0) {
     lines.push(
       profile === 'local'

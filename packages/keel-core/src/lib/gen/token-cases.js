@@ -9,7 +9,7 @@
 // conocido del servidor generado (D1 a D4 del plan) que ningún generador cumple hasta la fase 2.
 
 import { accessPlan, audienceOf, tokenClaims } from './access-plan.js';
-import { identityProvider, roleClaims, tokenContract } from './identity-providers.js';
+import { credentialClientId, identityProvider, roleClaims, tokenContract } from './identity-providers.js';
 import { FOREIGN_RESOURCE_SERVER, usesTokens } from './identity-realm.js';
 
 /** Reglas, por id estable. Cada caso de abajo cita la suya. */
@@ -36,11 +36,6 @@ const SUB = 'idt-sub';
 const IDENTITY = 'idt-identity';
 const RESOURCE = 'idt-resource';
 const UNKNOWN_CLIENT = 'idt-other-client';
-
-/** El valor del claim del cliente para un cliente declarado: el nombre, o un id opaco si el proveedor lo genera. */
-export function credentialClientId(auth, clientName) {
-  return identityProvider(auth).token.client.valueIsDeclaredName ? clientName : `opaque-id-of-${clientName}`;
-}
 
 /**
  * Los casos del token de este diseño con el proveedor de su stack. Vacío sin identidad por token o sin proveedor conocido:

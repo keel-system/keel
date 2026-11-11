@@ -202,14 +202,15 @@ export function fullAccessClaims(model, plan = accessPlan(model)) {
   const requirements = plan.chains.flatMap((chain) => [...chain.rules.map((rule) => rule.requirement), chain.fallback]);
   const authorities = [...new Set(requirements.flatMap((requirement) => requirement.authorities ?? []))];
   const claims = tokenClaims(model.stack?.auth);
-  const { prefixedScopes, audienceInScopePrefix } = tokenContract(model.stack?.auth);
+  const { prefixedScopes, audienceInScopePrefix, accepted } = tokenContract(model.stack?.auth);
   const roles = authorities.filter((a) => a.startsWith('ROLE_')).map((a) => a.slice('ROLE_'.length));
   const scopes = authorities.filter((a) => a.startsWith('SCOPE_')).map((a) => a.slice('SCOPE_'.length));
   const permissions = authorities.filter((a) => !a.startsWith('ROLE_') && !a.startsWith('SCOPE_'));
   const full = { sub: 'keel-test', azp: 'keel-test', [claims.principalClaim]: 'keel-test' };
   Object.assign(full, roleClaims(claims, roles));
+  if (accepted) full[accepted.claim] = accepted.value;
   if (permissions.length > 0) full[claims.permissionsClaim] = permissions;
-  if (scopes.length > 0) full.scope = scopes.map((scope) => (prefixedScopes && plan.audience ? `${plan.audience}/${scope}` : scope)).join(' ');
+  if (scopes.length > 0) full.scope = scopes.map((scope) => (prefixedScopes ? `${audienceOf(model)}/${scope}` : scope)).join(' ');
   if (plan.audience && !audienceInScopePrefix) full.aud = plan.audience;
   return full;
 }

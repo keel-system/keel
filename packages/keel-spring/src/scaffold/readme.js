@@ -494,6 +494,7 @@ const PARAMETER_PURPOSES = {
 
 const PARAMETER_PATTERNS = [
   [/^STORAGE_BUCKET_(.+)$/, (match) => `Nombre físico del bucket \`${match[1].toLowerCase()}\` declarado en el diseño.`],
+  [/^SECURITY_CLIENT_ID_(.+)$/, (match) => `Id que el proveedor de identidad generó para el cliente máquina \`${match[1].toLowerCase().replace(/_/g, '-')}\`.`],
   [/^API_KEY_(.+)$/, (match) => `Clave API del cliente máquina \`${match[1].toLowerCase().replace(/_/g, '-')}\`.`],
   [/_BASE_URL$/, () => 'URL base de un cliente HTTP declarado en el diseño.'],
   [/_CLIENT_ID$/, () => 'client-id OAuth2 (client_credentials) de un cliente HTTP saliente.'],

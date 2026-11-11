@@ -258,22 +258,23 @@ const ALLOWED_DIFFERENCES = {
   spring: [
     /^src\/main\/java\/.+\/infrastructure\/configurations\/security\/(AudienceAuthorizationFilter|JwtAuthConverter)\.java$/,
     /^src\/main\/resources\/parameters\/(develop|local)\/oauth2\.yaml$/,
+    /^src\/main\/resources\/parameters\/(develop|local|production)\/security\.yaml$/,
     /^src\/integrationTest\/java\/.+\/flows\/AbstractFlowIT\.java$/
   ],
   nest: [
-    /^config\/parameters\/(develop|local)\/security\.yaml$/,
+    /^config\/parameters\/(develop|local|production|test)\/security\.yaml$/,
     /^src\/infrastructure\/security\/jwt-authenticator\.ts$/,
     /^test\/integration\/(harness-smoke\.test\.ts|support\/flow\.ts)$/,
     /^test\/support\/test-credential\.ts$/
   ],
   dotnet: [
-    /^config\/parameters\/(develop|local)\/security\.yaml$/,
+    /^config\/parameters\/(develop|local|production|test)\/security\.yaml$/,
     /^src\/[A-Za-z]+\.Infrastructure\/Security\/JwtAuthenticator\.cs$/,
     /^tests\/[A-Za-z]+\.IntegrationTests\/(HarnessSmoke\.cs|Support\/(Credentials|FlowTest)\.cs)$/,
     /^tests\/[A-Za-z]+\.UnitTests\/TestCredential\.cs$/
   ],
   go: [
-    /^config\/parameters\/(develop|local)\/security\.yaml$/,
+    /^config\/parameters\/(develop|local|production|test)\/security\.yaml$/,
     /^internal\/platform\/security\/jwt\.go$/,
     /^internal\/httpapi\/api_test\.go$/,
     /^tests\/integration\/(credentials_test|flow_test|harness_smoke_test)\.go$/
