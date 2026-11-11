@@ -11,6 +11,7 @@
 // compileClasspath de este source set, así que nada de lo que se genera aquí
 // puede importar una clase del servicio.
 
+import { PERSONA_SUB_MAX, PERSONA_SUB_TOO_LONG } from '@keel-system/keel-core/gen/identity-realm';
 import { usesConditionalWrites } from '@keel-system/keel-core/gen/conditional-writes';
 import { paymentHarnessImports, paymentHarnessSection } from './payments-harness.js';
 import { javaFile, javaPath } from './render.js';
@@ -706,6 +707,9 @@ function personaTokenSection(model) {
      */
     private static synchronized void ensurePersona(String sub, String role, Map<String, String> claims,
             java.util.Set<String> named) {
+        if (sub.length() > ${PERSONA_SUB_MAX}) {
+            throw new IllegalArgumentException("El sub '" + sub + "' tiene " + sub.length() + " caracteres. ${PERSONA_SUB_TOO_LONG}");
+        }
         String applied = role + "|" + claims;
         String admin = personaAdminToken();
         if (!personaRealmReady) {

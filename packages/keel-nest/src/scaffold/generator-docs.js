@@ -10,6 +10,7 @@
 //     conventions— va a `docs/keel/`, UNA sola copia, y no puede citar rutas de harness.
 
 import { conditionalWritesAgentNote } from '@keel-system/keel-core/gen/conditional-writes';
+import { DESIGN_GAPS_FORM } from '@keel-system/keel-core/gen/design-gaps';
 import fs from 'node:fs';
 import path from 'node:path';
 import { HARNESSES, applyTokens, emitHarnessFiles } from '@keel-system/keel-core';
@@ -271,7 +272,7 @@ completo, con sus porqués: \`{{keel:docs}}/orchestration.md\`.
    \`infra/score-scenarios.sh\` y su código de salida, literales**, y sigue con lo que es del generador
    (\`harnessPatches\`, fixes de \`infra/\` o de la configuración, \`culprit: harness\`,
    \`probes[].verdict: FALSO-NEGATIVO\`), cada entrada diciendo de quién es. Y \`design-gaps.yaml\` con
-   **cada** \`designGap\` (schema \`design-gaps.schema.json\` de keel-core, con el \`service\` y la \`version\` de
+   **cada** \`designGap\` (${DESIGN_GAPS_FORM}; con el \`service\` y la \`version\` de
    \`specs/service.keel.yaml\` y \`generator: keel-nest\`): \`keel-nest check\` lo imprime desde el workspace.
    Antes de escribir un hueco, búscalo en \`specs/gaps.yaml\` y \`specs/decisions.yaml\`: si ya está ahí aceptado
    (\`state: accepted\`), es una decisión tomada por escrito y no se reporta.

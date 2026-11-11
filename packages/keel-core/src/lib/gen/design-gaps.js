@@ -11,6 +11,15 @@ import { readManifest } from './generated-manifest.js';
 export const DESIGN_GAPS_FILE = 'design-gaps.yaml';
 
 /**
+ * Cómo escribe `design-gaps.yaml` el agente, en la skill del proyecto generado. El schema vive en el workspace de diseño y el
+ * proyecto es autosuficiente: citarlo a secas hizo que una corrida (shop-api en keel-spring, 2026-11-10) no escribiera el
+ * archivo, y sus huecos se quedaron en prosa. Lo ata al schema `test/design-gaps-form.test.js`.
+ */
+export const DESIGN_GAPS_FORM =
+  'con esta forma, sin necesidad del schema (`design-gaps.schema.json` vive en el workspace de diseño, no en este proyecto, y su ausencia nunca es motivo para omitir un hueco): ' +
+  '`service`, `version`, `generator` y `gaps`, una lista cuyas entradas llevan `layer`, `kind` (`missing`, `contradiction` o `undeclared`) y `proposal` (obligatorios) y `unit`, `source` y `scenario`';
+
+/**
  * Los `designGaps` del proyecto `services/<servicio>-<projectSuffix>/`, si existe.
  *
  * Tolerante a propósito: un archivo ausente, mal formado o de otra versión no puede impedir que se

@@ -17,7 +17,7 @@
 
 import { closingCredentialOf, usesTokenProtocol } from '@keel-system/keel-core/gen/access-plan';
 import { usesIdentityHarness } from '@keel-system/keel-core/gen/features';
-import { keycloakAdminCredentials, secondUserOf, tokenUrl, TEST_USER_PASSWORD, userTestClient, usesPersonaTokens, usesScopedTokens } from '@keel-system/keel-core/gen/identity-realm';
+import { PERSONA_SUB_MAX, PERSONA_SUB_TOO_LONG, keycloakAdminCredentials, secondUserOf, tokenUrl, TEST_USER_PASSWORD, userTestClient, usesPersonaTokens, usesScopedTokens } from '@keel-system/keel-core/gen/identity-realm';
 import { goString } from '../lib/go-source.js';
 
 export { usesIdentityHarness };
@@ -485,6 +485,9 @@ var personas = struct {
 // los claims salen de atributos propios (kp_<claim>) con un mapper por claim, y el User Profile deja de exigir email
 // y nombre.
 func ensurePersona(ctx context.Context, p Persona) error {
+	if len(p.Sub) > ${PERSONA_SUB_MAX} {
+		return fmt.Errorf("el sub %q tiene %d caracteres. ${PERSONA_SUB_TOO_LONG}", p.Sub, len(p.Sub))
+	}
 	personas.Lock()
 	defer personas.Unlock()
 	admin, err := adminToken(ctx)

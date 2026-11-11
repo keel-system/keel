@@ -11,7 +11,7 @@
 // `serviceAuth` no hay clientes máquina.
 
 import { closingCredentialOf, usesTokenProtocol } from '@keel-system/keel-core/gen/access-plan';
-import { tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens, keycloakAdminCredentials, TEST_USER_PASSWORD } from '@keel-system/keel-core/gen/identity-realm';
+import { PERSONA_SUB_MAX, PERSONA_SUB_TOO_LONG, tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens, keycloakAdminCredentials, TEST_USER_PASSWORD } from '@keel-system/keel-core/gen/identity-realm';
 import { LOCAL_API_KEY, localClientApiKey } from './security.js';
 import { tsString } from './render.js';
 import { usesIdentityHarness } from '@keel-system/keel-core/gen/features';
@@ -268,6 +268,7 @@ let personaRealmReady = false;
  * nombre, o el password grant de una persona sin ellos responde «Account is not fully set up».
  */
 async function ensurePersona(sub: string, role: string | null, claims: Record<string, string>, named: readonly string[]): Promise<void> {
+  if (sub.length > ${PERSONA_SUB_MAX}) throw new Error(\`El sub '\${sub}' tiene \${sub.length} caracteres. ${PERSONA_SUB_TOO_LONG}\`);
   const admin = await personaAdminToken();
   if (!personaRealmReady) {
     await preparePersonaRealm(admin);

@@ -311,14 +311,17 @@ export function multipartPartCount(model) {
 }
 
 function tomcatPartCountLines(model) {
-  const parts = multipartPartCount(model);
-  if (parts <= TOMCAT_DEFAULT_PART_COUNT) return [];
+  // El doble y no el máximo justo: una petición con maxItems + 1 elementos tiene que llegar a la validación y responder su
+  // 400; con el tope exacto, Tomcat la rechazaba al leerla y salía un 413 (corrida asset-vault de keel-spring, 2026-11-10).
+  const limit = multipartPartCount(model) * 2;
+  if (limit <= TOMCAT_DEFAULT_PART_COUNT) return [];
   return [
     '  tomcat:',
     '    # Cada elemento de una lista multipart es una parte: con el defecto de Tomcat (10), una',
-    '    # petición válida se rechaza al leerla, antes de validar nada. Sale de la mayor petición',
-    '    # multipart del diseño (un campo, una parte; una lista, su maxItems).',
-    `    max-part-count: ${parts}`
+    '    # petición válida se rechaza al leerla, antes de validar nada. Es el doble de la mayor',
+    '    # petición multipart del diseño (un campo, una parte; una lista, su maxItems): lo que',
+    '    # se pase de maxItems tiene que llegar a la validación y responder su 400.',
+    `    max-part-count: ${limit}`
   ];
 }
 

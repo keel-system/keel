@@ -2434,7 +2434,7 @@ test('max-part-count de Tomcat sale de la mayor petición multipart del diseño'
   const yaml = scaffoldVault()('src/main/resources/application.yaml');
   // ownerId, slug, title, el binario y hasta 20 etiquetas: 24 partes, más que las 10 de Tomcat.
   assert.ok(/^server:[\s\S]*?\n {2}tomcat:\n/.test(yaml), yaml);
-  assert.ok(yaml.includes('    max-part-count: 24'), yaml);
+  assert.ok(yaml.includes('    max-part-count: 48'), yaml);
   // Y sin listas que lo superen, no se toca el defecto.
   const { read } = scaffoldExtended();
   assert.ok(!read('src/main/resources/application.yaml').includes('max-part-count'));

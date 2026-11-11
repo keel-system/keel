@@ -16,6 +16,7 @@ import { usesHttpClients } from './http-clients.js';
 import { usesMail } from './mail.js';
 import { usesCache } from './cache.js';
 import { usesStorageAdapter } from './storage.js';
+import { DESIGN_GAPS_FORM } from '@keel-system/keel-core/gen/design-gaps';
 import fs from 'node:fs';
 import path from 'node:path';
 import { HARNESSES, applyTokens, emitHarnessFiles } from '@keel-system/keel-core';
@@ -275,8 +276,7 @@ Se invoca **sin argumentos, con el cwd en esta raíz**; todas las rutas son rela
 6. **Informe de generación.** Escribe \`INFORME-GENERACION.md\`, que **abre con la matriz final de
    \`infra/score-scenarios.sh\` y su código de salida, literales**, y sigue con lo que es del generador
    (\`harnessPatches\`, fixes de \`infra/\` o de la solución, \`culprit: harness\`, \`probes[].verdict: FALSO-NEGATIVO\`),
-   cada entrada diciendo de quién es. Y \`design-gaps.yaml\` con **cada** \`designGap\` (schema
-   \`design-gaps.schema.json\` de keel-core, con el \`service\` y la \`version\` de \`specs/service.keel.yaml\` y
+   cada entrada diciendo de quién es. Y \`design-gaps.yaml\` con **cada** \`designGap\` (${DESIGN_GAPS_FORM}; con el \`service\` y la \`version\` de \`specs/service.keel.yaml\` y
    \`generator: keel-dotnet\`): \`keel-dotnet check\` lo imprime desde el workspace. Antes de escribir un hueco, búscalo
    en \`specs/gaps.yaml\` y \`specs/decisions.yaml\`: si ya está ahí aceptado (\`state: accepted\`), es una decisión
    tomada por escrito y no se reporta. Sin huecos, no se escribe; sin nada

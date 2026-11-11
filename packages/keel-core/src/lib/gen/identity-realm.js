@@ -184,6 +184,14 @@ export function usesScopedTokens(model) {
   return model.stack.auth === 'keycloak' && Boolean(scoping) && roles.some((role) => !scoping.exemptRoles.includes(role));
 }
 
+/**
+ * El `sub` de una persona es el id del usuario en Keycloak (`USER_ENTITY.ID`, VARCHAR(36)): con uno más largo, `partialImport`
+ * responde 500 y no hay token, y el fallo sale lejos de su causa (71 flujos de shop-api en keel-spring, 2026-11-10). El arnés
+ * de los cuatro generadores lo rechaza antes de llamar a nadie, con este motivo.
+ */
+export const PERSONA_SUB_MAX = 36;
+export const PERSONA_SUB_TOO_LONG = 'Keycloak guarda el sub como id del usuario, VARCHAR(36), y con uno más largo responde 500 al darlo de alta: usa un sub de hasta 36 caracteres, como un UUID';
+
 /** Credenciales de administración del contenedor de Keycloak, tal como las declara el catálogo. */
 export function keycloakAdminCredentials() {
   const env = AUTH.keycloak.composeServices().keycloak.environment;

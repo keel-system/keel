@@ -12,7 +12,7 @@
 // lo decide keel-core (`closingCredentialOf`), la misma para los tres generadores.
 
 import { closingCredentialOf, usesTokenProtocol } from '@keel-system/keel-core/gen/access-plan';
-import { tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens, keycloakAdminCredentials, TEST_USER_PASSWORD } from '@keel-system/keel-core/gen/identity-realm';
+import { PERSONA_SUB_MAX, PERSONA_SUB_TOO_LONG, tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens, keycloakAdminCredentials, TEST_USER_PASSWORD } from '@keel-system/keel-core/gen/identity-realm';
 import { csFile, csString } from './render.js';
 import { LOCAL_API_KEY, localClientApiKey } from './security.js';
 import { usesIdentityHarness } from '@keel-system/keel-core/gen/features';
@@ -297,6 +297,7 @@ function personaSection(model) {
     /// </summary>
     private static async Task EnsurePersona(string sub, string? role, Dictionary<string, string> claims, IReadOnlyList<string> named)
     {
+        if (sub.Length > ${PERSONA_SUB_MAX}) throw new ArgumentException($"El sub '{sub}' tiene {sub.Length} caracteres. ${PERSONA_SUB_TOO_LONG}");
         var admin = await AdminToken();
         if (!personaRealmReady)
         {
