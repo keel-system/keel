@@ -230,7 +230,7 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
 |---|---|---|
 | 1. contrato del proveedor | hecha el 2026-11-10 (sin el 1.5, opcional) | Lo emitido, idéntico en 4 generadores × 19 fixtures × 3 valores de `auth`; `keel-core/test/token-cases.test.js` y `keel-go/test/identity-providers.test.js`, falsada con tres sabotajes; las seis suites |
 | 2. servidor equivalente | hecha: 2.1 y 2.2/2.3 en keel-spring y keel-nest (2026-11-10), keel-dotnet y keel-go (2026-11-11) | keel-spring: `token-check` (4 diseños) y sus 4 sabotajes. keel-nest: `test/token-contract.test.js` ejecuta lo emitido, 3 sabotajes, y `ts-check --auth=cognito` 13/13. keel-dotnet: `cs-check --fixtures` con cuatro variantes `*-cognito` y 3 sabotajes, cada uno en exactamente sus casos. keel-go: `go-check --token` (5 sujetos con gofmt, vet y staticcheck) 9/9 y 3 sabotajes, cada uno en exactamente sus casos. Lo emitido con `keycloak` y sin proveedor, idéntico salvo la prueba nueva |
-| 3. lo que debe cumplir el proveedor | pendiente | |
+| 3. lo que debe cumplir el proveedor | hecha el 2026-11-11 | `keel-core/test/identity-support.test.js` (una prueba por exigencia, falsada con dos sabotajes), las redes de fase 3 de `keel-go/test/identity-providers.test.js` en los cuatro, `keel-recover/test/target.test.js`; las seis suites. Lo emitido con `keycloak`, idéntico salvo el documento nuevo |
 | 4. emulador fiel y arnés | pendiente | |
 | 5. Cognito real | diferida (fuera del cierre) | |
 
@@ -258,7 +258,6 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
   `getRequiredProperty`); toda prueba emitida que firme a mano un token necesita el claim del tipo (`accepted`), o da 401 donde espera
   403 (lo vio `ts-check`). **keel-dotnet (`api-tests.js:338`) y keel-go (`api-tests.js:545`) tienen ese mismo token.**
 - Local sigue con `client_id` igual al nombre: `clientIdLines` pone el nombre en `local` y `develop`, y cambia con T3 en la fase 4.
-- **Fase 3.2 o antes:** la descripción de `SECURITY_AUDIENCE` en `keel-spring/.../readme.js` dice «claim `aud`», falso con Cognito.
 - keel-dotnet (2026-11-11): `TokenContractTests.cs` (`src/scaffold/token-contract-test.js`) carga el perfil `test` REAL con
   `ServiceConfiguration.Load`, así que mide también la audiencia y el mapa `client-ids` de `security.yaml`; un método por caso con el
   id en el nombre, que es lo que lee `cs-check`. El mapa vive en `ServiceClientIds.cs` (estático: `CallerIdentity` es estático y
@@ -275,5 +274,22 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
   `test` embebido; `go-check --token` la ejecuta con sus sujetos y sabotajes (`test/helpers/token-sabotages.js`). RS-10 y
   `caller_scope_test.go` con Cognito construyen el principal con `Client` puesto, que es lo que deja el autenticador.
 - Fase 2 hecha. RS-10 de keel-nest sigue con `azp` escrito a mano (con Cognito daría rojo: lo arreglado en keel-dotnet y keel-go).
-- Siguiente: **fase 3** (lo que debe cumplir el proveedor, sin red): `checkIdentitySupport` (3.1), `docs/keel/identity-contract.md`
-  (3.2, y ahí la descripción de `SECURITY_AUDIENCE`), las skills (3.3) y el rechazo de keel-recover (3.4). P5 puede esperar a la fase 4.
+- Fase 3 hecha. Lo neutral está en `gen/identity-support.js`: `identityClaimDemands` (lo que la capa security lee del token
+  además de su forma fija: `caller-identity`, `scoping-user`, `scoping-machine` por los clientes no exentos con token, y
+  `permissions` por los permisos que ningún rol otorga), `claimSupport`/`checkIdentitySupport`/`identityCoverage` (la matriz,
+  tres estados) e `identityContractFile` (`docs/keel/identity-contract.md`, emitido en los cuatro desde `generator-docs.js` siempre
+  que el servidor consume un token, también sin proveedor del catálogo). El descriptor gana `token.issuer`, `token.accessTokenClaims`
+  de Keycloak (los client scopes por defecto), `token.customClaims` como `{ state, via, plan }` por portador, `token.setup` y
+  `verification` (`live`/`emulated`). `model.security.claimDemands` lleva las exigencias al documento.
+- `build` avisa (`requires-configuration`) o se niega (`unsupported`), y `planService` lanza con lo segundo, como la pasarela;
+  `check` imprime «Proveedores de identidad» y suma los avisos. Hoy ningún proveedor real tiene una celda `unsupported`: la rama la
+  mide un proveedor de prueba sin `customClaims.machine`. Sobre las fixtures, con Cognito avisan `shop-api` (D5, `email`) y
+  `asset-vault` (D6, `vaults`); con Keycloak, nada.
+- keel-recover: `target` lee `auth` de `keel-stack.json` y rechaza cualquier proveedor que no sea el de realm importado
+  (`realmImportProvider()`), también `none`; sin `keel-stack.json`, lo que diga el deploy.
+- Skills: las cuatro `keel-<tech>-cognito` citan `{{keel:docs}}/identity-contract.md` en vez de repetir el disparador, y su tabla de
+  rarezas gana D1 y D3/D4. T4 corregida en `references/configuration.md` de keel-spring; el README de keel-spring describe
+  `SECURITY_AUDIENCE` como el identificador del resource server cuando la audiencia va en el prefijo.
+- Siguiente: **fase 4** (emulador fiel y arnés): `client_id` opaco, `sub` uuid y `email` según P3 (4.1), T1 con varios valores (4.2),
+  `tokenAs`/`tokenWithScope` con Cognito (4.3) y la red de extremo a extremo (4.4, con P5 por decidir). Queda RS-10 de keel-nest con
+  `azp` a mano. Con P3, cuando el emulador añada un claim por el disparador, `check`/`build` ya lo dicen (el aviso de la matriz).
