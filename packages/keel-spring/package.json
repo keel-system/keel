@@ -26,6 +26,7 @@
     "finder-check": "node scripts/finder-check.js product-catalog-finder && node scripts/finder-check.js product-catalog-finder --database=mysql && node scripts/finder-check.js jobs-mongo-finder",
     "precondition-check": "node scripts/precondition-check.js catalog-conditional && node scripts/precondition-check.js catalog-conditional --database=mysql && node scripts/precondition-check.js catalog-conditional-mongo && node scripts/precondition-check.js shop-conditional",
     "read-scope-check": "node scripts/read-scope-check.js vault-scoped && node scripts/read-scope-check.js vault-scoped --database=mysql && node scripts/read-scope-check.js vault-scoped-mongo && node scripts/read-scope-check.js shop-scoped && node scripts/read-scope-check.js shop-scoped --database=mysql && node scripts/read-scope-check.js conduit-scoped",
+    "security-check": "node scripts/security-check.js",
     "schema-step-check": "node scripts/schema-step-check.js && node scripts/schema-step-check.js --database=mysql",
     "timer-check": "node scripts/timer-check.js && node scripts/timer-check.js verification-codes --database=mysql && node scripts/timer-check.js verification-codes-mongo"
   },

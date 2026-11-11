@@ -362,17 +362,37 @@ function personaSection(model) {
             await Admin(admin, HttpMethod.Post, "/partialImport", new JsonObject { ["ifResourceExists"] = "SKIP", ["users"] = new JsonArray(created) });
             id = await UserId(admin, sub);
             if (id != sub) throw new InvalidOperationException($"Keycloak no respetó el id pedido para la persona {sub} (asignó {id}): el claim sub del token no sería el del escenario");
-            if (role is not null)
-            {
-                var realmRole = await Admin(admin, HttpMethod.Get, $"/roles/{Uri.EscapeDataString(role)}");
-                await Admin(admin, HttpMethod.Post, $"/users/{id}/role-mappings/realm", new JsonArray(realmRole?.DeepClone()));
-            }
         }
         else
         {
             await Admin(admin, HttpMethod.Put, $"/users/{id}", user);
         }
+        await SyncPersonaRole(admin, id, role);
         PersonaApplied[sub] = applied;
+    }
+
+    /// <summary>
+    /// Deja a la persona con el rol pedido y SOLO ese, también cuando ya existía: el PUT del usuario no toca sus role
+    /// mappings, así que «la misma persona sin rol» después de pedirla con rol conservaba el rol (concedía de más), y al
+    /// revés no lo ganaba. Los <c>default-roles-&lt;realm&gt;</c> se quedan: los pone el realm a todo usuario.
+    /// </summary>
+    private static async Task SyncPersonaRole(string admin, string id, string? role)
+    {
+        var route = $"/users/{id}/role-mappings/realm";
+        var held = false;
+        var stale = new JsonArray();
+        foreach (var mapping in (await Admin(admin, HttpMethod.Get, route))?.AsArray() ?? new JsonArray())
+        {
+            var name = mapping?["name"]?.GetValue<string>() ?? "";
+            if (name == role) held = true;
+            else if (!name.StartsWith("default-roles-", StringComparison.Ordinal)) stale.Add(mapping?.DeepClone());
+        }
+        if (stale.Count > 0) await Admin(admin, HttpMethod.Delete, route, stale);
+        if (role is not null && !held)
+        {
+            var realmRole = await Admin(admin, HttpMethod.Get, $"/roles/{Uri.EscapeDataString(role)}");
+            await Admin(admin, HttpMethod.Post, route, new JsonArray(realmRole?.DeepClone()));
+        }
     }
 
     /// <summary>User Profile del realm: email y nombre opcionales, y atributos no declarados admitidos.</summary>

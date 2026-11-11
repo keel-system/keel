@@ -608,20 +608,50 @@ func ensurePersona(ctx context.Context, p Persona) error {
 		if id != p.Sub {
 			return fmt.Errorf("el realm no respetó el id pedido para la persona %s (asignó %q): el claim sub del token no sería el del escenario", p.Sub, id)
 		}
-		if p.Role != "" {
-			role, err := adminCall[map[string]any](ctx, admin, http.MethodGet, "/roles/"+url.PathEscape(p.Role), nil)
-			if err != nil {
-				return err
-			}
-			if _, err := adminCall[any](ctx, admin, http.MethodPost, "/users/"+url.PathEscape(id)+"/role-mappings/realm", []any{role}); err != nil {
-				return err
-			}
-		}
 	} else if _, err := adminCall[any](ctx, admin, http.MethodPut, "/users/"+url.PathEscape(id), user); err != nil {
+		return err
+	}
+	if err := syncPersonaRole(ctx, admin, id, p.Role); err != nil {
 		return err
 	}
 	personas.applied[p.Sub] = applied
 	return nil
+}
+
+// syncPersonaRole deja a la persona con el rol pedido y SOLO ese, también cuando ya existía: el PUT del usuario no toca
+// sus role mappings, así que «la misma persona sin rol» después de pedirla con rol conservaba el rol (concedía de más), y
+// al revés no lo ganaba. Los default-roles-<realm> se quedan: los pone el realm a todo usuario.
+func syncPersonaRole(ctx context.Context, admin, id, role string) error {
+	route := "/users/" + url.PathEscape(id) + "/role-mappings/realm"
+	mappings, err := adminCall[[]map[string]any](ctx, admin, http.MethodGet, route, nil)
+	if err != nil {
+		return err
+	}
+	held := false
+	var stale []map[string]any
+	for _, mapping := range mappings {
+		name, _ := mapping["name"].(string)
+		switch {
+		case name == role:
+			held = true
+		case !strings.HasPrefix(name, "default-roles-"):
+			stale = append(stale, mapping)
+		}
+	}
+	if len(stale) > 0 {
+		if _, err := adminCall[any](ctx, admin, http.MethodDelete, route, stale); err != nil {
+			return err
+		}
+	}
+	if role == "" || held {
+		return nil
+	}
+	realmRole, err := adminCall[map[string]any](ctx, admin, http.MethodGet, "/roles/"+url.PathEscape(role), nil)
+	if err != nil {
+		return err
+	}
+	_, err = adminCall[any](ctx, admin, http.MethodPost, route, []any{realmRole})
+	return err
 }
 
 // preparePersonaRealm deja el User Profile del realm con email y nombre opcionales y admite atributos no declarados.

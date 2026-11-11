@@ -783,7 +783,8 @@ function renderExceptionHandler(model) {
     'org.springframework.web.bind.annotation.ResponseStatus',
     'org.springframework.web.bind.annotation.RestControllerAdvice',
     'org.springframework.web.method.annotation.HandlerMethodValidationException',
-    'org.springframework.web.method.annotation.MethodArgumentTypeMismatchException'
+    'org.springframework.web.method.annotation.MethodArgumentTypeMismatchException',
+    'org.springframework.web.servlet.resource.NoResourceFoundException'
   ]);
 
   // Las constantes van arriba, junto al logger; los @ExceptionHandler, en su
@@ -872,6 +873,14 @@ ${constants.join('')}
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
     public ErrorResponse onMethodNotAllowed(HttpRequestMethodNotSupportedException exception) {
         return new ErrorResponse(HttpStatus.METHOD_NOT_ALLOWED.value(), "${FW.methodNotAllowed.error}", "${FW.methodNotAllowed.message}");
+    }
+
+    // Un camino que no casa con ninguna ruta: Spring lo lanza como NoResourceFoundException, y sin este handler el
+    // catch-all lo devolvía como 500 a todo cliente autenticado (sin credencial, la cadena de seguridad ya da 401).
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ErrorResponse onNoResource(NoResourceFoundException exception) {
+        return new ErrorResponse(HttpStatus.NOT_FOUND.value(), "${FW.notFound.error}", "${FW.notFound.message}");
     }
 ${multipart}${dataIntegrity}${optimisticLock}${transactionTimeout}
     // ── Errores de dominio (jerarquía DomainException) ───────────────────────

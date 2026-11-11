@@ -762,14 +762,41 @@ function personaTokenSection(model) {
                 throw new IllegalStateException("Keycloak no respetó el id pedido para la persona " + sub
                     + " (asignó " + id + "): el claim sub del token no sería el del escenario");
             }
-            if (role != null) {
-                String roleJson = personaAdmin(admin, "GET", "/roles/" + personaEncode(role), null);
-                personaAdmin(admin, "POST", "/users/" + id + "/role-mappings/realm", "[" + roleJson + "]");
-            }
         } else {
             personaAdmin(admin, "PUT", "/users/" + id, personaJson(user));
         }
+        personaSyncRole(admin, id, role);
         PERSONA_APPLIED.put(sub, applied);
+    }
+
+    /**
+     * Deja a la persona con el rol pedido y SOLO ese, también cuando ya existía: el PUT del usuario no toca sus role
+     * mappings, así que «la misma persona sin rol» después de pedirla con rol conservaba el rol (concedía de más), y
+     * al revés no lo ganaba. Los {@code default-roles-<realm>} se quedan: los pone el realm a todo usuario.
+     */
+    private static void personaSyncRole(String admin, String id, String role) {
+        String path = "/users/" + id + "/role-mappings/realm";
+        try {
+            tools.jackson.databind.node.ArrayNode stale = JSON.createArrayNode();
+            boolean held = false;
+            for (tools.jackson.databind.JsonNode mapping : JSON.readTree(personaAdmin(admin, "GET", path, null))) {
+                String name = mapping.path("name").asString();
+                if (name.equals(role)) {
+                    held = true;
+                } else if (!name.startsWith("default-roles-")) {
+                    stale.add(mapping);
+                }
+            }
+            if (!stale.isEmpty()) {
+                personaAdmin(admin, "DELETE", path, stale.toString());
+            }
+            if (role != null && !held) {
+                String roleJson = personaAdmin(admin, "GET", "/roles/" + personaEncode(role), null);
+                personaAdmin(admin, "POST", path, "[" + roleJson + "]");
+            }
+        } catch (tools.jackson.core.JacksonException e) {
+            throw new IllegalStateException("No se pudieron leer los roles de la persona " + id, e);
+        }
     }
 
     /** User Profile del realm: email y nombre opcionales, y atributos no declarados admitidos. */

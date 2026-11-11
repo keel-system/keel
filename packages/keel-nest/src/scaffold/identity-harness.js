@@ -325,14 +325,27 @@ async function ensurePersona(sub: string, role: string | null, claims: Record<st
     await personaAdmin(admin, 'POST', '/partialImport', { ifResourceExists: 'SKIP', users: [created] });
     id = await personaUserId(admin, sub);
     if (id !== sub) throw new Error(\`Keycloak no respetó el id pedido para la persona \${sub} (asignó \${id}): el claim sub del token no sería el del escenario\`);
-    if (role != null) {
-      const realmRole = await personaAdmin(admin, 'GET', \`/roles/\${encodeURIComponent(role)}\`);
-      await personaAdmin(admin, 'POST', \`/users/\${id}/role-mappings/realm\`, [realmRole]);
-    }
   } else {
     await personaAdmin(admin, 'PUT', \`/users/\${id}\`, user);
   }
+  await personaSyncRole(admin, id, role);
   personaApplied.set(sub, applied);
+}
+
+/**
+ * Deja a la persona con el rol pedido y SOLO ese, también cuando ya existía: el PUT del usuario no toca sus role mappings,
+ * así que «la misma persona sin rol» después de pedirla con rol conservaba el rol (concedía de más), y al revés no lo ganaba.
+ * Los \`default-roles-<realm>\` se quedan: los pone el realm a todo usuario.
+ */
+async function personaSyncRole(admin: string, id: string, role: string | null | undefined): Promise<void> {
+  const route = \`/users/\${id}/role-mappings/realm\`;
+  const mappings = ((await personaAdmin(admin, 'GET', route)) ?? []) as Array<{ name: string }>;
+  const stale = mappings.filter((mapping) => mapping.name !== role && !mapping.name.startsWith('default-roles-'));
+  if (stale.length > 0) await personaAdmin(admin, 'DELETE', route, stale);
+  if (role != null && !mappings.some((mapping) => mapping.name === role)) {
+    const realmRole = await personaAdmin(admin, 'GET', \`/roles/\${encodeURIComponent(role)}\`);
+    await personaAdmin(admin, 'POST', route, [realmRole]);
+  }
 }
 
 /** User Profile del realm: email y nombre opcionales, y atributos no declarados admitidos. */

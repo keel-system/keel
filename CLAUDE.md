@@ -166,6 +166,7 @@ npm run mapping-check --workspace packages/keel-spring    # pregunta al motor si
 npm run index-check --workspace packages/keel-spring      # ejercita la UNICIDAD CONDICIONADA en sus dos ramas
 npm run deploy-check --workspace packages/keel-spring     # levanta deploy/ entero y le pregunta AL BACKEND
 npm run matrix --workspace packages/keel-spring           # imprime la MATRIZ DE PARIDAD y sus tres listas (puro)
+npm run security-check --workspace packages/keel-spring   # la SEGURIDAD de extremo a extremo contra el proveedor REAL de prueba, Keycloak y el emulador de Cognito (`-- --auth=keycloak|cognito`): discovery, JWKS, emisor, 401/403, identidad, personas de tokenAs y, con Cognito, el ID token rechazado; falsada con la regla rebajada y sin token_use (JDK, podman/docker, minutos)
 npm run payment-check --workspace packages/keel-spring    # EJECUTA el adaptador y el verificador de avisos de cada pasarela contra una pasarela falsa del JDK (JDK, sin contenedores)
 npm run claim-check --workspace packages/keel-spring      # ejercita los RECLAMOS generados contra el motor real
 npm run finder-check --workspace packages/keel-spring     # EJECUTA los finders de las búsquedas (DSL 2.22) y la página vacía contra PostgreSQL, MySQL y MongoDB (un sabotaje, por diseño y sin npm, que encadena tres órdenes y `--` solo llega a la última: `node packages/keel-spring/scripts/finder-check.js <diseño> --sabotage=finder-where|finder-literal|empty-page`)

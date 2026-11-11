@@ -276,12 +276,12 @@ const ALLOWED_DIFFERENCES = {
     /^config\/parameters\/(develop|local|production|test)\/security\.yaml$/,
     /^src\/[A-Za-z]+\.Infrastructure\/Security\/(JwtAuthenticator|CallerIdentity|JwtCallerScope|ServiceClientIds)\.cs$/,
     /^tests\/[A-Za-z]+\.IntegrationTests\/(HarnessSmoke\.cs|Support\/(Credentials|FlowTest)\.cs)$/,
-    /^tests\/[A-Za-z]+\.UnitTests\/(TestCredential|TokenContractTests|ApiTests|ReadScopeTests)\.cs$/
+    /^tests\/[A-Za-z]+\.UnitTests\/(TestCredential|TokenContractTests|ApiTests|ReadScopeTests|OptionalAuthTests)\.cs$/
   ],
   go: [
     /^config\/parameters\/(develop|local|production|test)\/security\.yaml$/,
     /^internal\/platform\/security\/(jwt|principal|caller_scope|caller_scope_test)\.go$/,
-    /^internal\/httpapi\/(api_test|security|read_scope_test|token_contract_test)\.go$/,
+    /^internal\/httpapi\/(api_test|security|read_scope_test|token_contract_test|optional_auth_test)\.go$/,
     /^tests\/integration\/(credentials_test|flow_test|harness_smoke_test)\.go$/
   ]
 };

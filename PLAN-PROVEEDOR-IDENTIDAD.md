@@ -93,6 +93,9 @@ emite `email`.
   con V2.
 - **T6 · `SECURITY_AUDIENCE` solo existe con `validateAudience: true`.** Para quitar solo el prefijo propio (D2), un proveedor
   con scopes prefijados la necesita también con scopes declarados sin esa validación.
+- **T7 · el `id_token` del emulador. Medido con la 6.0.1 (2026-11-11).** mock-oauth2-server aplica los claims del mapping a
+  los DOS tokens, así que su `id_token` lleva `token_use: access` y el servidor lo aceptaría: escondería D1. Ningún arnés lo
+  usa; la red del 4.4 pide su ID token con un mapping propio (`keel_probe=id-token`) y comprueba que lleve `token_use: id`.
 
 ## Fases
 
@@ -210,6 +213,23 @@ Un diseño con Cognito tiene que poder llegar a verde en el pipeline, y el emula
   `security-check` contra Keycloak, porque lo que cambia entre proveedores son los claims. **Medido con:** esa red en verde y
   falsada.
 
+  Hecho el 2026-11-11: `npm run security-check --workspace packages/keel-spring` (`scripts/security-check.js`, `--auth=` para
+  uno). Sobre `profile-directory` con los handlers sonda que devuelven el llamante, la `infra/` real (Keycloak sembrado con
+  `init-keycloak.sh`, o el emulador con la configuración de build) y el flujo `FL-SEC-001` puntuado por `score-scenarios.sh`:
+  401 sin credencial y con un token que no valida, 403 sin el permiso, el `sub` del token en el handler, la persona de
+  `tokenAs` con rol y sin él, la identidad que no se acepta del cuerpo, 401/404 en un camino que no existe, 401 con otro
+  emisor y, con un proveedor que distingue el tipo de token, 401 con un ID token (T7). Falsada: la regla rebajada tumba C y F,
+  y sin la comprobación de `token_use` cae solo J. Keycloak 16/16, Cognito 19/19.
+
+  **Lo que destapó**, arreglado: (1) con Keycloak, la persona de `tokenAs` solo recibía el rol al CREARLA: pedir después la
+  misma persona con otro rol no lo cambiaba, y sin rol lo conservaba (concedía de más); en los cuatro arneses, ahora se
+  reconcilian sus role mappings en cada alta o cambio (ejecutado contra Keycloak en el `security-check` de keel-nest 32/32,
+  keel-dotnet 34/34 y keel-go 56/56; el cambio de rol de una misma persona solo lo pisa el de keel-spring). (2) keel-spring respondía 500 a un camino inexistente con credencial
+  (`NoResourceFoundException` caía en el catch-all); ahora 404 con el texto de `api-errors.js`. Los dos cambian lo emitido
+  con Keycloak, a propósito: son defectos, no cambios del plan. (3) Al relanzar las redes del 4.3, OA-2 de la identidad
+  opcional daba 401 en `conduit-cognito` en keel-dotnet y keel-go: su token firmado a mano no llevaba `token_use`
+  (`fb6b0fec`).
+
 ### Fase 5 · Cognito real (diferida)
 
 No forma parte del cierre de este plan. Se hace cuando un diseño real vaya a producción con Cognito, y en ese pool, que es el
@@ -258,7 +278,7 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
 | 1. contrato del proveedor | hecha el 2026-11-10 (sin el 1.5, opcional) | Lo emitido, idéntico en 4 generadores × 19 fixtures × 3 valores de `auth`; `keel-core/test/token-cases.test.js` y `keel-go/test/identity-providers.test.js`, falsada con tres sabotajes; las seis suites |
 | 2. servidor equivalente | hecha: 2.1 y 2.2/2.3 en keel-spring y keel-nest (2026-11-10), keel-dotnet y keel-go (2026-11-11) | keel-spring: `token-check` (4 diseños) y sus 4 sabotajes. keel-nest: `test/token-contract.test.js` ejecuta lo emitido, 3 sabotajes, y `ts-check --auth=cognito` 13/13. keel-dotnet: `cs-check --fixtures` con cuatro variantes `*-cognito` y 3 sabotajes, cada uno en exactamente sus casos. keel-go: `go-check --token` (5 sujetos con gofmt, vet y staticcheck) 9/9 y 3 sabotajes, cada uno en exactamente sus casos. Lo emitido con `keycloak` y sin proveedor, idéntico salvo la prueba nueva |
 | 3. lo que debe cumplir el proveedor | hecha el 2026-11-11 | `keel-core/test/identity-support.test.js` (una prueba por exigencia, falsada con dos sabotajes), las redes de fase 3 de `keel-go/test/identity-providers.test.js` en los cuatro, `keel-recover/test/target.test.js`; las seis suites. Lo emitido con `keycloak`, idéntico salvo el documento nuevo |
-| 4. emulador fiel y arnés | en curso: 4.1, 4.2 y 4.3 hechos (2026-11-11); falta el 4.4 | 4.1: `identity-provisioning.test.js`, tres sabotajes cada uno en su caso, `compile-check asset-vault --auth=cognito`; lo emitido sin Cognito, idéntico. 4.2: medido contra mock-oauth2-server 6.0.1. 4.3: `emulator-check` 10/10 y tres sabotajes; `emulator-harness-check` (keel-spring, keel-dotnet, keel-go) y `test/emulator-harness.test.js` (keel-nest) 16/16 con dos sabotajes cada uno en sus casos; las seis suites y las cuatro redes de sintaxis con shop-api, conduit y asset-vault en Cognito; lo emitido con `keycloak` y sin proveedor, idéntico en 4 × 19 |
+| 4. emulador fiel y arnés | hecha el 2026-11-11 | 4.4: `security-check` de keel-spring, Keycloak 16/16 y Cognito 19/19 con sus sabotajes. Las siete redes del 4.3, relanzadas y en verde tras arreglar OA-2. 4.1: `identity-provisioning.test.js`, tres sabotajes cada uno en su caso, `compile-check asset-vault --auth=cognito`; lo emitido sin Cognito, idéntico. 4.2: medido contra mock-oauth2-server 6.0.1. 4.3: `emulator-check` 10/10 y tres sabotajes; `emulator-harness-check` (keel-spring, keel-dotnet, keel-go) y `test/emulator-harness.test.js` (keel-nest) 16/16 con dos sabotajes cada uno en sus casos; las seis suites y las cuatro redes de sintaxis con shop-api, conduit y asset-vault en Cognito; lo emitido con `keycloak` y sin proveedor, idéntico en 4 × 19 |
 | 5. Cognito real | diferida (fuera del cierre) | |
 
 ## Para retomar
@@ -352,3 +372,10 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
   petición de referencia, y `emulator-check` mide que con ella el emulador da el token pedido); lo medirá de extremo a extremo el 4.4.
 - Siguiente: **4.4**, la red de extremo a extremo en keel-spring (P5), parametrizada por proveedor.
 - 4.4: **P5 cerrada, keel-spring.** Queda RS-10 de keel-nest con `azp` a mano.
+- **Fase 4 hecha (2026-11-11).** Las siete redes del 4.3 se leyeron y se relanzaron de una en una (la cadena de la sesión
+  anterior seguía viva y escribía en los mismos logs de `D:/keel-nets/`). La red del 4.4 es `security-check` de keel-spring;
+  sus logs, `D:/keel-nets/44-spring-{keycloak,cognito}.log`. Al lanzarla a mano contra el emulador desde Git Bash, ojo:
+  `MSYS_NO_PATHCONV=1`, o `-e JSON_CONFIG_PATH=/c/...` llega como ruta de Windows y el emulador arranca SIN configuración
+  (tokens válidos sin ningún claim del mapping: parece T1 y no lo es).
+- Queda del plan: el 1.5 (opcional) y la fase 5 (diferida). Fuera de él: RS-10 de keel-nest con `azp` a mano, y
+  `messages.cognitoEmulated` como texto de Cognito en cada proyección.
