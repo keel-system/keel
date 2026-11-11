@@ -249,7 +249,7 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
 | 1. contrato del proveedor | hecha el 2026-11-10 (sin el 1.5, opcional) | Lo emitido, idéntico en 4 generadores × 19 fixtures × 3 valores de `auth`; `keel-core/test/token-cases.test.js` y `keel-go/test/identity-providers.test.js`, falsada con tres sabotajes; las seis suites |
 | 2. servidor equivalente | hecha: 2.1 y 2.2/2.3 en keel-spring y keel-nest (2026-11-10), keel-dotnet y keel-go (2026-11-11) | keel-spring: `token-check` (4 diseños) y sus 4 sabotajes. keel-nest: `test/token-contract.test.js` ejecuta lo emitido, 3 sabotajes, y `ts-check --auth=cognito` 13/13. keel-dotnet: `cs-check --fixtures` con cuatro variantes `*-cognito` y 3 sabotajes, cada uno en exactamente sus casos. keel-go: `go-check --token` (5 sujetos con gofmt, vet y staticcheck) 9/9 y 3 sabotajes, cada uno en exactamente sus casos. Lo emitido con `keycloak` y sin proveedor, idéntico salvo la prueba nueva |
 | 3. lo que debe cumplir el proveedor | hecha el 2026-11-11 | `keel-core/test/identity-support.test.js` (una prueba por exigencia, falsada con dos sabotajes), las redes de fase 3 de `keel-go/test/identity-providers.test.js` en los cuatro, `keel-recover/test/target.test.js`; las seis suites. Lo emitido con `keycloak`, idéntico salvo el documento nuevo |
-| 4. emulador fiel y arnés | en curso: 4.1 y 4.2 hechos (2026-11-11) | 4.1: `identity-provisioning.test.js`, tres sabotajes cada uno en su caso, `compile-check asset-vault --auth=cognito`; lo emitido sin Cognito, idéntico. 4.2: medido contra mock-oauth2-server 6.0.1 |
+| 4. emulador fiel y arnés | en curso: 4.1, 4.2 y la mitad neutral del 4.3 hechos (2026-11-11) | 4.1: `identity-provisioning.test.js`, tres sabotajes cada uno en su caso, `compile-check asset-vault --auth=cognito`; lo emitido sin Cognito, idéntico. 4.2: medido contra mock-oauth2-server 6.0.1. 4.3 neutral: `npm run emulator-check --workspace packages/keel-core` 10/10 y tres sabotajes |
 | 5. Cognito real | diferida (fuera del cierre) | |
 
 ## Para retomar
@@ -308,6 +308,25 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
 - Skills: las cuatro `keel-<tech>-cognito` citan `{{keel:docs}}/identity-contract.md` en vez de repetir el disparador, y su tabla de
   rarezas gana D1 y D3/D4. T4 corregida en `references/configuration.md` de keel-spring; el README de keel-spring describe
   `SECURITY_AUDIENCE` como el identificador del resource server cuando la audiencia va en el prefijo.
-- Siguiente: **fase 4** (emulador fiel y arnés): `client_id` opaco, `sub` uuid y `email` según P3 (4.1), T1 con varios valores (4.2),
-  `tokenAs`/`tokenWithScope` con Cognito (4.3) y la red de extremo a extremo (4.4, con P5 por decidir). Queda RS-10 de keel-nest con
-  `azp` a mano. Con P3, cuando el emulador añada un claim por el disparador, `check`/`build` ya lo dicen (el aviso de la matriz).
+- Fase 4, 4.1 y 4.2 hechos (commit `9cd12363`): el id opaco es `opaqueClientId`/`credentialClientId` y el sub `emulatedSubject`
+  (`gen/identity-providers.js`); P3 es `triggeredUserClaims` (`gen/identity-provisioning.js`). El arnés de los cuatro manda
+  `AUTH_CLIENT_ID_<CLIENTE>` solo con un proveedor de id opaco, para no mover lo de Keycloak. Las huellas se comparan con un volcado
+  de 4 generadores × 19 fixtures × 3 `auth` (el script vive fuera del repo: dentro de `test/` lo recoge `node --test`).
+- 4.3, mitad neutral hecha (commit `9cb86af3`): el contrato está en `gen/identity-realm.js` (`EMULATOR_PARAMS`,
+  `EMULATOR_MAX_SCOPE_VALUES` = 4, `emulatorPersonaClaims`, `emulatorPersonaShape`, y la referencia ejecutable de la petición:
+  `emulatorPersonaForm` y `emulatorScopedForm`, con los dos motivos de rechazo), y los mappings en `personaMappings`/`scopedMappings`
+  de `gen/identity-provisioning.js`, DELANTE de los usuarios fijos (el emulador se queda con el primero que casa: sabotaje
+  `order`). El descriptor dice el mecanismo: `harness.personaTokens`/`scopedTokens` = `realm-admin` (Keycloak), `emulator` o
+  false; `personaTokenMechanism`, `scopedTokenMechanism` y `usesRealmAdmin` lo leen. **Cognito sigue con `false`**: darle
+  `emulator` hace que `usesPersonaTokens` sea verdad y que `closingCredentialOf` (`access-plan.js`) use `tokenAs`, así que los cuatro
+  arneses tienen que llevar antes su rama de emulador.
+- Siguiente: **4.3 por generador**, keel-spring primero. En cada arnés, con `personaTokenMechanism(model) === 'emulator'`: `tokenAs`
+  pide un `password` grant con `username` = el sub y los parámetros de `emulatorPersonaForm` (la forma la calcula el arnés en su
+  lenguaje: `role|norole` + `:` + los claims presentes ordenados y unidos por coma; un claim fuera de los del diseño se rechaza con
+  `EMULATOR_PERSONA_CLAIM_UNKNOWN`), y `tokenWithScope` con los de `emulatorScopedForm` (el usuario determinista de siempre;
+  más de 4 valores, `EMULATOR_SCOPE_VALUES_EXCEEDED`). Sin API de administración ni `PERSONA_SUB_MAX` (es de Keycloak). Después,
+  `cognito.harness` = `emulator` en el descriptor, y medir: lo emitido con Keycloak idéntico, `compile-check --auth=cognito`,
+  `ts-syntax`/`test/helpers/emitted.js`, `cs-syntax` y `go-syntax`, y el humo del arnés con `auth: cognito` sobre un diseño con la
+  identidad en el `sub` (conduit) y otro en `email` (shop-api). La red de la petición es `emulator-check`: la de cada arnés tiene
+  que mandar lo mismo que la referencia.
+- Después, 4.4, con **P5 por decidir** (la recomendación sigue siendo keel-spring). Queda RS-10 de keel-nest con `azp` a mano.
