@@ -21,6 +21,7 @@ import { SKILL, SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures, checkSupportedStack } from '../lib/supported-features.js';
 import { scaffoldService } from '../scaffold/index.js';
 import { checkGatewaySupport } from '@keel-system/keel-core/gen/payment-gateways';
+import { checkIdentitySupport } from '@keel-system/keel-core/gen/identity-support';
 
 export async function build(
   inputPath,
@@ -102,6 +103,17 @@ export async function build(
       process.exitCode = 1;
       return;
     }
+  // El proveedor de identidad elegido contra lo que el diseño lee del token (keel-core/gen/identity-support.js): un claim
+  // que no puede poner no se genera, y uno que solo pone con una pieza aparte (un disparador, un plan) se avisa.
+  const identity = checkIdentitySupport(layers, stack?.auth);
+  for (const message of identity.warnings) console.warn(`${pc.yellow('⚠')} ${message}`);
+  if (identity.errors.length > 0) {
+    console.error(pc.bold(pc.red(`✘ El proveedor de identidad '${stack.auth}' no puede servir este diseño — ${identity.errors.length}:`)));
+    for (const message of identity.errors) console.error(`  ${pc.red('•')} ${message}`);
+    console.error(pc.dim('  Elige otro proveedor (borra auth de keel-stack.json) o cambia lo que el diseño lee del token.'));
+    process.exitCode = 1;
+    return;
+  }
   }
 
   // El delta del diseño, ANTES de refrescar el snapshot: contra la base congelada de una evolución sin cerrar o, si

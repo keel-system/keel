@@ -1,7 +1,7 @@
 // README.md del servicio generado: procedencia, cómo ejecutarlo, infraestructura
 // de prueba y qué queda pendiente para el agente (/keel-generate-spring).
 
-import { identityProvider } from '@keel-system/keel-core/gen/identity-providers';
+import { identityProvider, tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { JAVA_VERSION, packageVersion } from '../lib/assets.js';
 import { selectedInfra } from '../lib/stack-catalog.js';
 import { needsDevtools } from './devtools.js';
@@ -511,6 +511,9 @@ function purposeOf(name, fragment, model) {
   // Mongo (config.js la emite como `spring.mongodb.uri`), no una URL JDBC.
   if (name === 'DB_URL' && model?.persistenceKind === 'document') {
     return 'URI de conexión de MongoDB (`mongodb://…`, con credenciales y base incluidas).';
+  }
+  if (name === 'SECURITY_AUDIENCE' && tokenContract(model?.stack?.auth).audienceInScopePrefix) {
+    return 'Identificador del resource server de este servicio: el prefijo de los scopes que valen aquí.';
   }
   if (PARAMETER_PURPOSES[name]) return PARAMETER_PURPOSES[name];
   for (const [pattern, describe] of PARAMETER_PATTERNS) {

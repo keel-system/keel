@@ -24,6 +24,8 @@ import { planService } from '../scaffold/index.js';
 import { DATABASES, PAYMENT_GATEWAYS } from '../lib/stack-catalog.js';
 import { gatewayCoverage } from '../lib/gateway-support.js';
 import { readDesignGaps } from '@keel-system/keel-core/gen/design-gaps';
+import { identityCoverage } from '@keel-system/keel-core/gen/identity-support';
+import { AUTH } from '@keel-system/keel-core/gen/infra-catalog';
 
 // El archivo que el cierre del pipeline escribe en la raíz del proyecto generado.
 
@@ -170,6 +172,20 @@ export function check(inputPath, { database = null, paymentGateway = null, stric
     // Con una pasarela pedida, que no la cubra bloquea. Sin ella, bloquea solo que no la cubra ninguna.
     if (serving.length === 0) blocking += 1;
     servingGateway = serving[0]?.id ?? null;
+  }
+
+  // 2c — Con identidad por token, qué proveedores del catálogo pueden servir lo que el diseño lee del token
+  // (keel-core/gen/identity-support.js, la misma matriz en los cuatro generadores).
+  const identityProviders = identityCoverage(layers, Object.keys(AUTH));
+  if (identityProviders.some((entry) => entry.cells.length > 0)) {
+    heading('Proveedores de identidad');
+    for (const entry of identityProviders) {
+      const extra = entry.errors.length === 0 && entry.warnings.length > 0 ? pc.dim(` — ${entry.warnings.length} con configuración`) : '';
+      console.log(`  ${entry.errors.length === 0 ? pc.green('✔') : pc.red('✘')} ${entry.id}${extra}`);
+      for (const message of entry.errors) bullet('red', message);
+      for (const message of entry.warnings) bullet('yellow', message);
+      notices += entry.errors.length + entry.warnings.length;
+    }
   }
 
   heading('Traducción a código');

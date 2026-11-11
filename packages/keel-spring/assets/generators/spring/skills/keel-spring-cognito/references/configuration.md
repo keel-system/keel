@@ -27,11 +27,11 @@ planos de Cognito) **lo genera build y no se toca**; aquí solo configuración.
 - El **ID token** trae los datos del usuario (`email`, etc.) y `aud`, pero
   `token_use: id`: no es un token de autorización.
 - Consecuencia: no configures `audiences` en el resource server esperando
-  validar el access token (fallaría por `aud` ausente). Si el diseño declara
-  `serviceAuth.validateAudience: true`, el `AudienceAuthorizationFilter` que generó build
-  choca con esta divergencia de Cognito: ajusta la comprobación al claim
-  `client_id` (o al scope) y documenta la decisión en el proyecto (frontera
-  agente admitida por mapping.md).
+  validar el access token (fallaría por `aud` ausente). Con `serviceAuth.validateAudience: true`, el
+  `AudienceAuthorizationFilter` que generó build **ya** comprueba lo que Cognito pone en su lugar: que algún
+  scope lleve el prefijo del resource server de este servicio (`SECURITY_AUDIENCE`). No lo toques.
+- El `JwtAuthConverter` rechaza con 401 todo token sin `token_use: access`: un ID token del mismo pool
+  tiene el mismo emisor y la misma firma, y sin esa comprobación se aceptaría.
 
 ## Claims y mapeo (lo hace build, entiéndelo para depurar)
 

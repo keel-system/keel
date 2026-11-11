@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { HARNESSES, applyTokens, emitHarnessFiles } from '@keel-system/keel-core';
 import { contractDocs } from '@keel-system/keel-core/gen/contract-docs';
+import { identityContractFile } from '@keel-system/keel-core/gen/identity-support';
 import { assetsDir, SKILL } from '../lib/assets.js';
 import { usesIdempotencyCheck } from './idempotency-check.js';
 import { usesDomainGuardsCheck } from './domain-guards-check.js';
@@ -125,6 +126,9 @@ export function generate(model) {
   // Los documentos de contrato del método (keel-core/gen/contract-docs.js): el catálogo de los code del generador y
   // el contrato del cable. Sin ellos, un agente en caja negra no distingue un code del generador de uno olvidado.
   for (const doc of contractDocs()) files.push({ path: `${DOCS_DIR}/${doc.name}`, content: doc.content });
+  // Lo que el proveedor de identidad tiene que traer para servir a este diseño (keel-core/gen/identity-support.js).
+  const identityContract = identityContractFile(model);
+  if (identityContract) files.push(identityContract);
 
   // Y los artefactos que sí carga el harness, proyectados a cada uno de ellos.
   for (const harness of HARNESSES) {

@@ -26,18 +26,21 @@ el token. Build deja:
 **Lo que ahí no queda probado**, y hay que decirlo al cerrar: que el proveedor autentique de verdad (el emulador
 no valida contraseñas) y el alta de user pool, grupos y usuarios (API de AWS).
 
-Con **alcance por recurso** (`scoping` en el diseño), el emulador pone el claim en el token de cada usuario no
-exento con el valor de `ScopedResource()`, como el realm de Keycloak. En un pool real ese claim no llega solo al
-access token: hace falta un disparador de pre-generación de tokens (V2) que copie `custom:<claim>` con el nombre
-del diseño, o todo usuario acotado recibe el error del alcance. Y `TokenWithScope` no existe con Cognito (el
-emulador no da de alta usuarios): un escenario que necesite otro valor del claim es un `blocker`.
+**Lo que el pool tiene que traer** —grupos, resource server, app clients, el disparador de pre-generación de
+tokens si el diseño lee un claim que Cognito no pone (el del alcance, `email`…), el plan que lo admite y las
+variables— está en `{{keel:docs}}/identity-contract.md`, que build genera desde el diseño: no lo repitas, cítalo
+en el cierre. El emulador pone esos claims como si el disparador existiera (el del alcance, con el valor de
+`ScopedResource()`). Y `TokenWithScope` no existe con Cognito (el emulador no da de alta usuarios): un escenario que necesite
+otro valor del claim es un `blocker`.
 
-## Las dos rarezas de Cognito, ya resueltas por build
+## Las rarezas de Cognito, ya resueltas por build
 
 | Rareza | Quién la absorbe |
 |---|---|
 | Los scopes vienen prefijados por el resource server (`<servicio>/product:read`) | `jwt.go` corta el prefijo antes de componer `SCOPE_*` |
 | Los tokens de `client_credentials` **no traen `aud`** | `security.IssuedFor` exige que algún scope venga prefijado por el resource server de este servicio, que es como Cognito dice «este token es para esta API» |
+| Un ID token del mismo pool tiene el mismo emisor, la misma firma y los mismos grupos | `jwt.go` rechaza con 401 lo que no traiga `token_use: access` |
+| `client_id` es un id que genera Cognito, no el nombre del cliente en el diseño | `jwt.go` (en `Principal.Client`, con `Settings.ClientIDs`) lo traduce con `client-ids` de `security.yaml` (`SECURITY_CLIENT_ID_<CLIENTE>`, obligatorio en production), para los exentos del alcance y la identidad 1:1 |
 
 Si algo no casa, el fallo está en otro sitio: no las arregles a mano.
 

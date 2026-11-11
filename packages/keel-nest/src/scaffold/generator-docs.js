@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { HARNESSES, applyTokens, emitHarnessFiles } from '@keel-system/keel-core';
 import { contractDocs } from '@keel-system/keel-core/gen/contract-docs';
+import { identityContractFile } from '@keel-system/keel-core/gen/identity-support';
 import { usesIdempotencyCheck } from './idempotency-check.js';
 import { describeStack } from '@keel-system/keel-core/gen/stack';
 import { assetsDir, SKILL } from '../lib/assets.js';
@@ -84,6 +85,9 @@ export function generate(model) {
   }
   // Los documentos de contrato del método, los mismos que instala keel-spring (keel-core/gen/contract-docs.js).
   for (const doc of contractDocs()) files.push({ path: `${DOCS_DIR}/${doc.name}`, content: doc.content });
+  // Lo que el proveedor de identidad tiene que traer para servir a este diseño (keel-core/gen/identity-support.js).
+  const identityContract = identityContractFile(model);
+  if (identityContract) files.push(identityContract);
   for (const harness of HARNESSES) files.push(...harnessArtifacts(model, harness));
   return files;
 }

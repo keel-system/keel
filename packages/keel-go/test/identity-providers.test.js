@@ -250,6 +250,8 @@ const ALLOWED_DIFFERENCES = {
     /^\.[a-z]+\/skills\/keel-[a-z]+-(keycloak|cognito)\//,
     /^\.[a-z]+\/skills\/keel-generate-[a-z]+\/SKILL\.md$/,
     /^(README|AGENTS|CLAUDE)\.md$/,
+    // Lo que el proveedor tiene que traer: nombra sus claims, su configuración y su nivel de verificación.
+    /^docs\/keel\/identity-contract\.md$/,
     // Levantar y sembrar el proveedor de prueba.
     /^infra\/(docker-compose\.yaml|test-credentials\.env|validate-infra\.sh|init-keycloak\.sh|cognito\/)/,
     /^deploy\/(\.env|docker-compose\.yaml|up\.sh|postman\/|keycloak\/|cognito\/)/
@@ -307,3 +309,21 @@ test('la paridad falla si difiere un archivo fuera de la lista', () => {
   const other = [{ path: 'src/domain/Thing.java', content: 'b' }];
   assert.deepEqual(unexpectedDifferences('spring', reference, other), ['src/domain/Thing.java']);
 });
+
+// ─── Lo que el proveedor tiene que cumplir (fase 3) ──────────────────────────
+
+for (const [name, plan] of Object.entries(GENERATORS)) {
+  test(`${name}: el proyecto lleva el documento de precondiciones, y su skill de Cognito lo cita en vez de repetirlo`, () => {
+    const { files } = generate(plan, 'asset-vault', 'cognito');
+    const doc = files.find((file) => pathOf(file) === 'docs/keel/identity-contract.md');
+    assert.ok(doc, `${name}: sin docs/keel/identity-contract.md`);
+    assert.match(textOf(doc), /no contra un pool real/);
+    const skills = files.filter((file) => /\/skills\/keel-[a-z]+-cognito\/SKILL\.md$/.test(pathOf(file)));
+    assert.ok(skills.length > 0, `${name}: sin la skill de Cognito`);
+    for (const skill of skills) {
+      const text = textOf(skill);
+      assert.match(text, /docs\/keel\/identity-contract\.md/, `${pathOf(skill)}: no cita el documento`);
+      assert.doesNotMatch(text, /disparador de pre-generación de tokens \(V2\)/, `${pathOf(skill)}: repite el disparador`);
+    }
+  });
+}

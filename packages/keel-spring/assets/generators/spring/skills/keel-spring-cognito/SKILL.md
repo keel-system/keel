@@ -41,19 +41,18 @@ Build deja esto, y **no hay que crear ningún user pool**:
    afirmar lo contrario.
 2. **El alta de user pool, grupos y usuarios**: eso es la API de AWS, y se verifica contra
    Cognito real (`references/environment.md`).
-3. **El claim del alcance por recurso** (`security.authentication.scoping.claim`), si el diseño
-   lo declara. El emulador lo pone en el token de cada usuario no exento con el valor de
-   `scopedResource()`, igual que el realm de Keycloak, pero Cognito real **no** mete un atributo
-   propio en el access token: hace falta un disparador de pre-generación de tokens (V2) que copie
-   `custom:<claim>` al access token con el nombre del diseño. Sin él, todo usuario acotado recibe
-   el error del alcance. Y `tokenWithScope` no existe aquí (el emulador no da de alta usuarios):
+3. **Lo que el pool tiene que traer**: grupos, resource server, app clients, el disparador de
+   pre-generación de tokens si el diseño lee un claim que Cognito no pone (el del alcance, `email`…),
+   el plan que lo admite y las variables. Está en `{{keel:docs}}/identity-contract.md`, que build
+   genera desde el diseño: no lo repitas, cítalo en el cierre. El emulador pone esos claims como si
+   el disparador existiera. Y `tokenWithScope` no existe aquí (el emulador no da de alta usuarios):
    un escenario que necesite otro valor del claim es un `blocker`, no un parche al config.
 
 **Lo que sí queda probado, y es todo lo que este servicio consume**: la verificación por
 JWKS, el `iss`, la caducidad, el mapeo de `cognito:groups` a roles, el formato real de los
 scopes y la ausencia de `aud` en los tokens de máquina.
 
-## Las dos rarezas de Cognito, ya resueltas por build
+## Las rarezas de Cognito, ya resueltas por build
 
 No las arregles a mano: si algo no casa, el fallo está en otro sitio.
 
@@ -61,6 +60,8 @@ No las arregles a mano: si algo no casa, el fallo está en otro sitio.
 |---|---|
 | Los scopes vienen prefijados por el resource server (`catalog/product:read`), no como el `recurso:accion` del diseño | `JwtAuthConverter` corta el prefijo antes de componer `SCOPE_*` |
 | Los access token de `client_credentials` **no traen `aud`**, traen `client_id` | `AudienceAuthorizationFilter` comprueba que algún scope venga prefijado por el resource server de este servicio — que es como Cognito expresa «este token es para esta API» |
+| Un ID token del mismo pool tiene el mismo emisor, la misma firma y los mismos grupos | `JwtAuthConverter` rechaza con 401 lo que no traiga `token_use: access` |
+| `client_id` es un id que genera Cognito, no el nombre del cliente en el diseño | El mapa `security.client-ids` (`SECURITY_CLIENT_ID_<CLIENTE>`, obligatorio en production) lo traduce, para los exentos del alcance y la identidad 1:1 |
 
 ## Qué hace el agente
 

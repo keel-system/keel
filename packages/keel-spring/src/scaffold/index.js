@@ -10,6 +10,7 @@ import { resolveStack as resolveNeutralStack } from '@keel-system/keel-core/gen/
 import { listKeelDocs } from '../lib/keel-docs.js';
 import { packageVersion } from '../lib/assets.js';
 import { checkGatewaySupport } from '../lib/gateway-support.js';
+import { checkIdentitySupport } from '@keel-system/keel-core/gen/identity-support';
 import { defaultGroup } from '../lib/naming.js';
 import * as gradle from './gradle.js';
 import * as wrapper from './wrapper.js';
@@ -218,6 +219,9 @@ export function planService({ manifest, layers, fixtures = null, workspace, stac
     const { errors } = checkGatewaySupport(layers, resolved.paymentGateway);
     if (errors.length > 0) throw new Error(errors.join('\n'));
   }
+  // Y el proveedor de identidad, lo que el diseño lee del token (keel-core/gen/identity-support.js), con la misma razón.
+  const identityErrors = checkIdentitySupport(layers, resolved.auth).errors;
+  if (identityErrors.length > 0) throw new Error(identityErrors.join('\n'));
   const model = buildModel({ manifest, layers, stack: resolved });
   model.stack = resolved;
   // Contratos de /keel-docs presentes en el workspace: el README los enlaza y

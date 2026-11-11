@@ -12,6 +12,7 @@ import { materializeProject } from '@keel-system/keel-core/gen/materialize';
 import { resolveStack } from '@keel-system/keel-core/gen/stack';
 import { listKeelDocs } from '@keel-system/keel-core/gen/keel-docs';
 import { checkGatewaySupport } from '@keel-system/keel-core/gen/payment-gateways';
+import { checkIdentitySupport } from '@keel-system/keel-core/gen/identity-support';
 import { packageVersion } from '../lib/assets.js';
 import { TS_PROJECTION } from '../lib/ts-projection.js';
 import * as project from './project.js';
@@ -209,6 +210,9 @@ export function planService({ manifest, layers, fixtures = null, workspace, stac
     const { errors } = checkGatewaySupport(layers, resolved.paymentGateway);
     if (errors.length > 0) throw new Error(errors.join('\n'));
   }
+  // Y el proveedor de identidad, lo que el diseño lee del token (keel-core/gen/identity-support.js), con la misma razón.
+  const identityErrors = checkIdentitySupport(layers, resolved.auth).errors;
+  if (identityErrors.length > 0) throw new Error(identityErrors.join('\n'));
   const model = buildModel({ manifest, layers, stack: resolved, projection: TS_PROJECTION });
   model.stack = resolved;
   // Contratos de /keel-docs presentes en el workspace: build los copia a docs/ del proyecto.

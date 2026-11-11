@@ -5,6 +5,7 @@ import { gateDesign } from '@keel-system/keel-core/gen/design-gate';
 import { SKILL, SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { checkGatewaySupport } from '../lib/gateway-support.js';
+import { checkIdentitySupport } from '@keel-system/keel-core/gen/identity-support';
 import { scaffoldService } from '../scaffold/index.js';
 import { writeFiles } from '../lib/writer.js';
 import {
@@ -144,6 +145,17 @@ export async function build(
       process.exitCode = 1;
       return;
     }
+  }
+  // El proveedor de identidad elegido contra lo que el diseño lee del token (keel-core/gen/identity-support.js): un claim
+  // que no puede poner no se genera, y uno que solo pone con una pieza aparte (un disparador, un plan) se avisa.
+  const identity = checkIdentitySupport(layers, stack?.auth);
+  for (const message of identity.warnings) console.warn(`${pc.yellow('⚠')} ${message}`);
+  if (identity.errors.length > 0) {
+    console.error(pc.bold(pc.red(`✘ El proveedor de identidad '${stack.auth}' no puede servir este diseño — ${identity.errors.length}:`)));
+    for (const message of identity.errors) console.error(`  ${pc.red('•')} ${message}`);
+    console.error(pc.dim('  Elige otro proveedor (borra auth de keel-stack.json) o cambia lo que el diseño lee del token.'));
+    process.exitCode = 1;
+    return;
   }
   const scaffold = scaffoldService({ manifest, layers, fixtures, workspace, force, stack, mode, prune, readiness, acceptedUnready });
   const stackChanged = stackChanges.added.length + stackChanges.removed.length > 0;

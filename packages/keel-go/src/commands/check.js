@@ -4,7 +4,8 @@ import { SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { planService } from '../scaffold/index.js';
 import { gatewayCoverage } from '@keel-system/keel-core/gen/payment-gateways';
-import { PAYMENT_GATEWAYS } from '@keel-system/keel-core/gen/infra-catalog';
+import { AUTH, PAYMENT_GATEWAYS } from '@keel-system/keel-core/gen/infra-catalog';
+import { identityCoverage } from '@keel-system/keel-core/gen/identity-support';
 
 /**
  * La pasada en seco: el mismo tronco que `build` —la puerta del diseño y `planService`— sin escribir NADA,
@@ -49,6 +50,21 @@ export function check(inputPath, { strict = false } = {}) {
       for (const message of entry.errors) console.log(`    ${pc.red('•')} ${message}`);
       for (const message of entry.warnings) console.log(`    ${pc.yellow('•')} ${message}`);
       notices += entry.warnings.length;
+    }
+  }
+
+  // Con identidad por token, qué proveedores del catálogo pueden servir lo que el diseño lee del token
+  // (keel-core/gen/identity-support.js, la misma matriz en los cuatro generadores).
+  const identityProviders = identityCoverage(layers, Object.keys(AUTH));
+  if (identityProviders.some((entry) => entry.cells.length > 0)) {
+    console.log();
+    console.log(pc.bold('Proveedores de identidad'));
+    for (const entry of identityProviders) {
+      const extra = entry.errors.length === 0 && entry.warnings.length > 0 ? pc.dim(` — ${entry.warnings.length} con configuración`) : '';
+      console.log(`  ${entry.errors.length === 0 ? pc.green('✔') : pc.red('✘')} ${entry.id}${extra}`);
+      for (const message of entry.errors) console.log(`    ${pc.red('•')} ${message}`);
+      for (const message of entry.warnings) console.log(`    ${pc.yellow('•')} ${message}`);
+      notices += entry.errors.length + entry.warnings.length;
     }
   }
 

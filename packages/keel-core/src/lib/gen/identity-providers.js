@@ -33,6 +33,35 @@ const COGNITO_ACCESS_TOKEN_CLAIMS = [
   'cognito:groups'
 ];
 
+/**
+ * Los claims de un access token de Keycloak con los client scopes por defecto de un realm (`profile`, `email`, `roles`,
+ * `web-origins`, `acr`, `basic`). Cualquier otro llega con un mapper de protocolo del realm.
+ */
+const KEYCLOAK_ACCESS_TOKEN_CLAIMS = [
+  'sub',
+  'iss',
+  'aud',
+  'azp',
+  'client_id',
+  'typ',
+  'scope',
+  'sid',
+  'acr',
+  'auth_time',
+  'exp',
+  'iat',
+  'jti',
+  'allowed-origins',
+  'realm_access',
+  'resource_access',
+  'preferred_username',
+  'name',
+  'given_name',
+  'family_name',
+  'email',
+  'email_verified'
+];
+
 const OIDC_REALM_PATHS = {
   issuerPath: '/realms/{service}',
   tokenPath: '/realms/{service}/protocol/openid-connect/token',
@@ -45,15 +74,23 @@ export const IDENTITY_PROVIDERS = {
     displayName: 'Keycloak',
     skill: true,
     token: {
+      issuer: 'https://<host>/realms/<realm>',
       claims: { type: 'nested', rolesParent: 'realm_access', rolesField: 'roles', permissionsClaim: 'permissions', principalClaim: 'preferred_username' },
       scopes: { format: 'plain' },
       audience: { via: 'aud' },
       client: { claims: ['azp', 'client_id'], valueIsDeclaredName: true },
       accepted: null,
-      // Cualquier claim llega al access token con un mapper del realm, que es lo que siembra el aprovisionamiento.
-      accessTokenClaims: null,
-      customClaims: null
+      accessTokenClaims: KEYCLOAK_ACCESS_TOKEN_CLAIMS,
+      // Cualquier otro claim llega con un mapper del realm, que es lo que siembra el aprovisionamiento de prueba.
+      customClaims: {
+        user: { state: 'supported', via: 'un mapper de protocolo del realm (de atributo de usuario, o de grupo para una lista)' },
+        machine: { state: 'supported', via: 'un mapper de protocolo del realm sobre el cliente (atributo del service account o claim fijo)' }
+      },
+      // Lo que hay que crear en el proveedor, con sus nombres.
+      setup: { roles: 'roles del realm', scopes: 'client scopes del realm, asignados como opcionales a cada cliente máquina', clients: 'clientes confidenciales con service account' }
     },
+    // Medido contra un Keycloak real: el security-check de keel-nest, keel-dotnet y keel-go.
+    verification: { level: 'live', note: 'medido contra un Keycloak real (la red security-check de los generadores)' },
     harness: { personaTokens: true, scopedTokens: true },
     provisioning: {
       kind: 'realm-import',
@@ -70,6 +107,7 @@ export const IDENTITY_PROVIDERS = {
     displayName: 'Cognito',
     skill: true,
     token: {
+      issuer: 'https://cognito-idp.<región>.amazonaws.com/<id del user pool>',
       claims: { type: 'flat', rolesClaim: 'cognito:groups', permissionsClaim: 'permissions', principalClaim: 'username' },
       scopes: { format: 'resource-server-prefix' },
       // Un access token de client_credentials no lleva `aud`: el prefijo del scope dice para qué API vale.
@@ -79,11 +117,28 @@ export const IDENTITY_PROVIDERS = {
       // Un ID token del mismo pool tiene el mismo emisor y la misma firma: solo este claim los distingue.
       accepted: { claim: 'token_use', value: 'access', rejected: 'id' },
       accessTokenClaims: COGNITO_ACCESS_TOKEN_CLAIMS,
+      // Lo que no está en esa lista solo llega con un disparador, y el disparador depende del plan del pool (documentación de
+      // AWS consultada el 2026-11-10). Los tokens de máquina solo pasan por la versión 3.
       customClaims: {
-        user: 'disparador de pre-generación de tokens V2 (Essentials y Plus; en Lite, con las funciones de seguridad avanzada)',
-        machine: 'disparador de pre-generación de tokens V3 (Essentials y Plus)'
+        user: {
+          state: 'requires-configuration',
+          via: 'un disparador de pre-generación de tokens (Lambda) V2 o V3 que añada el claim al access token',
+          plan: 'Essentials o Plus; en Lite, solo con las funciones de seguridad avanzada'
+        },
+        machine: {
+          state: 'requires-configuration',
+          via: 'un disparador de pre-generación de tokens (Lambda) V3, el único que reciben los tokens de client_credentials',
+          plan: 'Essentials o Plus'
+        }
+      },
+      setup: {
+        roles: 'grupos del user pool',
+        scopes: 'scopes personalizados de un resource server cuyo identificador es la audiencia del servicio',
+        clients: 'app clients con secreto y el grant client_credentials'
       }
     },
+    // Ni la forma del token ni el disparador se han ejecutado contra un pool real: fase 5 de PLAN-PROVEEDOR-IDENTIDAD.md.
+    verification: { level: 'emulated', note: 'verificado contra el contrato documentado por AWS y el emulador del docker-compose, no contra un pool real' },
     harness: { personaTokens: false, scopedTokens: false },
     provisioning: {
       kind: 'token-emulator',
@@ -112,14 +167,17 @@ const GENERIC_PROVIDER = {
   displayName: null,
   skill: false,
   token: {
+    issuer: null,
     claims: { type: 'flat', rolesClaim: 'roles', permissionsClaim: 'permissions', principalClaim: 'sub' },
     scopes: { format: 'plain' },
     audience: { via: 'aud' },
     client: { claims: ['azp', 'client_id'], valueIsDeclaredName: true },
     accepted: null,
     accessTokenClaims: null,
-    customClaims: null
+    customClaims: null,
+    setup: null
   },
+  verification: null,
   harness: { personaTokens: false, scopedTokens: false },
   provisioning: { kind: null, ...OIDC_REALM_PATHS, internalPort: null, localIssuerNote: null, console: null, adminEnv: null, emulationMessage: null }
 };

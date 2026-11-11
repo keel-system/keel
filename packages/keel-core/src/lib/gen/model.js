@@ -10,6 +10,7 @@
 // menudo cómo lo consume keel-spring, que es la implementación de referencia.
 
 import { identityProvider } from './identity-providers.js';
+import { identityClaimDemands } from './identity-support.js';
 import { collectPayments } from './payments-model.js';
 import {
   pascalCase,
@@ -2131,6 +2132,8 @@ function collectSecurity(layers, services, routeBase, warnings) {
     scoping,
     ownership,
     serviceClients,
+    // Los claims que el diseño lee del token además de la forma fija del proveedor (identity-support.js).
+    claimDemands: identityClaimDemands(sec),
     roleGrants,
     roles,
     scopes,

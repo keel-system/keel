@@ -10,6 +10,7 @@ import { buildModel } from '@keel-system/keel-core/gen/model';
 import { materializeProject } from '@keel-system/keel-core/gen/materialize';
 import { resolveStack } from '@keel-system/keel-core/gen/stack';
 import { checkGatewaySupport } from '@keel-system/keel-core/gen/payment-gateways';
+import { checkIdentitySupport } from '@keel-system/keel-core/gen/identity-support';
 import { listKeelDocs } from '@keel-system/keel-core/gen/keel-docs';
 import { derivedOpenapiFiles } from '@keel-system/keel-core/gen/openapi';
 import { packageVersion } from '../lib/assets.js';
@@ -101,6 +102,9 @@ export function planService({ manifest, layers, fixtures = null, workspace, stac
     const { errors } = checkGatewaySupport(layers, resolved.paymentGateway);
     if (errors.length > 0) throw new Error(errors.join('\n'));
   }
+  // Y el proveedor de identidad, lo que el diseño lee del token (keel-core/gen/identity-support.js), con la misma razón.
+  const identityErrors = checkIdentitySupport(layers, resolved.auth).errors;
+  if (identityErrors.length > 0) throw new Error(identityErrors.join('\n'));
   const model = buildModel({ manifest, layers, stack: resolved, projection: CS_PROJECTION });
   model.stack = resolved;
   // Los plazos (DSL 2.26) necesitan un motor con las sentencias del cronómetro medidas, ids uuid y un code de un solo status.
