@@ -10,6 +10,7 @@
 
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
+import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { goExported } from '../lib/go-projection.js';
 import { goString } from '../lib/go-source.js';
 import { layout, packageFile } from './render.js';
@@ -32,7 +33,12 @@ export function generate(model) {
   const identity = model.security.callerIdentity;
   const claim = identity.source === 'claim' ? identity.claim : 'azp';
   // El sujeto y el claim de la identidad (que puede ser el propio sub), sin repetir clave: Go no admite una duplicada.
-  const identityClaims = [...new Set(['sub', claim])].map((name) => `${goString(name)}: oaSubject`).join(', ');
+  // Con un proveedor que distingue el tipo de token (Cognito, `token_use`), un token sin ese claim es 401 y OA-2 no medía nada.
+  const { accepted } = tokenContract(model.stack?.auth);
+  const identityClaims = [
+    ...[...new Set(['sub', claim])].map((name) => `${goString(name)}: oaSubject`),
+    ...(accepted ? [`${goString(accepted.claim)}: ${goString(accepted.value)}`] : [])
+  ].join(', ');
   const field = goExported(identity.field);
   const plan = securityPlan(model);
   const init = [

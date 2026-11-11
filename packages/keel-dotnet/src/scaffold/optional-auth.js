@@ -8,6 +8,7 @@
 
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
+import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { csFile, csMember, csString, namespaceOf, solution } from './render.js';
 import { messageComponents, messageNamespace } from './services.js';
 import { usesTestCredential } from './test-credential.js';
@@ -26,7 +27,9 @@ export function generate(model) {
   if (operations.length === 0 || !usesTestCredential(model)) return [];
   const identity = model.security.callerIdentity;
   const claim = identity.source === 'claim' ? identity.claim : 'azp';
-  const claims = JSON.stringify({ sub: SUBJECT, [claim]: SUBJECT });
+  // Con un proveedor que distingue el tipo de token (Cognito, `token_use`), un token sin ese claim es 401 y OA-2 no medía nada.
+  const { accepted } = tokenContract(model.stack?.auth);
+  const claims = JSON.stringify({ sub: SUBJECT, [claim]: SUBJECT, ...(accepted ? { [accepted.claim]: accepted.value } : {}) });
   const field = csMember(identity.field);
   const unauthenticated = FW.unauthenticated;
   const tests = operations.map((operation) => {
