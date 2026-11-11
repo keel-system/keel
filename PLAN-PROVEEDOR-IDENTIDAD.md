@@ -8,6 +8,9 @@ pieza nueva tiene una red que la ejecuta y un sabotaje que demuestra que esa red
 elegido, y se puede afirmar que ese servidor funcionará con él. No hace falta generar todos los proyectos con Cognito: lo que
 se garantiza es el contrato entre el servidor y el token. Y queda un camino medido para añadir otro proveedor.
 
+**Nivel de garantía.** El contrato se verifica contra la documentación del proveedor y un emulador fiel, no contra un pool real:
+las fases 1 a 4 no necesitan una cuenta de AWS. Lo que eso no demuestra está en la fase 5, y se dice en lo que se genera.
+
 **Cuándo empieza:** ya se cumple la condición (las corridas de keel-spring del inc. 8 del plan 2.27 terminaron: asset-vault
 32/32 y shop-api 92/92).
 
@@ -68,7 +71,7 @@ emite `email`.
 | P1 | Forma de la traducción del cliente | **Cerrada.** Un mapa nombre → id por configuración, con una variable de entorno por cliente, solo con proveedores cuyo `client_id` no sea el nombre declarado. Se aplica en el único punto que lee el cliente de la credencial. Va en `gen/security-config.js` y también en el `config.js` de keel-spring, que no usa ese módulo. No se aplica con `resolvedBy` |
 | P2 | Si falta esa variable en producción | **Cerrada.** El servicio no arranca, solo por los clientes de los que depende (exentos e identidad 1:1): un exento sin reconocer rompe en silencio a un consumidor |
 | P3 | ¿Emite `email` el emulador? | **Cerrada.** No por defecto, como el token real. Si el diseño lo necesita, el emulador lo añade representando un pool con el disparador desplegado, y `check`/`build` lo dicen |
-| P4 | Cuenta de AWS | **Abierta, del usuario.** La captura (incremento 1.5) y la fase 5 la necesitan. Sin ella no se hacen, y el plan lo dice |
+| P4 | Cuenta de AWS | **Cerrada: no hace falta para este plan.** Solo la necesitan lo opcional (incremento 1.5) y la fase 5, diferida. Si llega a usarse: un perfil propio en la máquina, nunca credenciales en la conversación, y recursos con prefijo `keel-` que se borran al terminar |
 | P5 | Generador de la red de extremo a extremo (incremento 4.4) | **Abierta.** Recomendación: keel-spring, que es la referencia y la única sin `security-check` |
 
 ## Trampas
@@ -115,8 +118,8 @@ Deja todo lo que un proveedor es en un solo sitio, y la forma de demostrar que u
   por nombre fuera de los módulos del descriptor (como `gen-neutral.test.js`); y un test de paridad entre proveedores, con la
   lista cerrada de lo que puede diferir (como `payment-parity.test.js`). **Sabotaje:** una rama nueva por nombre y un archivo
   distinto fuera de la lista.
-- **1.5 Captura de tokens reales (si P4 está resuelta).** Un token de usuario y uno de máquina de un pool de verdad, saneados,
-  contrastados con los casos `IDT-*`. No bloquea la fase. Es la única medida que no depende de la forma que esperamos.
+- **1.5 Captura de tokens reales (opcional).** Solo si alguien aporta un pool: un token de usuario y uno de máquina, saneados y
+  contrastados con los casos `IDT-*`. No bloquea la fase ni la puerta de cierre.
 
 ### Fase 2 · El servidor equivalente (los cuatro generadores)
 
@@ -144,7 +147,8 @@ El servidor puede estar bien y el pool mal configurado. Lo que el pool debe trae
   qué plan) y no soportado. `check` dice con qué proveedores sirve el diseño y `build` lo aplica, con el mismo texto en los
   cuatro. **Medido con:** una prueba por requisito.
 - **3.2 El documento de precondiciones** (`docs/keel/identity-contract.md`, emitido siempre, como `engine-limits.md`): grupos,
-  resource server, disparador, plan, variables y qué se ha medido solo en el emulador.
+  resource server, disparador, plan y variables. Con Cognito dice, igual que `build` (`messages.cognitoEmulated`), «verificado
+  contra el contrato documentado y el emulador, no contra un pool real», y cómo debe llegar el claim que añade el disparador.
 - **3.3 Skills.** Las cuatro `keel-<tech>-cognito` remiten a ese documento en vez de repetirlo, y se corrige la referencia de T4.
   **Medido con:** `generator-docs.test.js` y `harness.test.js`.
 - **3.4 keel-recover.** Con un proveedor distinto de Keycloak, `target` rechaza con su motivo en vez de omitir `idp`. **Medido
@@ -165,13 +169,24 @@ Un diseño con Cognito tiene que poder llegar a verde en el pipeline, y el emula
   `security-check` contra Keycloak, porque lo que cambia entre proveedores son los claims. **Medido con:** esa red en verde y
   falsada.
 
-### Fase 5 · Cognito real
+### Fase 5 · Cognito real (diferida)
 
-Requiere P4.
+No forma parte del cierre de este plan. Se hace cuando un diseño real vaya a producción con Cognito, y en ese pool, que es el
+que importa. El plan se cierra sin ella porque el servidor solo consume el token, cuya forma está documentada por AWS, y porque
+los defectos D1 a D6 salieron de leer el código y esa documentación.
 
-- **5.1 Corrida** de `asset-vault` en keel-spring contra un pool real con el disparador desplegado: mide la traducción de
-  `exemptClients`, el claim del alcance y T5. Se registra en `docs/corridas/`.
-- **5.2 Cierre.** Contrastar lo medido con los casos `IDT-*` y el emulador, corregir lo que no coincida, y pasar la puerta.
+**Lo que queda sin demostrar hasta entonces:** que Cognito emita la forma documentada, cómo llega el claim que añade el
+disparador (lista o texto) y T5 en ejecución. Si AWS se aparta de su documentación, se verá en el primer despliegue real, casi
+siempre como un 401 o un 403 visible, una vez corregidos D1 y D2. Que un pool concreto esté bien configurado no lo demuestra
+ninguna red de keel: lo cubre el documento del incremento 3.2.
+
+- **5.1 Verificación dirigida**, no una corrida completa: el arnés no puede funcionar contra un pool real, porque pide los tokens
+  de usuario con el grant `password` (por lo que se sabe de Cognito, su `/oauth2/token` no lo admite; sin medir) y `tokenAs` y
+  `tokenWithScope` dependen del emulador o del admin de Keycloak. Se pide a mano cada token (`InitiateAuth` para los de usuario,
+  `client_credentials` para los de máquina) contra el servidor generado, en local y apuntando al pool, y se miden los casos que
+  dependen del proveedor: grupos, scope con prefijo, cliente exento traducido, claim del alcance con V2 y V3, e ID token
+  rechazado. Se registra en `docs/corridas/`.
+- **5.2 Contraste.** Lo medido contra los casos `IDT-*` y el emulador; se corrige lo que no coincida.
 
 ## Fuera de alcance
 
@@ -186,7 +201,8 @@ Requiere P4.
 - Lo emitido con `auth: keycloak`, igual que antes del plan.
 - El proveedor ficticio genera en los cuatro, y ningún test admite una rama por nombre fuera del descriptor.
 - Todo proyecto generado con proveedor lleva su prueba `IDT-*`, y cada sabotaje cae solo en sus casos, en cada generador.
-- La corrida real hecha, o escrito en este plan por qué no.
+- Lo generado con Cognito dice que no se ha verificado contra un pool real, y la fase 5 sigue escrita con lo que queda sin
+  demostrar.
 
 ## Cómo se ejecuta
 
@@ -202,10 +218,10 @@ Requiere P4.
 | 2. servidor equivalente | pendiente | |
 | 3. lo que debe cumplir el proveedor | pendiente | |
 | 4. emulador fiel y arnés | pendiente | |
-| 5. Cognito real | pendiente (requiere P4) | |
+| 5. Cognito real | diferida (fuera del cierre) | |
 
 ## Para retomar
 
 - Plan reorganizado en fases el 2026-11-10 tras evaluarlo contra el código. Ya medido o resuelto: T1 (salvo varios valores), T4
-  y T5; P1 a P3 cerradas.
-- Siguiente: **fase 1, incremento 1.1**, en un contexto nuevo. Antes, el usuario decide P4; P5 puede esperar a la fase 4.
+  y T5; P1 a P4 cerradas. Por decisión del usuario, el plan se hace con el emulador y sin cuenta de AWS.
+- Siguiente: **fase 1, incremento 1.1**, en un contexto nuevo. P5 puede esperar a la fase 4.
