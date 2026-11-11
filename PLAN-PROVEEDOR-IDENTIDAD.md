@@ -72,7 +72,7 @@ emite `email`.
 | P2 | Si falta esa variable en producción | **Cerrada.** El servicio no arranca, solo por los clientes de los que depende (exentos e identidad 1:1): un exento sin reconocer rompe en silencio a un consumidor |
 | P3 | ¿Emite `email` el emulador? | **Cerrada.** No por defecto, como el token real. Si el diseño lo necesita, el emulador lo añade representando un pool con el disparador desplegado, y `check`/`build` lo dicen |
 | P4 | Cuenta de AWS | **Cerrada: no hace falta para este plan.** Solo la necesitan lo opcional (incremento 1.5) y la fase 5, diferida. Si llega a usarse: un perfil propio en la máquina, nunca credenciales en la conversación, y recursos con prefijo `keel-` que se borran al terminar |
-| P5 | Generador de la red de extremo a extremo (incremento 4.4) | **Abierta.** Recomendación: keel-spring, que es la referencia y la única sin `security-check` |
+| P5 | Generador de la red de extremo a extremo (incremento 4.4) | **Cerrada (2026-11-11): keel-spring**, que es la referencia y la única sin `security-check` |
 
 ## Trampas
 
@@ -329,4 +329,11 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
   `ts-syntax`/`test/helpers/emitted.js`, `cs-syntax` y `go-syntax`, y el humo del arnés con `auth: cognito` sobre un diseño con la
   identidad en el `sub` (conduit) y otro en `email` (shop-api). La red de la petición es `emulator-check`: la de cada arnés tiene
   que mandar lo mismo que la referencia.
-- Después, 4.4, con **P5 por decidir** (la recomendación sigue siendo keel-spring). Queda RS-10 de keel-nest con `azp` a mano.
+- **En curso, SIN COMMIT (2026-11-11):** la rama del emulador de keel-spring está escrita en
+  `packages/keel-spring/src/scaffold/integration-tests.js` (`emulatorPersonaSection`, `emulatorScopedSection` y el `personaEncode` propio
+  en `keycloakAdminSection` cuando no hay `realm-admin`; esa sección ya se emite solo con `usesRealmAdmin`). El módulo carga, y
+  nada más: falta medirla. Como `cognito.harness` sigue en `false`, hoy no se emite; para medirla, activar `emulator` en un test
+  (como hace `emulator-check`) o ya en el descriptor cuando estén los cuatro. Comprobar que lo emitido con Keycloak no cambia
+  (`git diff` de esa sección y volcado de huellas), `java-syntax`, `compile-check --auth=cognito` sobre `shop-api` y `asset-vault`, y
+  que el formulario que arma el Java coincide con `emulatorPersonaForm`/`emulatorScopedForm`.
+- 4.4: **P5 cerrada, keel-spring.** Queda RS-10 de keel-nest con `azp` a mano.
