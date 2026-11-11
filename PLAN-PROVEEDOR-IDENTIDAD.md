@@ -229,7 +229,7 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
 | Fase | Estado | Medido con |
 |---|---|---|
 | 1. contrato del proveedor | hecha el 2026-11-10 (sin el 1.5, opcional) | Lo emitido, idéntico en 4 generadores × 19 fixtures × 3 valores de `auth`; `keel-core/test/token-cases.test.js` y `keel-go/test/identity-providers.test.js`, falsada con tres sabotajes; las seis suites |
-| 2. servidor equivalente | pendiente | |
+| 2. servidor equivalente | a medias: 2.1 hecho y 2.2/2.3 en keel-spring y keel-nest (2026-11-10); faltan keel-dotnet y keel-go | keel-spring: `token-check` (4 diseños) y sus 4 sabotajes. keel-nest: `test/token-contract.test.js` ejecuta lo emitido, 3 sabotajes, y `ts-check --auth=cognito` 13/13. Lo emitido con `keycloak` y sin proveedor, idéntico salvo la prueba nueva |
 | 3. lo que debe cumplir el proveedor | pendiente | |
 | 4. emulador fiel y arnés | pendiente | |
 | 5. Cognito real | diferida (fuera del cierre) | |
@@ -246,4 +246,19 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
 - `npm run golden -- --check` de keel-spring y keel-nest **ya estaba en rojo antes de empezar** (417 y 407 diferencias, las mismas
   con y sin la fase 1, en agentes y skills). Una `--check` no vale para la fase 2 hasta regenerarlas, y regenerarlas a ciegas
   tampoco: la fase 1 se midió con una línea base propia tomada antes de tocar nada.
-- Siguiente: **fase 2, incremento 2.1**, en un contexto nuevo. P5 puede esperar a la fase 4.
+- Fase 2 cortada después de keel-nest, el corte natural del plan. Lo neutral está en `gen/identity-providers.js` (la referencia
+  ejecutable: `acceptsToken`, `grantedScope`, `credentialClient`, `isExemptClient`, `declaredClient`; `tokenContract` da también
+  `clientClaims`, `opaqueClients` y `accepted`) y en `gen/security-config.js` (`needsAudience`, `translatedClients`, `clientIdLines`). El
+  diseño de D4 sin fixture es `keel-core/test/helpers/identity-designs.js`.
+- Decisiones tomadas al implementar: con scopes prefijados, un scope sin el prefijo propio no da authority (tampoco uno pelado); con ids
+  generados, a falta del claim el nombre de la autenticación no sustituye al cliente; un id fuera del mapa sigue crudo y no encuentra
+  recurso, como un cliente desconocido con Keycloak; el rechazo de D1 se hace donde el token se convierte en principal, también en un
+  diseño sin reglas por rol (keel-spring emite entonces el conversor con el `sub` de principal).
+- Trampas medidas: en keel-spring el `Binder` deja un `${VAR}` sin resolver como texto, y P2 no se cumpliría (se lee con
+  `getRequiredProperty`); toda prueba emitida que firme a mano un token necesita el claim del tipo (`accepted`), o da 401 donde espera
+  403 (lo vio `ts-check`). **keel-dotnet (`api-tests.js:338`) y keel-go (`api-tests.js:545`) tienen ese mismo token.**
+- Local sigue con `client_id` igual al nombre: `clientIdLines` pone el nombre en `local` y `develop`, y cambia con T3 en la fase 4.
+- **Fase 3.2 o antes:** la descripción de `SECURITY_AUDIENCE` en `keel-spring/.../readme.js` dice «claim `aud`», falso con Cognito.
+- Siguiente: **fase 2, incremento 2.3 en keel-dotnet** (con la prueba emitida del 2.2 y `cs-check`), y después keel-go, en un contexto
+  nuevo. Patrón: lo de keel-nest. Hay que ampliar `ALLOWED_DIFFERENCES` de `keel-go/test/identity-providers.test.js` en cada generador,
+  y RS-10 de keel-nest, keel-dotnet y keel-go sigue con `azp` escrito a mano. P5 puede esperar a la fase 4.

@@ -70,6 +70,7 @@ import * as restSupport from './rest-support.js';
 import * as controllers from './controllers.js';
 import * as security from './security.js';
 import * as testCredential from './test-credential.js';
+import * as tokenContractTest from './token-contract-test.js';
 import * as apiTests from './api-tests.js';
 import * as health from './health.js';
 import * as appTests from './app-tests.js';
@@ -183,6 +184,7 @@ const GENERATORS = [
   security,
   // La credencial con la que las pruebas del perfil test pasan la autorización.
   testCredential,
+  tokenContractTest,
   domainGuardsCheck,
   appTests,
   apiTests,

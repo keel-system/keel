@@ -23,6 +23,7 @@ import { usesCallerRoles, ownershipRulesOf } from '@keel-system/keel-core/gen/ow
 import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
 import { audienceOf, tokenClaims } from '@keel-system/keel-core/gen/access-plan';
 import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
+import { translatedClients } from '@keel-system/keel-core/gen/security-config';
 import { classPath, DIRS, tsModule, tsString } from './render.js';
 // ETag e If-Match con escritura condicional (CW-9): la lista es la neutral de los cuatro generadores.
 import { corsAllowedHeaders, corsExposedHeaders } from '@keel-system/keel-core/gen/conditional-writes';
@@ -45,6 +46,7 @@ export const CORS_POLICY_TS = `${DIR}/cors-policy.ts`;
 export const HTTP_SECURITY_TS = `${DIR}/http-security.ts`;
 export const CALLER_IDENTITY_TS = `${DIR}/caller-identity.ts`;
 export const JWT_CALLER_SCOPE_TS = `${DIR}/jwt-caller-scope.ts`;
+export const SERVICE_CLIENT_IDS_TS = `${DIR}/service-client-ids.ts`;
 export const CALLER_ROLES_TS = classPath(DIRS.appSupport, 'CallerRoles');
 export const JWT_CALLER_ROLES_TS = `${DIR}/jwt-caller-roles.ts`;
 export const SECURITY_MODULE_TS = `${DIR}/security-module.ts`;
@@ -133,6 +135,7 @@ export function generate(model) {
   if (apiKeyClients(model).length > 0) files.push({ path: API_KEY_AUTHENTICATOR_TS, content: apiKeyAuthenticator(model) });
   if (model.security?.cors) files.push({ path: CORS_POLICY_TS, content: corsPolicy(model) });
   if (usesCallerIdentity(model)) files.push({ path: CALLER_IDENTITY_TS, content: callerIdentity(model) });
+  if (translatedClients(model).length > 0) files.push({ path: SERVICE_CLIENT_IDS_TS, content: serviceClientIds() });
   if (usesCallerScope(model)) files.push(...callerScope(model));
   if (usesRoleCheck(model)) files.push(...callerRoles());
   if (usesSecurityModule(model)) files.push({ path: SECURITY_MODULE_TS, content: securityModuleFile(model) });
@@ -286,7 +289,8 @@ export function verdict(requirement: Requirement, principal: Principal | null): 
 function jwtAuthenticator(model) {
   const sec = model.security;
   const claims = tokenClaims(model.stack?.auth);
-  const { prefixedScopes, audienceInScopePrefix, displayName } = tokenContract(model.stack?.auth);
+  const { prefixedScopes, audienceInScopePrefix, displayName, accepted } = tokenContract(model.stack?.auth);
+  const translates = translatedClients(model).length > 0;
   // Sin roles, permisos ni scopes en ninguna regla, Spring usa su conversor por defecto, cuyo
   // principal es el `sub`: el nombre que ve la identidad del llamante tiene que ser el mismo.
   const principalClaim = sec.usesAuthorities ? claims.principalClaim : 'sub';
@@ -363,7 +367,7 @@ export class JwtAuthenticator {
   private constructor(
     private readonly issuerUri: string | null,
     private readonly jwkSetUri: string | null,
-    private readonly inlineJwks: string | null
+    private readonly inlineJwks: string | null${prefixedScopes ? ',\n    private readonly resourceServer: string' : ''}
   ) {}
 
   static from(configuration: Configuration): JwtAuthenticator {
@@ -371,7 +375,7 @@ export class JwtAuthenticator {
       const value = configuration.get(path);
       return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
     };
-    return new JwtAuthenticator(text('security.oauth2.issuer-uri'), text('security.oauth2.jwk-set-uri'), text('security.oauth2.jwks'));
+${translates ? '    configureServiceClientIds(configuration);\n' : ''}    return new JwtAuthenticator(text('security.oauth2.issuer-uri'), text('security.oauth2.jwk-set-uri'), text('security.oauth2.jwks')${prefixedScopes ? `, text('security.audience') ?? ${tsString(audienceOf(model))}` : ''});
   }
 
   /** El principal del token, o InvalidCredential si no vale (401). */
@@ -389,7 +393,9 @@ export class JwtAuthenticator {
       }
       throw error;
     }
-    return toPrincipal(payload);
+${accepted ? `    // Un token del mismo emisor y con la misma firma que no es un access token: lo que lo distingue es este claim.
+    if (payload[${tsString(accepted.claim)}] !== ${tsString(accepted.value)}) throw new InvalidCredential('El token no es un access token');
+` : ''}    return toPrincipal(payload${prefixedScopes ? ', this.resourceServer' : ''});
   }
 
   private resolveKeys(): Promise<Keys> {
@@ -417,10 +423,10 @@ export class JwtAuthenticator {
   }
 }
 
-function toPrincipal(payload: JWTPayload): Principal {
+function toPrincipal(payload: JWTPayload${prefixedScopes ? ', resourceServer: string' : ''}): Principal {
   const roles = rolesOf(payload);
   const authorities = new Set<string>(roles.map((role) => \`ROLE_\${role}\`));
-  for (const scope of scopesOf(payload)) authorities.add(\`SCOPE_\${scope}\`);
+  for (const scope of scopesOf(payload${prefixedScopes ? ', resourceServer' : ''})) authorities.add(\`SCOPE_\${scope}\`);
   for (const permission of textList(payload[${tsString(claims.permissionsClaim)}])) if (permission.trim() !== '') authorities.add(permission);
   for (const role of roles) for (const permission of ROLE_GRANTS[role] ?? []) authorities.add(permission);
   const name = payload[PRINCIPAL_CLAIM] ?? payload.sub;
@@ -431,14 +437,15 @@ function rolesOf(payload: JWTPayload): string[] {
 ${roles}
 }
 
-function scopesOf(payload: JWTPayload): string[] {
+function scopesOf(payload: JWTPayload${prefixedScopes ? ', resourceServer: string' : ''}): string[] {
   const scope = payload['scope'];
   if (typeof scope !== 'string') return [];
   return scope
     .split(' ')
     .filter((value) => value.trim() !== '')${prefixedScopes ? `
-    // ${displayName}: <resource-server>/<scope>. Sin prefijo, se queda igual.
-    .map((value) => value.slice(value.indexOf('/') + 1))` : ''};
+    // ${displayName}: <resource-server>/<scope>. Solo valen los de este servicio.
+    .filter((value) => value.startsWith(\`\${resourceServer}/\`) && value.length > resourceServer.length + 1)
+    .map((value) => value.slice(resourceServer.length + 1))` : ''};
 }
 
 /** Un claim de lista; un texto suelto cuenta como lista de uno, como getClaimAsStringList. */
@@ -459,9 +466,36 @@ ${audienceCheck}`;
       { symbol: 'JWTPayload', from: 'jose', type: true },
       { symbol: 'JWTVerifyGetKey', from: 'jose', type: true },
       { symbol: 'Configuration', from: CONFIGURATION_TS, type: true },
-      { symbol: 'Principal', from: SECURITY_CONTEXT_TS, type: true }
+      { symbol: 'Principal', from: SECURITY_CONTEXT_TS, type: true },
+      translates ? { symbol: 'configureServiceClientIds', from: SERVICE_CLIENT_IDS_TS } : null
     ],
     body
+  );
+}
+
+// El mapa nombre → id de los clientes máquina, con un proveedor que genera ese id (security.client-ids). Un módulo y no
+// un provider: CallerIdentity es un objeto sin dependencias. Una variable obligatoria sin valor ya no deja arrancar
+// (el cargador de la configuración, P2).
+function serviceClientIds() {
+  return tsModule(
+    SERVICE_CLIENT_IDS_TS,
+    [{ symbol: 'Configuration', from: CONFIGURATION_TS, type: true }],
+    `/** El id que el proveedor de identidad generó para cada cliente máquina del diseño (security.client-ids). */
+let ids: Readonly<Record<string, string>> = {};
+
+export function configureServiceClientIds(configuration: Configuration): void {
+  ids = (configuration.get('security.client-ids') ?? {}) as Readonly<Record<string, string>>;
+}
+
+/** El id configurado de un cliente declarado, o undefined si no lo hay. */
+export function clientIdOf(declaredName: string): string | undefined {
+  return ids[declaredName];
+}
+
+/** El nombre declarado de un id; un id que no es de ningún cliente declarado sigue crudo y no encuentra recurso. */
+export function declaredClientName(clientId: string | null): string | null {
+  return Object.entries(ids).find(([, id]) => id === clientId)?.[0] ?? clientId;
+}`
   );
 }
 
@@ -767,12 +801,19 @@ ${authenticate}`;
 function callerIdentity(model) {
   const identity = model.security.callerIdentity;
   const optionalOps = model.services.flatMap((group) => group.operations).some((operation) => operation.optionalAuth);
+  const { clientClaims, opaqueClients } = tokenContract(model.stack?.auth);
+  const clientRead = clientClaims.map((claim) => `text(principal.claims[${tsString(claim)}])`).join(' ?? ');
+  // D4: con `resolvedBy` no se traduce, la lista del recurso guarda los ids.
+  const oneToOne = opaqueClients && identity.source === 'serviceClient' && !identity.resolvedBy;
   const extract =
     identity.source === 'claim'
       ? `    const value = text(principal.claims[${tsString(identity.claim ?? 'sub')}]);`
-      : `    // El cliente máquina de la credencial: Keycloak lo pone en \`azp\` y otros proveedores en
+      : opaqueClients
+        ? `    // El cliente máquina de la credencial, con el id que generó el proveedor.
+    const value = ${oneToOne ? `declaredClientName(${clientRead})` : clientRead};`
+        : `    // El cliente máquina de la credencial: Keycloak lo pone en \`azp\` y otros proveedores en
     // \`client_id\`; con client_credentials, el nombre del principal también es el cliente.
-    const value = text(principal.claims['azp']) ?? text(principal.claims['client_id']) ?? text(principal.name);`;
+    const value = ${clientRead} ?? text(principal.name);`;
   const body = `/**
  * De dónde sale, por HTTP, la identidad de QUIÉN pide el trabajo (security.authentication.callerIdentity):
  * ${identity.source === 'claim' ? `el claim \`${identity.claim ?? 'sub'}\` del token` : 'el cliente máquina de la credencial'}, que llega al campo \`${identity.field}\` del mensaje.
@@ -819,7 +860,8 @@ function text(value: unknown): string | null {
 }`;
   const resolution = callerResolution(model);
   const unauthorized = { symbol: 'UnauthorizedException', from: classPath(DIRS.errors, 'UnauthorizedException') };
-  if (!resolution) return tsModule(CALLER_IDENTITY_TS, [{ symbol: 'SecurityContext', from: SECURITY_CONTEXT_TS }, unauthorized], body);
+  const translation = oneToOne ? { symbol: 'declaredClientName', from: SERVICE_CLIENT_IDS_TS } : null;
+  if (!resolution) return tsModule(CALLER_IDENTITY_TS, [{ symbol: 'SecurityContext', from: SECURITY_CONTEXT_TS }, unauthorized, translation], body);
   const resolver = `
 
 /**
@@ -865,6 +907,16 @@ function callerScope(model) {
   const exemptDoc = exempt.length > 0 ? exempt.map((role) => `\`${role}\``).join(', ') : 'ninguno';
   const exemptClients = scoping.exemptClients ?? [];
   const clientsDoc = exemptClients.length > 0 ? exemptClients.map((client) => `\`${client}\``).join(', ') : 'ninguno';
+  const { clientClaims, opaqueClients } = tokenContract(model.stack?.auth);
+  const translates = translatedClients(model).length > 0 && exemptClients.length > 0;
+  const fromToken = clientClaims.map((claim) => `textClaim(principal.claims[${tsString(claim)}])`).join(' ?? ');
+  // Con ids generados por el proveedor, un usuario que se llamase como un cliente pasaría por él.
+  const clientRead = opaqueClients ? `principal.kind === 'token' ? ${fromToken} : textClaim(principal.name)` : `${fromToken} ?? textClaim(principal.name)`;
+  const exemptCheck = translates ? 'EXEMPT_CLIENTS.some((name) => client === clientIdOf(name))' : 'EXEMPT_CLIENTS.includes(client)';
+  const recognizedBy = opaqueClients
+    ? 'reconocidos por el id que el proveedor generó para cada uno (security.client-ids).'
+    : `reconocidos por el cliente de la
+ * credencial —\`azp\`, \`client_id\` o el nombre del principal, el mismo criterio que la identidad del llamante—.`;
   const port = `/**
  * Alcance por recurso del llamante (security.authentication.scoping: claim \`${scoping.claim}\` sobre
  * \`${scoping.over}\`).
@@ -888,8 +940,7 @@ export abstract class CallerScope {
   const adapter = `/**
  * Alcance por recurso leído del token de la petición en curso (security.authentication.scoping):
  * el claim \`${scoping.claim}\` como lista o como texto separado por comas o espacios; exentos, los roles
- * ${exemptDoc} y los clientes máquina ${clientsDoc} (scoping.exemptClients), reconocidos por el cliente de la
- * credencial —\`azp\`, \`client_id\` o el nombre del principal, el mismo criterio que la identidad del llamante—.
+ * ${exemptDoc} y los clientes máquina ${clientsDoc} (scoping.exemptClients), ${recognizedBy}
  * La exención es solo del alcance: las reglas de acceso ya se aplicaron. Sin dependencias: Nest lo construye sin
  * decorador (SecurityModule).
  */
@@ -902,8 +953,8 @@ export class JwtCallerScope extends CallerScope {
     const principal = SecurityContext.current();
     if (principal == null) return false;
     if (EXEMPT_AUTHORITIES.some((authority) => principal.authorities.has(authority))) return true;
-    const client = textClaim(principal.claims['azp']) ?? textClaim(principal.claims['client_id']) ?? textClaim(principal.name);
-    return client != null && EXEMPT_CLIENTS.includes(client);
+    const client = ${clientRead};
+    return client != null && ${exemptCheck};
   }
 
   scopedValues(): ReadonlySet<string> {
@@ -928,7 +979,8 @@ function textClaim(value: unknown): string | null {
         JWT_CALLER_SCOPE_TS,
         [
           { symbol: 'CallerScope', from: CALLER_SCOPE_TS },
-          { symbol: 'SecurityContext', from: SECURITY_CONTEXT_TS }
+          { symbol: 'SecurityContext', from: SECURITY_CONTEXT_TS },
+          translates ? { symbol: 'clientIdOf', from: SERVICE_CLIENT_IDS_TS } : null
         ],
         adapter
       )

@@ -37,7 +37,7 @@ export function planFixture(name, { mutate = null, withoutLayers = [], stack = n
  * Transpila los `.ts` de `files` bajo `src/` a un directorio temporal y devuelve `load(ruta)`, que
  * importa el módulo emitido en `ruta` (desde la raíz del proyecto, con `.ts`).
  */
-export function transpileTree(files, { stubs = {} } = {}) {
+export function transpileTree(files, { stubs = {}, tests = false } = {}) {
   const root = tmpDir('keel-nest-emitted-');
   fs.writeFileSync(path.join(root, 'package.json'), '{"type":"module"}\n');
   // Paquetes sustitutos (`{ '@nestjs/common': fuente }`): lo emitido que importa Nest solo para decorar se
@@ -58,7 +58,8 @@ export function transpileTree(files, { stubs = {} } = {}) {
     fs.symlinkSync(dir, link, 'junction');
   }
   for (const file of files) {
-    if (!file.path.startsWith('src/') || !file.path.endsWith('.ts') || file.path.endsWith('.d.ts')) continue;
+    const inTree = file.path.startsWith('src/') || (tests && file.path.startsWith('test/'));
+    if (!inTree || !file.path.endsWith('.ts') || file.path.endsWith('.d.ts')) continue;
     const { outputText } = ts.transpileModule(file.content, {
       fileName: file.path,
       compilerOptions: {

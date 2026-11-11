@@ -115,14 +115,14 @@ test('Cognito: grupos planos, el prefijo del scope fuera, y la audiencia es ese 
   const keys = await generateKeyPair('RS256');
   const jwks = JSON.stringify({ keys: [{ ...(await exportJWK(keys.publicKey)), kid: 'k1', alg: 'RS256' }] });
   const authenticator = JwtAuthenticator.from(configuration({ 'security.oauth2.jwks': jwks }));
-  const token = await new SignJWT({ sub: 'm2m', client_id: 'm2m', scope: 'asset-vault/asset:read', 'cognito:groups': ['ops'] })
+  const token = await new SignJWT({ sub: 'm2m', client_id: 'm2m', token_use: 'access', scope: 'asset-vault-api/asset:read', 'cognito:groups': ['ops'] })
     .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
     .setExpirationTime('5m')
     .sign(keys.privateKey);
   const principal = await authenticator.authenticate(token);
   assert.ok(principal.authorities.has('SCOPE_asset:read'));
   assert.ok(principal.authorities.has('ROLE_ops'));
-  assert.equal(issuedFor(principal, 'asset-vault'), true);
+  assert.equal(issuedFor(principal, 'asset-vault-api'), true);
   assert.equal(issuedFor(principal, 'otro-servicio'), false);
 });
 

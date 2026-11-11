@@ -9,6 +9,7 @@
 // Las peticiones se eligen del DISEÑO: si un caso no tiene operación que lo ejercite, no se emite (y
 // el test de keel-nest que mira esta prueba lo dice), en vez de inventar una ruta.
 
+import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { FRAMEWORK_RESPONSES as FW, missingParameterMessage, missingPartMessage } from '@keel-system/keel-core/gen/api-errors';
@@ -35,6 +36,12 @@ export function apiCases(model) {
  * Las opciones de app.inject() para un caso: con seguridad, la credencial que satisface toda regla del
  * diseño (CREDENTIAL, la firma la propia prueba) — el caso mide la API, no la autorización.
  */
+/** El claim con el que el proveedor marca el token como access token: sin él, el servidor respondería 401 y no 403. */
+function acceptedClaim(model) {
+  const { accepted } = tokenContract(model.stack?.auth);
+  return accepted ? `, ${accepted.claim}: ${tsString(accepted.value)}` : '';
+}
+
 function request(entry, { json = null, secured = false } = {}) {
   const headers = [secured ? '...CREDENTIAL' : null, json != null ? "'content-type': 'application/json'" : null].filter(Boolean);
   return `{ method: ${tsString(entry.method)}, url: ${tsString(entry.url)}${headers.length > 0 ? `, headers: { ${headers.join(', ')} }` : ''}${
@@ -263,7 +270,7 @@ let CREDENTIAL: Readonly<Record<string, string>> = {};`;
   const forbidden = cases.forbidden;
   if (forbidden) {
     tests.push(`  it(${tsString(`una credencial válida sin lo que exige la regla (${forbidden.authorities.join(' o ')}) es 403`)}, async () => {
-    const bare = await credential.tokenWith({ sub: 'keel-sin-permisos' });
+    const bare = await credential.tokenWith({ sub: 'keel-sin-permisos'${acceptedClaim(model)} });
     const response = await app.inject({ method: ${tsString(forbidden.method)}, url: ${tsString(forbidden.url)}, headers: ${bearer('bare')} });
     expectError(response, 403, ${REJECTED_403});
   });`);

@@ -259,12 +259,14 @@ const ALLOWED_DIFFERENCES = {
     /^src\/main\/java\/.+\/infrastructure\/configurations\/security\/(AudienceAuthorizationFilter|JwtAuthConverter|SecurityConfig|JwtCallerScope|CallerIdentity|ServiceClientIds)\.java$/,
     /^src\/test\/java\/.+\/infrastructure\/configurations\/security\/TokenContractTest\.java$/,
     /^src\/main\/resources\/parameters\/(develop|local)\/oauth2\.yaml$/,
-    /^src\/main\/resources\/parameters\/(develop|local|production)\/security\.yaml$/,
+    /^src\/main\/resources\/parameters\/(develop|local|production|test)\/security\.yaml$/,
+    /^src\/main\/resources\/application-test\.yaml$/,
     /^src\/integrationTest\/java\/.+\/flows\/AbstractFlowIT\.java$/
   ],
   nest: [
     /^config\/parameters\/(develop|local|production|test)\/security\.yaml$/,
-    /^src\/infrastructure\/security\/jwt-authenticator\.ts$/,
+    /^src\/infrastructure\/security\/(jwt-authenticator|caller-identity|jwt-caller-scope|service-client-ids)\.ts$/,
+    /^test\/(token-contract|api)\.test\.ts$/,
     /^test\/integration\/(harness-smoke\.test\.ts|support\/flow\.ts)$/,
     /^test\/support\/test-credential\.ts$/
   ],

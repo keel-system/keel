@@ -104,6 +104,15 @@ export async function mountOutsideFrontier(workspace) {
  * adaptador de repositorio no se emitía ni puente ni publisher. Ahora la rechazan los tres (keel-core/gen/messaging-frontier.js).
  */
 export const DERIVED_SILHOUETTES = [
+  // La identidad del cliente máquina con correspondencia 1:1 (identity-designs.js): solo traduce con `--auth=cognito`.
+  {
+    name: 'mailer-one-to-one',
+    fixture: 'notification-mailer',
+    withoutLayers: [],
+    mutate(layers) {
+      delete layers.security.authentication.callerIdentity.from.resolvedBy;
+    }
+  },
   {
     name: 'stock-reservation-compuesto-saliente',
     fixture: 'stock-reservation',

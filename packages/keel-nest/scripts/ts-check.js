@@ -8,7 +8,7 @@
 // equivalente de `compile-check` de keel-spring, y como él se lanza antes de dar por buena
 // cualquier cambio en lo que se emite.
 //
-//   node packages/keel-nest/scripts/ts-check.js [--keep] [--only=<silueta>[,<silueta>]] [--sabotage=<id>]
+//   node packages/keel-nest/scripts/ts-check.js [--keep] [--only=<silueta>[,<silueta>]] [--auth=<proveedor>] [--sabotage=<id>]
 //   npm run ts-check --workspace packages/keel-nest
 //
 // --keep deja el proyecto generado (y dice dónde) para inspeccionarlo.
@@ -45,6 +45,7 @@ import { JOSE_VERSION, AMQPLIB_VERSION, KAFKA_JAVASCRIPT_VERSION, AWS_SDK_VERSIO
 const keep = process.argv.includes('--keep');
 const only = process.argv.find((arg) => arg.startsWith('--only='))?.split('=')[1]?.split(',') ?? null;
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
+const auth = process.argv.find((arg) => arg.startsWith('--auth='))?.split('=')[1] ?? null;
 // [silueta, sufijo del archivo, texto, sustituto]
 const SABOTAGES = {
   'cw-no-428': ['catalog-conditional', 'rest/conditional-requests.ts', 'if (required) throw new PreconditionRequiredException();', 'if (required) return null;'],
@@ -183,8 +184,8 @@ for (const { name: fixture, derived, broker, paymentGateway, telemetry } of silh
   const name = [fixture, broker, paymentGateway, telemetry].filter(Boolean).join('-');
   const { manifest, layers } = derived ? derivedDesign(derived, loadService) : loadService(path.join(FIXTURES_DIR, fixture));
   const stack =
-    broker || paymentGateway || telemetry
-      ? { ...(broker ? { broker } : {}), ...(paymentGateway ? { paymentGateway } : {}), ...(telemetry ? { telemetry } : {}) }
+    broker || paymentGateway || telemetry || auth
+      ? { ...(broker ? { broker } : {}), ...(paymentGateway ? { paymentGateway } : {}), ...(telemetry ? { telemetry } : {}), ...(auth ? { auth } : {}) }
       : null;
   const { files } = planService({ manifest, layers, workspace: workspace, stack });
   const dir = path.join(workspace, 'fixtures-tsc', name);
