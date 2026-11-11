@@ -88,9 +88,9 @@ export function tokenCases(model) {
     add('IDT-ROLE', 'role-claim', claimsOfCase, {
       authenticated: true,
       principal: principalOf(claimsOfCase),
-      authorities: { includes: [`ROLE_${role}`, ...grantsOf(role)] }
+      ...(sec.usesAuthorities ? { authorities: { includes: [`ROLE_${role}`, ...grantsOf(role)] } } : {})
     });
-    add('IDT-NO-ROLE', 'no-role', userToken([]), { authenticated: true, authorities: { excludes: roles.map((name) => `ROLE_${name}`) } });
+    if (sec.usesAuthorities) add('IDT-NO-ROLE', 'no-role', userToken([]), { authenticated: true, authorities: { excludes: roles.map((name) => `ROLE_${name}`) } });
   }
 
   const plan = accessPlan(model);
@@ -121,7 +121,7 @@ export function tokenCases(model) {
 
   const clients = sec.serviceClients ?? [];
   const scopes = sec.scopes ?? [];
-  if (usesMachineTokens && scopes.length > 0) {
+  if (usesMachineTokens && scopes.length > 0 && sec.usesAuthorities) {
     const clientId = clientIdOf(clients[0]?.name ?? UNKNOWN_CLIENT);
     add('IDT-SCOPE', 'scope-claim', machineToken(clientId, [scopes[0]]), { authenticated: true, authorities: { includes: [`SCOPE_${scopes[0]}`] } });
     if (prefixedScopes) {
@@ -167,8 +167,8 @@ export function tokenCases(model) {
 
   const scoping = sec.scoping;
   if (scoping) {
-    const [exemptRole] = scoping.exemptRoles;
-    const scopedRole = roles.find((role) => !scoping.exemptRoles.includes(role));
+    const [exemptRole] = sec.usesAuthorities ? scoping.exemptRoles : [];
+    const scopedRole = sec.usesAuthorities ? roles.find((role) => !scoping.exemptRoles.includes(role)) : undefined;
     if (exemptRole) add('IDT-EXEMPT-ROLE', 'exempt-role', userToken([exemptRole]), { authenticated: true, exempt: true });
     if (scopedRole) {
       add('IDT-SCOPED-ROLE', 'scoped-role', userToken([scopedRole], { [scoping.claim]: [RESOURCE] }), {

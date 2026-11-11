@@ -15,6 +15,7 @@ import * as gradle from './gradle.js';
 import * as wrapper from './wrapper.js';
 import * as application from './application.js';
 import * as appTests from './app-tests.js';
+import * as tokenContractTest from './token-contract-test.js';
 import * as integrationTests from './integration-tests.js';
 import * as config from './config.js';
 import * as migrations from './migrations.js';
@@ -92,6 +93,7 @@ const GENERATORS = [
   wrapper,
   application,
   appTests,
+  tokenContractTest,
   integrationTests,
   config,
   migrations,

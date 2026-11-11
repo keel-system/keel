@@ -1850,6 +1850,11 @@ function testProfileFiles(model) {
     fragments.push(fragment('test', model.service.artifactId, serviceParametersYaml(model, 'test')));
   }
 
+  // Los ids de los clientes máquina: sin ellos, ServiceClientIds no deja arrancar el contexto de @SpringBootTest.
+  if (translatedClients(model).length > 0) {
+    fragments.push(fragment('test', 'security', `${['security:', ...clientIdLines(model, 'test')].join('\n')}\n`));
+  }
+
   // Storage: mismo generador que el resto de perfiles (endpoint local,
   // credenciales de juguete, aprovisionamiento desactivado y el mapa completo de
   // `storage.buckets.*`), para que el bean S3Client, el adaptador S3FileStorage y

@@ -256,7 +256,8 @@ const ALLOWED_DIFFERENCES = {
   ],
   // El lector del token, su configuración, y el arnés que pide los tokens.
   spring: [
-    /^src\/main\/java\/.+\/infrastructure\/configurations\/security\/(AudienceAuthorizationFilter|JwtAuthConverter)\.java$/,
+    /^src\/main\/java\/.+\/infrastructure\/configurations\/security\/(AudienceAuthorizationFilter|JwtAuthConverter|SecurityConfig|JwtCallerScope|CallerIdentity|ServiceClientIds)\.java$/,
+    /^src\/test\/java\/.+\/infrastructure\/configurations\/security\/TokenContractTest\.java$/,
     /^src\/main\/resources\/parameters\/(develop|local)\/oauth2\.yaml$/,
     /^src\/main\/resources\/parameters\/(develop|local|production)\/security\.yaml$/,
     /^src\/integrationTest\/java\/.+\/flows\/AbstractFlowIT\.java$/

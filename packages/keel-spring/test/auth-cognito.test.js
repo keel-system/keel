@@ -127,10 +127,11 @@ test('cognito: la matriz M2M conserva su significado sin claim aud', () => {
 test('cognito: el código generado absorbe las dos rarezas del proveedor', () => {
   const { read } = scaffoldCognito();
 
-  // 1. El prefijo del resource server se corta antes de componer la authority: si no,
+  // 1. Solo el prefijo de este servicio se corta antes de componer la authority: si no,
   //    `SCOPE_product-catalog/product:read` no casa con ningún matcher del diseño.
   const converter = read(`${JAVA}/infrastructure/configurations/security/JwtAuthConverter.java`);
-  assert.ok(converter.includes(".map(scope -> scope.substring(scope.indexOf('/') + 1))"), converter);
+  assert.ok(converter.includes('.filter(scope -> scope.startsWith(resourceServer + "/")'), converter);
+  assert.ok(converter.includes('.map(scope -> scope.substring(resourceServer.length() + 1))'), converter);
 
   // 2. La audiencia se comprueba por el prefijo del scope, no por `aud`. Mirar `aud`
   //    daría 403 a TODOS los clientes máquina contra Cognito real.

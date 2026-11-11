@@ -12,6 +12,7 @@
 // correcto (la fila propia se ve, la ajena no, el total) es RS-8; lo que sigue siendo verdad con el camino roto (el
 // scope sin filtro, el vacío, la fila que no existe, la ajena) conserva su caso.
 
+import { credentialClientId, tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { findersOf } from '@keel-system/keel-core/gen';
 import { READ_SCOPE_KEY_CASES, readMissMessage, readScopePath, scopedRootsOf, scopedReadsOf } from '@keel-system/keel-core/gen/read-scope';
 import { cachedOperations } from '@keel-system/keel-core/gen/cache-plan';
@@ -426,7 +427,7 @@ ${keyCases.join('\n')}
     for (const { method, read } of edges) {
       const checks = [];
       for (const role of read.exemptRoles) checks.push(`        as(List.of(${java(role)}), ${identityClaim(identity)});\n        assertEquals(ReadScope.unrestricted(), scopes.${method}(), "RS-10: el rol exento ${role} no da unrestricted");`);
-      for (const client of read.exemptClients) checks.push(`        as(List.of(), "azp", ${java(client)});\n        assertEquals(ReadScope.unrestricted(), scopes.${method}(), "RS-10: el cliente exento ${client} no da unrestricted");`);
+      for (const client of read.exemptClients) checks.push(`        as(List.of(), ${java(tokenContract(model.stack.auth).clientClaims[0])}, ${java(credentialClientId(model.stack.auth, client))});\n        assertEquals(ReadScope.unrestricted(), scopes.${method}(), "RS-10: el cliente exento ${client} no da unrestricted");`);
       if (read.kind === 'scoping') {
         checks.push(
           `        as(List.of(), ${java(read.claim)}, List.of("A", "B"));\n        assertEquals(ReadScope.within(Set.of("A", "B")), scopes.${method}(), "RS-10: el claim no da su conjunto");`,

@@ -21,12 +21,13 @@ import {
   usesServiceApiKeys as needsServiceApiKeyFilter
 } from '@keel-system/keel-core/gen/access-plan';
 import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
+import { translatedClients } from '@keel-system/keel-core/gen/security-config';
 import { camelCase } from '../lib/naming.js';
 import { credentialFinderName } from './repositories.js';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { METRICS_TRANSPORT, usesTelemetry } from '../lib/telemetry-probes.js';
 
-const SECURITY_PKG = 'infrastructure.configurations.security';
+export const SECURITY_PKG = 'infrastructure.configurations.security';
 
 
 function providerMeta(model) {
@@ -88,6 +89,16 @@ public class OpenApiSecurityConfig {
   };
 }
 
+/**
+ * ¿Hace falta un conversor propio del JWT? Para leer las authorities del diseño, y siempre con un proveedor que marca
+ * el tipo de token: el rechazo de lo que no es un access token vive ahí, también en un diseño sin reglas por rol.
+ */
+export function usesJwtConverter(model) {
+  const sec = model.security;
+  const jwt = sec.protocol === 'oidc' || sec.protocol === 'jwt';
+  return jwt && (sec.usesAuthorities || Boolean(tokenContract(model.stack.auth).accepted));
+}
+
 export function generate(model) {
   const sec = model.security;
   if (!model.layersPresent.security || !sec) {
@@ -97,7 +108,8 @@ export function generate(model) {
   const files = [renderSecurityConfig(model, sec)];
   if (sec.cors) files.push(renderCorsConfig(model, sec.cors));
   const jwt = sec.protocol === 'oidc' || sec.protocol === 'jwt';
-  if (jwt && sec.usesAuthorities) files.push(renderJwtAuthConverter(model));
+  if (usesJwtConverter(model)) files.push(renderJwtAuthConverter(model));
+  if (translatedClients(model).length > 0) files.push(renderServiceClientIds(model));
   if (sec.protocol === 'api-key') files.push(renderApiKeyFilter(model));
   if (checksAudience(sec)) files.push(renderAudienceFilter(model));
   if (sec.protocol !== 'none') files.push(renderSecurityErrorHandlers(model));
@@ -163,6 +175,29 @@ function renderCallerScope(model, sec) {
   const exemptDoc = scoping.exemptRoles.length > 0 ? scoping.exemptRoles.map((role) => `{@code ${role}}`).join(', ') : 'ninguno';
   const exemptClients = scoping.exemptClients ?? [];
   const clientsDoc = exemptClients.length > 0 ? exemptClients.map((client) => `{@code ${client}}`).join(', ') : 'ninguno';
+  const { opaqueClients } = tokenContract(model.stack.auth);
+  const translates = translatedClients(model).length > 0 && exemptClients.length > 0;
+  const recognizedBy = opaqueClients
+    ? 'reconocidos por el id que el proveedor generó para cada uno (security.client-ids).'
+    : `reconocidos por el cliente de la credencial: {@code azp},
+ *       {@code client_id} o el nombre de la autenticación, el mismo criterio que la identidad del llamante.`;
+  const clientRead = `            String client = token.getToken().getClaimAsString("${tokenContract(model.stack.auth).clientClaims[0]}");${tokenContract(model.stack.auth).clientClaims.slice(1).map((claim) => `
+            if (client == null || client.isBlank()) {
+                client = token.getToken().getClaimAsString("${claim}");
+            }`).join('')}
+            if (client != null && !client.isBlank()) {
+                return client;
+            }${opaqueClients ? `
+            return null;` : ''}`;
+  const exemptCheck = opaqueClients ? 'isExemptClient(credentialClient(authentication))' : 'EXEMPT_CLIENTS.contains(credentialClient(authentication))';
+  const exemptHelper = opaqueClients
+    ? `
+
+    /** Con ids generados por el proveedor, se compara con el id configurado de cada cliente exento. */
+    private static boolean isExemptClient(String client) {
+        return client != null && ${translates ? 'EXEMPT_CLIENTS.stream().anyMatch(name -> client.equals(ServiceClientIds.idOf(name)))' : 'EXEMPT_CLIENTS.contains(client)'};
+    }`
+    : '';
 
   const port = `/**
  * Alcance por recurso del llamante (security.authentication.scoping: claim {@code ${scoping.claim}}
@@ -193,8 +228,7 @@ public interface CallerScope {
  *   <li>{@code ${scoping.claim}}: los valores de {@code ${scoping.over}} del llamante; se admite como
  *       lista (mapper multivaluado) o como texto separado por comas o espacios.</li>
  *   <li>Exentos: los roles ${exemptDoc}, como authority {@code ROLE_<rol>}; y los clientes máquina
- *       ${clientsDoc} (scoping.exemptClients), reconocidos por el cliente de la credencial: {@code azp},
- *       {@code client_id} o el nombre de la autenticación, el mismo criterio que la identidad del llamante.</li>
+ *       ${clientsDoc} (scoping.exemptClients), ${recognizedBy}</li>
  * </ul>
  *
  * <p>La exención es solo del alcance: las reglas de acceso (roles, scopes) ya se aplicaron en la cadena.
@@ -214,22 +248,16 @@ public class JwtCallerScope implements CallerScope {
         }
         return authentication.getAuthorities().stream()
                 .anyMatch(authority -> EXEMPT_AUTHORITIES.contains(authority.getAuthority()))
-                || EXEMPT_CLIENTS.contains(credentialClient(authentication));
+                || ${exemptCheck};
     }
 
     /** El cliente máquina de la credencial: Keycloak lo pone en azp y otros proveedores en client_id. */
     private static String credentialClient(Authentication authentication) {
         if (authentication instanceof JwtAuthenticationToken token) {
-            String client = token.getToken().getClaimAsString("azp");
-            if (client == null || client.isBlank()) {
-                client = token.getToken().getClaimAsString("client_id");
-            }
-            if (client != null && !client.isBlank()) {
-                return client;
-            }
+${clientRead}
         }
         return authentication.getName();
-    }
+    }${exemptHelper}
 
     @Override
     public Set<String> scopedValues() {
@@ -406,7 +434,7 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
     imports.add('org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter');
     // Todas las cadenas comparten el decoder que autoconfigura Boot desde el
     // issuer-uri: la audiencia ya no es asunto de la autenticación.
-    if (sec.usesAuthorities) {
+    if (usesJwtConverter(model)) {
       chain.push(
         `            ${resourceServer(true)}`
       );
@@ -414,7 +442,7 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
 
     @Bean
     public JwtAuthenticationConverter jwtAuthConverter() {
-        return new JwtAuthConverter().converter();
+        return new JwtAuthConverter(${tokenContract(model.stack.auth).prefixedScopes ? 'audience' : ''}).converter();
     }`;
     } else {
       imports.add('org.springframework.security.config.Customizer');
@@ -456,7 +484,7 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
   // por perfil (issuer-uri en local/develop/production, jwk-set-uri de juguete en
   // test, ver config.js). Un decoder propio aquí obligaría a hardcodear una clave
   // en src/main y a acoplar esta clase al perfil de pruebas.
-  if (audienceChecked) {
+  if (audienceChecked || (jwt && tokenContract(model.stack.auth).prefixedScopes)) {
     imports.add('org.springframework.beans.factory.annotation.Value');
     fields.push(`
     @Value("\${security.audience:${audienceOf(model, sec)}}")
@@ -472,8 +500,8 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
     const patterns = securityMatcherPatterns(serviceMatchers)
       .map((p) => JSON.stringify(p))
       .join(', ');
-    const serviceResourceServer = resourceServer(sec.usesAuthorities);
-    if (!sec.usesAuthorities) imports.add('org.springframework.security.config.Customizer');
+    const serviceResourceServer = resourceServer(usesJwtConverter(model));
+    if (!usesJwtConverter(model)) imports.add('org.springframework.security.config.Customizer');
     imports.add('org.springframework.security.web.access.intercept.AuthorizationFilter');
     serviceChainBean = `
     /**
@@ -615,17 +643,33 @@ function renderJwtAuthConverter(model) {
   const meta = providerMeta(model);
   const pkg = subPackage(model, SECURITY_PKG);
 
-  // Cognito emite los scopes prefijados por el resource server
-  // (`catalog/product:read`), no como el `recurso:accion` pelado que declara el
-  // diseño y que esperan los matchers `SCOPE_*`. Sin cortar el prefijo, un token
-  // de máquina correcto no casa con ninguna regla y todo sale 403 — y solo en
-  // producción, porque un emulador más cómodo no lo reproduce. `indexOf` devuelve
-  // -1 sin prefijo, así que la misma línea vale para un scope ya pelado.
-  const { prefixedScopes, displayName: scopeProvider } = tokenContract(model.stack.auth);
+  // Un proveedor con scopes prefijados los emite como `<resource-server>/<scope>`, no como el `recurso:accion` pelado
+  // que declara el diseño y que esperan los matchers `SCOPE_*`. Solo cuenta el prefijo de ESTE servicio
+  // (grantedScope, en keel-core): cortar por la primera barra daba por bueno el permiso de otra API.
+  const { prefixedScopes, accepted, displayName: scopeProvider } = tokenContract(model.stack.auth);
   const scopePrefix = prefixedScopes
     ? `
-                // ${scopeProvider}: <resource-server>/<scope>. Sin prefijo, se queda igual.
-                .map(scope -> scope.substring(scope.indexOf('/') + 1))`
+                // ${scopeProvider}: <resource-server>/<scope>. Solo valen los de este servicio.
+                .filter(scope -> scope.startsWith(resourceServer + "/") && scope.length() > resourceServer.length() + 1)
+                .map(scope -> scope.substring(resourceServer.length() + 1))`
+    : '';
+  const principalClaim = model.security.usesAuthorities ? meta.principalClaim : 'sub';
+  const constructor = prefixedScopes
+    ? `
+    private final String resourceServer;
+
+    public JwtAuthConverter(String resourceServer) {
+        this.resourceServer = resourceServer;
+    }
+`
+    : '';
+  // D1: un token del mismo emisor y con la misma firma que no es un access token. Una excepción de autenticación desde
+  // el conversor llega al BearerTokenAuthenticationFilter y sale por el mismo 401 que un token inválido.
+  const acceptedCheck = accepted
+    ? `
+        if (!${JSON.stringify(accepted.value)}.equals(jwt.getClaimAsString(${JSON.stringify(accepted.claim)}))) {
+            throw new InvalidBearerTokenException("El token no es un access token");
+        }`
     : '';
 
   const scopesAndPermissions = `
@@ -728,18 +772,18 @@ ${grants
  * Mapea el JWT del proveedor (${model.stack.auth ?? 'genérico'}) a authorities de Spring:
  * roles (ROLE_), scopes OAuth2 (SCOPE_) y permisos granulares (sin prefijo).
  * Claim de roles: ${meta.type === 'nested' ? `${meta.rolesParent}.${meta.rolesField} (anidado)` : `${meta.rolesClaim} (plano)`}.
- * Principal: ${meta.principalClaim}.
+ * Principal: ${principalClaim}.
  */
 public class JwtAuthConverter {
-${roleGrantsConstant}
+${roleGrantsConstant}${constructor}
     public JwtAuthenticationConverter converter() {
         JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
         converter.setJwtGrantedAuthoritiesConverter(this::extractAuthorities);
-        converter.setPrincipalClaimName("${meta.principalClaim}");
+        converter.setPrincipalClaimName("${principalClaim}");
         return converter;
     }
 
-    private java.util.Collection<GrantedAuthority> extractAuthorities(Jwt jwt) {
+    private java.util.Collection<GrantedAuthority> extractAuthorities(Jwt jwt) {${acceptedCheck}
         java.util.Collection<GrantedAuthority> roles = extractRoles(jwt);
         java.util.List<GrantedAuthority> authorities = new java.util.ArrayList<>(roles);
         authorities.addAll(extractScopes(jwt));
@@ -758,7 +802,8 @@ ${scopesAndPermissions}${grantsExtractor}
         'org.springframework.security.core.GrantedAuthority',
         'org.springframework.security.core.authority.SimpleGrantedAuthority',
         'org.springframework.security.oauth2.jwt.Jwt',
-        'org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter'
+        'org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter',
+        ...(accepted ? ['org.springframework.security.oauth2.server.resource.InvalidBearerTokenException'] : [])
       ],
       body
     )
@@ -1086,6 +1131,67 @@ export function callerResolution(model) {
  * El campo NO se acepta del cuerpo de la petición: quien la hace es justamente quien no debería
  * poder elegir en nombre de quién actúa.
  */
+function serviceClientRead(model, callerIdentity) {
+  const { clientClaims, opaqueClients } = tokenContract(model.stack.auth);
+  const blank = 'value == null || value.isBlank()';
+  const lines = [`        String value = jwt.getClaimAsString("${clientClaims[0]}");`];
+  for (const claim of clientClaims.slice(1)) lines.push(`        if (${blank}) {`, `            value = jwt.getClaimAsString("${claim}");`, '        }');
+  // Con ids generados por el proveedor, un usuario que se llamase como un cliente pasaría por él.
+  if (!opaqueClients) lines.push(`        if (${blank}) {`, '            value = authentication.getName();', '        }');
+  // D4: la identidad 1:1 es el nombre declarado. Con `resolvedBy` no se traduce: la lista del recurso guarda los ids.
+  if (opaqueClients && !callerIdentity.resolvedBy) lines.push('        value = ServiceClientIds.declaredName(value);');
+  return lines.join('\n');
+}
+
+// El mapa nombre → id de los clientes máquina, con un proveedor que genera ese id (security.client-ids). Lo lee
+// CallerIdentity, que es estática porque la estampa el controller, y por eso el mapa también. Se lee cliente a cliente
+// con el Environment y no con el Binder, que deja un `${VAR}` sin resolver como texto y arrancaría sin el id (P2).
+function renderServiceClientIds(model) {
+  const body = `/**
+ * El id que el proveedor de identidad generó para cada cliente máquina del diseño (security.client-ids): el
+ * valor del claim del cliente no es el nombre que declara el diseño. Sin la variable en production, no arranca.
+ */
+@Component
+public class ServiceClientIds {
+
+    private static final List<String> CLIENTS = List.of(${translatedClients(model).map((client) => JSON.stringify(client.name)).join(', ')});
+
+    private static volatile Map<String, String> ids = Map.of();
+
+    public ServiceClientIds(Environment environment) {
+        Map<String, String> configured = new HashMap<>();
+        for (String client : CLIENTS) {
+            configured.put(client, environment.getRequiredProperty("security.client-ids." + client));
+        }
+        ids = Map.copyOf(configured);
+    }
+
+    /** El id configurado de un cliente declarado, o null si no lo hay. */
+    public static String idOf(String declaredName) {
+        return ids.get(declaredName);
+    }
+
+    /** El nombre declarado de un id; un id que no es de ningún cliente declarado sigue crudo y no encuentra recurso. */
+    public static String declaredName(String clientId) {
+        return ids.entrySet().stream().filter(entry -> entry.getValue().equals(clientId)).map(Map.Entry::getKey).findFirst().orElse(clientId);
+    }
+}`;
+  return {
+    path: javaPath(model, SECURITY_PKG, 'ServiceClientIds'),
+    content: javaFile(
+      subPackage(model, SECURITY_PKG),
+      [
+        'java.util.HashMap',
+        'java.util.List',
+        'java.util.Map',
+        'org.springframework.core.env.Environment',
+        'org.springframework.stereotype.Component'
+      ],
+      body
+    )
+  };
+}
+
 function renderCallerIdentity(model, callerIdentity) {
   const pkg = subPackage(model, SECURITY_PKG);
   const imports = [
@@ -1102,13 +1208,7 @@ function renderCallerIdentity(model, callerIdentity) {
   const extract =
     callerIdentity.source === 'claim'
       ? `        String value = jwt.getClaimAsString("${callerIdentity.claim}");`
-      : `        String value = jwt.getClaimAsString("azp");
-        if (value == null || value.isBlank()) {
-            value = jwt.getClaimAsString("client_id");
-        }
-        if (value == null || value.isBlank()) {
-            value = authentication.getName();
-        }`;
+      : serviceClientRead(model, callerIdentity);
 
   const readCredential = `
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
