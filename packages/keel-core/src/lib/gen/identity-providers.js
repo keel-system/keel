@@ -9,7 +9,7 @@
 // Las tres mitades responden a preguntas distintas y cambian por motivos distintos:
 //
 //   · `token`: lo que el servidor generado consume. Vale en producción.
-//   · `harness`: lo que el arnés de pruebas puede pedir por petición. Solo vale en local.
+//   · `harness`: cómo da el arnés de pruebas personas y titulares del alcance (`realm-admin`, `emulator` o false). Solo vale en local.
 //   · `provisioning`: cómo se levanta y se siembra el proveedor de prueba. Solo vale en local.
 //
 // Lo de Cognito sale de su documentación y de leer el código, no de un pool real: lo que eso no demuestra está en la
@@ -93,7 +93,7 @@ export const IDENTITY_PROVIDERS = {
     },
     // Medido contra un Keycloak real: el security-check de keel-nest, keel-dotnet y keel-go.
     verification: { level: 'live', note: 'medido contra un Keycloak real (la red security-check de los generadores)' },
-    harness: { personaTokens: true, scopedTokens: true },
+    harness: { personaTokens: 'realm-admin', scopedTokens: 'realm-admin' },
     provisioning: {
       kind: 'realm-import',
       ...OIDC_REALM_PATHS,

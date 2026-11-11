@@ -33,6 +33,13 @@ import {
   usesPersonaTokens,
   usesUserClient,
   usesScopedTokens,
+  usesRealmAdmin,
+  personaTokenMechanism,
+  scopedTokenMechanism,
+  emulatorPersonaClaims,
+  emulatorPersonaShape,
+  EMULATOR_PARAMS,
+  EMULATOR_MAX_SCOPE_VALUES,
   keycloakAdminCredentials,
   realmSpec
 } from './identity-realm.js';
@@ -116,7 +123,7 @@ function credentialsEnv(model, platform) {
     const users = realmSpec(model)?.users.map((user) => user.username) ?? [];
     lines.push('', `# Usuarios de prueba (<rol> y <rol>-2, más uno sin roles): ${users.join(', ')}`);
   }
-  if (usesPersonaTokens(model) || usesScopedTokens(model)) {
+  if (usesRealmAdmin(model)) {
     const admin = keycloakAdminCredentials();
     const helpers = [usesPersonaTokens(model) && 'tokenAs(sub, claims)', usesScopedTokens(model) && 'tokenWithScope(rol, valores)'].filter(Boolean);
     lines.push(
@@ -505,7 +512,14 @@ export function cognitoMockConfig(model) {
       {
         issuerId,
         tokenExpiry: 3600,
-        requestMappings: [...users, ...machines]
+        // Las personas y los titulares del alcance, DELANTE: emparejan por su propio parámetro, y el emulador se queda con el
+        // primer mapping que casa (medido en emulator-check), así que tokenAs("agent") no puede caer en el usuario fijo.
+        requestMappings: [
+          ...personaMappings(model, spec, token, acceptedClaim, clientIdOf(spec.userClient ?? '')),
+          ...scopedMappings(model, spec, token, acceptedClaim, clientIdOf(spec.userClient ?? '')),
+          ...users,
+          ...machines
+        ]
       }
     ]
   };
@@ -530,4 +544,61 @@ export function triggeredUserClaims(model) {
 /** El valor de ese claim para un usuario de prueba: el correo con el que el realm de Keycloak da de alta a sus usuarios. */
 export function emulatedClaimValue(claim, username) {
   return claim === 'email' ? `${username}@example.com` : username;
+}
+
+// ─── Personas y alcance en el emulador (incremento 4.3) ──────────────────────
+
+/** El hueco de plantilla del emulador que sustituye el parámetro `param` de la petición. */
+const slot = (param) => '${' + param + '}';
+
+/** Las partes de un conjunto, en orden estable: cada una es una forma de persona. */
+function subsets(items) {
+  return items.reduce((acc, item) => [...acc, ...acc.map((subset) => [...subset, item])], [[]]);
+}
+
+/**
+ * Un mapping por forma de persona (`tokenAs`): con rol o sin él × qué claims de `emulatorPersonaClaims` lleva. El `sub`
+ * y el principal son los que pide el escenario; el resto, lo de un token de usuario del proveedor.
+ */
+function personaMappings(model, spec, token, acceptedClaim, userClientId) {
+  if (personaTokenMechanism(model) !== 'emulator') return [];
+  const P = EMULATOR_PARAMS;
+  return [true, false].flatMap((hasRole) =>
+    subsets(emulatorPersonaClaims(model)).map((claims) => ({
+      requestParam: P.persona,
+      match: emulatorPersonaShape(hasRole, claims),
+      claims: {
+        sub: slot(P.sub),
+        [token.claims.principalClaim]: slot(P.sub),
+        ...acceptedClaim,
+        ...roleClaims(token.claims, hasRole ? [slot(P.role)] : []),
+        [token.client.claims[0]]: userClientId,
+        ...Object.fromEntries(claims.map((claim) => [claim, slot(`${P.claimPrefix}${claim}`)]))
+      }
+    }))
+  );
+}
+
+/**
+ * Un mapping por aridad del claim del alcance (`tokenWithScope`): de 0 —el titular del rol SIN el claim, como con
+ * Keycloak— a `EMULATOR_MAX_SCOPE_VALUES`, cada valor en su parámetro (un parámetro vacío daría `[""]`, no la lista vacía).
+ */
+function scopedMappings(model, spec, token, acceptedClaim, userClientId) {
+  if (scopedTokenMechanism(model) !== 'emulator') return [];
+  const P = EMULATOR_PARAMS;
+  const { claim } = spec.scoping;
+  const triggered = triggeredUserClaims(model);
+  return Array.from({ length: EMULATOR_MAX_SCOPE_VALUES + 1 }, (_, arity) => ({
+    requestParam: P.scoped,
+    match: String(arity),
+    claims: {
+      sub: slot(P.user),
+      [token.claims.principalClaim]: slot(P.user),
+      ...acceptedClaim,
+      ...roleClaims(token.claims, [slot(P.role)]),
+      [token.client.claims[0]]: userClientId,
+      ...Object.fromEntries(triggered.map((name) => [name, emulatedClaimValue(name, slot(P.user))])),
+      ...(arity > 0 ? { [claim]: Array.from({ length: arity }, (_, i) => slot(`${P.valuePrefix}${i + 1}`)) } : {})
+    }
+  }));
 }

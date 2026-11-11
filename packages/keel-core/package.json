@@ -15,7 +15,8 @@
   "scripts": {
     "test": "node --test",
     "design-matrix": "node scripts/design-matrix.js",
-    "timer-sql-check": "node scripts/timer-sql-check.js"
+    "timer-sql-check": "node scripts/timer-sql-check.js",
+    "emulator-check": "node scripts/emulator-check.js"
   },
   "files": [
     "src",

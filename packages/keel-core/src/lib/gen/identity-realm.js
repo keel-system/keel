@@ -191,6 +191,93 @@ export function usesScopedTokens(model) {
 }
 
 /**
+ * CÓMO da el arnés esos tokens con el proveedor del stack, o null si no los da: `realm-admin` (los da de alta por la API de
+ * administración del realm, Keycloak) o `emulator` (los pide al emulador con la forma en la petición: medido en el
+ * incremento 4.2 de PLAN-PROVEEDOR-IDENTIDAD.md, sin estado que sembrar).
+ */
+export function personaTokenMechanism(model) {
+  return usesPersonaTokens(model) ? identityProvider(model.stack.auth).harness.personaTokens : null;
+}
+
+/** Lo mismo para `tokenWithScope`. */
+export function scopedTokenMechanism(model) {
+  return usesScopedTokens(model) ? identityProvider(model.stack.auth).harness.scopedTokens : null;
+}
+
+/** ¿Hace falta la API de administración del realm en el arnés (y sus credenciales en test-credentials.env)? */
+export function usesRealmAdmin(model) {
+  return personaTokenMechanism(model) === 'realm-admin' || scopedTokenMechanism(model) === 'realm-admin';
+}
+
+// ─── Personas y alcance contra el emulador ───────────────────────────────────
+//
+// El emulador (mock-oauth2-server) no guarda usuarios: sustituye en cada token los parámetros de la PETICIÓN (T1, medido
+// con la 6.0.1). Pero solo dentro de la forma fija de un mapping: un parámetro ausente deja el literal `${x}` en el token
+// y uno vacío da `[""]`, no la lista vacía (incremento 4.2). Así que hay un mapping por FORMA —con o sin rol, qué claims
+// lleva la persona, cuántos valores lleva el claim del alcance— y el arnés dice cuál quiere. Los nombres de los
+// parámetros son contrato entre el emulador (identity-provisioning.js) y el arnés de los cuatro generadores.
+
+export const EMULATOR_PARAMS = {
+  persona: 'keel_persona',
+  sub: 'keel_sub',
+  role: 'keel_role',
+  claimPrefix: 'keel_claim_',
+  scoped: 'keel_scoped',
+  user: 'keel_user',
+  valuePrefix: 'keel_value_'
+};
+
+/** Cuántos valores del claim del alcance puede pedir `tokenWithScope` al emulador: un mapping por aridad, de 0 a este. */
+export const EMULATOR_MAX_SCOPE_VALUES = 4;
+
+/**
+ * Los claims, además del `sub`, que una persona puede llevar en el emulador: los que el diseño lee del token para la
+ * identidad. Otro no tiene mapping, y el arnés lo rechaza con `EMULATOR_PERSONA_CLAIM_UNKNOWN`.
+ */
+export function emulatorPersonaClaims(model) {
+  const claim = model.security?.callerIdentity?.claim;
+  return claim && claim !== 'sub' ? [claim] : [];
+}
+
+/** La forma de una persona: con rol o sin él, y qué claims lleva (ordenados). La misma cadena en el emulador y en los arneses. */
+export function emulatorPersonaShape(hasRole, claimNames) {
+  return `${hasRole ? 'role' : 'norole'}:${[...claimNames].sort().join(',')}`;
+}
+
+export const EMULATOR_PERSONA_CLAIM_UNKNOWN =
+  'el emulador del proveedor solo pone en una persona los claims que el diseño lee del token (la identidad del llamante), porque cada forma de token es un mapping de su configuración';
+export const EMULATOR_SCOPE_VALUES_EXCEEDED = `el emulador del proveedor da como mucho ${EMULATOR_MAX_SCOPE_VALUES} valores del claim del alcance, uno por mapping de su configuración`;
+
+/**
+ * La petición que pide al emulador el token de una persona: la REFERENCIA EJECUTABLE de lo que escribe el `tokenAs` de los
+ * cuatro arneses. `claims` como el de `tokenAs`: un valor null quita el claim.
+ */
+export function emulatorPersonaForm(model, sub, claims = {}, role = null) {
+  const allowed = emulatorPersonaClaims(model);
+  const present = Object.entries(claims).filter(([, value]) => value !== null && value !== undefined);
+  const unknown = present.map(([name]) => name).filter((name) => !allowed.includes(name));
+  if (unknown.length > 0) throw new Error(`tokenAs: ${unknown.join(', ')}: ${EMULATOR_PERSONA_CLAIM_UNKNOWN}`);
+  return {
+    [EMULATOR_PARAMS.persona]: emulatorPersonaShape(role !== null, present.map(([name]) => name)),
+    [EMULATOR_PARAMS.sub]: sub,
+    ...(role !== null ? { [EMULATOR_PARAMS.role]: role } : {}),
+    ...Object.fromEntries(present.map(([name, value]) => [`${EMULATOR_PARAMS.claimPrefix}${name}`, value]))
+  };
+}
+
+/** La petición de `tokenWithScope(role, ...values)` al emulador; `user` es el nombre determinista del titular. */
+export function emulatorScopedForm(user, role, values) {
+  const wanted = [...new Set(values)].sort();
+  if (wanted.length > EMULATOR_MAX_SCOPE_VALUES) throw new Error(`tokenWithScope: ${wanted.length} valores: ${EMULATOR_SCOPE_VALUES_EXCEEDED}`);
+  return {
+    [EMULATOR_PARAMS.scoped]: String(wanted.length),
+    [EMULATOR_PARAMS.user]: user,
+    [EMULATOR_PARAMS.role]: role,
+    ...Object.fromEntries(wanted.map((value, i) => [`${EMULATOR_PARAMS.valuePrefix}${i + 1}`, value]))
+  };
+}
+
+/**
  * El `sub` de una persona es el id del usuario en Keycloak (`USER_ENTITY.ID`, VARCHAR(36)): con uno más largo, `partialImport`
  * responde 500 y no hay token, y el fallo sale lejos de su causa (71 flujos de shop-api en keel-spring, 2026-11-10). El arnés
  * de los cuatro generadores lo rechaza antes de llamar a nadie, con este motivo.
