@@ -41,7 +41,10 @@ generado. Todo lo que hagas ocurre dentro de esa raíz.
    recurso comprueba que el claim llega al token de cada usuario). No lo edites: es del generador, y lo que
    tenga que cambiar cambia en el diseño (skill `keel-nest-keycloak`).
 7. Si `infra/reset-db.sh` existe, ejecútalo una vez: es lo que cada flujo hará al empezar, y un reset
-   que falla ahora fallaría en todos.
+   que falla ahora fallaría en todos. Las tablas aún no existen: las crea TypeORM (`synchronize` en `local`)
+   cuando arranca el servidor (el arnés lo arranca antes del primer reset de cada suite). Así que el vaciado pasa con la base vacía, pero si el diseño
+   trae estado de partida (`specs/<servicio>/fixtures.yaml`), su carga falla ahora con «la tabla no existe»: es lo esperado, no un KO. Repórtalo
+   `reset: N/A` con ese motivo, y KO solo con cualquier otro error.
 8. **No detengas la infraestructura al terminar**: la usan los escenarios; bajarla es del orquestador.
    No preguntas al usuario: registra cada bloqueo en `blockers` y termina.
 9. **No lanzas subagentes.** Eres una hoja.
