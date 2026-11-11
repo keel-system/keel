@@ -12,11 +12,28 @@
 // lo decide keel-core (`closingCredentialOf`), la misma para los tres generadores.
 
 import { closingCredentialOf, usesTokenProtocol } from '@keel-system/keel-core/gen/access-plan';
-import { PERSONA_SUB_MAX, PERSONA_SUB_TOO_LONG, tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens, keycloakAdminCredentials, TEST_USER_PASSWORD } from '@keel-system/keel-core/gen/identity-realm';
+import {
+  EMULATOR_MAX_SCOPE_VALUES,
+  EMULATOR_PARAMS,
+  EMULATOR_PERSONA_CLAIM_UNKNOWN,
+  EMULATOR_SCOPE_VALUES_EXCEEDED,
+  PERSONA_SUB_MAX,
+  PERSONA_SUB_TOO_LONG,
+  emulatorPersonaClaims,
+  keycloakAdminCredentials,
+  personaTokenMechanism,
+  scopedTokenMechanism,
+  TEST_USER_PASSWORD,
+  tokenUrl,
+  userTestClient,
+  usesPersonaTokens,
+  usesRealmAdmin,
+  usesScopedTokens
+} from '@keel-system/keel-core/gen/identity-realm';
 import { csFile, csString } from './render.js';
 import { LOCAL_API_KEY, localClientApiKey } from './security.js';
 import { usesIdentityHarness } from '@keel-system/keel-core/gen/features';
-import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
+import { credentialClientId, tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 export { usesIdentityHarness };
 
 const tokens = (model) => usesTokenProtocol(model.security);
@@ -119,9 +136,9 @@ export function credentialsCs(model, namespace) {
     if (roles(model).length > 0) parts.push(tokenForSection(model));
     if (machineTokens(model)) parts.push(serviceCredentialSection(model));
     if (model.security.scoping) parts.push(scopedResourceSection(model));
-    if (usesPersonaTokens(model)) parts.push(personaSection(model));
-    if (usesScopedTokens(model)) parts.push(scopedTokenSection(model));
-    if (usesPersonaTokens(model) || usesScopedTokens(model)) parts.push(adminSection(model));
+    if (usesPersonaTokens(model)) parts.push(personaTokenMechanism(model) === 'emulator' ? emulatorPersonaSection(model) : personaSection(model));
+    if (usesScopedTokens(model)) parts.push(scopedTokenMechanism(model) === 'emulator' ? emulatorScopedSection(model) : scopedTokenSection(model));
+    if (usesRealmAdmin(model)) parts.push(adminSection(model));
   }
   const usings = ['System.Collections.Concurrent', 'System.Globalization', 'System.Text', 'System.Text.Json', 'System.Text.Json.Nodes'];
   return csFile({
@@ -461,6 +478,85 @@ function scopedTokenSection(model) {
                 $"El usuario del alcance {username} tiene ${claim}=[{string.Join(", ", stored)}] y el escenario pidió [{string.Join(", ", values)}]: ¿se ejecutó infra/init-keycloak.sh (User Profile)?");
         }
         ScopedUsers.Add(username);
+    }`;
+}
+
+/**
+ * `TokenAs` contra el EMULADOR del proveedor (incremento 4.3 de PLAN-PROVEEDOR-IDENTIDAD.md): no hay usuarios que dar de
+ * alta, la persona viaja en la petición con los parámetros de `EMULATOR_PARAMS`. La referencia de lo que manda es
+ * `emulatorPersonaForm`; la del emulador que la recibe, `emulator-check` de keel-core.
+ */
+function emulatorPersonaSection(model) {
+  const P = EMULATOR_PARAMS;
+  const claims = emulatorPersonaClaims(model);
+  return `    /// <summary>
+    /// Los claims que una persona puede llevar en el emulador del proveedor: los que el diseño lee del token. El emulador no
+    /// guarda usuarios; cada forma de token (con rol o sin él, y qué claims lleva) es un mapping de su configuración.
+    /// </summary>
+    private static readonly HashSet<string> PersonaClaims = new(StringComparer.Ordinal) { ${claims.map(csString).join(', ')} };
+
+    public static Task<string> TokenAs(string sub, IReadOnlyDictionary<string, string?> claims, string? role)
+    {
+        if (claims.ContainsKey("sub")) throw new ArgumentException("El sub de la persona va en el primer argumento, no entre los claims", nameof(claims));
+        var wanted = claims.Where(claim => claim.Value is not null).OrderBy(claim => claim.Key, StringComparer.Ordinal).ToList();
+        foreach (var claim in wanted)
+        {
+            if (!PersonaClaims.Contains(claim.Key)) throw new ArgumentException($"TokenAs: {claim.Key}: {${csString(EMULATOR_PERSONA_CLAIM_UNKNOWN)}}");
+        }
+        var key = $"persona|{sub}|{role}|{JsonSerializer.Serialize(wanted)}";
+        return Cached(key, () =>
+        {
+            var form = new Dictionary<string, string>
+            {
+                ["grant_type"] = "password",
+                ["client_id"] = Value("AUTH_TEST_CLIENT", ${csString(credentialClientId(model.stack.auth, userTestClient(model)))}),
+                ["username"] = sub,
+                ["password"] = Value("AUTH_TEST_PASSWORD", ${csString(TEST_USER_PASSWORD)}),
+                [${csString(P.persona)}] = $"{(role is null ? "norole" : "role")}:{string.Join(',', wanted.Select(claim => claim.Key))}",
+                [${csString(P.sub)}] = sub
+            };
+            if (role is not null) form[${csString(P.role)}] = role;
+            foreach (var claim in wanted) form[${csString(P.claimPrefix)} + claim.Key] = claim.Value!;
+            return RequestToken(form);
+        });
+    }`;
+}
+
+/** `TokenWithScope` contra el EMULADOR: un mapping por aridad, cada valor en su parámetro (`emulatorScopedForm`). */
+function emulatorScopedSection(model) {
+  const P = EMULATOR_PARAMS;
+  return `    /// <summary>
+    /// El emulador del proveedor da el titular sin estado: un mapping por cantidad de valores, hasta ${EMULATOR_MAX_SCOPE_VALUES}. El nombre del
+    /// titular es el MISMO que en keel-spring y keel-nest (la huella es el String.hashCode de Java).
+    /// </summary>
+    public static Task<string> TokenWithScope(string role, IReadOnlyList<string> values)
+    {
+        var wanted = values.Distinct(StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal).ToList();
+        if (wanted.Count > ${EMULATOR_MAX_SCOPE_VALUES}) throw new ArgumentException($"TokenWithScope: {wanted.Count} valores: {${csString(EMULATOR_SCOPE_VALUES_EXCEEDED)}}");
+        var username = $"scoped-{role}-{JavaStringHash(string.Join('\\n', wanted))}";
+        return Cached($"scope:{username}", () =>
+        {
+            var form = new Dictionary<string, string>
+            {
+                ["grant_type"] = "password",
+                ["client_id"] = Value("AUTH_TEST_CLIENT", ${csString(credentialClientId(model.stack.auth, userTestClient(model)))}),
+                ["username"] = username,
+                ["password"] = Value("AUTH_TEST_PASSWORD", ${csString(TEST_USER_PASSWORD)}),
+                [${csString(P.scoped)}] = wanted.Count.ToString(CultureInfo.InvariantCulture),
+                [${csString(P.user)}] = username,
+                [${csString(P.role)}] = role
+            };
+            for (var i = 0; i < wanted.Count; i++) form[$"${P.valuePrefix}{i + 1}"] = wanted[i];
+            return RequestToken(form);
+        });
+    }
+
+    /// <summary>El <c>Integer.toHexString(String.hashCode())</c> de Java: el mismo usuario para los servidores del diseño.</summary>
+    private static string JavaStringHash(string text)
+    {
+        var hash = 0;
+        foreach (var character in text) hash = unchecked((31 * hash) + character);
+        return ((uint)hash).ToString("x", CultureInfo.InvariantCulture);
     }`;
 }
 
