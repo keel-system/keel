@@ -228,7 +228,7 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
 
 | Fase | Estado | Medido con |
 |---|---|---|
-| 1. contrato del proveedor | pendiente | |
+| 1. contrato del proveedor | hecha el 2026-11-10 (sin el 1.5, opcional) | Lo emitido, idéntico en 4 generadores × 19 fixtures × 3 valores de `auth`; `keel-core/test/token-cases.test.js` y `keel-go/test/identity-providers.test.js`, falsada con tres sabotajes; las seis suites |
 | 2. servidor equivalente | pendiente | |
 | 3. lo que debe cumplir el proveedor | pendiente | |
 | 4. emulador fiel y arnés | pendiente | |
@@ -238,4 +238,12 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
 
 - Plan reorganizado en fases el 2026-11-10 tras evaluarlo contra el código. Ya medido o resuelto: T1 (salvo varios valores), T4
   y T5; P1 a P4 cerradas. Por decisión del usuario, el plan se hace con el emulador y sin cuenta de AWS.
-- Siguiente: **fase 1, incremento 1.1**, en un contexto nuevo. P5 puede esperar a la fase 4.
+- Fase 1 hecha. Lo que deja: `gen/identity-providers.js` (el descriptor; `identityProvider(auth)` y `tokenContract(auth)`),
+  `gen/token-cases.js` (`tokenCases(model)`, con `defect` en D1 a D4) y las tres redes de `keel-go/test/identity-providers.test.js`.
+  El proveedor ficticio se registra añadiendo su entrada a `IDENTITY_PROVIDERS` y a `AUTH`.
+- `cognitoMockConfig` ya sale del descriptor, pero sigue escribiendo `client_id` igual al nombre: eso es T3, en la fase 4.
+  `messages.cognitoEmulated` sigue siendo un texto de Cognito en cada proyección: otro proveedor emulado necesitaría el suyo.
+- `npm run golden -- --check` de keel-spring y keel-nest **ya estaba en rojo antes de empezar** (417 y 407 diferencias, las mismas
+  con y sin la fase 1, en agentes y skills). Una `--check` no vale para la fase 2 hasta regenerarlas, y regenerarlas a ciegas
+  tampoco: la fase 1 se midió con una línea base propia tomada antes de tocar nada.
+- Siguiente: **fase 2, incremento 2.1**, en un contexto nuevo. P5 puede esperar a la fase 4.
