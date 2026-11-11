@@ -10,6 +10,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import { TEST_USER_PASSWORD } from '@keel-system/keel-core/gen/identity-realm';
+import { STACK_FILE } from '@keel-system/keel-core/gen/stack';
+import { identityProvider, realmImportProvider } from '@keel-system/keel-core/gen/identity-providers';
 import { validateDoc } from './schema.js';
 import { DATABASE_TECHS } from './db/index.js';
 
@@ -59,8 +61,19 @@ const ENGINES = [
  *
  * @returns {{ doc: object|null, errors: string[] }}
  */
-export function planTarget({ compose, realm, name, projectRel, containerOf, networkOf }) {
+export function planTarget({ compose, realm, auth = null, name, projectRel, containerOf, networkOf }) {
   const errors = [];
+  // La paridad da de alta a las personas de los flujos con la administración de un realm importado (seedPersona, con
+  // kcadm). Otro proveedor no tiene ese camino, y omitir el bloque idp en silencio dejaría los flujos con identidad sin
+  // token: se rechaza con su motivo. Su adaptador (src/lib/idp/) entra cuando un legacy lo pida.
+  const seedable = realmImportProvider();
+  if (auth && auth !== seedable.id) {
+    errors.push(
+      `el proveedor de identidad del regenerado es '${identityProvider(auth).displayName ?? auth}' (${STACK_FILE}): la paridad solo sabe dar de alta ` +
+        `a las personas de los flujos en ${seedable.displayName}. Regenera con auth: ${seedable.id} para medir la paridad`
+    );
+    return { doc: null, errors };
+  }
   const services = compose?.services ?? {};
   const project = compose?.name;
   if (!project) errors.push('deploy/docker-compose.yaml no declara `name`: sin el proyecto de compose no se encuentran los contenedores');
@@ -140,9 +153,12 @@ export function deriveTarget(projectDir, { rt, workspace = process.cwd() } = {})
   const compose = YAML.parse(fs.readFileSync(composeFile, 'utf8'));
   const realmFile = path.join(dir, 'deploy', 'keycloak', 'realm-export.json');
   const realm = fs.existsSync(realmFile) ? JSON.parse(fs.readFileSync(realmFile, 'utf8')) : null;
+  const stackFile = path.join(dir, STACK_FILE);
+  const auth = fs.existsSync(stackFile) ? (JSON.parse(fs.readFileSync(stackFile, 'utf8')).auth ?? null) : null;
   return planTarget({
     compose,
     realm,
+    auth,
     name: path.basename(dir),
     projectRel: path.relative(workspace, dir).replace(/\\/g, '/'),
     containerOf: (service) => rt.composeContainer(compose.name, service),

@@ -59,6 +59,17 @@ test('un deploy sin levantar, o con otra base, es un error que lo dice', async (
   assert.match(other.errors.join('\n'), /mariadb:11\.4: la paridad solo sabe vaciar mongodb, postgresql y mysql/);
 });
 
+test('con otro proveedor de identidad, target se niega con su motivo en vez de omitir idp', async () => {
+  const { compose, realm } = await deployOf('keel-dotnet');
+  const plan = (auth) => planTarget({ compose, realm, auth, name: 'c', projectRel: 'x', containerOf: () => 'c', networkOf: () => ['n'] });
+  const cognito = plan('cognito');
+  assert.equal(cognito.doc, null);
+  assert.match(cognito.errors.join('\n'), /el proveedor de identidad del regenerado es 'Cognito' \(keel-stack\.json\): la paridad solo sabe dar de alta a las personas de los flujos en Keycloak/);
+  assert.match(plan('none').errors.join('\n'), /es 'none'/);
+  assert.deepEqual(plan('keycloak').errors, []);
+  assert.deepEqual(plan(null).errors, [], 'sin keel-stack.json, lo que diga el deploy');
+});
+
 for (const [generator, tech] of [['keel-dotnet', 'dotnet'], ['keel-nest', 'nest'], ['keel-spring', 'spring']]) {
   test(`${generator}: con PostgreSQL, el target lleva la base, el usuario y la contraseña de su deploy/`, async () => {
     const { compose, realm } = await deployOf(generator, { database: 'postgresql' });
