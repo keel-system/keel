@@ -22,6 +22,7 @@
 // El agente de infraestructura ya no escribe el script: lo ejecuta y verifica.
 
 import { AUTH } from './infra-catalog.js';
+import { identityProvider, providerPath, realmImportProvider } from './identity-providers.js';
 
 export const TEST_USER_PASSWORD = 'password';
 // Secreto de los clientes M2M que solo existen para las variantes negativas de los
@@ -82,16 +83,13 @@ export function secretEnvKey(clientName) {
  */
 export function scopingClaimChecks(model) {
   const provider = model.stack?.auth;
-  if (provider !== 'keycloak' && provider !== 'cognito') return [];
+  if (!identityProvider(provider).provisioning.kind) return [];
   const spec = realmSpec(model);
   if (!spec?.scoping || !spec.userClient) return [];
   const claim = spec.scoping.claim;
-  // Con Cognito el sujeto es el emulador (mock-oauth2-server): sirve el token bajo el issuerId, que es el realm,
-  // y empareja al usuario por el parámetro `username` del mismo grant.
-  const url =
-    provider === 'cognito'
-      ? `http://cognito-mock:8080/${spec.realm}/token`
-      : `http://keycloak:8080/realms/${spec.realm}/protocol/openid-connect/token`;
+  // La red del compose: el token lo sirve el proveedor de prueba por su nombre de servicio. El emulador empareja al
+  // usuario por el parámetro `username` del mismo grant.
+  const url = providerInternalUrl(model, identityProvider(provider).provisioning.tokenPath);
   return spec.users
     .filter((user) => (user.attributes?.[claim] ?? []).length > 0)
     .map((user) => {
@@ -113,12 +111,15 @@ export function scopingClaimChecks(model) {
 /** URL del endpoint de token del proveedor del stack. */
 export function tokenUrl(model) {
   const port = AUTH[model.stack.auth]?.port ?? 8180;
-  // Con cognito, el emulador local sirve OAuth2 estándar bajo el issuerId (que es
-  // el nombre del servicio): por eso el arnés no necesita ninguna rama propia y
-  // pide los tokens igual que con Keycloak.
-  return model.stack.auth === 'cognito'
-    ? `http://localhost:${port}/${model.service.name}/token`
-    : `http://localhost:${port}/realms/${model.service.name}/protocol/openid-connect/token`;
+  // El emulador sirve OAuth2 estándar bajo el issuerId (el nombre del servicio): por eso el arnés no necesita ninguna
+  // rama propia y pide los tokens igual con cualquier proveedor.
+  return `http://localhost:${port}${providerPath(identityProvider(model.stack.auth).provisioning.tokenPath, model.service.name)}`;
+}
+
+/** Una ruta del proveedor de prueba vista desde la red del compose, donde se le alcanza por su nombre de servicio. */
+export function providerInternalUrl(model, template) {
+  const { provisioning } = identityProvider(model.stack.auth);
+  return `http://${AUTH[model.stack.auth].serviceKey}:${provisioning.internalPort}${providerPath(template, model.service.name)}`;
 }
 
 /**
@@ -155,7 +156,7 @@ export function userTestClient(model) {
  */
 export function usesPersonaTokens(model) {
   const identity = model.security?.callerIdentity;
-  return model.stack.auth === 'keycloak' && identity?.source === 'claim';
+  return identityProvider(model.stack.auth).harness.personaTokens && identity?.source === 'claim';
 }
 
 /**
@@ -181,7 +182,7 @@ export function usesUserClient(model) {
 export function usesScopedTokens(model) {
   const scoping = model.security?.scoping;
   const roles = model.security?.roles ?? [];
-  return model.stack.auth === 'keycloak' && Boolean(scoping) && roles.some((role) => !scoping.exemptRoles.includes(role));
+  return identityProvider(model.stack.auth).harness.scopedTokens && Boolean(scoping) && roles.some((role) => !scoping.exemptRoles.includes(role));
 }
 
 /**
@@ -194,8 +195,9 @@ export const PERSONA_SUB_TOO_LONG = 'Keycloak guarda el sub como id del usuario,
 
 /** Credenciales de administración del contenedor de Keycloak, tal como las declara el catálogo. */
 export function keycloakAdminCredentials() {
-  const env = AUTH.keycloak.composeServices().keycloak.environment;
-  return { user: env.KC_BOOTSTRAP_ADMIN_USERNAME, password: env.KC_BOOTSTRAP_ADMIN_PASSWORD };
+  const { id, provisioning } = realmImportProvider();
+  const env = AUTH[id].composeServices()[AUTH[id].serviceKey].environment;
+  return { user: env[provisioning.adminEnv.user], password: env[provisioning.adminEnv.password] };
 }
 
 /** Clientes M2M que solo existen para las variantes negativas (matriz scope × audiencia). */
@@ -290,7 +292,7 @@ export function realmSpec(model) {
 
 /** El issuer del perfil local: el del proveedor de prueba de infra/, el mismo en todos los generadores. */
 export function localIssuer(model) {
-  if (model.stack?.auth === 'keycloak') return `http://localhost:8180/realms/${model.service.name}`;
-  if (model.stack?.auth === 'cognito') return `http://localhost:9229/${model.service.name}`;
-  return 'https://tu-issuer';
+  const { provisioning } = identityProvider(model.stack?.auth);
+  if (!provisioning.kind) return 'https://tu-issuer';
+  return `http://localhost:${AUTH[model.stack.auth].port}${providerPath(provisioning.issuerPath, model.service.name)}`;
 }

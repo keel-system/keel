@@ -5,6 +5,7 @@
 // Spring: las imágenes del mismo diseño se despliegan con el mismo .env. Estaba escrita en keel-nest y copiada en
 // keel-dotnet; salió aquí al llegar el cuarto generador (PLAN-KEEL-GO.md, incremento 8).
 
+import { identityProvider } from './identity-providers.js';
 import { audienceOf } from './access-plan.js';
 import { envRequired } from './profile-values.js';
 import { envFor, runtimeDefault } from './runtime-env.js';
@@ -39,7 +40,7 @@ export function securityYaml(model, profile) {
     } else {
       if (profile === 'local') {
         lines.push(
-          model.stack?.auth === 'keycloak' || model.stack?.auth === 'cognito'
+          identityProvider(model.stack?.auth).provisioning.kind
             ? '    # El proveedor de identidad de prueba de infra/docker-compose.yaml.'
             : '    # TODO (agente): issuer real del resource server según security.keel.yaml.'
         );

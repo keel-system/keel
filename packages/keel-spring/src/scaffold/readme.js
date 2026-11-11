@@ -1,6 +1,7 @@
 // README.md del servicio generado: procedencia, cómo ejecutarlo, infraestructura
 // de prueba y qué queda pendiente para el agente (/keel-generate-spring).
 
+import { identityProvider } from '@keel-system/keel-core/gen/identity-providers';
 import { JAVA_VERSION, packageVersion } from '../lib/assets.js';
 import { selectedInfra } from '../lib/stack-catalog.js';
 import { needsDevtools } from './devtools.js';
@@ -152,7 +153,7 @@ export function generate(model) {
         'Probarlo en vivo sobre una BD sin esquema queda para ti, a mano: ver «Despliegue en producción».'
     );
   }
-  if (layersPresent.security && stack.auth === 'keycloak') {
+  if (layersPresent.security && identityProvider(stack.auth).provisioning.kind === 'realm-import') {
     pendingLayers.push('- `security`: el `SecurityFilterChain` ya está generado; crea el realm en el Keycloak de prueba (http://localhost:8180, admin/admin).');
   }
   if (layersPresent.messaging) {
@@ -241,7 +242,7 @@ function docsSection(model) {
 // confunda con infra/, que es la de la generación.
 function manualTestingSection(model) {
   const { service, layersPresent, stack } = model;
-  const realm = stack.auth === 'keycloak' ? realmSpec(model) : null;
+  const realm = identityProvider(stack.auth).provisioning.kind === 'realm-import' ? realmSpec(model) : null;
 
   const lines = [
     '## Pruebas manuales en contenedor',

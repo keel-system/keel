@@ -23,6 +23,7 @@ import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { usesCallerRoles, ownershipRulesOf } from '@keel-system/keel-core/gen/ownership';
 import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
 import { audienceOf, tokenClaims } from '@keel-system/keel-core/gen/access-plan';
+import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { csFile, csMember, csString, located, namespaceOf } from './render.js';
 // ETag e If-Match con escritura condicional (CW-9): la lista es la neutral de los cuatro generadores.
 import { corsAllowedHeaders, corsExposedHeaders } from '@keel-system/keel-core/gen/conditional-writes';
@@ -366,7 +367,7 @@ ${chains.join('\n')}
 function jwtAuthenticatorBody(model) {
   const sec = model.security;
   const claims = tokenClaims(model.stack?.auth);
-  const cognito = model.stack?.auth === 'cognito';
+  const { prefixedScopes, audienceInScopePrefix, displayName } = tokenContract(model.stack?.auth);
   // Sin roles, permisos ni scopes en ninguna regla, Spring usa su conversor por defecto, cuyo principal es el `sub`:
   // el nombre que ve la identidad del llamante tiene que ser el mismo.
   const principalClaim = sec.usesAuthorities ? claims.principalClaim : 'sub';
@@ -380,9 +381,9 @@ function jwtAuthenticatorBody(model) {
         }
         return [.. roles.EnumerateArray().Where(role => role.ValueKind == JsonValueKind.String).Select(role => role.GetString()!)];`
       : `        return [.. ClaimValues.List(claims, ${csString(claims.rolesClaim)}).Where(role => !string.IsNullOrWhiteSpace(role))];`;
-  const issuedFor = cognito
+  const issuedFor = audienceInScopePrefix
     ? `    /// <summary>
-    /// ¿Está el token emitido para ESTE servicio? Cognito no pone <c>aud</c> en los tokens de client_credentials: dice a
+    /// ¿Está el token emitido para ESTE servicio? ${displayName} no pone <c>aud</c> en los tokens de client_credentials: dice a
     /// qué API vale cada permiso con el PREFIJO del scope (<c>&lt;audiencia&gt;/&lt;scope&gt;</c>), así que la audiencia es ese
     /// prefijo. Un token de usuario, sin scopes de máquina, tampoco pasa.
     /// </summary>
@@ -403,7 +404,7 @@ public sealed class InvalidCredentialException(string message, Exception? cause 
 
 /// <summary>
 /// Valida el JWT de la petición y lo convierte en un Principal con las authorities de Spring: <c>ROLE_&lt;rol&gt;</c>
-/// (${claims.type === 'nested' ? `claim anidado <c>${claims.rolesParent}.${claims.rolesField}</c>` : `claim <c>${claims.rolesClaim}</c>`}), <c>SCOPE_&lt;scope&gt;</c> (claim <c>scope</c>${cognito ? ', sin el prefijo del resource server que pone Cognito' : ''}),
+/// (${claims.type === 'nested' ? `claim anidado <c>${claims.rolesParent}.${claims.rolesField}</c>` : `claim <c>${claims.rolesClaim}</c>`}), <c>SCOPE_&lt;scope&gt;</c> (claim <c>scope</c>${prefixedScopes ? `, sin el prefijo del resource server que pone ${displayName}` : ''}),
 /// los permisos del claim <c>${claims.permissionsClaim}</c> y los que otorga cada rol según el diseño (security.roleGrants).
 /// </summary>
 /// <remarks>
@@ -588,8 +589,8 @@ ${roles}
 
     private static IEnumerable<string> ScopesOf(Dictionary<string, JsonElement> claims) =>
         (ClaimValues.Text(claims, "scope") ?? string.Empty)
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries)${cognito ? `
-            // Cognito: <resource-server>/<scope>. Sin prefijo, se queda igual.
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)${prefixedScopes ? `
+            // ${displayName}: <resource-server>/<scope>. Sin prefijo, se queda igual.
             .Select(value => value[(value.IndexOf('/', StringComparison.Ordinal) + 1)..])` : ''};
 
     private static string? Setting(ServiceConfiguration configuration, string key) =>

@@ -4,8 +4,10 @@
 // (local literal → develop ${VAR:default} → production ${VAR} obligatoria).
 // El perfil activo se elige con la variable de entorno PROFILE (default local).
 
+import { identityProvider } from '@keel-system/keel-core/gen/identity-providers';
+import { localIssuer } from '@keel-system/keel-core/gen/identity-realm';
 import { DENIED_ADDRESSES_ENV, usesOutboundPolicy } from './outbound-address.js';
-import { AUTH, DATABASES, HTTP_STUB, TELEMETRY_INFRA, collectorHostEndpoint } from '../lib/stack-catalog.js';
+import { DATABASES, HTTP_STUB, TELEMETRY_INFRA, collectorHostEndpoint } from '../lib/stack-catalog.js';
 import { JAVA_DATABASES } from '../lib/java-stack.js';
 import { usesPartialIndexes } from './migrations.js';
 import { EMBEDDED_MONGO_VERSION } from '../lib/assets.js';
@@ -1294,31 +1296,13 @@ function redisYaml(profile) {
 }
 
 function oauth2Yaml(model, profile) {
-  const { service, stack } = model;
+  const { stack } = model;
   const lines = ['spring:', '  security:', '    oauth2:', '      resourceserver:', '        jwt:'];
-  if (stack.auth === 'keycloak') {
-    if (profile === 'local') {
-      lines.push('          # Keycloak de prueba del docker-compose; crea el realm y ajusta el nombre.');
-    }
-    lines.push(`          issuer-uri: ${envFor('OAUTH2_ISSUER_URI', profile, `http://localhost:8180/realms/${service.name}`)}`);
-  } else if (stack.auth === 'cognito') {
-    if (profile === 'local') {
-      lines.push(
-        '          # Emulador del contrato de token de Cognito en el docker-compose. El issuer es',
-        '          # DETERMINISTA porque el issuerId lo elige el diseño (el nombre del servicio):',
-        '          # no hay ningún id de user pool que descubrir después de crearlo.',
-        '          # Fuera de local, aquí va el pool real: https://cognito-idp.<región>.amazonaws.com/<poolId>.'
-      );
-    }
-    lines.push(
-      `          issuer-uri: ${envFor('OAUTH2_ISSUER_URI', profile, `http://localhost:${AUTH.cognito.port}/${service.name}`)}`
-    );
-  } else {
-    if (profile === 'local') {
-      lines.push('          # TODO (agente): issuer real del resource server según security.keel.yaml.');
-    }
-    lines.push(`          issuer-uri: ${envFor('OAUTH2_ISSUER_URI', profile, 'https://tu-issuer')}`);
+  if (profile === 'local') {
+    const note = identityProvider(stack.auth).provisioning.localIssuerNote ?? ['TODO (agente): issuer real del resource server según security.keel.yaml.'];
+    lines.push(...note.map((line) => `          # ${line}`));
   }
+  lines.push(`          issuer-uri: ${envFor('OAUTH2_ISSUER_URI', profile, localIssuer(model))}`);
   return lines.join('\n') + '\n';
 }
 

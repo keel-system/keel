@@ -9,6 +9,7 @@
 // referencia es `keel-spring/src/lib/java-projection.js`. Los comentarios de abajo cuentan a
 // menudo cómo lo consume keel-spring, que es la implementación de referencia.
 
+import { identityProvider } from './identity-providers.js';
 import { collectPayments } from './payments-model.js';
 import {
   pascalCase,
@@ -177,10 +178,9 @@ function interpret({ manifest, layers, stack = null }) {
   // verde. No va en supported-features.js porque aquello corre antes de conocer el
   // stack: allí solo se sabe qué declara el diseño, y esto depende del proveedor
   // elegido en el cuestionario.
-  if (stack?.auth === 'cognito' && (security?.protocol === 'oidc' || security?.protocol === 'jwt')) {
-    warnings.push(
-      P.messages.cognitoEmulated()
-    );
+  const emulationMessage = identityProvider(stack?.auth).provisioning.emulationMessage;
+  if (emulationMessage && (security?.protocol === 'oidc' || security?.protocol === 'jwt')) {
+    warnings.push(P.messages[emulationMessage]());
   }
   const httpClients = collectHttpClients(layers, domainTypes, inlineEnumName, warnings);
   const storage = collectStorage(layers);

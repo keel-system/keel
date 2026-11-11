@@ -45,9 +45,9 @@ import {
 import { METRICS_TRANSPORT, usesTelemetry } from './telemetry-vocabulary.js';
 import { dashboardUid } from './observability-assets.js';
 import { cognitoMockConfig } from './identity-provisioning.js';
-import { realmSpec, tokenUrl } from './identity-realm.js';
+import { realmSpec, tokenUrl, providerInternalUrl } from './identity-realm.js';
 import { kebabCase } from './naming.js';
-import { TOKEN_CLAIMS } from './access-plan.js';
+import { identityProvider, realmImportProvider } from './identity-providers.js';
 import { RUNTIME_RESOLUTION, composeResolution, HOSTPATH_HELPER } from './infra-scripts.js';
 
 /**
@@ -130,11 +130,12 @@ export function deployFiles(model, platform) {
 
   // El emulador de Cognito lee su config del mismo archivo que en infra/, pero
   // relativo a deploy/: son dos composes distintos y cada uno monta el suyo.
-  if (model.stack.auth === 'cognito') {
+  const { provisioning } = identityProvider(model.stack.auth);
+  if (provisioning.kind === 'token-emulator') {
     const config = cognitoMockConfig(model);
-    if (config) files.push({ path: 'deploy/cognito/mock-oauth2-config.json', content: config.content });
+    if (config) files.push({ path: `deploy/${provisioning.emulatorDir}/mock-oauth2-config.json`, content: config.content });
   }
-  const realm = model.stack.auth === 'keycloak' ? realmSpec(model) : null;
+  const realm = provisioning.kind === 'realm-import' ? realmSpec(model) : null;
   if (realm) {
     files.push({ path: 'deploy/keycloak/realm-export.json', content: realmExport(realm) });
   }
@@ -205,18 +206,19 @@ function composeServices(model, platform) {
   // Keycloak: importa el realm al arrancar y abre el puerto de management que
   // consume su healthcheck. `--import-realm` solo actúa si el realm no existe,
   // así que reiniciar no pisa lo que el diseñador haya tocado a mano.
-  const realm = services.keycloak && model.stack.auth === 'keycloak' ? realmSpec(model) : null;
+  const identityService = services[AUTH[model.stack.auth]?.serviceKey];
+  const realm = identityService && identityProvider(model.stack.auth).provisioning.kind === 'realm-import' ? realmSpec(model) : null;
   if (realm) {
-    services.keycloak.command = ['start-dev', '--import-realm'];
-    services.keycloak.environment = {
-      ...services.keycloak.environment,
+    identityService.command = ['start-dev', '--import-realm'];
+    identityService.environment = {
+      ...identityService.environment,
       KC_HEALTH_ENABLED: 'true',
       // El issuer que Keycloak emite y publica: el que ve quien pide el token
       // desde fuera (Postman, un front). Ver la nota de jwkSetUri más abajo.
       KC_HOSTNAME: 'http://localhost:${KEYCLOAK_PORT:-8180}'
     };
-    services.keycloak.volumes = [
-      ...(services.keycloak.volumes ?? []),
+    identityService.volumes = [
+      ...(identityService.volumes ?? []),
       './keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro'
     ];
   }
@@ -527,13 +529,10 @@ function appEnvironment(model, platform) {
 }
 
 function jwkSetUri(model) {
-  const realmPath = `realms/${model.service.name}/protocol/openid-connect/certs`;
-  if (model.stack.auth === 'keycloak') return `http://keycloak:8080/${realmPath}`;
-  // El issuerId del emulador es el nombre del servicio, así que la ruta es
-  // determinista (con un emulador de la API de Cognito habría sido un id de pool
-  // generado, imposible de escribir aquí).
-  if (model.stack.auth === 'cognito') return `http://cognito-mock:8080/${model.service.name}/jwks`;
-  return null;
+  // El issuerId del emulador es el nombre del servicio, así que la ruta es determinista (con un emulador de la API de
+  // Cognito habría sido un id de pool generado, imposible de escribir aquí).
+  const { provisioning } = identityProvider(model.stack.auth);
+  return provisioning.kind ? providerInternalUrl(model, provisioning.jwksPath) : null;
 }
 
 // ─── deploy/.env ─────────────────────────────────────────────────────────────
@@ -592,7 +591,7 @@ function postmanEnvironment(model, platform) {
   add('baseUrl', 'http://localhost:8080');
   if (model.layersPresent.security && security?.cors) add('webOrigin', platform.localCorsOrigins.split(',')[0]);
 
-  const spec = model.layersPresent.security && ['keycloak', 'cognito'].includes(model.stack.auth) ? realmSpec(model) : null;
+  const spec = model.layersPresent.security && identityProvider(model.stack.auth).provisioning.kind ? realmSpec(model) : null;
   if (spec) {
     add('tokenUrl', tokenUrl(model));
     // Cliente público con direct access grants: sin secreto, pero la colección lo manda. Sin
@@ -663,7 +662,7 @@ function upScript(model, platform) {
   const urls = publishedUrls(model, platform)
     .map(({ label, url }) => `echo "  ${label.padEnd(22)} ${url}"`)
     .join('\n');
-  const realm = model.stack.auth === 'keycloak' ? realmSpec(model) : null;
+  const realm = identityProvider(model.stack.auth).provisioning.kind === 'realm-import' ? realmSpec(model) : null;
   const credentials = realm?.users.length
     ? `echo ""
 echo "Usuarios del realm '${realm.realm}' (password: ${realm.password}): ${realm.users
@@ -790,9 +789,8 @@ export function publishedUrls(model, platform) {
   if (layersPresent.storage && stack.storage === 'minio') {
     urls.push({ label: 'MinIO (minioadmin)', url: 'http://localhost:${MINIO_CONSOLE_PORT:-9001}' });
   }
-  if (stack.auth === 'keycloak') {
-    urls.push({ label: 'Keycloak (admin/admin)', url: 'http://localhost:${KEYCLOAK_PORT:-8180}' });
-  }
+  const identityConsole = identityProvider(stack.auth).provisioning.console;
+  if (identityConsole) urls.push(identityConsole);
   if (usesTelemetry(model)) {
     const port = TELEMETRY_INFRA.backend.grafanaPublishedPort;
     const grafana = `http://localhost:\${GRAFANA_PORT:-${port}}`;
@@ -939,7 +937,7 @@ function userProfileComponent() {
 /**
  * Los tres scopes integrados de Keycloak de los que depende el servidor generado, con
  * sus nombres y mappers de fábrica. Los nombres de claim no se escriben aquí: salen de
- * `AUTH_PROVIDERS.keycloak`, que es lo que lee el `JwtAuthConverter`; si uno cambia,
+ * el descriptor del proveedor, que es lo que lee el `JwtAuthConverter`; si uno cambia,
  * el otro lo sigue.
  *
  * `basic` y `roles` no entran en el claim `scope`; `profile` sí, como en Keycloak (da un
@@ -947,7 +945,7 @@ function userProfileComponent() {
  * diseño y la audiencia, y estos no tocan ninguno de los dos.
  */
 export function builtinScopes() {
-  const { rolesParent, rolesField, principalClaim } = TOKEN_CLAIMS.keycloak;
+  const { rolesParent, rolesField, principalClaim } = realmImportProvider().token.claims;
   const claims = { 'access.token.claim': 'true', 'id.token.claim': 'true', 'introspection.token.claim': 'true' };
   return [
     {

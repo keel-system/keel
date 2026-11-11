@@ -22,6 +22,7 @@ import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { usesCallerRoles, ownershipRulesOf } from '@keel-system/keel-core/gen/ownership';
 import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
 import { audienceOf, tokenClaims } from '@keel-system/keel-core/gen/access-plan';
+import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { classPath, DIRS, tsModule, tsString } from './render.js';
 // ETag e If-Match con escritura condicional (CW-9): la lista es la neutral de los cuatro generadores.
 import { corsAllowedHeaders, corsExposedHeaders } from '@keel-system/keel-core/gen/conditional-writes';
@@ -285,7 +286,7 @@ export function verdict(requirement: Requirement, principal: Principal | null): 
 function jwtAuthenticator(model) {
   const sec = model.security;
   const claims = tokenClaims(model.stack?.auth);
-  const cognito = model.stack?.auth === 'cognito';
+  const { prefixedScopes, audienceInScopePrefix, displayName } = tokenContract(model.stack?.auth);
   // Sin roles, permisos ni scopes en ninguna regla, Spring usa su conversor por defecto, cuyo
   // principal es el `sub`: el nombre que ve la identidad del llamante tiene que ser el mismo.
   const principalClaim = sec.usesAuthorities ? claims.principalClaim : 'sub';
@@ -296,9 +297,9 @@ function jwtAuthenticator(model) {
   const roles = parent && typeof parent === 'object' ? (parent as Record<string, unknown>)[${tsString(claims.rolesField)}] : undefined;
   return Array.isArray(roles) ? roles.filter((role): role is string => typeof role === 'string') : [];`
       : `  return textList(payload[${tsString(claims.rolesClaim)}]).filter((role) => role.trim() !== '');`;
-  const audienceCheck = cognito
+  const audienceCheck = audienceInScopePrefix
     ? `/**
- * ¿Está el token emitido para ESTE servicio? Cognito no pone \`aud\` en los tokens de
+ * ¿Está el token emitido para ESTE servicio? ${displayName} no pone \`aud\` en los tokens de
  * client_credentials: dice a qué API vale cada permiso con el PREFIJO del scope
  * (\`<audiencia>/<scope>\`), así que la audiencia es ese prefijo. Un token de usuario, sin scopes de
  * máquina, tampoco pasa — que es lo que la cadena de máquinas tiene que rechazar.
@@ -315,7 +316,7 @@ export function issuedFor(principal: Principal, audience: string): boolean {
   const body = `/**
  * Valida el JWT de la petición y lo convierte en un Principal con las authorities de Spring:
  * \`ROLE_<rol>\` (claim de roles del proveedor${claims.type === 'nested' ? `, anidado en \`${claims.rolesParent}.${claims.rolesField}\`` : `, \`${claims.rolesClaim}\``}),
- * \`SCOPE_<scope>\` (claim \`scope\`${cognito ? ', sin el prefijo del resource server que pone Cognito' : ''}), los permisos del claim
+ * \`SCOPE_<scope>\` (claim \`scope\`${prefixedScopes ? `, sin el prefijo del resource server que pone ${displayName}` : ''}), los permisos del claim
  * \`${claims.permissionsClaim}\` y los que otorga cada rol según el diseño (security.roleGrants).
  *
  * Las claves salen de la configuración, como en el resource server de Spring:
@@ -435,8 +436,8 @@ function scopesOf(payload: JWTPayload): string[] {
   if (typeof scope !== 'string') return [];
   return scope
     .split(' ')
-    .filter((value) => value.trim() !== '')${cognito ? `
-    // Cognito: <resource-server>/<scope>. Sin prefijo, se queda igual.
+    .filter((value) => value.trim() !== '')${prefixedScopes ? `
+    // ${displayName}: <resource-server>/<scope>. Sin prefijo, se queda igual.
     .map((value) => value.slice(value.indexOf('/') + 1))` : ''};
 }
 

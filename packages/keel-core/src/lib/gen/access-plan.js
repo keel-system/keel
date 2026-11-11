@@ -16,6 +16,7 @@
 import { PAYMENT_NOTICE_PATH } from './payment-gateways.js';
 import { METRICS_TRANSPORT, usesTelemetry } from './telemetry-vocabulary.js';
 import { usesPersonaTokens } from './identity-realm.js';
+import { identityProvider, roleClaims, tokenContract } from './identity-providers.js';
 
 /** Las rutas técnicas abiertas: las sondas del servicio. No cuentan nada del negocio. */
 export const TECHNICAL_OPEN_PATHS = ['/livez', '/readyz'];
@@ -143,20 +144,11 @@ export function accessPlan(model, { extraOpenPosts = model.payments ? [PAYMENT_N
 }
 
 /**
- * Dónde lleva cada proveedor de identidad del stack los roles, los permisos y el nombre del principal.
- * Es conocimiento del TOKEN, no del lenguaje: los dos servidores leen los mismos claims. Keycloak anida
- * los roles en `realm_access.roles`; Cognito los da como grupos. Sin proveedor conocido, claims planos.
+ * Dónde lleva el proveedor elegido en el stack (`stack.auth`) los roles, los permisos y el nombre del principal. Es
+ * conocimiento del TOKEN, no del lenguaje: los servidores leen los mismos claims (identity-providers.js).
  */
-export const TOKEN_CLAIMS = {
-  keycloak: { type: 'nested', rolesParent: 'realm_access', rolesField: 'roles', permissionsClaim: 'permissions', principalClaim: 'preferred_username' },
-  cognito: { type: 'flat', rolesClaim: 'cognito:groups', permissionsClaim: 'permissions', principalClaim: 'username' }
-};
-
-const GENERIC_TOKEN_CLAIMS = { type: 'flat', rolesClaim: 'roles', permissionsClaim: 'permissions', principalClaim: 'sub' };
-
-/** Los claims del proveedor elegido en el stack (`stack.auth`). */
 export function tokenClaims(auth) {
-  return TOKEN_CLAIMS[auth] ?? GENERIC_TOKEN_CLAIMS;
+  return identityProvider(auth).token.claims;
 }
 
 /**
@@ -210,15 +202,14 @@ export function fullAccessClaims(model, plan = accessPlan(model)) {
   const requirements = plan.chains.flatMap((chain) => [...chain.rules.map((rule) => rule.requirement), chain.fallback]);
   const authorities = [...new Set(requirements.flatMap((requirement) => requirement.authorities ?? []))];
   const claims = tokenClaims(model.stack?.auth);
-  const cognito = model.stack?.auth === 'cognito';
+  const { prefixedScopes, audienceInScopePrefix } = tokenContract(model.stack?.auth);
   const roles = authorities.filter((a) => a.startsWith('ROLE_')).map((a) => a.slice('ROLE_'.length));
   const scopes = authorities.filter((a) => a.startsWith('SCOPE_')).map((a) => a.slice('SCOPE_'.length));
   const permissions = authorities.filter((a) => !a.startsWith('ROLE_') && !a.startsWith('SCOPE_'));
   const full = { sub: 'keel-test', azp: 'keel-test', [claims.principalClaim]: 'keel-test' };
-  if (claims.type === 'nested') full[claims.rolesParent] = { [claims.rolesField]: roles };
-  else full[claims.rolesClaim] = roles;
+  Object.assign(full, roleClaims(claims, roles));
   if (permissions.length > 0) full[claims.permissionsClaim] = permissions;
-  if (scopes.length > 0) full.scope = scopes.map((scope) => (cognito && plan.audience ? `${plan.audience}/${scope}` : scope)).join(' ');
-  if (plan.audience && !cognito) full.aud = plan.audience;
+  if (scopes.length > 0) full.scope = scopes.map((scope) => (prefixedScopes && plan.audience ? `${plan.audience}/${scope}` : scope)).join(' ');
+  if (plan.audience && !audienceInScopePrefix) full.aud = plan.audience;
   return full;
 }

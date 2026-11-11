@@ -16,6 +16,7 @@
 //
 // Misma regeneración segura que el resto del scaffolding.
 
+import { identityProvider } from '@keel-system/keel-core/gen/identity-providers';
 import { conditionalWritesAgentNote } from '@keel-system/keel-core/gen/conditional-writes';
 import { DESIGN_GAPS_FORM } from '@keel-system/keel-core/gen/design-gaps';
 import fs from 'node:fs';
@@ -103,7 +104,7 @@ export function stackSkills(model) {
     skills.push('keel-spring-payments', `keel-spring-${stack.paymentGateway}`);
   }
   if (stack.cache) skills.push('keel-spring-redis');
-  if (stack.auth && stack.auth !== 'none') skills.push(`keel-spring-${stack.auth}`);
+  if (identityProvider(stack.auth).skill) skills.push(`keel-spring-${stack.auth}`);
   return skills;
 }
 

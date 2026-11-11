@@ -25,6 +25,7 @@
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
 import { audienceOf, fullAccessClaims, tokenClaims } from '@keel-system/keel-core/gen/access-plan';
+import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { securityPlan, usesHttpSecurity, usesJwt } from '@keel-system/keel-core/gen/features';
 import { ownershipRulesOf, usesCallerRoles } from '@keel-system/keel-core/gen/ownership';
 import { securityConfigFiles } from '@keel-system/keel-core/gen/security-config';
@@ -296,7 +297,7 @@ func SettingsFrom(cfg *config.Config) Settings {
 function jwtGo(model) {
   const sec = model.security;
   const claims = tokenClaims(model.stack?.auth);
-  const cognito = model.stack?.auth === 'cognito';
+  const { prefixedScopes, audienceInScopePrefix, displayName } = tokenContract(model.stack?.auth);
   // Sin roles, permisos ni scopes en ninguna regla, Spring usa su conversor por defecto, cuyo principal es el `sub`:
   // el nombre que ve la identidad del llamante tiene que ser el mismo.
   const principalClaim = sec.usesAuthorities ? claims.principalClaim : 'sub';
@@ -326,8 +327,8 @@ function jwtGo(model) {
 		}
 	}
 	return roles`;
-  const issuedFor = cognito
-    ? `// IssuedFor dice si el token está emitido para ESTE servicio. Cognito no pone aud en los tokens de
+  const issuedFor = audienceInScopePrefix
+    ? `// IssuedFor dice si el token está emitido para ESTE servicio. ${displayName} no pone aud en los tokens de
 // client_credentials: dice a qué API vale cada permiso con el PREFIJO del scope (<audiencia>/<scope>), así que la
 // audiencia es ese prefijo. Un token de usuario, sin scopes de máquina, tampoco pasa.
 func IssuedFor(principal *Principal, audience string) bool {
@@ -343,10 +344,10 @@ func IssuedFor(principal *Principal, audience string) bool {
 func IssuedFor(principal *Principal, audience string) bool {
 	return slices.Contains(ClaimList(principal.Claims, "aud"), audience)
 }`;
-  const scopes = cognito
+  const scopes = prefixedScopes
     ? `	var scopes []string
 	for value := range strings.FieldsSeq(scope) {
-		// Cognito: <resource-server>/<scope>. Sin prefijo, se queda igual.
+		// ${displayName}: <resource-server>/<scope>. Sin prefijo, se queda igual.
 		_, after, found := strings.Cut(value, "/")
 		if !found {
 			after = value
@@ -388,7 +389,7 @@ var signingMethods = []string{"RS256", "RS384", "RS512", "PS256", "PS384", "PS51
 var tokenFormat = regexp.MustCompile(\`^[A-Za-z0-9\\-._~+/]+=*$\`)
 
 // JWTAuthenticator valida el JWT de la petición y lo convierte en un Principal con las authorities de Spring:
-// ROLE_<rol> (${claims.type === 'nested' ? `claim anidado ${claims.rolesParent}.${claims.rolesField}` : `claim ${claims.rolesClaim}`}), SCOPE_<scope> (claim scope${cognito ? ', sin el prefijo del resource server que pone Cognito' : ''}),
+// ROLE_<rol> (${claims.type === 'nested' ? `claim anidado ${claims.rolesParent}.${claims.rolesField}` : `claim ${claims.rolesClaim}`}), SCOPE_<scope> (claim scope${prefixedScopes ? `, sin el prefijo del resource server que pone ${displayName}` : ''}),
 // los permisos del claim ${claims.permissionsClaim} y los que otorga cada rol según el diseño (security.roleGrants).
 //
 // Las claves se resuelven en la PRIMERA petición con token, no al arrancar: el servicio arranca aunque el proveedor

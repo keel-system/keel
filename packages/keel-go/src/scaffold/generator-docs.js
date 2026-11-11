@@ -9,6 +9,7 @@
 //   · lo que solo es markdown que un agente lee por ruta —architecture, constitution, orchestration, conventions— va
 //     a `docs/keel/`, UNA sola copia, y no puede citar rutas de harness.
 
+import { identityProvider } from '@keel-system/keel-core/gen/identity-providers';
 import { conditionalWritesAgentNote } from '@keel-system/keel-core/gen/conditional-writes';
 import { DESIGN_GAPS_FORM } from '@keel-system/keel-core/gen/design-gaps';
 import fs from 'node:fs';
@@ -58,7 +59,7 @@ export const AGENTS = ['keel-go-code.md', 'keel-go-infra.md', 'keel-go-tests.md'
 /** Skills por tecnología aplicables al servicio: la de la base relacional, la del proveedor de identidad, la del broker y la de los clientes salientes. */
 export function stackSkills(model) {
   const skills = usesRelational(model) ? ['keel-go-database'] : usesDocument(model) ? ['keel-go-mongodb'] : [];
-  if (usesTokenHarness(model) && ['keycloak', 'cognito'].includes(model.stack?.auth)) skills.push(`keel-go-${model.stack.auth}`);
+  if (usesTokenHarness(model) && identityProvider(model.stack?.auth).skill) skills.push(`keel-go-${model.stack.auth}`);
   if (usesGoRabbitMq(model)) skills.push('keel-go-rabbitmq');
   if (usesGoKafka(model)) skills.push('keel-go-kafka');
   if (usesGoSnsSqs(model)) skills.push('keel-go-snssqs');

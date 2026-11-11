@@ -16,11 +16,11 @@ import { FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors
 import {
   audienceOf,
   checksAudience,
-  TOKEN_CLAIMS,
   tokenClaims,
   serviceMatchers as serviceMatchersOf,
   usesServiceApiKeys as needsServiceApiKeyFilter
 } from '@keel-system/keel-core/gen/access-plan';
+import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { camelCase } from '../lib/naming.js';
 import { credentialFinderName } from './repositories.js';
 import { javaFile, javaPath, subPackage } from './render.js';
@@ -28,8 +28,6 @@ import { METRICS_TRANSPORT, usesTelemetry } from '../lib/telemetry-probes.js';
 
 const SECURITY_PKG = 'infrastructure.configurations.security';
 
-// Claims por proveedor del stack (neutral: keel-core/gen/access-plan.js, TOKEN_CLAIMS).
-export const AUTH_PROVIDERS = TOKEN_CLAIMS;
 
 function providerMeta(model) {
   return tokenClaims(model.stack.auth);
@@ -623,9 +621,10 @@ function renderJwtAuthConverter(model) {
   // de máquina correcto no casa con ninguna regla y todo sale 403 — y solo en
   // producción, porque un emulador más cómodo no lo reproduce. `indexOf` devuelve
   // -1 sin prefijo, así que la misma línea vale para un scope ya pelado.
-  const scopePrefix = model.stack.auth === 'cognito'
+  const { prefixedScopes, displayName: scopeProvider } = tokenContract(model.stack.auth);
+  const scopePrefix = prefixedScopes
     ? `
-                // Cognito: <resource-server>/<scope>. Sin prefijo, se queda igual.
+                // ${scopeProvider}: <resource-server>/<scope>. Sin prefijo, se queda igual.
                 .map(scope -> scope.substring(scope.indexOf('/') + 1))`
     : '';
 
@@ -839,7 +838,7 @@ public class SecurityErrorHandlers implements AuthenticationEntryPoint, AccessDe
 // 403. Validarlo en el JwtDecoder daría 401 y borraría esa distinción.
 function renderAudienceFilter(model) {
   const audience = audienceOf(model, model.security);
-  const cognito = model.stack.auth === 'cognito';
+  const { audienceInScopePrefix, displayName } = tokenContract(model.stack.auth);
 
   // La MISMA pregunta —«¿este token está emitido para nosotros?»— se responde con
   // claims distintos según el proveedor, y no es una preferencia: los access token
@@ -851,7 +850,7 @@ function renderAudienceFilter(model) {
   // (`catalog/product:read`), y ese prefijo ES la audiencia: dice a qué API
   // pertenece el permiso. Un token de usuario, que no trae scopes de máquina,
   // tampoco pasa — que es justo lo que esta cadena tiene que rechazar.
-  const check = cognito
+  const check = audienceInScopePrefix
     ? `        if (authentication instanceof JwtAuthenticationToken token && !issuedForUs(token.getToken())) {
             throw new AccessDeniedException("El token no trae scopes de " + audience + ": no está emitido para este servicio");
         }`
@@ -860,11 +859,11 @@ function renderAudienceFilter(model) {
             throw new AccessDeniedException("El token no está emitido para la audiencia " + audience);
         }`;
 
-  const helper = cognito
+  const helper = audienceInScopePrefix
     ? `
 
     /**
-     * ¿Trae el token algún scope de ESTE servicio? Cognito emite los custom scopes
+     * ¿Trae el token algún scope de ESTE servicio? ${displayName} emite los custom scopes
      * como {@code <resource-server>/<scope>}, así que el prefijo es lo que dice para
      * qué API vale el permiso — el equivalente del {@code aud} que sus tokens de
      * máquina no llevan.
@@ -879,9 +878,9 @@ function renderAudienceFilter(model) {
     }`
     : '';
 
-  const doc = cognito
+  const doc = audienceInScopePrefix
     ? ` * Exige que el JWT traiga algún scope del resource server de este servicio
- * (security.audience, por defecto "${audience}"), que es como Cognito expresa la
+ * (security.audience, por defecto "${audience}"), que es como ${displayName} expresa la
  * audiencia: sus access token de client_credentials no llevan claim aud. Un token
  * emitido para otra API —o uno de usuario— queda autenticado pero no autorizado:
  * 403, no 401.`
@@ -924,7 +923,7 @@ ${check}
         'org.springframework.security.core.context.SecurityContextHolder',
         'org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken',
         'org.springframework.web.filter.OncePerRequestFilter',
-        ...(cognito ? ['org.springframework.security.oauth2.jwt.Jwt'] : [])
+        ...(audienceInScopePrefix ? ['org.springframework.security.oauth2.jwt.Jwt'] : [])
       ],
       body
     )

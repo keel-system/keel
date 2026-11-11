@@ -35,6 +35,7 @@ import {
   keycloakAdminCredentials,
   realmSpec
 } from './identity-realm.js';
+import { identityProvider, roleClaims, tokenContract } from './identity-providers.js';
 
 /**
  * Clientes con asignación de client scopes, en el orden en que se emiten: primero
@@ -56,8 +57,9 @@ function scopeAssignments(spec) {
 export function identityProvisioningFiles(model, platform) {
   if (!model.layersPresent.security || !usesTokens(model)) return [];
   const files = [credentialsEnv(model, platform)];
-  if (model.stack.auth === 'keycloak') files.push(keycloakScript(model, platform));
-  if (model.stack.auth === 'cognito') files.push(cognitoMockConfig(model));
+  const { kind } = identityProvider(model.stack.auth).provisioning;
+  if (kind === 'realm-import') files.push(keycloakScript(model, platform));
+  if (kind === 'token-emulator') files.push(cognitoMockConfig(model));
   return files;
 }
 
@@ -76,7 +78,7 @@ function credentialsEnv(model, platform) {
     '# Cualquier variable de entorno del mismo nombre tiene prioridad sobre este archivo.',
     ''
   ];
-  if (model.stack.auth !== 'keycloak' && model.stack.auth !== 'cognito') {
+  if (!identityProvider(model.stack.auth).provisioning.kind) {
     lines.push(
       `# Stack de identidad '${model.stack.auth}': build no genera el script de aprovisionamiento,`,
       '# pero estos son los valores con los que el arnés va a llamar. El agente de',
@@ -432,6 +434,10 @@ ${
 export function cognitoMockConfig(model) {
   const spec = realmSpec(model);
   const issuerId = spec.realm;
+  const { token, provisioning } = identityProvider(model.stack.auth);
+  const clientClaim = token.client.claims[0];
+  const acceptedClaim = token.accepted ? { [token.accepted.claim]: token.accepted.value } : {};
+  const { prefixedScopes, audienceInScopePrefix } = tokenContract(model.stack.auth);
 
   // Un mapping por usuario, emparejado por `username` (el grant es ROPC, como con
   // Keycloak). El usuario sin roles emite el array vacío: sin él, «autenticado
@@ -441,10 +447,10 @@ export function cognitoMockConfig(model) {
     match: user.username,
     claims: {
       sub: user.username,
-      username: user.username,
-      token_use: 'access',
-      'cognito:groups': user.roles,
-      client_id: spec.userClient,
+      [token.claims.principalClaim]: user.username,
+      ...acceptedClaim,
+      ...roleClaims(token.claims, user.roles),
+      [clientClaim]: spec.userClient,
       // El claim del alcance por recurso (`scoping.claim`), con el mismo valor que siembra el realm de Keycloak y
       // solo en los usuarios NO exentos. Sin él, con Cognito ningún usuario estaba acotado: el emulador emitía
       // `sub`, grupos y cliente, y un diseño con alcance no tenía titular que probar. En un pool real llega igual
@@ -465,13 +471,14 @@ export function cognitoMockConfig(model) {
     const resourceServer = client.audience === 'wrong' ? FOREIGN_RESOURCE_SERVER : spec.audience;
     const claims = {
       sub: client.name,
-      token_use: 'access',
-      client_id: client.name
+      ...acceptedClaim,
+      [clientClaim]: client.name
     };
+    if (!audienceInScopePrefix && client.audience) claims.aud = client.audience === 'wrong' ? FOREIGN_RESOURCE_SERVER : spec.audience;
     // Sin scopes no hay claim `scope`: es el control de la matriz (`test-m2m-none`),
     // y un claim vacío no significaría lo mismo que su ausencia.
     if (client.scopes.length > 0) {
-      claims.scope = client.scopes.map((scope) => `${resourceServer}/${scope}`).join(' ');
+      claims.scope = client.scopes.map((scope) => (prefixedScopes ? `${resourceServer}/${scope}` : scope)).join(' ');
     }
     return { requestParam: 'client_id', match: client.name, claims };
   });
@@ -487,7 +494,7 @@ export function cognitoMockConfig(model) {
     ]
   };
   return {
-    path: 'infra/cognito/mock-oauth2-config.json',
+    path: `infra/${provisioning.emulatorDir}/mock-oauth2-config.json`,
     content: `${JSON.stringify(config, null, 2)}\n`
   };
 }
