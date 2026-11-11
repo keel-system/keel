@@ -343,7 +343,7 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
   keel-dotnet, `caller-scope` y `generator-docs` de keel-go) afirman ahora la rama del emulador, y las cuatro skills
   `keel-<tech>-cognito` enseñan `tokenAs`/`tokenWithScope` con sus límites (hasta 4 valores del alcance, solo los claims que el
   diseño lee). El volcado de huellas está en el scratchpad de la sesión (`dump.mjs`/`cmp.mjs`): no está en el repo.
-- **Redes que compilan, lanzadas al cerrar el 4.3 y SIN LEER al cortar el contexto**: sus logs están en `D:\keel-nets#-*.log`
+- **Redes que compilan, lanzadas al cerrar el 4.3 y SIN LEER al cortar el contexto**: sus logs están en `D:/keel-nets/43-*.log`
   (`spring-shop`, `spring-conduit`, `spring-vault` = `compile-check <fixture> --auth=cognito`; `nest-ts` = `ts-check --auth=cognito`;
   `dotnet-cs` = `cs-check --fixtures --only=asset-vault-cognito,shop-api-cognito,conduit-cognito`; `go-token` = `go-check --token`,
   que ahora incluye `conduit-cognito`; `core-emulator` = `emulator-check`). Lo primero al retomar: leer el final de cada log; si
