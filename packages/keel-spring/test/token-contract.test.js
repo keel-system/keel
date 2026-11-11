@@ -10,6 +10,7 @@ import { usesJwtConverter } from '../src/scaffold/security.js';
 import { TOKEN_SABOTAGES } from '../src/lib/token-sabotages.js';
 import { IDENTITY_DESIGNS } from '../../keel-core/test/helpers/identity-designs.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
+import { credentialClientId } from '@keel-system/keel-core/gen/identity-providers';
 
 function emit(fixture, auth, mutate = () => {}) {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, fixture));
@@ -45,7 +46,8 @@ test('solo con un proveedor que genera el id se traduce el cliente', () => {
 
 test('el perfil test trae los ids, o el contexto de @SpringBootTest no arranca', () => {
   const files = emit('asset-vault', 'cognito');
-  assert.match(files.get('src/main/resources/parameters/test/security.yaml'), /security:\n[\s\S]*client-ids:\n\s+rendering-service: opaque-id-of-rendering-service/);
+  const id = credentialClientId('cognito', 'rendering-service');
+  assert.match(files.get('src/main/resources/parameters/test/security.yaml'), new RegExp(`security:\\n[\\s\\S]*client-ids:\\n\\s+rendering-service: ${id}\\n`));
 });
 
 test('el servidor con Cognito no acepta otro tipo de token ni el scope de otra API', () => {

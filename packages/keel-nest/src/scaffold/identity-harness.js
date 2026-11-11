@@ -15,6 +15,7 @@ import { PERSONA_SUB_MAX, PERSONA_SUB_TOO_LONG, tokenUrl, userTestClient, usesPe
 import { LOCAL_API_KEY, localClientApiKey } from './security.js';
 import { tsString } from './render.js';
 import { usesIdentityHarness } from '@keel-system/keel-core/gen/features';
+import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 export { usesIdentityHarness };
 
 /**
@@ -197,6 +198,8 @@ export async function tokenFor(role: string, n = 1): Promise<string> {
 
 function serviceCredentialSection(model) {
   if (model.security.serviceAuth?.protocol === 'api-key') return apiKeySection(model);
+  // Con un proveedor que genera el id de cada cliente, el client_id que se manda es ese id (AUTH_CLIENT_ID_<CLIENTE>), no el nombre.
+  const opaqueClients = tokenContract(model.stack?.auth).opaqueClients;
   return `
 /**
  * Credencial de máquina (client_credentials) de un cliente declarado en security.serviceClients, o de
@@ -206,8 +209,14 @@ function serviceCredentialSection(model) {
  */
 export async function serviceCredential(client: string): Promise<string> {
   const specific = credential(\`AUTH_CLIENT_SECRET_\${client.toUpperCase().replace(/[^A-Z0-9]/g, '_')}\`, '');
-  const secret = specific !== '' ? specific : credential('AUTH_CLIENT_SECRET', \`\${client}-secret\`);
-  return cachedToken(\`client:\${client}\`, () => requestToken({ grant_type: 'client_credentials', client_id: client, client_secret: secret }));
+  const secret = specific !== '' ? specific : credential('AUTH_CLIENT_SECRET', \`\${client}-secret\`);${
+    opaqueClients
+      ? `
+  // El id que el proveedor generó para el cliente; sin él, el nombre.
+  const clientId = credential(\`AUTH_CLIENT_ID_\${client.toUpperCase().replace(/[^A-Z0-9]/g, '_')}\`, client);`
+      : ''
+  }
+  return cachedToken(\`client:\${client}\`, () => requestToken({ grant_type: 'client_credentials', client_id: ${opaqueClients ? 'clientId' : 'client'}, client_secret: secret }));
 }`;
 }
 

@@ -16,6 +16,7 @@ import { PERSONA_SUB_MAX, PERSONA_SUB_TOO_LONG, tokenUrl, userTestClient, usesPe
 import { csFile, csString } from './render.js';
 import { LOCAL_API_KEY, localClientApiKey } from './security.js';
 import { usesIdentityHarness } from '@keel-system/keel-core/gen/features';
+import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 export { usesIdentityHarness };
 
 const tokens = (model) => usesTokenProtocol(model.security);
@@ -116,7 +117,7 @@ export function credentialsCs(model, namespace) {
   else {
     parts.push(tokenCache(model));
     if (roles(model).length > 0) parts.push(tokenForSection(model));
-    if (machineTokens(model)) parts.push(serviceCredentialSection());
+    if (machineTokens(model)) parts.push(serviceCredentialSection(model));
     if (model.security.scoping) parts.push(scopedResourceSection(model));
     if (usesPersonaTokens(model)) parts.push(personaSection(model));
     if (usesScopedTokens(model)) parts.push(scopedTokenSection(model));
@@ -256,14 +257,21 @@ function tokenForSection() {
     }`;
 }
 
-function serviceCredentialSection() {
+function serviceCredentialSection(model) {
+  // Con un proveedor que genera el id de cada cliente, el client_id que se manda es ese id (AUTH_CLIENT_ID_<CLIENTE>), no el nombre.
+  const opaqueClients = tokenContract(model.stack?.auth).opaqueClients;
+  const clientId = opaqueClients
+    ? `
+        // El id que el proveedor generó para el cliente; sin él, el nombre.
+        var clientId = Value("AUTH_CLIENT_ID_" + new string([.. client.ToUpperInvariant().Select(c => char.IsAsciiLetterOrDigit(c) ? c : '_')]), client);`
+    : '';
   return `    public static Task<string> ServiceCredential(string client)
     {
         var specific = Value("AUTH_CLIENT_SECRET_" + new string([.. client.ToUpperInvariant().Select(c => char.IsAsciiLetterOrDigit(c) ? c : '_')]), string.Empty);
-        var secret = specific.Length > 0 ? specific : Value("AUTH_CLIENT_SECRET", $"{client}-secret");
+        var secret = specific.Length > 0 ? specific : Value("AUTH_CLIENT_SECRET", $"{client}-secret");${clientId}
         return Cached(
             $"client:{client}",
-            () => RequestToken(new Dictionary<string, string> { ["grant_type"] = "client_credentials", ["client_id"] = client, ["client_secret"] = secret }));
+            () => RequestToken(new Dictionary<string, string> { ["grant_type"] = "client_credentials", ["client_id"] = ${opaqueClients ? 'clientId' : 'client'}, ["client_secret"] = secret }));
     }`;
 }
 

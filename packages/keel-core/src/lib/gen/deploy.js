@@ -47,7 +47,7 @@ import { dashboardUid } from './observability-assets.js';
 import { cognitoMockConfig } from './identity-provisioning.js';
 import { realmSpec, tokenUrl, providerInternalUrl } from './identity-realm.js';
 import { kebabCase } from './naming.js';
-import { identityProvider, realmImportProvider } from './identity-providers.js';
+import { credentialClientId, identityProvider, realmImportProvider } from './identity-providers.js';
 import { RUNTIME_RESOLUTION, composeResolution, HOSTPATH_HELPER } from './infra-scripts.js';
 
 /**
@@ -597,7 +597,7 @@ function postmanEnvironment(model, platform) {
     // Cliente público con direct access grants: sin secreto, pero la colección lo manda. Sin
     // roles no existe (realmSpec): no hay usuarios a los que pedirles un token.
     if (spec.userClient) {
-      add('clientId', spec.userClient);
+      add('clientId', credentialClientId(model.stack.auth, spec.userClient));
       add('clientSecret', '');
     }
     for (const user of spec.users) {
@@ -605,7 +605,7 @@ function postmanEnvironment(model, platform) {
       add(`password_${kebabCase(user.username)}`, spec.password, true);
     }
     for (const client of spec.serviceClients) {
-      add(`clientId_${kebabCase(client.name)}`, client.name);
+      add(`clientId_${kebabCase(client.name)}`, credentialClientId(model.stack.auth, client.name));
       add(`clientSecret_${kebabCase(client.name)}`, client.secret, true);
       add(`scope_${kebabCase(client.name)}`, client.scopes.join(' '));
     }
@@ -614,7 +614,7 @@ function postmanEnvironment(model, platform) {
     // aquí se le da el que tiene la audiencia equivocada.
     const otherAudience = spec.m2mClients.find((client) => client.audience === 'wrong');
     if (otherAudience) {
-      add('clientId_other-audience', otherAudience.name);
+      add('clientId_other-audience', credentialClientId(model.stack.auth, otherAudience.name));
       add('clientSecret_other-audience', otherAudience.secret, true);
       add('scope_other-audience', otherAudience.scopes.join(' '));
     }

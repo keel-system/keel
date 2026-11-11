@@ -80,7 +80,8 @@ emite `email`.
   petición: `sub`, `email` y un elemento de `cognito:groups` salieron del formulario. El comentario de `usesPersonaTokens` que
   lo descarta está desactualizado. Tres límites medidos: un parámetro ausente deja el literal `${email}` en el token, así que
   «un token sin ese claim» necesita su propio mapping; un parámetro repetido no devuelve token, así que varios valores no
-  entran por ahí; y un cliente sin mapping recibe un token válido sin `sub`. Sin medir: varios valores en un solo parámetro.
+  entran por ahí; y un cliente sin mapping recibe un token válido sin `sub`. Varios valores y la lista vacía, medidos en el
+  incremento 4.2: un mapping por aridad.
 - **T2 · `sub` en el emulador.** Es el nombre de usuario, y en Cognito real es un uuid: un escenario o una sonda que dependa de
   su forma no se vería.
 - **T3 · `client_id` opaco.** Al dejar de ser el nombre, se mueven los mapeos del emulador (`requestParam: 'client_id'`), el
@@ -174,7 +175,24 @@ Un diseño con Cognito tiene que poder llegar a verde en el pipeline, y el emula
 
 - **4.1 Emulador.** `client_id` opaco y determinista, `sub` uuid y `email` según P3, con T3 resuelta. **Medido con:**
   `identity-provisioning.test.js`. **Sabotaje:** volver al `client_id` igual al nombre deja de pasar.
+
+  Hecho el 2026-11-11. `opaqueClientId` (26 caracteres de `[a-z0-9]`, de un sha256 del nombre) y `emulatedSubject` (uuid con
+  forma de v5, de un sha1 del usuario) en `gen/identity-providers.js`; `credentialClientId` da el opaco en el emulador, en los
+  perfiles `local`, `develop` (default) y `test`, en `test-credentials.env` (`AUTH_TEST_CLIENT` y un `AUTH_CLIENT_ID_<CLIENTE>`
+  por cliente máquina, también los `test-m2m-*`) y en el environment de Postman de `deploy/`. El token de máquina lleva el id
+  en `client_id` y en `sub`. P3: `triggeredUserClaims` añade a los usuarios el claim de la identidad que el proveedor no pone
+  de serie (`email` → `<usuario>@example.com`, el correo del realm de Keycloak). El arnés de los cuatro manda
+  `AUTH_CLIENT_ID_<CLIENTE>` como `client_id`, solo con un proveedor de id opaco. Tres sabotajes (`client_id` = nombre, `sub`
+  = nombre, sin el claim de P3), cada uno en exactamente su caso. Lo emitido con `keycloak` y sin proveedor, idéntico en 4
+  generadores × 19 fixtures.
 - **4.2 Medir lo que falta de T1**: varios valores del claim y lista vacía.
+
+  Medido el 2026-11-11 contra mock-oauth2-server 6.0.1 (grant `client_credentials`, emparejando por un parámetro propio). Un
+  elemento plantilla (`["${vaults}"]`) con `vaults=a,b` da `["a,b"]`, y con `a","b` da `["a\",\"b"]`: la sustitución escapa,
+  no hay inyección de JSON. Un valor entero plantilla con `["a","b"]` da el TEXTO. Un parámetro vacío da `[""]`, no la lista
+  vacía; `[]` literal en el mapping sí. Y N elementos plantilla (`["${v1}","${v2}"]`) dan la lista de N, con el literal
+  `${v2}` si falta uno. **Conclusión para el 4.3:** la lista se pide con un mapping por aridad (0, 1, 2… valores), cada
+  valor en su parámetro; una aridad sin mapping se rechaza con su motivo.
 - **4.3 Arnés.** `tokenAs` y `tokenWithScope` también con Cognito, con un mapping por forma de claims, en los cuatro generadores
   y por capacidad del descriptor. Lo que no se pueda, rechazado con su motivo. **Medido con:** humo del arnés con `auth: cognito`
   y un diseño con identidad en el `sub`.
@@ -231,7 +249,7 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
 | 1. contrato del proveedor | hecha el 2026-11-10 (sin el 1.5, opcional) | Lo emitido, idéntico en 4 generadores × 19 fixtures × 3 valores de `auth`; `keel-core/test/token-cases.test.js` y `keel-go/test/identity-providers.test.js`, falsada con tres sabotajes; las seis suites |
 | 2. servidor equivalente | hecha: 2.1 y 2.2/2.3 en keel-spring y keel-nest (2026-11-10), keel-dotnet y keel-go (2026-11-11) | keel-spring: `token-check` (4 diseños) y sus 4 sabotajes. keel-nest: `test/token-contract.test.js` ejecuta lo emitido, 3 sabotajes, y `ts-check --auth=cognito` 13/13. keel-dotnet: `cs-check --fixtures` con cuatro variantes `*-cognito` y 3 sabotajes, cada uno en exactamente sus casos. keel-go: `go-check --token` (5 sujetos con gofmt, vet y staticcheck) 9/9 y 3 sabotajes, cada uno en exactamente sus casos. Lo emitido con `keycloak` y sin proveedor, idéntico salvo la prueba nueva |
 | 3. lo que debe cumplir el proveedor | hecha el 2026-11-11 | `keel-core/test/identity-support.test.js` (una prueba por exigencia, falsada con dos sabotajes), las redes de fase 3 de `keel-go/test/identity-providers.test.js` en los cuatro, `keel-recover/test/target.test.js`; las seis suites. Lo emitido con `keycloak`, idéntico salvo el documento nuevo |
-| 4. emulador fiel y arnés | pendiente | |
+| 4. emulador fiel y arnés | en curso: 4.1 y 4.2 hechos (2026-11-11) | 4.1: `identity-provisioning.test.js`, tres sabotajes cada uno en su caso, `compile-check asset-vault --auth=cognito`; lo emitido sin Cognito, idéntico. 4.2: medido contra mock-oauth2-server 6.0.1 |
 | 5. Cognito real | diferida (fuera del cierre) | |
 
 ## Para retomar

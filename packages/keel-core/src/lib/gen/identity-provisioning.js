@@ -27,6 +27,7 @@ import {
   testM2mClients,
   serviceClientSecret,
   secretEnvKey,
+  clientIdEnvKey,
   tokenUrl,
   userTestClient,
   usesPersonaTokens,
@@ -35,7 +36,7 @@ import {
   keycloakAdminCredentials,
   realmSpec
 } from './identity-realm.js';
-import { identityProvider, roleClaims, tokenContract } from './identity-providers.js';
+import { credentialClientId, emulatedSubject, identityProvider, roleClaims, tokenContract } from './identity-providers.js';
 
 /**
  * Clientes con asignación de client scopes, en el orden en que se emiten: primero
@@ -88,8 +89,9 @@ function credentialsEnv(model, platform) {
   }
   lines.push(`AUTH_TOKEN_URL=${tokenUrl(model)}`);
   if (usesUserClient(model)) {
-    lines.push(`AUTH_TEST_CLIENT=${userTestClient(model)}`, `AUTH_TEST_PASSWORD=${PASSWORD}`);
+    lines.push(`AUTH_TEST_CLIENT=${credentialClientId(model.stack.auth, userTestClient(model))}`, `AUTH_TEST_PASSWORD=${PASSWORD}`);
   }
+  const opaqueClients = tokenContract(model.stack.auth).opaqueClients;
 
   const clients = security?.serviceClients ?? [];
   const m2m = testM2mClients(model);
@@ -102,6 +104,12 @@ function credentialsEnv(model, platform) {
     );
     for (const client of clients) {
       lines.push(`${secretEnvKey(client.name)}=${serviceClientSecret(client.name)}`);
+    }
+    // El proveedor genera el id de cada cliente: es el que se manda como client_id y el que lleva el token. Con un pool
+    // real, aquí van los suyos, y los mismos en las variables SECURITY_CLIENT_ID_* del servicio.
+    if (opaqueClients) {
+      lines.push('', '# Id que el proveedor generó para cada cliente máquina (el client_id que se manda al pedir el token).');
+      for (const name of [...clients.map((client) => client.name), ...m2m]) lines.push(`${clientIdEnvKey(name)}=${credentialClientId(model.stack.auth, name)}`);
     }
   }
   if (security?.roles?.length) {
@@ -438,6 +446,8 @@ export function cognitoMockConfig(model) {
   const clientClaim = token.client.claims[0];
   const acceptedClaim = token.accepted ? { [token.accepted.claim]: token.accepted.value } : {};
   const { prefixedScopes, audienceInScopePrefix } = tokenContract(model.stack.auth);
+  const clientIdOf = (name) => credentialClientId(model.stack.auth, name);
+  const triggerClaims = triggeredUserClaims(model);
 
   // Un mapping por usuario, emparejado por `username` (el grant es ROPC, como con
   // Keycloak). El usuario sin roles emite el array vacío: sin él, «autenticado
@@ -446,11 +456,15 @@ export function cognitoMockConfig(model) {
     requestParam: 'username',
     match: user.username,
     claims: {
-      sub: user.username,
+      // El sub lo asigna el proveedor, y no es el nombre del usuario: un uuid (T2).
+      sub: emulatedSubject(user.username),
       [token.claims.principalClaim]: user.username,
       ...acceptedClaim,
       ...roleClaims(token.claims, user.roles),
-      [clientClaim]: spec.userClient,
+      [clientClaim]: clientIdOf(spec.userClient),
+      // El claim de la identidad, si el proveedor no lo pone de serie (P3): representa un pool con el disparador que el
+      // diseño necesita, y check y build ya avisan de que hace falta (identity-support.js).
+      ...Object.fromEntries(triggerClaims.map((claim) => [claim, emulatedClaimValue(claim, user.username)])),
       // El claim del alcance por recurso (`scoping.claim`), con el mismo valor que siembra el realm de Keycloak y
       // solo en los usuarios NO exentos. Sin él, con Cognito ningún usuario estaba acotado: el emulador emitía
       // `sub`, grupos y cliente, y un diseño con alcance no tenía titular que probar. En un pool real llega igual
@@ -459,7 +473,9 @@ export function cognitoMockConfig(model) {
     }
   }));
 
-  // Un mapping por cliente máquina, emparejado por `client_id`.
+  // Un mapping por cliente máquina, emparejado por `client_id` con el id que el proveedor generó para él, que es lo que
+  // manda el arnés (AUTH_CLIENT_ID_<CLIENTE> de test-credentials.env) y lo que lleva el token, en `client_id` y en `sub`.
+  // Con el nombre, el emulador escondía D3 y D4 (T3).
   //
   // La matriz de prueba conserva su significado bajo semántica Cognito, y la clave
   // está en el PREFIJO: como sus tokens de máquina no llevan `aud`, la audiencia se
@@ -470,9 +486,9 @@ export function cognitoMockConfig(model) {
   const machines = [...spec.serviceClients, ...spec.m2mClients].map((client) => {
     const resourceServer = client.audience === 'wrong' ? FOREIGN_RESOURCE_SERVER : spec.audience;
     const claims = {
-      sub: client.name,
+      sub: clientIdOf(client.name),
       ...acceptedClaim,
-      [clientClaim]: client.name
+      [clientClaim]: clientIdOf(client.name)
     };
     if (!audienceInScopePrefix && client.audience) claims.aud = client.audience === 'wrong' ? FOREIGN_RESOURCE_SERVER : spec.audience;
     // Sin scopes no hay claim `scope`: es el control de la matriz (`test-m2m-none`),
@@ -480,7 +496,7 @@ export function cognitoMockConfig(model) {
     if (client.scopes.length > 0) {
       claims.scope = client.scopes.map((scope) => (prefixedScopes ? `${resourceServer}/${scope}` : scope)).join(' ');
     }
-    return { requestParam: 'client_id', match: client.name, claims };
+    return { requestParam: 'client_id', match: clientIdOf(client.name), claims };
   });
 
   const config = {
@@ -497,4 +513,21 @@ export function cognitoMockConfig(model) {
     path: `infra/${provisioning.emulatorDir}/mock-oauth2-config.json`,
     content: `${JSON.stringify(config, null, 2)}\n`
   };
+}
+
+/**
+ * Los claims de usuario que el diseño lee del token y que el proveedor no pone de serie, sin contar el del alcance (va en
+ * los atributos del realm): hoy, el de la identidad (`email` en shop-api). Sin descriptor del token, ninguno.
+ */
+export function triggeredUserClaims(model) {
+  const native = identityProvider(model.stack?.auth).token.accessTokenClaims;
+  if (!native) return [];
+  return (model.security?.claimDemands ?? [])
+    .filter((demand) => demand.id === 'caller-identity' && demand.claim && !native.includes(demand.claim))
+    .map((demand) => demand.claim);
+}
+
+/** El valor de ese claim para un usuario de prueba: el correo con el que el realm de Keycloak da de alta a sus usuarios. */
+export function emulatedClaimValue(claim, username) {
+  return claim === 'email' ? `${username}@example.com` : username;
 }

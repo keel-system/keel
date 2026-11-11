@@ -109,6 +109,61 @@ test('con Cognito: el emulador pone el claim del alcance en los no exentos, y va
   assert.ok(checks[0].cmd.includes(`grep -qF '"desks":["billing"]'`), checks[0].cmd);
 });
 
+// Incremento 4.1 de PLAN-PROVEEDOR-IDENTIDAD.md: el emulador escondía D3 a D6 porque ponía `client_id` igual al nombre
+// del cliente y el nombre del usuario como `sub`. Ahora el id es opaco y el MISMO en el emulador, en las credenciales que
+// manda el arnés y en el perfil local del servicio; con el nombre, el servidor no traduciría nada y saldría verde igual.
+test('4.1: con Cognito el emulador emite un client_id opaco, el mismo que manda el arnés y que traduce el servicio', async () => {
+  const { credentialClientId } = await import('../src/lib/gen/identity-providers.js');
+  const model = modelFor('cognito', { scoping: { claim: 'desks', over: 'Desk.code', error: 'DESK_FORBIDDEN', exemptRoles: [], exemptClients: ['billing'], testResource: 'billing' } });
+  const files = byPath(identityProvisioningFiles(model, PROBE));
+  const mappings = JSON.parse(files['infra/cognito/mock-oauth2-config.json']).tokenCallbacks[0].requestMappings;
+  const machines = mappings.filter((mapping) => mapping.requestParam === 'client_id');
+  assert.deepEqual(machines.map((mapping) => mapping.match), ['billing', 'test-m2m-ok', 'test-m2m-no-scope', 'test-m2m-bad-aud', 'test-m2m-none'].map((name) => credentialClientId('cognito', name)));
+  for (const { match, claims } of machines) {
+    assert.match(match, /^[a-z0-9]{26}$/, 'con la forma de un app client de Cognito');
+    assert.equal(claims.client_id, match);
+    assert.equal(claims.sub, match, 'el sub de un token de máquina es el id del cliente');
+  }
+  const billing = credentialClientId('cognito', 'billing');
+  assert.notEqual(billing, 'billing');
+  // El arnés manda el id de test-credentials.env; el perfil local del servicio lo traduce con el mismo
+  // credentialClientId (security-config.test.js).
+  assert.match(files['infra/test-credentials.env'], new RegExp(`^AUTH_CLIENT_ID_BILLING=${billing}$`, 'm'));
+  assert.match(files['infra/test-credentials.env'], new RegExp(`^AUTH_CLIENT_ID_TEST_M2M_OK=${credentialClientId('cognito', 'test-m2m-ok')}$`, 'm'));
+  // El token de usuario lleva el id del cliente de usuario, el mismo que el arnés manda.
+  const user = mappings.find((mapping) => mapping.requestParam === 'username');
+  assert.match(files['infra/test-credentials.env'], new RegExp(`^AUTH_TEST_CLIENT=${user.claims.client_id}$`, 'm'));
+  assert.notEqual(user.claims.client_id, 'ticket-desk-probe-test');
+
+  // Con Keycloak nada de esto cambia: el id es el nombre y no hay AUTH_CLIENT_ID_*.
+  const keycloak = byPath(identityProvisioningFiles(modelFor('keycloak'), PROBE));
+  assert.doesNotMatch(keycloak['infra/test-credentials.env'], /AUTH_CLIENT_ID_/);
+});
+
+test('4.1 (T2): el sub de un usuario en el emulador es un uuid determinista, no su nombre', () => {
+  const read = () => JSON.parse(byPath(identityProvisioningFiles(modelFor('cognito'), PROBE))['infra/cognito/mock-oauth2-config.json']).tokenCallbacks[0].requestMappings;
+  const users = read().filter((mapping) => mapping.requestParam === 'username');
+  const subs = users.map((user) => user.claims.sub);
+  for (const [i, user] of users.entries()) {
+    assert.match(subs[i], /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.equal(user.claims.username, user.match, 'el principal sigue siendo el nombre del usuario');
+  }
+  assert.equal(new Set(subs).size, subs.length, 'dos usuarios no comparten sub');
+  assert.deepEqual(read().filter((mapping) => mapping.requestParam === 'username').map((user) => user.claims.sub), subs, 'determinista');
+});
+
+// P3: Cognito no pone `email` en el access token. El emulador tampoco, salvo que el diseño lo lea: entonces representa
+// un pool con el disparador desplegado (y check/build ya avisan de que hace falta).
+test('4.1 (P3): el emulador pone el claim de la identidad solo si el diseño lo lee y el proveedor no lo da de serie', () => {
+  const claimsOf = (security) =>
+    JSON.parse(byPath(identityProvisioningFiles(modelFor('cognito', security), PROBE))['infra/cognito/mock-oauth2-config.json']).tokenCallbacks[0].requestMappings.find(
+      (mapping) => mapping.requestParam === 'username' && mapping.match === 'agent'
+    ).claims;
+  const byEmail = { claimDemands: [{ id: 'caller-identity', claim: 'email', holder: 'user' }] };
+  assert.equal(claimsOf(byEmail).email, 'agent@example.com', 'el correo con el que Keycloak da de alta al usuario');
+  assert.equal(claimsOf({}).email, undefined, 'sin exigencia, como el token real');
+});
+
 test('sin protocolo de token no hay proveedor que aprovisionar', () => {
   assert.deepEqual(identityProvisioningFiles(modelFor('keycloak', { protocol: 'api-key' }), PROBE), []);
   assert.deepEqual(identityProvisioningFiles({ ...modelFor('keycloak'), layersPresent: {} }, PROBE), []);

@@ -10,14 +10,16 @@ API de Cognito**, es un servidor OAuth2 que emite tokens con su forma.
 Para pedir un token, OAuth2 estándar (es lo mismo que hace `AbstractFlowIT`):
 
 ```bash
-# Usuario (el username ES el rol; ver infra/test-credentials.env)
+set -a; . infra/test-credentials.env; set +a
+
+# Usuario (el username ES el rol)
 TOKEN=$(curl -s -X POST http://localhost:9229/<servicio>/token \
-    -d 'grant_type=password' -d 'client_id=<servicio>-spring-test' \
+    -d 'grant_type=password' -d "client_id=$AUTH_TEST_CLIENT" \
     -d 'username=<rol>' -d 'password=password' | jq -r .access_token)
 
-# Cliente máquina
+# Cliente máquina: el client_id es el id que el pool generó para él (AUTH_CLIENT_ID_<CLIENTE>), no su nombre
 M2M=$(curl -s -X POST http://localhost:9229/<servicio>/token \
-    -d 'grant_type=client_credentials' -d 'client_id=<cliente>' \
+    -d 'grant_type=client_credentials' -d "client_id=$AUTH_CLIENT_ID_<CLIENTE>" \
     -d 'client_secret=<cliente>-secret' | jq -r .access_token)
 ```
 
@@ -27,8 +29,11 @@ Decodifica y comprueba la forma, que es lo que hace que local prediga producció
 echo "$TOKEN" | cut -d. -f2 | base64 -d | jq
 ```
 
-- Token de usuario: `cognito:groups` con sus roles, `iss` = `http://localhost:9229/<servicio>`.
-- Token de máquina: `scope` **prefijado** (`<servicio>/<scope>`), `client_id`, y **sin `aud`**.
+- Token de usuario: `cognito:groups` con sus roles, `username` = el rol, `sub` = un uuid (no el nombre) e
+  `iss` = `http://localhost:9229/<servicio>`. Sin `email`, salvo que el diseño lo lea: entonces el emulador
+  representa un pool con el disparador que lo añade (`docs/keel/identity-contract.md`).
+- Token de máquina: `scope` **prefijado** (`<servicio>/<scope>`), `client_id` y `sub` = el id opaco del cliente, y
+  **sin `aud`**. El perfil `local` lleva esos mismos ids en `security.client-ids`.
 
 Si el pool hiciera falta de verdad (probar el alta de usuarios, MFA, políticas de
 contraseña), eso ya no es local: es Cognito real, abajo.

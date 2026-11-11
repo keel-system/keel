@@ -12,6 +12,7 @@
 // puede importar una clase del servicio.
 
 import { PERSONA_SUB_MAX, PERSONA_SUB_TOO_LONG } from '@keel-system/keel-core/gen/identity-realm';
+import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { usesConditionalWrites } from '@keel-system/keel-core/gen/conditional-writes';
 import { paymentHarnessImports, paymentHarnessSection } from './payments-harness.js';
 import { javaFile, javaPath } from './render.js';
@@ -6110,6 +6111,8 @@ ${clientKeys}        throw new IllegalArgumentException("Cliente de servicio no 
 `;
   }
 
+  // Con un proveedor que genera el id de cada cliente, el client_id que se manda es ese id, no el nombre (T3).
+  const opaqueClients = tokenContract(model.stack?.auth).opaqueClients;
   const serviceCred = model.security?.serviceAuth
     ? `
     /**
@@ -6126,10 +6129,19 @@ ${clientKeys}        throw new IllegalArgumentException("Cliente de servicio no 
     protected String serviceCredential(String client) {
         return cachedToken("client:" + client, () ->
             requestToken("grant_type=client_credentials"
-                + "&client_id=" + client
+                + "&client_id=" + ${opaqueClients ? 'clientId(client)' : 'client'}
                 + "&client_secret=" + clientSecret(client)));
     }
-
+${
+  opaqueClients
+    ? `
+    /** El id que el proveedor generó para el cliente (\`AUTH_CLIENT_ID_&lt;CLIENTE&gt;\`); sin él, el nombre. */
+    private static String clientId(String client) {
+        return env("AUTH_CLIENT_ID_" + client.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "_"), client);
+    }
+`
+    : ''
+}
     private static String clientSecret(String client) {
         String key = "AUTH_CLIENT_SECRET_" + client.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "_");
         String specific = env(key, null);

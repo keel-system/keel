@@ -21,6 +21,10 @@ import { loadService } from '@keel-system/keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { AUTH } from '../src/lib/stack-catalog.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
+import { credentialClientId } from '@keel-system/keel-core/gen/identity-providers';
+
+// El emulador empareja a cada cliente máquina por el id que Cognito le habría generado (T3), no por su nombre.
+const idOf = (name) => credentialClientId('cognito', name);
 
 const fixtureDir = path.join(FIXTURES_DIR, 'product-catalog');
 const PROJECT = 'services/product-catalog-spring';
@@ -101,10 +105,11 @@ test('cognito: el emulador emite tokens con la forma de Cognito, derivados del d
   // Cognito de verdad, y SIN `aud`, que es lo que sus tokens de client_credentials no
   // llevan. Un emulador más cómodo dejaría verde un servicio que en producción
   // devuelve 403 a todas las máquinas.
-  const machine = byMatch['pricing-service'];
+  const machine = byMatch[idOf('pricing-service')];
   assert.equal(machine.requestParam, 'client_id');
   assert.equal(machine.claims.scope, 'product-catalog/product:read');
-  assert.equal(machine.claims.client_id, 'pricing-service');
+  assert.equal(machine.claims.client_id, idOf('pricing-service'));
+  assert.notEqual(idOf('pricing-service'), 'pricing-service');
   assert.ok(!('aud' in machine.claims), JSON.stringify(machine.claims));
 });
 
@@ -116,12 +121,12 @@ test('cognito: la matriz M2M conserva su significado sin claim aud', () => {
   const config = JSON.parse(read('infra/cognito/mock-oauth2-config.json'));
   const byMatch = Object.fromEntries(config.tokenCallbacks[0].requestMappings.map((m) => [m.match, m]));
 
-  assert.equal(byMatch['test-m2m-ok'].claims.scope, 'product-catalog/product:read');
-  assert.equal(byMatch['test-m2m-bad-aud'].claims.scope, 'audiencia-ajena/product:read');
+  assert.equal(byMatch[idOf('test-m2m-ok')].claims.scope, 'product-catalog/product:read');
+  assert.equal(byMatch[idOf('test-m2m-bad-aud')].claims.scope, 'audiencia-ajena/product:read');
   // Sin scopes no hay claim: su AUSENCIA es el control, y un claim vacío no
   // significaría lo mismo.
-  assert.ok(!('scope' in byMatch['test-m2m-no-scope'].claims));
-  assert.ok(!('scope' in byMatch['test-m2m-none'].claims));
+  assert.ok(!('scope' in byMatch[idOf('test-m2m-no-scope')].claims));
+  assert.ok(!('scope' in byMatch[idOf('test-m2m-none')].claims));
 });
 
 test('cognito: el código generado absorbe las dos rarezas del proveedor', () => {

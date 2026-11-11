@@ -69,6 +69,11 @@ export function secretEnvKey(clientName) {
   return `AUTH_CLIENT_SECRET_${clientName.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
 }
 
+/** Clave del id del cliente en test-credentials.env (`AUTH_CLIENT_ID_<CLIENTE>`), solo con un proveedor que genera ese id. */
+export function clientIdEnvKey(clientName) {
+  return `AUTH_CLIENT_ID_${clientName.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+}
+
 /**
  * Sondeos de `validate-infra.sh` para el ALCANCE POR RECURSO: cada usuario que debe llevar el
  * claim lo lleva de verdad en su token.

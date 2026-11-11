@@ -17,6 +17,7 @@
 
 import { closingCredentialOf, usesTokenProtocol } from '@keel-system/keel-core/gen/access-plan';
 import { usesIdentityHarness } from '@keel-system/keel-core/gen/features';
+import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { PERSONA_SUB_MAX, PERSONA_SUB_TOO_LONG, keycloakAdminCredentials, secondUserOf, tokenUrl, TEST_USER_PASSWORD, userTestClient, usesPersonaTokens, usesScopedTokens } from '@keel-system/keel-core/gen/identity-realm';
 import { goString } from '../lib/go-source.js';
 
@@ -97,7 +98,7 @@ export function credentialsBody(model) {
   const parts = [readerGo(), tokenCacheGo(model)];
   if (userTokens(model)) parts.push(passwordGrantGo(model));
   if (roles(model).length > 0) parts.push(tokenForGo());
-  if (machineTokens(model)) parts.push(serviceCredentialGo());
+  if (machineTokens(model)) parts.push(serviceCredentialGo(model));
   if (model.security.scoping) parts.push(scopedResourceGo(model));
   if (usesPersonaTokens(model)) parts.push(personaGo(model));
   if (usesScopedTokens(model)) parts.push(scopedTokenGo(model));
@@ -287,8 +288,10 @@ function secondUserGo() {
   return `role + ${goString(suffix)}`;
 }
 
-function serviceCredentialGo() {
-  return String.raw`// ServiceCredential es el token de máquina (client_credentials) del cliente client: uno de security.serviceClients o de
+function serviceCredentialGo(model) {
+  // Con un proveedor que genera el id de cada cliente, el client_id que se manda es ese id (AUTH_CLIENT_ID_<CLIENTE>), no el nombre.
+  if (!tokenContract(model.stack?.auth).opaqueClients) {
+    return String.raw`// ServiceCredential es el token de máquina (client_credentials) del cliente client: uno de security.serviceClients o de
 // la matriz de prueba (test-m2m-*). El secreto sale de infra/test-credentials.env. Se llama en cada petición.
 func (s *Scenario) ServiceCredential(client string) string {
 	s.Helper()
@@ -314,7 +317,39 @@ func clientSecretVariable(client string) string {
 		return '_'
 	}, strings.ToUpper(client))
 }`;
+  }
+  return String.raw`// ServiceCredential es el token de máquina (client_credentials) del cliente client: uno de security.serviceClients o de
+// la matriz de prueba (test-m2m-*). El secreto sale de infra/test-credentials.env, y el client_id es el id que el
+// proveedor generó para el cliente (AUTH_CLIENT_ID_<CLIENTE>); sin él, el nombre. Se llama en cada petición.
+func (s *Scenario) ServiceCredential(client string) string {
+	s.Helper()
+	secret := credential("AUTH_CLIENT_SECRET_"+clientVariableSuffix(client), "")
+	if secret == "" {
+		secret = credential("AUTH_CLIENT_SECRET", client+"-secret")
+	}
+	clientID := credential("AUTH_CLIENT_ID_"+clientVariableSuffix(client), client)
+	token, err := cachedToken("client:"+client, func() (string, error) {
+		return requestToken(s.Context(), url.Values{"grant_type": {"client_credentials"}, "client_id": {clientID}, "client_secret": {secret}})
+	})
+	if err != nil {
+		s.Fatalf("credencial de máquina de %q: %v", client, err)
+	}
+	return token
 }
+
+${CLIENT_VARIABLE_SUFFIX_GO}`;
+}
+
+const CLIENT_VARIABLE_SUFFIX_GO = String.raw`// clientVariableSuffix es el sufijo de las variables de un cliente en infra/test-credentials.env: su nombre en
+// mayúsculas, con '_' en lo que no es letra ni dígito.
+func clientVariableSuffix(client string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '_'
+	}, strings.ToUpper(client))
+}`;
 
 function scopedResourceGo(model) {
   const { claim, exemptRoles, testResource } = model.security.scoping;

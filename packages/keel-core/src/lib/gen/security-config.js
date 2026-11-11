@@ -57,7 +57,8 @@ export function translatedClients(model) {
 export function clientIdLines(model, profile) {
   const clients = translatedClients(model);
   if (clients.length === 0) return [];
-  const value = (client) => (profile === 'test' ? credentialClientId(model.stack.auth, client.name) : envValue(profile, client.variable, client.name));
+  // Fuera de production, el id del emulador de infra/ y deploy/: el mismo que emite en el token (credentialClientId).
+  const value = (client) => (profile === 'test' ? credentialClientId(model.stack.auth, client.name) : envValue(profile, client.variable, credentialClientId(model.stack.auth, client.name)));
   return [
     '  # Id que el proveedor generó para cada cliente máquina del diseño; obligatorio en production (sin él la app no arranca).',
     '  client-ids:',

@@ -15,6 +15,8 @@
 // Lo de Cognito sale de su documentación y de leer el código, no de un pool real: lo que eso no demuestra está en la
 // fase 5 de PLAN-PROVEEDOR-IDENTIDAD.md, y lo emitido lo dice (`emulationMessage`).
 
+import { createHash } from 'node:crypto';
+
 /** Los claims de un access token de Cognito sin disparador de pre-generación. */
 const COGNITO_ACCESS_TOKEN_CLAIMS = [
   'sub',
@@ -200,9 +202,30 @@ export function tokenContract(auth) {
   };
 }
 
-/** El valor del claim del cliente para un cliente declarado en las pruebas: el nombre, o un id opaco si el proveedor lo genera. */
+/**
+ * El id que un proveedor que los genera le daría a un cliente, con la forma de un app client de Cognito (26 caracteres en
+ * minúscula y dígitos) y DETERMINISTA: el emulador, los perfiles `local` y `develop`, `test-credentials.env` y la prueba
+ * emitida tienen que dar el mismo sin hablar entre ellos. No contiene el nombre, para que nada pueda leerlo de él: es lo
+ * que escondía el emulador mientras el id era el nombre (T3 de PLAN-PROVEEDOR-IDENTIDAD.md).
+ */
+export function opaqueClientId(clientName) {
+  const digest = createHash('sha256').update(`keel-client:${clientName}`).digest();
+  return [...digest.subarray(0, 26)].map((byte) => '0123456789abcdefghijklmnopqrstuvwxyz'[byte % 36]).join('');
+}
+
+/** El valor del claim del cliente para un cliente declarado: el nombre, o el id opaco si el proveedor lo genera. */
 export function credentialClientId(auth, clientName) {
-  return identityProvider(auth).token.client.valueIsDeclaredName ? clientName : `opaque-id-of-${clientName}`;
+  return identityProvider(auth).token.client.valueIsDeclaredName ? clientName : opaqueClientId(clientName);
+}
+
+/**
+ * El `sub` de un usuario en el emulador: un uuid, como el que asigna el proveedor real, y determinista por el nombre del
+ * usuario. Con el nombre como `sub`, un escenario o una sonda que dependiera de su forma no se vería (T2).
+ */
+export function emulatedSubject(username) {
+  const hex = createHash('sha1').update(`keel-user:${username}`).digest('hex');
+  const variant = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
 // ─── La referencia ejecutable de cada regla ──────────────────────────────────

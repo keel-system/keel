@@ -4,6 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { clientIdLines, needsAudience, securityYaml, translatedClients } from '../src/lib/gen/security-config.js';
+import { credentialClientId } from '../src/lib/gen/identity-providers.js';
 
 const SECURITY = {
   protocol: 'oidc',
@@ -53,13 +54,15 @@ test('un cliente exento y con identidad 1:1 sale una sola vez', () => {
   assert.equal(translatedClients(modelWith('cognito', { ...EXEMPT, ...ONE_TO_ONE })).filter((client) => client.name === 'batch-runner').length, 1);
 });
 
-test('P2: la variable es obligatoria en production y tiene valor en los demás perfiles', () => {
+test('P2: la variable es obligatoria en production; fuera, el id que emite el emulador (T3)', () => {
   const model = modelWith('cognito', EXEMPT);
   const entry = (profile) => clientIdLines(model, profile).at(-1).trim();
+  const id = credentialClientId('cognito', 'batch-runner');
+  assert.match(id, /^[a-z0-9]{26}$/);
   assert.equal(entry('production'), 'batch-runner: ${SECURITY_CLIENT_ID_BATCH_RUNNER}');
-  assert.equal(entry('develop'), 'batch-runner: ${SECURITY_CLIENT_ID_BATCH_RUNNER:batch-runner}');
-  assert.equal(entry('local'), 'batch-runner: batch-runner');
-  assert.equal(entry('test'), 'batch-runner: opaque-id-of-batch-runner');
+  assert.equal(entry('develop'), `batch-runner: \${SECURITY_CLIENT_ID_BATCH_RUNNER:${id}}`);
+  assert.equal(entry('local'), `batch-runner: ${id}`);
+  assert.equal(entry('test'), `batch-runner: ${id}`);
 });
 
 test('sin nada que traducir no sale la clave', () => {
