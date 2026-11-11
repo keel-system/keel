@@ -12,7 +12,7 @@
 // puede importar una clase del servicio.
 
 import { PERSONA_SUB_MAX, PERSONA_SUB_TOO_LONG } from '@keel-system/keel-core/gen/identity-realm';
-import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
+import { credentialClientId, identityProvider, tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { usesConditionalWrites } from '@keel-system/keel-core/gen/conditional-writes';
 import { paymentHarnessImports, paymentHarnessSection } from './payments-harness.js';
 import { javaFile, javaPath } from './render.js';
@@ -46,6 +46,16 @@ import {
   PRINT_WRAPPER
 } from '@keel-system/keel-core/gen/mongo-probes';
 import { tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens } from './auth-provisioning.js';
+import {
+  EMULATOR_MAX_SCOPE_VALUES,
+  EMULATOR_PARAMS,
+  EMULATOR_PERSONA_CLAIM_UNKNOWN,
+  EMULATOR_SCOPE_VALUES_EXCEEDED,
+  emulatorPersonaClaims,
+  personaTokenMechanism,
+  scopedTokenMechanism,
+  usesRealmAdmin
+} from '@keel-system/keel-core/gen/identity-realm';
 // La forma de la tabla y el SQL con el que el arnés fabrica la precondición del rescate:
 // fuente única con scripts/claim-check.js, que ejecuta AMBOS contra el motor junto al reclamo
 // que los lee. Copiar la derivación en vez de compartirla hacía que el check midiera su propia
@@ -648,6 +658,7 @@ exit 1
  */
 function personaTokenSection(model) {
   if (!usesPersonaTokens(model)) return '';
+  if (personaTokenMechanism(model) === 'emulator') return emulatorPersonaSection(model);
   return `
     /**
      * Token de una PERSONA del documento de escenarios: el usuario cuyo claim {@code sub} es
@@ -815,6 +826,7 @@ function personaTokenSection(model) {
  */
 function scopedTokenSection(model) {
   if (!usesScopedTokens(model)) return '';
+  if (scopedTokenMechanism(model) === 'emulator') return emulatorScopedSection(model);
   const { claim } = model.security.scoping;
   return `
     /**
@@ -897,12 +909,124 @@ function scopedTokenSection(model) {
 }
 
 /**
+ * `tokenAs` contra el EMULADOR del proveedor (incremento 4.3 de PLAN-PROVEEDOR-IDENTIDAD.md): no hay usuarios que dar de
+ * alta, la persona viaja en la petición con los parámetros de `EMULATOR_PARAMS` y la forma de `emulatorPersonaShape`.
+ * La referencia de lo que manda es `emulatorPersonaForm`, y su red en vivo, `emulator-check` de keel-core.
+ */
+function emulatorPersonaSection(model) {
+  const P = EMULATOR_PARAMS;
+  const claims = emulatorPersonaClaims(model);
+  const userClient = credentialClientId(model.stack.auth, userTestClient(model));
+  return `
+    /**
+     * Token de una PERSONA del documento de escenarios: el usuario cuyo claim {@code sub} es
+     * exactamente {@code sub}, con los claims de {@code claims}. Un valor {@code null} QUITA ese claim
+     * («el token de ana sin email»), y un valor que el tipo del campo no admite viaja tal cual.
+     *
+     * <p>El emulador del proveedor no guarda usuarios: la persona viaja en la petición, y cada forma
+     * de token (con rol o sin él, y qué claims lleva) es un mapping de
+     * {@code infra/${identityProvider(model.stack.auth).provisioning.emulatorDir}/mock-oauth2-config.json}. Por eso solo admite los
+     * claims que el diseño lee del token (${claims.length > 0 ? claims.map((claim) => `{@code ${claim}}`).join(', ') : 'ninguno además del {@code sub}'}).
+     *
+     * <p><b>Llámalo en cada petición</b>, igual que {@code tokenFor}: la caché renueva por {@code exp}.
+     */
+    protected String tokenAs(String sub, Map<String, String> claims) {
+        return tokenAs(sub, null, claims);
+    }
+
+    /** Lo mismo, con un rol concedido a la persona (un operador de back-office). */
+    protected String tokenAs(String sub, String role, Map<String, String> claims) {
+        if (claims.containsKey("sub")) {
+            throw new IllegalArgumentException("El sub de la persona va en el primer argumento, no entre los claims");
+        }
+        java.util.TreeMap<String, String> wanted = new java.util.TreeMap<>();
+        claims.forEach((name, value) -> {
+            if (value != null) {
+                wanted.put(name, value);
+            }
+        });
+        for (String name : wanted.keySet()) {
+            if (!PERSONA_CLAIMS.contains(name)) {
+                throw new IllegalArgumentException("tokenAs: " + name + ": " + ${JSON.stringify(EMULATOR_PERSONA_CLAIM_UNKNOWN)});
+            }
+        }
+        String key = "persona|" + sub + "|" + role + "|" + wanted;
+        return cachedToken(key, () -> {
+            StringBuilder form = new StringBuilder("grant_type=password")
+                .append("&client_id=").append(personaEncode(env("AUTH_TEST_CLIENT", "${userClient}")))
+                .append("&username=").append(personaEncode(sub))
+                .append("&password=").append(personaEncode(env("AUTH_TEST_PASSWORD", "password")))
+                .append("&${P.persona}=").append(personaEncode((role != null ? "role" : "norole") + ":" + String.join(",", wanted.keySet())))
+                .append("&${P.sub}=").append(personaEncode(sub));
+            if (role != null) {
+                form.append("&${P.role}=").append(personaEncode(role));
+            }
+            wanted.forEach((name, value) -> form.append("&${P.claimPrefix}").append(name).append('=').append(personaEncode(value)));
+            return requestToken(form.toString());
+        });
+    }
+
+    /** Los claims que una persona puede llevar en el emulador: los que el diseño lee del token. */
+    private static final java.util.Set<String> PERSONA_CLAIMS = java.util.Set.of(${claims.map((claim) => JSON.stringify(claim)).join(', ')});
+`;
+}
+
+/** `tokenWithScope` contra el EMULADOR: un mapping por aridad, cada valor en su parámetro (`emulatorScopedForm`). */
+function emulatorScopedSection(model) {
+  const P = EMULATOR_PARAMS;
+  const { claim } = model.security.scoping;
+  const userClient = credentialClientId(model.stack.auth, userTestClient(model));
+  return `
+    /**
+     * Token de un usuario del rol {@code role} cuyo claim {@code ${claim}} enumera EXACTAMENTE
+     * {@code values}; sin valores, el usuario del rol SIN el claim. Es lo que necesita «un titular cuyo
+     * ${claim} es ["OTRO"]»: {@link #tokenFor(String)} trae siempre {@link #scopedResource()}.
+     *
+     * <p>El emulador del proveedor lo da sin estado: un mapping por cantidad de valores, hasta
+     * ${EMULATOR_MAX_SCOPE_VALUES}. El nombre del titular es el mismo que con Keycloak ({@code scoped-<rol>-<huella>}).
+     *
+     * <p><b>Llámalo en cada petición</b>, igual que {@code tokenFor}: la caché renueva por {@code exp}.
+     */
+    protected String tokenWithScope(String role, String... values) {
+        List<String> wanted = java.util.Arrays.stream(values).distinct().sorted().toList();
+        if (wanted.size() > ${EMULATOR_MAX_SCOPE_VALUES}) {
+            throw new IllegalArgumentException("tokenWithScope: " + wanted.size() + " valores: " + ${JSON.stringify(EMULATOR_SCOPE_VALUES_EXCEEDED)});
+        }
+        String username = "scoped-" + role + "-" + Integer.toHexString(String.join("\\n", wanted).hashCode());
+        return cachedToken("scope:" + username, () -> {
+            StringBuilder form = new StringBuilder("grant_type=password")
+                .append("&client_id=").append(personaEncode(env("AUTH_TEST_CLIENT", "${userClient}")))
+                .append("&username=").append(personaEncode(username))
+                .append("&password=").append(personaEncode(env("AUTH_TEST_PASSWORD", "password")))
+                .append("&${P.scoped}=").append(wanted.size())
+                .append("&${P.user}=").append(personaEncode(username))
+                .append("&${P.role}=").append(personaEncode(role));
+            for (int i = 0; i < wanted.size(); i++) {
+                form.append("&${P.valuePrefix}").append(i + 1).append('=').append(personaEncode(wanted.get(i)));
+            }
+            return requestToken(form.toString());
+        });
+    }
+`;
+}
+
+/**
  * La API de administración del realm, que comparten {@code tokenAs} (personas) y
  * {@code tokenWithScope} (el claim del alcance): token del realm master, peticiones y el id de un
  * usuario por su nombre.
  */
 function keycloakAdminSection(model) {
-  if (!usesPersonaTokens(model) && !usesScopedTokens(model)) return '';
+  if (!usesRealmAdmin(model)) {
+    // Sin la API de administración, el emulador solo necesita codificar la petición.
+    return personaTokenMechanism(model) === 'emulator' || scopedTokenMechanism(model) === 'emulator'
+      ? `
+
+    private static String personaEncode(String value) {
+        return java.net.URLEncoder.encode(value, java.nio.charset.StandardCharsets.UTF_8);
+    }
+`
+      : '';
+  }
   return `
     /** El id del usuario con ese username (Keycloak lo guarda en minúsculas), o null. */
     private static String personaUserId(String admin, String username) {
