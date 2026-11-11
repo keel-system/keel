@@ -8,6 +8,7 @@
 //   · edge_test.go (interna): lo que no se alcanza desde fuera sin lógica del agente — un pánico, un error sin
 //     traducir y un error del dominio con y sin mensaje.
 
+import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { FRAMEWORK_RESPONSES as FW, DOMAIN_ERROR_RESPONSES, missingParameterMessage, missingPartMessage } from '@keel-system/keel-core/gen/api-errors';
@@ -486,6 +487,15 @@ func bearer(t *testing.T, claims map[string]any) http.Header {
  * Las pruebas de la seguridad de la API, con las peticiones de keel-core (securityCases): las mismas que piden las de
  * keel-nest y keel-dotnet.
  */
+/**
+ * Los claims del token del 403: ninguna authority, y el claim con el que el proveedor marca el token como access token
+ * (sin él, el servidor respondería 401 y no 403).
+ */
+function bareClaims(model) {
+  const { accepted } = tokenContract(model.stack?.auth);
+  return `map[string]any{"sub": "keel-test"${accepted ? `, ${goString(accepted.claim)}: ${goString(accepted.value)}` : ''}}`;
+}
+
 function securityTests(model) {
   const cases = securityCases(model, securityPlan(model));
   if (!cases) return [];
@@ -542,7 +552,7 @@ ${anonymous.map((entry) => `\t\t{${goString(entry.method)}, ${goString(entry.url
     tests.push(`func TestUnaCredencialValidaSinLoQueExigeLaReglaEs403(t *testing.T) {
 	server := newServer(t)
 	// ${cases.forbidden.method} ${cases.forbidden.url} exige ${cases.forbidden.authorities.join(' o ')}.
-	got := send(t, server, ${goString(cases.forbidden.method)}, ${goString(cases.forbidden.url)}, "", bearer(t, map[string]any{"sub": "keel-test"}))
+	got := send(t, server, ${goString(cases.forbidden.method)}, ${goString(cases.forbidden.url)}, "", bearer(t, ${bareClaims(model)}))
 	expectError(t, got, ${forbidden})
 }`);
   }

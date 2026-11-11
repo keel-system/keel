@@ -229,7 +229,7 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
 | Fase | Estado | Medido con |
 |---|---|---|
 | 1. contrato del proveedor | hecha el 2026-11-10 (sin el 1.5, opcional) | Lo emitido, idéntico en 4 generadores × 19 fixtures × 3 valores de `auth`; `keel-core/test/token-cases.test.js` y `keel-go/test/identity-providers.test.js`, falsada con tres sabotajes; las seis suites |
-| 2. servidor equivalente | a medias: 2.1 hecho y 2.2/2.3 en keel-spring, keel-nest (2026-11-10) y keel-dotnet (2026-11-11); falta keel-go | keel-spring: `token-check` (4 diseños) y sus 4 sabotajes. keel-nest: `test/token-contract.test.js` ejecuta lo emitido, 3 sabotajes, y `ts-check --auth=cognito` 13/13. keel-dotnet: `cs-check --fixtures` con cuatro variantes `*-cognito` y 3 sabotajes, cada uno en exactamente sus casos. Lo emitido con `keycloak` y sin proveedor, idéntico salvo la prueba nueva |
+| 2. servidor equivalente | hecha: 2.1 y 2.2/2.3 en keel-spring y keel-nest (2026-11-10), keel-dotnet y keel-go (2026-11-11) | keel-spring: `token-check` (4 diseños) y sus 4 sabotajes. keel-nest: `test/token-contract.test.js` ejecuta lo emitido, 3 sabotajes, y `ts-check --auth=cognito` 13/13. keel-dotnet: `cs-check --fixtures` con cuatro variantes `*-cognito` y 3 sabotajes, cada uno en exactamente sus casos. keel-go: `go-check --token` (5 sujetos con gofmt, vet y staticcheck) 9/9 y 3 sabotajes, cada uno en exactamente sus casos. Lo emitido con `keycloak` y sin proveedor, idéntico salvo la prueba nueva |
 | 3. lo que debe cumplir el proveedor | pendiente | |
 | 4. emulador fiel y arnés | pendiente | |
 | 5. Cognito real | diferida (fuera del cierre) | |
@@ -267,7 +267,13 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
   --only=asset-vault-cognito,mailer-one-to-one-cognito --sabotage=<id>`: el paso «cae en exactamente sus casos» en verde y la suite
   en rojo). RS-10 de keel-dotnet ya no lleva `azp` escrito a mano: con Cognito usa `client_id`, el id opaco y el mapa del perfil
   `test`, y por eso `client-translation` también lo tumba.
-- Siguiente: **fase 2, incremento 2.3 en keel-go**, en un contexto nuevo. Patrón: keel-dotnet (la prueba emitida ejecutada por
-  `go-check`, con el perfil `test` real si se puede). Hay que ampliar `ALLOWED_DIFFERENCES` de `keel-go/test/identity-providers.test.js`
-  (`api_test.go` ya está; el token del 403 está en `api-tests.js:545`), y RS-10 de keel-nest y keel-go sigue con `azp` escrito a
-  mano. P5 puede esperar a la fase 4.
+- keel-go (2026-11-11): sin estado global (§ 3 de PLAN-KEEL-GO.md), así que no hay un `ServiceClientIds`: el autenticador traduce el
+  cliente UNA vez y lo deja en `Principal.Client` (el nombre declarado si el id está en `Settings.ClientIDs`, si no vacío), y el
+  alcance y la identidad 1:1 leen ese campo; con `resolvedBy`, `client_id` crudo. El campo y `Settings.ClientIDs` solo existen con un
+  proveedor de id opaco, y `SettingsFrom` lee el mapa por los nombres del diseño (el `Config` de Go no enumera claves). La prueba
+  emitida es `internal/httpapi/token_contract_test.go` (paquete `httpapi`, por `callerIdentity`), con `config.Load` sobre el perfil
+  `test` embebido; `go-check --token` la ejecuta con sus sujetos y sabotajes (`test/helpers/token-sabotages.js`). RS-10 y
+  `caller_scope_test.go` con Cognito construyen el principal con `Client` puesto, que es lo que deja el autenticador.
+- Fase 2 hecha. RS-10 de keel-nest sigue con `azp` escrito a mano (con Cognito daría rojo: lo arreglado en keel-dotnet y keel-go).
+- Siguiente: **fase 3** (lo que debe cumplir el proveedor, sin red): `checkIdentitySupport` (3.1), `docs/keel/identity-contract.md`
+  (3.2, y ahí la descripción de `SECURITY_AUDIENCE`), las skills (3.3) y el rechazo de keel-recover (3.4). P5 puede esperar a la fase 4.

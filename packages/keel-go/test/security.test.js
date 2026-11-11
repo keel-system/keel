@@ -37,10 +37,11 @@ test('profile-directory: el principal, el JWT, el emisor de las pruebas y el mid
   const jwt = content(files, 'internal/platform/security/jwt.go');
   assert.match(jwt, /claims\["realm_access"\]/);
   assert.match(jwt, /"card-holder": \{"card:self"\}/);
-  // Cognito: grupos planos y el prefijo del resource server fuera del scope.
+  // Cognito: grupos planos, solo los scopes con el prefijo de este resource server (D2) y solo access tokens (D1).
   const cognito = content(plan('profile-directory', 'cognito').files, 'internal/platform/security/jwt.go');
   assert.match(cognito, /ClaimList\(claims, "cognito:groups"\)/);
-  assert.match(cognito, /strings\.Cut\(value, "\/"\)/);
+  assert.match(cognito, /strings\.CutPrefix\(value, resourceServer\+"\/"\)/);
+  assert.match(cognito, /kind != "access"/);
 });
 
 test('la seguridad va detrás del borde y delante del enrutador, y decide con el patrón que casaría', () => {

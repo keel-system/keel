@@ -278,8 +278,8 @@ const ALLOWED_DIFFERENCES = {
   ],
   go: [
     /^config\/parameters\/(develop|local|production|test)\/security\.yaml$/,
-    /^internal\/platform\/security\/jwt\.go$/,
-    /^internal\/httpapi\/api_test\.go$/,
+    /^internal\/platform\/security\/(jwt|principal|caller_scope|caller_scope_test)\.go$/,
+    /^internal\/httpapi\/(api_test|security|read_scope_test|token_contract_test)\.go$/,
     /^tests\/integration\/(credentials_test|flow_test|harness_smoke_test)\.go$/
   ]
 };

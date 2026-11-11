@@ -41,6 +41,9 @@ import { SCOPE_SABOTAGES, SCOPE_SUBJECT, applyScopeSabotage } from '../test/help
 import { STORAGE_SABOTAGES, STORAGE_SUBJECT, applySabotage as applyStorageSabotage } from '../test/helpers/storage-sabotages.js';
 import { CONDITIONAL_SABOTAGES, applySabotage as applyConditionalSabotage } from '../test/helpers/conditional-sabotages.js';
 import { READ_SCOPE_EDGE_SABOTAGES, applyReadScopeSabotage } from '../test/helpers/read-scope-sabotages.js';
+import { TOKEN_PACKAGES, TOKEN_SABOTAGES, TOKEN_SUBJECTS, applyTokenEdit } from '../test/helpers/token-sabotages.js';
+import { tokenCases } from '@keel-system/keel-core/gen/token-cases';
+import { tokenCaseTest } from '../src/scaffold/token-contract-test.js';
 
 // Los diseños de la lectura acotada cuyas pruebas emitidas se ejecutan y se falsan: el alcance por claim con caché y la
 // propiedad con roles exentos y forbidden (RS-9 a RS-11). Los cuatro compilan además en go-check --fixtures.
@@ -174,6 +177,14 @@ const version = go(process.cwd(), ['version']);
 const [, major, minor] = version.output.match(/go(\d+)\.(\d+)/) ?? [];
 if (!step('Go disponible', version.ok && (Number(major) > 1 || Number(minor) >= 27), version.ok ? version.output.trim() : 'instala Go: winget install GoLang.Go')) {
   process.exit(1);
+}
+
+// --token: solo el contrato del token con cada proveedor (PLAN-PROVEEDOR-IDENTIDAD.md), su prueba emitida y sus sabotajes.
+if (process.argv.includes('--token')) {
+  tokenFalsification();
+  const failed = results.filter((result) => !result.ok).length;
+  console.log(failed === 0 ? `\ngo-check --token: ${results.length}/${results.length} en verde.` : `\ngo-check --token: ${failed} paso(s) en rojo.`);
+  process.exit(failed === 0 ? 0 : 1);
 }
 
 // --read-scope: solo la lectura acotada (DSL 2.27), sus pruebas emitidas y sus sabotajes.
@@ -659,6 +670,73 @@ function readScopeFalsification() {
       const exact = [...new Set(failed)].sort().join(' ') === sabotage.fails;
       step(`lectura acotada falsada: ${sabotage.id} (${sabotage.what}) → ${sabotage.fails} en rojo, y solo eso`, !sabotaged.ok && exact, failed.join(' ').slice(0, 200) || sabotaged.output.slice(0, 300));
     }
+  }
+}
+
+/**
+ * El contrato del token: la prueba emitida token_contract_test.go (y las de la seguridad y la API) de cada sujeto en verde,
+ * y cada sabotaje en rojo con EXACTAMENTE los casos IDT-* de su defecto en los sujetos que toca, y nada más.
+ */
+function tokenFalsification() {
+  const subjects = new Map();
+  for (const subject of TOKEN_SUBJECTS) {
+    const dir = path.join(makeWorkspace('keel-go-token-'), subject.name);
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, subject.from));
+    manifest.service.name = subject.name;
+    subject.mutate?.(layers);
+    const { files, model } = planService({ manifest, layers, workspace: dir, stack: { auth: subject.auth } });
+    for (const file of files) {
+      const out = path.join(dir, file.path);
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      fs.writeFileSync(out, file.content);
+    }
+    const tidied = go(dir, ['mod', 'tidy']);
+    // El Go que solo sale con otro proveedor no lo ve el gofmt ni el staticcheck de las fixtures: aquí, sobre todo el módulo.
+    const unformatted = tidied.ok ? run('gofmt', ['-l', '.'], dir) : tidied;
+    const formatted = unformatted.ok && unformatted.stdout.trim() !== '' ? { ok: false, output: `sin gofmt: ${unformatted.stdout}` } : unformatted;
+    const vetted = formatted.ok ? go(dir, ['vet', ...TOKEN_PACKAGES]) : formatted;
+    const linted = vetted.ok ? go(dir, ['tool', 'staticcheck', ...TOKEN_PACKAGES]) : vetted;
+    const baseline = linted.ok ? go(dir, ['test', '-count=1', ...TOKEN_PACKAGES]) : linted;
+    const cases = tokenCases(model).length;
+    if (step(`token: las pruebas emitidas de ${subject.name} en verde (${cases} casos IDT-*)`, baseline.ok && cases > 0, baseline.ok ? '' : baseline.output.slice(0, 900))) {
+      subjects.set(subject.name, { dir, model });
+    }
+  }
+  for (const sabotage of TOKEN_SABOTAGES) {
+    const touched = [...new Set(sabotage.edits.map((edit) => edit.subject))];
+    if (!touched.every((name) => subjects.has(name))) {
+      step(`token falsado: ${sabotage.id}`, false, 'algún sujeto no salió en verde');
+      continue;
+    }
+    const originals = [];
+    let applies = true;
+    for (const edit of sabotage.edits) {
+      const file = path.join(subjects.get(edit.subject).dir, edit.file);
+      const original = fs.readFileSync(file, 'utf8');
+      const mutated = applyTokenEdit(edit, original);
+      if (!mutated) applies = false;
+      else {
+        originals.push([file, original]);
+        fs.writeFileSync(file, mutated);
+      }
+    }
+    const fell = [];
+    if (applies) {
+      for (const name of touched) {
+        const sabotaged = go(subjects.get(name).dir, ['test', '-count=1', ...TOKEN_PACKAGES]);
+        fell.push(...[...sabotaged.output.matchAll(/--- FAIL: (\S+)/g)].map((match) => `${name}:${match[1].split('/')[0]}`));
+      }
+    }
+    for (const [file, original] of originals) fs.writeFileSync(file, original);
+    if (!applies) {
+      step(`token falsado: ${sabotage.id}`, false, 'el sabotaje ya no se aplica a lo emitido');
+      continue;
+    }
+    const expected = touched
+      .flatMap((name) => tokenCases(subjects.get(name).model).filter((entry) => sabotage.defects.includes(entry.defect)).map((entry) => `${name}:${tokenCaseTest(entry.id)}`))
+      .sort();
+    const got = [...new Set(fell)].sort();
+    step(`token falsado: ${sabotage.id} (${sabotage.what}) → ${expected.join(' ')} en rojo, y solo eso`, expected.length > 0 && got.join(' ') === expected.join(' '), got.join(' ').slice(0, 300) || 'nada en rojo');
   }
 }
 

@@ -74,6 +74,7 @@ import * as endpoints from './endpoints.js';
 import * as restSupport from './rest-support.js';
 import * as security from './security.js';
 import * as apiTests from './api-tests.js';
+import * as tokenContractTest from './token-contract-test.js';
 import * as httpapi from './httpapi.js';
 import * as server from './server.js';
 import * as architecture from './architecture.js';
@@ -143,6 +144,8 @@ const GENERATORS = [
   restSupport,
   security,
   apiTests,
+  // El contrato con el token del proveedor de identidad (casos IDT-*).
+  tokenContractTest,
   httpapi,
   server,
   architecture,

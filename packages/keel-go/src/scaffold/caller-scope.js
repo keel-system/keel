@@ -7,6 +7,7 @@
 // Go, así que el claim no lo enumera nunca y un recurso sin valor queda fuera del alcance, como su null.
 
 import { usesCallerScope } from '@keel-system/keel-core/gen/features';
+import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { goString } from '../lib/go-source.js';
 import { applicationPath, layout, packageFile } from './render.js';
 
@@ -65,6 +66,14 @@ type CallerScope interface {
 function adapterGo(model) {
   const { claim, exemptRoles, exemptClients = [] } = model.security.scoping;
   const list = (values) => `[]string{${values.map(goString).join(', ')}}`;
+  // Con ids generados por el proveedor, el cliente lo reconoce el autenticador (Principal.Client): un usuario que se llamase
+  // como un cliente pasaría por él, y el id del claim no es el nombre declarado.
+  const { opaqueClients } = tokenContract(model.stack?.auth);
+  const recognized = opaqueClients
+    ? `reconocidos por el id que el proveedor generó para cada uno (security.client-ids, Principal.Client).
+// La exención es solo del alcance:`
+    : `reconocidos por el cliente de la credencial (azp,
+// client_id o el nombre del principal, el mismo criterio que la identidad del llamante). La exención es solo del alcance:`;
   return `
 // scopingClaim es el claim que enumera el alcance del llamante.
 const scopingClaim = ${goString(claim)}
@@ -77,8 +86,7 @@ var (
 )
 
 // CallerScope lee el alcance por recurso del token de la petición en curso: el claim como lista o como texto separado por
-// comas o espacios. Exentos, los roles del diseño y los clientes máquina, reconocidos por el cliente de la credencial (azp,
-// client_id o el nombre del principal, el mismo criterio que la identidad del llamante). La exención es solo del alcance:
+// comas o espacios. Exentos, los roles del diseño y los clientes máquina, ${recognized}
 // las reglas de acceso ya se aplicaron. Satisface application.CallerScope.
 type CallerScope struct{}
 
@@ -88,7 +96,7 @@ func (CallerScope) IsExempt(ctx context.Context) bool {
 	if !ok {
 		return false
 	}
-	return slices.ContainsFunc(exemptAuthorities, principal.Has) || slices.Contains(exemptClients, credentialClient(principal))
+	return slices.ContainsFunc(exemptAuthorities, principal.Has) || slices.Contains(exemptClients, ${opaqueClients ? 'principal.Client' : 'credentialClient(principal)'})
 }
 
 // ScopedValues son los valores que enumera el claim del llamante: ninguno sin token o sin el claim.
@@ -109,7 +117,7 @@ func (scope CallerScope) Covers(ctx context.Context, value string) bool {
 	return scope.IsExempt(ctx) || slices.Contains(scope.ScopedValues(ctx), value)
 }
 
-// credentialClient es el cliente de la credencial: azp, client_id o, a falta de los dos, el nombre del principal.
+${opaqueClients ? '' : `// credentialClient es el cliente de la credencial: azp, client_id o, a falta de los dos, el nombre del principal.
 func credentialClient(principal *Principal) string {
 	for _, name := range []string{"azp", "client_id"} {
 		if client, ok := ClaimText(principal.Claims, name); ok && client != "" {
@@ -119,7 +127,7 @@ func credentialClient(principal *Principal) string {
 	return principal.Name
 }
 
-// scopedValuesOf lee el claim como lista de textos o como texto separado por comas o espacios; otra forma no enumera nada.
+`}// scopedValuesOf lee el claim como lista de textos o como texto separado por comas o espacios; otra forma no enumera nada.
 // Un valor vacío tampoco: es el de un recurso sin valor.
 func scopedValuesOf(claim jsontext.Value) []string {
 	var values []string
@@ -153,7 +161,26 @@ func TestUnRolExentoAlcanzaCualquierRecurso(t *testing.T) {
 `
     : '';
   const clientJson = goString(JSON.stringify(client ?? ''));
-  const clientTest = client
+  const { opaqueClients } = tokenContract(model.stack?.auth);
+  const opaqueTest = client
+    ? `
+func TestUnClienteExentoSeReconocePorElIDQueGeneroElProveedor(t *testing.T) {
+	scope := ${pkg}.CallerScope{}
+	recognized := caller(nil, "service-account", nil)
+	recognized.Client = ${goString(client)}
+	if !scope.IsExempt(${pkg}.WithPrincipal(t.Context(), recognized)) {
+		t.Error("el cliente que reconoció el autenticador no está exento")
+	}
+	// Ni el nombre del principal ni el claim con el nombre declarado: el id lo genera el proveedor.
+	if scope.IsExempt(${pkg}.WithPrincipal(t.Context(), caller(nil, ${goString(client)}, map[string]string{"client_id": ${clientJson}}))) {
+		t.Error("un llamante que solo se llama como el cliente está exento")
+	}
+}
+`
+    : '';
+  const clientTest = opaqueClients
+    ? opaqueTest
+    : client
     ? `
 func TestUnClienteExentoSeReconocePorLaCredencial(t *testing.T) {
 	scope := ${pkg}.CallerScope{}

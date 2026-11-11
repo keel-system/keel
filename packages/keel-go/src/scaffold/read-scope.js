@@ -17,6 +17,7 @@
 //     `internal/application`), el scope del borde (RS-10) y el 403 del cable (RS-11). RS-1 a RS-8 las miden db-check y
 //     doc-check contra el adaptador.
 
+import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { READ_SCOPE_KEY_CASES, readMissMessage, readScopeNote, readScopePath, readScopeText, scopedLoadOf, scopedReadsOf, scopedRootsOf } from '@keel-system/keel-core/gen/read-scope';
 import { operationError } from '@keel-system/keel-core/gen/declared-errors';
 import { documentShape } from '@keel-system/keel-core/gen/document';
@@ -523,7 +524,19 @@ ${functions.join('\n\n')}
 /** La identidad del llamante en los claims de un principal de prueba, como la lee callerIdentity. */
 function identityClaim(model) {
   const identity = model.security.callerIdentity;
-  return identity.source === 'claim' ? identity.claim ?? 'sub' : 'azp';
+  return identity.source === 'claim' ? identity.claim ?? 'sub' : tokenContract(model.stack?.auth).clientClaims[0];
+}
+
+/**
+ * Un cliente exento como llega del autenticador (`setup` son las líneas que lo preparan y `expr`, el principal): con su nombre en el claim del cliente, o, si el proveedor genera el id,
+ * reconocido en Principal.Client (lo que hace el autenticador con security.client-ids; lo mide token_contract_test.go).
+ */
+function exemptClientCaller(model, client) {
+  const { clientClaims, opaqueClients } = tokenContract(model.stack?.auth);
+  if (!opaqueClients) return { setup: '', expr: `tokenWith(nil, ${goString(client)}, map[string]string{${goString(clientClaims[0])}: ${goString(JSON.stringify(client))}})` };
+  return { setup: `	client := tokenWith(nil, "service-account", nil)
+	client.Client = ${goString(client)}
+`, expr: 'client' };
 }
 
 /**
@@ -552,7 +565,7 @@ function edgeTestGo(model) {
 	if exempt := as(tokenWith([]string{${goString(`ROLE_${role}`)}}, "admin", nil)); exempt.Kind() != domain.ReadScopeUnrestricted {
 		t.Errorf("el rol exento ${role} no lo ve todo: %#v", exempt)
 	}` : ''}${client ? `
-	if exempt := as(tokenWith(nil, ${goString(client)}, map[string]string{"azp": ${goString(JSON.stringify(client))}})); exempt.Kind() != domain.ReadScopeUnrestricted {
+${exemptClientCaller(model, client).setup}	if exempt := as(${exemptClientCaller(model, client).expr}); exempt.Kind() != domain.ReadScopeUnrestricted {
 		t.Errorf("el cliente exento ${client} no lo ve todo: %#v", exempt)
 	}` : ''}
 }`);

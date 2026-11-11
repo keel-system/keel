@@ -28,7 +28,7 @@ import { audienceOf, fullAccessClaims, tokenClaims } from '@keel-system/keel-cor
 import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { securityPlan, usesHttpSecurity, usesJwt } from '@keel-system/keel-core/gen/features';
 import { ownershipRulesOf, usesCallerRoles } from '@keel-system/keel-core/gen/ownership';
-import { securityConfigFiles } from '@keel-system/keel-core/gen/security-config';
+import { securityConfigFiles, translatedClients } from '@keel-system/keel-core/gen/security-config';
 import { alignRows, goString, keyedLiteral } from '../lib/go-source.js';
 import { applicationPath, layout, packageFile } from './render.js';
 // ETag e If-Match con escritura condicional (CW-9): la lista es la neutral de los cuatro generadores.
@@ -139,6 +139,7 @@ export function securityTestPackage(model) {
 // ─── principal.go ───────────────────────────────────────────────────────────────────────────────
 
 function principalGo(model) {
+  const translated = translatedClients(model);
   const roles = usesRoleCheck(model)
     ? `
 
@@ -172,7 +173,11 @@ type Principal struct {
 	// Authorities son ROLE_<rol>, el permiso tal cual (recurso:accion) y SCOPE_<scope>, como en Spring.
 	Authorities []string
 	// Claims son los claims del token tal como llegaron (vacío con una clave de API).
-	Claims map[string]jsontext.Value
+	Claims map[string]jsontext.Value${translated.length > 0 ? `
+	// Client es el cliente máquina que declara el diseño cuya credencial es esta, reconocido por el id que el proveedor
+	// generó para él (security.client-ids); vacío si no es ninguno de ellos. Lo pone el autenticador, el único que lee el
+	// cliente de la credencial.
+	Client string` : ''}
 }
 
 // Has dice si el principal tiene la authority.
@@ -266,7 +271,9 @@ type Settings struct {
 	// Audience es la audiencia que tienen que traer los tokens de las rutas de máquinas.
 	Audience string
 	// AllowedOrigins son los orígenes del navegador que admite CORS (* es cualquiera).
-	AllowedOrigins []string
+	AllowedOrigins []string${translated.length > 0 ? `
+	// ClientIDs es el id que el proveedor generó para cada cliente máquina del diseño, por su nombre declarado.
+	ClientIDs map[string]string` : ''}
 }
 
 // SettingsFrom lee la configuración de la seguridad.
@@ -281,12 +288,19 @@ func SettingsFrom(cfg *config.Config) Settings {
 			origins = append(origins, origin)
 		}
 	}
-	return Settings{
+${translated.length > 0 ? `	clientIDs := map[string]string{}
+	for _, name := range []string{${translated.map((client) => goString(client.name)).join(', ')}} {
+		if id := value("security.client-ids." + name); id != "" {
+			clientIDs[name] = id
+		}
+	}
+` : ''}	return Settings{
 		IssuerURI:      value("security.oauth2.issuer-uri"),
 		JWKSetURI:      value("security.oauth2.jwk-set-uri"),
 		JWKS:           value("security.oauth2.jwks"),
 		Audience:       value("security.audience"),
-		AllowedOrigins: origins,
+		AllowedOrigins: origins,${translated.length > 0 ? `
+		ClientIDs:      clientIDs,` : ''}
 	}
 }${roles}
 `;
@@ -297,7 +311,10 @@ func SettingsFrom(cfg *config.Config) Settings {
 function jwtGo(model) {
   const sec = model.security;
   const claims = tokenClaims(model.stack?.auth);
-  const { prefixedScopes, audienceInScopePrefix, displayName } = tokenContract(model.stack?.auth);
+  const { prefixedScopes, audienceInScopePrefix, displayName, accepted, clientClaims } = tokenContract(model.stack?.auth);
+  const translates = translatedClients(model).length > 0;
+  // toPrincipal necesita la configuración para quitar solo el prefijo propio (D2) y para reconocer al cliente (D3, D4).
+  const withSettings = prefixedScopes || translates;
   // Sin roles, permisos ni scopes en ninguna regla, Spring usa su conversor por defecto, cuyo principal es el `sub`:
   // el nombre que ve la identidad del llamante tiene que ser el mismo.
   const principalClaim = sec.usesAuthorities ? claims.principalClaim : 'sub';
@@ -347,12 +364,10 @@ func IssuedFor(principal *Principal, audience string) bool {
   const scopes = prefixedScopes
     ? `	var scopes []string
 	for value := range strings.FieldsSeq(scope) {
-		// ${displayName}: <resource-server>/<scope>. Sin prefijo, se queda igual.
-		_, after, found := strings.Cut(value, "/")
-		if !found {
-			after = value
+		// ${displayName}: <resource-server>/<scope>. Solo valen los de este servicio.
+		if after, found := strings.CutPrefix(value, resourceServer+"/"); found && after != "" {
+			scopes = append(scopes, after)
 		}
-		scopes = append(scopes, after)
 	}
 	return scopes`
     : '	return strings.Fields(scope)';
@@ -441,8 +456,12 @@ func (a *JWTAuthenticator) Authenticate(ctx context.Context, token string) (*Pri
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidCredential, err)
-	}
-	return toPrincipal(claims), nil
+	}${accepted ? `
+	// Un token del mismo emisor y con la misma firma que no es un access token: lo que lo distingue es este claim.
+	if kind, _ := ClaimText(claims, ${goString(accepted.claim)}); kind != ${goString(accepted.value)} {
+		return nil, fmt.Errorf("%w: el token no es un access token", ErrInvalidCredential)
+	}` : ''}
+	return toPrincipal(claims${withSettings ? ', a.settings' : ''}), nil
 }
 
 ${issuedFor}
@@ -616,7 +635,12 @@ func verify(token string, keys *keySet) (map[string]jsontext.Value, error) {
 	return claims, nil
 }
 
-func toPrincipal(claims map[string]jsontext.Value) *Principal {
+func toPrincipal(claims map[string]jsontext.Value${withSettings ? ', settings Settings' : ''}) *Principal {${prefixedScopes ? `
+	// El resource server de este servicio (security.audience): solo los scopes con su prefijo dan authority.
+	resourceServer := settings.Audience
+	if resourceServer == "" {
+		resourceServer = ${goString(audienceOf(model))}
+	}` : ''}
 	roles := rolesOf(claims)
 	var authorities []string
 	add := func(authority string) {
@@ -628,7 +652,7 @@ func toPrincipal(claims map[string]jsontext.Value) *Principal {
 		add("ROLE_" + role)
 	}
 	scope, _ := ClaimText(claims, "scope")
-	for _, value := range scopesOf(scope) {
+	for _, value := range scopesOf(scope${prefixedScopes ? ', resourceServer' : ''}) {
 		add("SCOPE_" + value)
 	}
 	for _, permission := range ClaimList(claims, permissionsClaim) {
@@ -645,14 +669,23 @@ func toPrincipal(claims map[string]jsontext.Value) *Principal {
 	if !ok {
 		name, _ = ClaimText(claims, "sub")
 	}
-	return &Principal{Kind: TokenPrincipal, Name: name, Authorities: authorities, Claims: claims}
+${translates ? `	// El cliente máquina del diseño, por el id que el proveedor generó para él: un id que no es de ninguno no es ninguno.
+	var client string
+	if id, ok := ClaimText(claims, ${goString(clientClaims[0])}); ok && id != "" {
+		for name, configured := range settings.ClientIDs {
+			if configured == id {
+				client = name
+			}
+		}
+	}
+	return &Principal{Kind: TokenPrincipal, Name: name, Authorities: authorities, Claims: claims, Client: client}` : '	return &Principal{Kind: TokenPrincipal, Name: name, Authorities: authorities, Claims: claims}'}
 }
 
 func rolesOf(claims map[string]jsontext.Value) []string {
 ${roles}
 }
 
-func scopesOf(scope string) []string {
+func scopesOf(scope string${prefixedScopes ? ', resourceServer string' : ''}) []string {
 ${scopes}
 }
 `;
@@ -1164,10 +1197,20 @@ export const UNIDENTIFIED_ERROR = 'errUnidentifiedCaller';
 function callerIdentityGo(model) {
   const identity = model.security.callerIdentity;
   const optionalOps = model.services.flatMap((group) => group.operations).some((operation) => operation.optionalAuth);
+  const { clientClaims, opaqueClients } = tokenContract(model.stack?.auth);
+  // D4: con `resolvedBy` no se traduce, la lista del recurso guarda los ids.
+  const oneToOne = opaqueClients && identity.source === 'serviceClient' && !identity.resolvedBy;
   const extract =
     identity.source === 'claim'
       ? `	value, ok := security.ClaimText(principal.Claims, ${goString(identity.claim ?? 'sub')})`
-      : `	// El cliente máquina de la credencial: Keycloak lo pone en azp y otros proveedores en client_id; con
+      : opaqueClients
+        ? `	// El cliente máquina de la credencial, con el id que generó el proveedor${oneToOne ? `: el nombre que declara el diseño si es uno
+	// de los suyos (lo reconoce el autenticador), y si no, el id tal cual, que no encuentra recurso` : ''}.
+	value, ok := security.ClaimText(principal.Claims, ${goString(clientClaims[0])})${oneToOne ? `
+	if principal.Client != "" {
+		value, ok = principal.Client, true
+	}` : ''}`
+        : `	// El cliente máquina de la credencial: Keycloak lo pone en azp y otros proveedores en client_id; con
 	// client_credentials, el nombre del principal también es el cliente.
 	value, ok := security.ClaimText(principal.Claims, "azp")
 	if !ok {

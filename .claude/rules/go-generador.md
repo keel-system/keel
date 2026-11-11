@@ -26,6 +26,15 @@ Cuarto generador, construido por incrementos medidos (`PLAN-KEEL-GO.md`, con su 
 
 **`fixtures.yaml`** llega a `build` y a `check` (`test/fixtures-schema.test.js`): hasta el 16 se descartaba en silencio, y `shop-api` salía sin su estado de partida.
 
+## El contrato del token (fase 2 de PLAN-PROVEEDOR-IDENTIDAD.md)
+
+build emite `internal/httpapi/token_contract_test.go` con los casos `IDT-*` de `keel-core/gen/token-cases.js`, contra el
+`JWTAuthenticator` real y el perfil `test` embebido cargado con `config.Load`. Con un proveedor que genera el id del cliente, el
+autenticador lo traduce una vez a `Principal.Client` (con `Settings.ClientIDs`, leído por los nombres del diseño), sin estado
+global. Lo miden `test/token-contract.test.js` (sin Go, también tree-sitter sobre lo que solo sale con Cognito) y
+`npm run go-check -- --token`: los sujetos de `test/helpers/token-sabotages.js` con gofmt, vet, staticcheck y sus pruebas, y cada
+sabotaje en exactamente sus casos.
+
 ## Lectura acotada (DSL 2.27, inc. 4 de PLAN-DSL-227-LECTURA-ACOTADA.md)
 
 `src/scaffold/read-scope.js`, con el reparto de los otros tres y lo neutral de `keel-core/gen/read-scope.js`: `domain.ReadScope` (con `CacheKey()`, la forma de keel-core) cuyo **valor cero es el conjunto vacío** —Go no obliga a dar un campo en un literal, así que un mensaje que nadie estampó no ve nada—; el scope del borde en `internal/httpapi/read_scope.go` (`readScopeScoping` sobre `security.CallerScope`, `readScopeOwnerOf<Entidad>` con `callerIdentity` y los roles exentos), que el endpoint estampa en el mensaje (``ReadScope domain.ReadScope `json:"-"` ``) tras el lector; el predicado `scoped` sumado al `filters` del finder tras sus criterios (el salto a otra raíz, una subconsulta `IN` por salto; el `IN` vacío es `1 = 0`, nunca todo) o a las condiciones del documento (resolviendo los `_id` de la otra colección con `idsIn`), y `LoadScoped`/`LoadScopedBy<Clave>` con `admittedOrMiss`, que pregunta al motor con el MISMO predicado. Las sondas RS-1 a RS-8 (`scripts/lib/read-scope-probes.js`) son una prueba por caso con el id en el nombre, en un bloque aparte de `rootProbes` (doc-probes reescribe los repositorios de ese texto con el de la raíz) y con el repositorio de cada almacén; RS-9 a RS-11 son pruebas emitidas que ejecuta `go-check --read-scope`. **Medido**: `rs-finder-replace` escrito como «el predicado sustituye a los criterios» rompía también la sonda 2.22 del finder, que pide con `UnrestrictedScope`; el sabotaje sustituye solo con un scope. En Go, conduit-scoped pasa también las sondas GENERALES de doc-check (el hueco que tiene keel-dotnet no aparece).
