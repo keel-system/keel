@@ -11,11 +11,28 @@
 // `serviceAuth` no hay clientes máquina.
 
 import { closingCredentialOf, usesTokenProtocol } from '@keel-system/keel-core/gen/access-plan';
-import { PERSONA_SUB_MAX, PERSONA_SUB_TOO_LONG, tokenUrl, userTestClient, usesPersonaTokens, usesScopedTokens, keycloakAdminCredentials, TEST_USER_PASSWORD } from '@keel-system/keel-core/gen/identity-realm';
+import {
+  EMULATOR_MAX_SCOPE_VALUES,
+  EMULATOR_PARAMS,
+  EMULATOR_PERSONA_CLAIM_UNKNOWN,
+  EMULATOR_SCOPE_VALUES_EXCEEDED,
+  PERSONA_SUB_MAX,
+  PERSONA_SUB_TOO_LONG,
+  emulatorPersonaClaims,
+  keycloakAdminCredentials,
+  personaTokenMechanism,
+  scopedTokenMechanism,
+  TEST_USER_PASSWORD,
+  tokenUrl,
+  userTestClient,
+  usesPersonaTokens,
+  usesRealmAdmin,
+  usesScopedTokens
+} from '@keel-system/keel-core/gen/identity-realm';
 import { LOCAL_API_KEY, localClientApiKey } from './security.js';
 import { tsString } from './render.js';
 import { usesIdentityHarness } from '@keel-system/keel-core/gen/features';
-import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
+import { credentialClientId, identityProvider, tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 export { usesIdentityHarness };
 
 /**
@@ -53,10 +70,10 @@ export function identitySection(model) {
   parts.push(tokenCache(model));
   if ((sec.roles ?? []).length > 0) parts.push(tokenForSection(model));
   if (sec.serviceAuth) parts.push(serviceCredentialSection(model));
-  if (usesPersonaTokens(model)) parts.push(personaSection(model));
+  if (usesPersonaTokens(model)) parts.push(personaTokenMechanism(model) === 'emulator' ? emulatorPersonaSection(model) : personaSection(model));
   if (sec.scoping) parts.push(scopedResourceSection(model));
-  if (usesScopedTokens(model)) parts.push(scopedTokenSection(model));
-  if (usesPersonaTokens(model) || usesScopedTokens(model)) parts.push(keycloakAdminSection(model));
+  if (usesScopedTokens(model)) parts.push(scopedTokenMechanism(model) === 'emulator' ? emulatorScopedSection(model) : scopedTokenSection(model));
+  if (usesRealmAdmin(model)) parts.push(keycloakAdminSection(model));
   return parts.join('\n');
 }
 
@@ -426,6 +443,92 @@ async function ensureScopedUser(username: string, role: string, values: readonly
     throw new Error(\`El usuario del alcance \${username} tiene ${claim}=\${JSON.stringify(stored)} y el escenario pidió \${JSON.stringify(values)}: ¿se ejecutó infra/init-keycloak.sh (User Profile)?\`);
   }
   scopedUsers.add(username);
+}`;
+}
+
+/**
+ * `tokenAs` contra el EMULADOR del proveedor (incremento 4.3 de PLAN-PROVEEDOR-IDENTIDAD.md): no hay usuarios que dar de
+ * alta, la persona viaja en la petición con los parámetros de `EMULATOR_PARAMS`. La referencia de lo que manda es
+ * `emulatorPersonaForm`; la del emulador que la recibe, `emulator-check` de keel-core.
+ */
+function emulatorPersonaSection(model) {
+  const P = EMULATOR_PARAMS;
+  const claims = emulatorPersonaClaims(model);
+  return `
+// ── Personas: un sub elegido por el escenario ────────────────────────────────
+
+/** Los claims que una persona puede llevar en el emulador: los que el diseño lee del token. */
+const PERSONA_CLAIMS: ReadonlySet<string> = new Set([${claims.map(tsString).join(', ')}]);
+
+/**
+ * Token de una PERSONA del documento de escenarios: el usuario cuyo claim \`sub\` es exactamente \`sub\`, con los claims
+ * de \`claims\`. Un valor \`null\` QUITA ese claim («el token de ana sin email»), y uno que el tipo del campo no admite
+ * viaja tal cual. \`role\`, si se da, es un rol concedido a la persona.
+ *
+ * El emulador del proveedor no guarda usuarios: la persona viaja en la petición, y cada forma de token (con rol o sin
+ * él, y qué claims lleva) es un mapping de \`infra/${identityProvider(model.stack.auth).provisioning.emulatorDir}/mock-oauth2-config.json\`. Por eso solo admite
+ * los claims que el diseño lee del token (${claims.length > 0 ? claims.map((claim) => '`' + claim + '`').join(', ') : 'ninguno además del `sub`'}). Llámalo en cada petición.
+ */
+export async function tokenAs(sub: string, claims: Readonly<Record<string, string | null>> = {}, role: string | null = null): Promise<string> {
+  if ('sub' in claims) throw new Error('El sub de la persona va en el primer argumento, no entre los claims');
+  const wanted = Object.entries(claims)
+    .filter((entry): entry is [string, string] => entry[1] != null)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  for (const [name] of wanted) {
+    if (!PERSONA_CLAIMS.has(name)) throw new Error(\`tokenAs: \${name}: \${${tsString(EMULATOR_PERSONA_CLAIM_UNKNOWN)}}\`);
+  }
+  return cachedToken(\`persona|\${sub}|\${role}|\${JSON.stringify(wanted)}\`, () =>
+    requestToken({
+      grant_type: 'password',
+      client_id: credential('AUTH_TEST_CLIENT', ${tsString(credentialClientId(model.stack.auth, userTestClient(model)))}),
+      username: sub,
+      password: credential('AUTH_TEST_PASSWORD', ${tsString(TEST_USER_PASSWORD)}),
+      ${P.persona}: \`\${role != null ? 'role' : 'norole'}:\${wanted.map(([name]) => name).join(',')}\`,
+      ${P.sub}: sub,
+      ...(role != null ? { ${P.role}: role } : {}),
+      ...Object.fromEntries(wanted.map(([name, value]) => [\`${P.claimPrefix}\${name}\`, value]))
+    })
+  );
+}`;
+}
+
+/** `tokenWithScope` contra el EMULADOR: un mapping por aridad, cada valor en su parámetro (`emulatorScopedForm`). */
+function emulatorScopedSection(model) {
+  const P = EMULATOR_PARAMS;
+  const { claim } = model.security.scoping;
+  return `
+// ── Alcance: un titular con otro valor del claim ─────────────────────────────
+
+/**
+ * Token de un usuario del rol \`role\` cuyo claim \`${claim}\` enumera EXACTAMENTE \`values\`; sin valores, el usuario del rol
+ * SIN el claim. Es lo que necesita «un titular cuyo ${claim} es ["OTRO"]»: \`tokenFor\` trae siempre \`scopedResource()\`.
+ *
+ * El emulador del proveedor lo da sin estado: un mapping por cantidad de valores, hasta ${EMULATOR_MAX_SCOPE_VALUES}. El nombre del
+ * titular es el mismo que en keel-spring (\`scoped-<rol>-<huella>\`). Llámalo en cada petición, como \`tokenFor\`.
+ */
+export async function tokenWithScope(role: string, ...values: readonly string[]): Promise<string> {
+  const wanted = [...new Set(values)].sort();
+  if (wanted.length > ${EMULATOR_MAX_SCOPE_VALUES}) throw new Error(\`tokenWithScope: \${wanted.length} valores: \${${tsString(EMULATOR_SCOPE_VALUES_EXCEEDED)}}\`);
+  const username = \`scoped-\${role}-\${javaStringHash(wanted.join('\\n'))}\`;
+  return cachedToken(\`scope:\${username}\`, () =>
+    requestToken({
+      grant_type: 'password',
+      client_id: credential('AUTH_TEST_CLIENT', ${tsString(credentialClientId(model.stack.auth, userTestClient(model)))}),
+      username,
+      password: credential('AUTH_TEST_PASSWORD', ${tsString(TEST_USER_PASSWORD)}),
+      ${P.scoped}: String(wanted.length),
+      ${P.user}: username,
+      ${P.role}: role,
+      ...Object.fromEntries(wanted.map((value, i) => [\`${P.valuePrefix}\${i + 1}\`, value]))
+    })
+  );
+}
+
+/** El \`Integer.toHexString(String.hashCode())\` de Java: el mismo usuario para los servidores del diseño. */
+function javaStringHash(text: string): string {
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) hash = (Math.imul(31, hash) + text.charCodeAt(i)) | 0;
+  return (hash >>> 0).toString(16);
 }`;
 }
 
