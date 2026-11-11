@@ -27,7 +27,7 @@ verde con el emulador prueba menos de lo que parece, porque el emulador se escri
 | Redes en vivo | Alto | `security-check` de keel-nest, keel-dotnet y keel-go, contra Keycloak; keel-spring no tiene esa red. Cognito es un emulador (`mock-oauth2-server`) |
 | Corridas | Alto | 2 de los 100 registros de `docs/corridas/` mencionan Cognito |
 | keel-recover | Total | `target.js` busca una imagen `keycloak` y `parity-target.js` da de alta personas con `kcadm`. Con Cognito omite el bloque `idp` sin decir nada |
-| Añadir un proveedor | Medio | El catálogo `AUTH` solo tiene `keycloak`, `cognito` y `none`, unas 33 ramas por nombre (21 en keel-core y 12 en los generadores, contadas el 2026-11-10) y una skill por generador y proveedor, que ya divergen: la de keel-spring tiene 89 líneas y tres referencias, las otras tres unas 52 y ninguna |
+| Añadir un proveedor | Medio | El catálogo `AUTH` solo tiene `keycloak`, `cognito` y `none`, 36 ramas por nombre (23 en keel-core y 13 en los generadores, recontadas en el incremento 1.1) y una skill por generador y proveedor, que ya divergen: la de keel-spring tiene 89 líneas y tres referencias, las otras tres unas 52 y ninguna |
 
 ### Lo que falla hoy con un Cognito real
 
@@ -104,6 +104,20 @@ Deja todo lo que un proveedor es en un solo sitio, y la forma de demostrar que u
 
 - **1.1 Inventario.** Recontar las ramas por nombre y clasificar cada una: contrato del token, capacidad del arnés o
   aprovisionamiento. **Medido con:** la tabla escrita en este plan.
+
+  Hecho el 2026-11-10: 36 ramas, sin contar `keel-recover` (fase 3.4) ni las redes en vivo (`scripts/`). Las líneas son las
+  de `3c0a7961`.
+
+  | Clase | Qué decide | Dónde |
+  |---|---|---|
+  | Contrato del token (6) | Formato de los scopes y cómo se expresa la audiencia | `gen/access-plan.js:213`, `keel-spring/.../security.js:626` y `:842`, y el `security.js` de keel-nest (`:288`), keel-dotnet (`:369`) y keel-go (`:299`) |
+  | Capacidad del arnés (3) | Personas por petición, valores del alcance y el sondeo del claim | `gen/identity-realm.js:85`, `:158` y `:184` |
+  | Aprovisionamiento (23) | URLs del proveedor de prueba, realm importado o emulador, consola, credenciales de administración y notas del issuer | `gen/identity-realm.js:92`, `:119`, `:197`, `:293` y `:294`; `gen/deploy.js:133`, `:137`, `:208`, `:531`, `:535`, `:595`, `:666`, `:793` y `:950`; `gen/identity-provisioning.js:59`, `:60` y `:79`; `gen/security-config.js:42`; `keel-spring/.../config.js:1299`, `:1304` y `:1314`; `keel-spring/.../readme.js:155` y `:244` |
+  | Aviso y skills (4) | Qué se emula y qué skill se instala | `gen/model.js:180`, y el `generator-docs.js` de keel-nest (`:61`), keel-dotnet (`:54`) y keel-go (`:61`) |
+
+  Fuera de la cuenta porque ya son datos: `TOKEN_CLAIMS`, el catálogo `AUTH`, `PORT_VARS` y `HEALTHCHECKS`. Tampoco son ramas, pero
+  pasan al descriptor: `cognitoMockConfig`, con los claims de Cognito escritos a mano, y la skill de keel-spring
+  (`generator-docs.js:106`), que se instala para cualquier proveedor que no sea `none`.
 - **1.2 El descriptor** (`gen/identity-providers.js`). Por proveedor: `token` (roles, permisos, principal, formato de los
   scopes, cómo se expresa la audiencia, claims del cliente y si su valor es el nombre declarado, qué token se acepta, qué claims
   no llegan al access token sin configuración), `harness` (personas por petición, valores del alcance) y `provisioning`.
