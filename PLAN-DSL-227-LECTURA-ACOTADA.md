@@ -573,5 +573,6 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
   Cognito 92/92 (huella 30: 25 TODO y las 4 consultas por lote de keel-spring). `quarantine-last-scanned-at` y
   `cart-line-sum-over-max` vuelven: la serie los da ya como candidatos a id. Un hueco menor del generador: el paso 7 del
   agente de infra ejecuta `reset-db.sh` antes del primer arranque, y con `fixtures.sql` la carga falla porque el esquema
-  aún no existe (pendiente: el paso está en keel-nest, keel-dotnet y keel-go; keel-spring no lo tiene).
+  aún no existe. Arreglado en los tres agentes de infra (keel-spring no tiene el paso): `reset: N/A` con ese motivo
+  (`4da2c080`), y las siete corridas pendientes refrescadas con `build --refresh --prune` para que lo lleven.
 
