@@ -17,7 +17,9 @@ import { checkSupportedFeatures } from '../src/lib/supported-features.js';
 import { planService } from '../src/scaffold/index.js';
 import { READ_SCOPE_TS, READ_SCOPES_TS, scopedLoadsOf as nestLoads, readScopesMethod } from '../src/scaffold/read-scope.js';
 import { EXCEPTION_FILTER_TS } from '../src/scaffold/rest-support.js';
-import { SECURITY_CONTEXT_TS } from '../src/scaffold/security.js';
+import { SECURITY_CONTEXT_TS, SERVICE_CLIENT_IDS_TS } from '../src/scaffold/security.js';
+import { credentialClientId, tokenContract } from '@keel-system/keel-core/gen/identity-providers';
+import { translatedClients } from '@keel-system/keel-core/gen/security-config';
 import { classPath, DIRS } from '../src/scaffold/render.js';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { scopedLoadsOf as springLoads } from '../../keel-spring/src/scaffold/read-scope.js';
@@ -147,24 +149,49 @@ test('rs-cache-key: una clave sin el scope sirve a un llamante la entrada de otr
   assert.equal(key(ReadScope.within(['a'])), key(ReadScope.within(['b'])), 'el sabotaje no se aplicó');
 });
 
-async function readScopes(name, sabotage) {
-  const { tree } = await emitted(name, { sabotage });
+async function readScopes(name, sabotage, stack = null) {
+  const { tree, model } = await emitted(name, { sabotage, stack });
   const { ReadScopes } = await tree.load(READ_SCOPES_TS);
   const { SecurityContext } = await tree.load(SECURITY_CONTEXT_TS);
-  return { ReadScopes, as: (who, action) => SecurityContext.runWith(who, action) };
+  // Con un proveedor que genera el id del cliente, el mapa nombre → id que el arranque carga de security.client-ids.
+  if (translatedClients(model).length > 0) {
+    const { configureServiceClientIds } = await tree.load(SERVICE_CLIENT_IDS_TS);
+    const ids = Object.fromEntries(translatedClients(model).map(({ name: client }) => [client, credentialClientId(model.stack.auth, client)]));
+    configureServiceClientIds({ get: (key) => (key === 'security.client-ids' ? ids : undefined) });
+  }
+  return { ReadScopes, model, as: (who, action) => SecurityContext.runWith(who, action) };
 }
 
-test('RS-10: ReadScopes construye el scope desde el principal; el claim ausente es el conjunto vacío, nunca todo', async () => {
-  const vault = await readScopes('vault-scoped');
-  assert.deepEqual(vault.as(principal(['vault-admin'], {}), () => vault.ReadScopes.scoping()), { kind: 'unrestricted' }, 'RS-10: el rol exento');
-  assert.deepEqual(vault.as(principal([], { azp: 'rendering-service' }), () => vault.ReadScopes.scoping()), { kind: 'unrestricted' }, 'RS-10: el cliente exento');
-  assert.deepEqual([...vault.as(principal(['vault-reader'], { vaults: ['A', 'B'] }), () => vault.ReadScopes.scoping()).values], ['A', 'B'], 'RS-10: el claim');
-  const absent = vault.as(principal(['vault-reader'], {}), () => vault.ReadScopes.scoping());
-  assert.equal(absent.kind, 'within', 'RS-10: el claim ausente no da el conjunto vacío');
-  assert.equal(absent.values.size, 0);
-  const shop = await readScopes('shop-scoped');
-  assert.deepEqual(shop.as(principal(['employee'], { email: 'ana@x.io' }), () => shop.ReadScopes.ownerOfOrderMain()), { kind: 'unrestricted' }, 'RS-10: el rol exento de la propiedad');
-  assert.deepEqual(shop.as(principal(['customer'], { email: 'ana@x.io' }), () => shop.ReadScopes.ownerOfOrderMain()), { kind: 'ownedBy', value: 'ana@x.io' }, 'RS-10: el dueño es la identidad');
+for (const auth of ['keycloak', 'cognito']) {
+  test(`RS-10 (${auth}): ReadScopes construye el scope desde el principal; el claim ausente es el conjunto vacío, nunca todo`, async () => {
+    const vault = await readScopes('vault-scoped', undefined, { auth });
+    const scoping = scopedReadsOf(vault.model).find((operation) => operation.readScope.kind === 'scoping').readScope;
+    assert.deepEqual(vault.as(principal([`${scoping.exemptRoles[0]}`], {}), () => vault.ReadScopes.scoping()), { kind: 'unrestricted' }, 'RS-10: el rol exento');
+    // El cliente exento con la forma del proveedor: su claim y el id con el que llega (el generado, con Cognito).
+    const [clientClaim] = tokenContract(auth).clientClaims;
+    const clientId = credentialClientId(auth, scoping.exemptClients[0]);
+    assert.deepEqual(vault.as(principal([], { [clientClaim]: clientId }), () => vault.ReadScopes.scoping()), { kind: 'unrestricted' }, 'RS-10: el cliente exento');
+    assert.deepEqual([...vault.as(principal(['vault-reader'], { vaults: ['A', 'B'] }), () => vault.ReadScopes.scoping()).values], ['A', 'B'], 'RS-10: el claim');
+    const absent = vault.as(principal(['vault-reader'], {}), () => vault.ReadScopes.scoping());
+    assert.equal(absent.kind, 'within', 'RS-10: el claim ausente no da el conjunto vacío');
+    assert.equal(absent.values.size, 0);
+    const shop = await readScopes('shop-scoped', undefined, { auth });
+    assert.deepEqual(shop.as(principal(['employee'], { email: 'ana@x.io' }), () => shop.ReadScopes.ownerOfOrderMain()), { kind: 'unrestricted' }, 'RS-10: el rol exento de la propiedad');
+    assert.deepEqual(shop.as(principal(['customer'], { email: 'ana@x.io' }), () => shop.ReadScopes.ownerOfOrderMain()), { kind: 'ownedBy', value: 'ana@x.io' }, 'RS-10: el dueño es la identidad');
+  });
+}
+
+test('client-translation (la mitad del borde): con Cognito, el cliente exento comparado con su nombre declarado, y RS-10 lo ve', async () => {
+  const vault = await readScopes(
+    'vault-scoped',
+    (file) => (file.path.endsWith('jwt-caller-scope.ts') ? file.content.replace('client === clientIdOf(name)', 'client === name') : file.content),
+    { auth: 'cognito' }
+  );
+  const scoping = scopedReadsOf(vault.model).find((operation) => operation.readScope.kind === 'scoping').readScope;
+  const [clientClaim] = tokenContract('cognito').clientClaims;
+  const clientId = credentialClientId('cognito', scoping.exemptClients[0]);
+  // El token del cliente exento, el que RS-10 da por bueno: sin la traducción ya no se le reconoce.
+  assert.equal(vault.as(principal([], { [clientClaim]: clientId }), () => vault.ReadScopes.scoping()).kind, 'within', 'el sabotaje no se aplicó');
 });
 
 test('rs-empty-is-all (la mitad del borde): el claim ausente leído como todo, y RS-10 lo ve', async () => {

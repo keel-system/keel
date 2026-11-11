@@ -371,11 +371,13 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
 - Lo que el 4.3 NO mide: el arnés de un generador pidiendo un token REAL al emulador. Está por transitividad (cada arnés manda la
   petición de referencia, y `emulator-check` mide que con ella el emulador da el token pedido); lo medirá de extremo a extremo el 4.4.
 - Siguiente: **4.4**, la red de extremo a extremo en keel-spring (P5), parametrizada por proveedor.
-- 4.4: **P5 cerrada, keel-spring.** Queda RS-10 de keel-nest con `azp` a mano.
+- 4.4: **P5 cerrada, keel-spring.**
 - **Fase 4 hecha (2026-11-11).** Las siete redes del 4.3 se leyeron y se relanzaron de una en una (la cadena de la sesión
   anterior seguía viva y escribía en los mismos logs de `D:/keel-nets/`). La red del 4.4 es `security-check` de keel-spring;
   sus logs, `D:/keel-nets/44-spring-{keycloak,cognito}.log`. Al lanzarla a mano contra el emulador desde Git Bash, ojo:
   `MSYS_NO_PATHCONV=1`, o `-e JSON_CONFIG_PATH=/c/...` llega como ruta de Windows y el emulador arranca SIN configuración
   (tokens válidos sin ningún claim del mapping: parece T1 y no lo es).
-- Queda del plan: el 1.5 (opcional) y la fase 5 (diferida). Fuera de él: RS-10 de keel-nest con `azp` a mano, y
-  `messages.cognitoEmulated` como texto de Cognito en cada proyección.
+- Queda del plan: el 1.5 (opcional) y la fase 5 (diferida). Fuera de él: `messages.cognitoEmulated` como texto de Cognito en cada proyección.
+- RS-10 de keel-nest arreglado (2026-11-11): `test/read-scope.test.js` lo corre con Keycloak y con Cognito, el cliente exento
+  con el claim y el id del descriptor y el mapa `security.client-ids` cargado como en el arranque; el sabotaje
+  `client-translation` (comparar con el nombre declarado) lo tumba.
