@@ -17,9 +17,27 @@
 
 import { closingCredentialOf, usesTokenProtocol } from '@keel-system/keel-core/gen/access-plan';
 import { usesIdentityHarness } from '@keel-system/keel-core/gen/features';
-import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
-import { PERSONA_SUB_MAX, PERSONA_SUB_TOO_LONG, keycloakAdminCredentials, secondUserOf, tokenUrl, TEST_USER_PASSWORD, userTestClient, usesPersonaTokens, usesScopedTokens } from '@keel-system/keel-core/gen/identity-realm';
-import { goString } from '../lib/go-source.js';
+import { credentialClientId, tokenContract } from '@keel-system/keel-core/gen/identity-providers';
+import {
+  EMULATOR_MAX_SCOPE_VALUES,
+  EMULATOR_PARAMS,
+  EMULATOR_PERSONA_CLAIM_UNKNOWN,
+  EMULATOR_SCOPE_VALUES_EXCEEDED,
+  PERSONA_SUB_MAX,
+  PERSONA_SUB_TOO_LONG,
+  emulatorPersonaClaims,
+  keycloakAdminCredentials,
+  personaTokenMechanism,
+  scopedTokenMechanism,
+  secondUserOf,
+  tokenUrl,
+  TEST_USER_PASSWORD,
+  userTestClient,
+  usesPersonaTokens,
+  usesRealmAdmin,
+  usesScopedTokens
+} from '@keel-system/keel-core/gen/identity-realm';
+import { goString, keyedLiteral } from '../lib/go-source.js';
 
 export { usesIdentityHarness };
 
@@ -100,9 +118,9 @@ export function credentialsBody(model) {
   if (roles(model).length > 0) parts.push(tokenForGo());
   if (machineTokens(model)) parts.push(serviceCredentialGo(model));
   if (model.security.scoping) parts.push(scopedResourceGo(model));
-  if (usesPersonaTokens(model)) parts.push(personaGo(model));
-  if (usesScopedTokens(model)) parts.push(scopedTokenGo(model));
-  if (usesPersonaTokens(model) || usesScopedTokens(model)) parts.push(adminGo(model));
+  if (usesPersonaTokens(model)) parts.push(personaTokenMechanism(model) === 'emulator' ? emulatorPersonaGo(model) : personaGo(model));
+  if (usesScopedTokens(model)) parts.push(scopedTokenMechanism(model) === 'emulator' ? emulatorScopedGo(model) : scopedTokenGo(model));
+  if (usesRealmAdmin(model)) parts.push(adminGo(model));
   return parts.join('\n\n');
 }
 
@@ -460,8 +478,8 @@ func ensureScopedUser(ctx context.Context, username, role string, values []strin
 }`;
 }
 
-function personaGo(model) {
-  return String.raw`// Persona es el llamante de un escenario que el diseño identifica por un claim: «el perfil de sub-ana-001», «el mismo
+// El tipo Persona, el mismo con el realm y con el emulador.
+const PERSONA_TYPE = String.raw`// Persona es el llamante de un escenario que el diseño identifica por un claim: «el perfil de sub-ana-001», «el mismo
 // token sin email». TokenFor no puede darlo (su sub lo asigna el realm y no lleva más claims), y TokenAs sí.
 type Persona struct {
 	// Sub es el claim sub exacto del token.
@@ -474,7 +492,10 @@ type Persona struct {
 	Role string
 }
 
-// TokenAs es el token de la persona p: la da de alta (o la deja como la pide el escenario) por la API de
+`;
+
+function personaGo(model) {
+  return String.raw`${PERSONA_TYPE}// TokenAs es el token de la persona p: la da de alta (o la deja como la pide el escenario) por la API de
 // administración del realm y pide su token. Se llama en cada petición, como TokenFor.
 func (s *Scenario) TokenAs(p Persona) string {
 	s.Helper()
@@ -654,6 +675,127 @@ func ensurePersonaMapper(ctx context.Context, admin, claim string) error {
 		},
 	})
 	return err
+}`;
+}
+
+/** El password grant del cliente de usuario contra el emulador, como campos de `url.Values` alineados por gofmt. */
+function emulatorForm(model, username, extra) {
+  const pairs = [
+    ['"grant_type"', '{"password"}'],
+    ['"client_id"', `{credential("AUTH_TEST_CLIENT", ${goString(credentialClientId(model.stack.auth, userTestClient(model)))})}`],
+    ['"username"', `{${username}}`],
+    ['"password"', `{credential("AUTH_TEST_PASSWORD", ${goString(TEST_USER_PASSWORD)})}`],
+    ...extra
+  ];
+  return `form := url.Values{\n${keyedLiteral(pairs, '\t\t').join('\n')}\n\t}`;
+}
+
+/**
+ * `TokenAs` contra el EMULADOR del proveedor (incremento 4.3 de PLAN-PROVEEDOR-IDENTIDAD.md): no hay usuarios que dar de
+ * alta, la persona viaja en la petición con los parámetros de `EMULATOR_PARAMS`. La referencia de lo que manda es
+ * `emulatorPersonaForm`; la del emulador que la recibe, `emulator-check` de keel-core. La petición va en una función libre,
+ * `personaToken`, para que `emulator-harness-check` la ejecute sin escenario.
+ */
+function emulatorPersonaGo(model) {
+  const P = EMULATOR_PARAMS;
+  const claims = emulatorPersonaClaims(model);
+  return String.raw`${PERSONA_TYPE}// personaClaimNames son los claims que una persona puede llevar en el emulador del proveedor: los que el diseño lee del
+// token. El emulador no guarda usuarios; cada forma de token (con rol o sin él, y qué claims lleva) es un mapping de su
+// configuración.
+var personaClaimNames = []string{${claims.map(goString).join(', ')}}
+
+// TokenAs es el token de la persona p, pedido al emulador del proveedor con la forma de la persona en la petición. Se
+// llama en cada petición, como TokenFor.
+func (s *Scenario) TokenAs(p Persona) string {
+	s.Helper()
+	token, err := personaToken(s.Context(), p)
+	if err != nil {
+		s.Fatalf("token de la persona %q: %v", p.Sub, err)
+	}
+	return token
+}
+
+// personaToken pide al emulador el token de la persona p: los claims que lleva (sin los de Without), ordenados.
+func personaToken(ctx context.Context, p Persona) (string, error) {
+	if _, ok := p.Claims["sub"]; ok || slices.Contains(p.Without, "sub") {
+		return "", errors.New("el sub de la persona va en Persona.Sub, no entre sus claims")
+	}
+	var names []string
+	for name := range p.Claims {
+		if !slices.Contains(p.Without, name) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		if !slices.Contains(personaClaimNames, name) {
+			return "", fmt.Errorf("TokenAs: %s: %s", name, ${goString(EMULATOR_PERSONA_CLAIM_UNKNOWN)})
+		}
+	}
+	shape := "norole"
+	if p.Role != "" {
+		shape = "role"
+	}
+	${emulatorForm(model, 'p.Sub', [
+    [goString(P.persona), '{shape + ":" + strings.Join(names, ",")}'],
+    [goString(P.sub), '{p.Sub}']
+  ])}
+	if p.Role != "" {
+		form.Set(${goString(P.role)}, p.Role)
+	}
+	for _, name := range names {
+		form.Set(${goString(P.claimPrefix)}+name, p.Claims[name])
+	}
+	return cachedToken("persona|"+form.Encode(), func() (string, error) {
+		return requestToken(ctx, form)
+	})
+}`;
+}
+
+/** `TokenWithScope` contra el EMULADOR: un mapping por aridad, cada valor en su parámetro (`emulatorScopedForm`). */
+function emulatorScopedGo(model) {
+  const P = EMULATOR_PARAMS;
+  const { claim } = model.security.scoping;
+  return String.raw`// TokenWithScope es el token de un usuario del rol role cuyo claim ${claim} enumera EXACTAMENTE values; sin valores, el usuario
+// del rol SIN el claim. El emulador del proveedor lo da sin estado: un mapping por cantidad de valores, hasta ${EMULATOR_MAX_SCOPE_VALUES}. Se
+// llama en cada petición, como TokenFor.
+func (s *Scenario) TokenWithScope(role string, values ...string) string {
+	s.Helper()
+	token, err := scopedToken(s.Context(), role, values)
+	if err != nil {
+		s.Fatalf("token del titular del alcance del rol %q: %v", role, err)
+	}
+	return token
+}
+
+// scopedToken pide al emulador el token del titular del rol role con esos valores, distintos y ordenados.
+func scopedToken(ctx context.Context, role string, values []string) (string, error) {
+	wanted := slices.Compact(slices.Sorted(slices.Values(values)))
+	if len(wanted) > ${EMULATOR_MAX_SCOPE_VALUES} {
+		return "", fmt.Errorf("TokenWithScope: %d valores: %s", len(wanted), ${goString(EMULATOR_SCOPE_VALUES_EXCEEDED)})
+	}
+	username := fmt.Sprintf("scoped-%s-%x", role, javaStringHash(strings.Join(wanted, "\n")))
+	${emulatorForm(model, 'username', [
+    [goString(P.scoped), '{fmt.Sprint(len(wanted))}'],
+    [goString(P.user), '{username}'],
+    [goString(P.role), '{role}']
+  ])}
+	for i, value := range wanted {
+		form.Set(fmt.Sprintf(${goString(`${P.valuePrefix}%d`)}, i+1), value)
+	}
+	return cachedToken("scope:"+username, func() (string, error) {
+		return requestToken(ctx, form)
+	})
+}
+
+// javaStringHash es el String.hashCode de Java sobre las unidades UTF-16: el nombre del titular es el MISMO que en
+// keel-spring, keel-nest y keel-dotnet.
+func javaStringHash(text string) uint32 {
+	var hash uint32
+	for _, unit := range utf16.Encode([]rune(text)) {
+		hash = 31*hash + uint32(unit)
+	}
+	return hash
 }`;
 }
 

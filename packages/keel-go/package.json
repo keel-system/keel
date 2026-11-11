@@ -20,7 +20,8 @@
     "cache-check": "node scripts/cache-check.js",
     "telemetry-check": "node scripts/telemetry-check.js",
     "deploy-check": "node scripts/deploy-check.js",
-    "matrix": "node scripts/support-matrix.js"
+    "matrix": "node scripts/support-matrix.js",
+    "emulator-harness-check": "node scripts/emulator-harness-check.js && node scripts/emulator-harness-check.js --sabotage=persona-shape && node scripts/emulator-harness-check.js --sabotage=scope-unsorted"
   },
   "files": [
     "src",
