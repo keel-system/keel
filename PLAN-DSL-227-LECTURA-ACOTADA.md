@@ -305,11 +305,12 @@ cada diseño dos, con el mismo stack que su gemela de Keycloak, así que lo úni
 |---|---|---|---|---|
 | `vault-227-spring-mongo-rabbit` | asset-vault | keel-spring | Keycloak | hecha (32/32) |
 | `shop-227-spring-postgre` | shop-api | keel-spring | Keycloak | hecha (92/92) |
-| `vault-227-{nest,dotnet,go}-mongo-rabbit` | asset-vault | los otros tres | Keycloak | la gemela de keel-spring |
+| `vault-227-nest-mongo-rabbit` | asset-vault | keel-nest | Keycloak | hecha (32/32, 2026-11-11, a la primera) |
+| `vault-227-{dotnet,go}-mongo-rabbit` | asset-vault | keel-dotnet, keel-go | Keycloak | la gemela de keel-spring |
 | `shop-227-{nest,dotnet,go}-postgre` | shop-api | los otros tres | Keycloak | la gemela de keel-spring |
 | `vault-227-spring-mongo-rabbit-cognito` | asset-vault | keel-spring | Cognito | hecha (32/32, 2026-11-11): D6 y D3 en verde por el emulador |
 | `vault-227-go-mongo-rabbit-cognito` | asset-vault | keel-go | Cognito | lo mismo en keel-go |
-| `shop-227-nest-postgre-cognito` | shop-api | keel-nest | Cognito | D5 (la identidad por `email`), las personas de `tokenAs` por el emulador |
+| `shop-227-nest-postgre-cognito` | shop-api | keel-nest | Cognito | hecha (92/92, 2026-11-11): D5 y las personas de `tokenAs` en verde por el emulador |
 | `shop-227-dotnet-postgre-cognito` | shop-api | keel-dotnet | Cognito | lo mismo en keel-dotnet |
 
 Las de Cognito miden contra el emulador, no contra un pool real (fase 5 de `PLAN-PROVEEDOR-IDENTIDAD.md`): un verde dice
@@ -347,7 +348,7 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
 | 5. `level: optional` | hecho (2026-11-10) | OA-1 a OA-3 sobre `conduit-optional` en los cuatro, con `oa-degrade` y `oa-ignore-token` cada uno en exactamente su caso: keel-spring `read-scope-check` (MockMvc con la cadena generada, 12/12); keel-nest `test/optional-auth.test.js` (el hook, las reglas, el JWT y el lector emitidos sobre Fastify); keel-dotnet la prueba emitida `OptionalAuthTests` con `cs-check --fixtures --only=conduit-optional`; keel-go `optional_auth_test.go` con `go-check --read-scope` (8/8); suites de los cinco paquetes |
 | 6. derivados y docs | hecho (2026-11-10) | `keel-nest/test/openapi.test.js` sobre los cinco sujetos: el mismo documento en los cuatro generadores, OA-4, el 404/403 de `readMiss` y el listado acotado, sin deriva para `CHK-DOCS-OPENAPI-DRIFT`; falsado (sin la alternativa vacía cae solo `conduit-optional`; sin la cláusula de `not-found`, solo `conduit-scoped`); `redocly lint` válido en los cinco (los avisos, los mismos que en las fixtures base); suites de los cinco paquetes |
 | 7. fixtures y keel-recover | hecho, salvo la paridad en vivo (2026-11-10) | `keel validate --ready` de las tres fixtures con los mismos criterios que antes (asset-vault 12/13, el que falta es DESIGN.md fuera de un workspace; shop-api y conduit con los mismos rojos previos y FL-ART-009 sin ejecutar); `design-matrix` 206 falsados, ninguno `sin-mutacion`; suites de los seis paquetes; `db-check` de keel-go sobre shop-api en PostgreSQL y MySQL, con `rank-sort` cayendo en `TestOrderMain_SortsByOrderStatusRank`. La paridad de shop-api y conduit necesita los servicios regenerados en marcha: pasa al inc. 8 |
-| 8. corridas de control | en curso: keel-spring hecho (asset-vault 32/32, shop-api 92/92, 2026-11-10); keel-spring con Cognito hecho (asset-vault 32/32, 2026-11-11); faltan las seis de Keycloak de keel-nest, keel-dotnet y keel-go y tres de Cognito | `docs/corridas/2026-11-10-*-227-spring-control.md`, `2026-11-11-asset-vault-227-spring-cognito-control.md` |
+| 8. corridas de control | en curso: keel-spring hecho (asset-vault 32/32, shop-api 92/92, 2026-11-10); keel-spring con Cognito hecho (asset-vault 32/32, 2026-11-11); keel-nest: asset-vault con Keycloak (32/32) y shop-api con Cognito (92/92), 2026-11-11; faltan cuatro de Keycloak (shop-api en keel-nest; las dos de keel-dotnet y de keel-go) y dos de Cognito (keel-go y keel-dotnet) | `docs/corridas/2026-11-10-*-227-spring-control.md`, `2026-11-11-*-227-*.md` |
 
 ## Para retomar
 
@@ -568,3 +569,9 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
   generador).
 - Siguiente: **incremento 8, corridas de control** (las lanza el usuario). Cada una: `cd D:\keel-example\<workspace>\services\<servicio>-<generador>`
   y `/keel-generate-<generador>`; en keel-nest, `npm install` antes.
+- **Corridas de keel-nest (2026-11-11)**: asset-vault con Keycloak 32/32 a la primera (huella 14, 13 TODO) y shop-api con
+  Cognito 92/92 (huella 30: 25 TODO y las 4 consultas por lote de keel-spring). `quarantine-last-scanned-at` y
+  `cart-line-sum-over-max` vuelven: la serie los da ya como candidatos a id. Un hueco menor del generador: el paso 7 del
+  agente de infra ejecuta `reset-db.sh` antes del primer arranque, y con `fixtures.sql` la carga falla porque el esquema
+  aún no existe (pendiente: el paso está en keel-nest, keel-dotnet y keel-go; keel-spring no lo tiene).
+
