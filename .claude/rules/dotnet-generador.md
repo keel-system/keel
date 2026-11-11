@@ -79,6 +79,12 @@ JWT validado con `Microsoft.IdentityModel.JsonWebTokens`. Las pruebas emitidas f
 (`TestCredential.cs`) y el arnés pide los tokens a `infra/test-credentials.env` (`Support/Credentials.cs`); lo miden
 `test/security-parity.test.js` y `npm run security-check`.
 
+El contrato del token con cada proveedor (fase 2 de `PLAN-PROVEEDOR-IDENTIDAD.md`): build emite `TokenContractTests.cs` con los
+casos `IDT-*` de `keel-core/gen/token-cases.js`, contra el `JwtAuthenticator` real y el perfil `test` cargado de verdad. Con un
+proveedor que genera el id del cliente, `ServiceClientIds.cs` traduce el exento y la identidad 1:1. Lo miden
+`test/token-contract.test.js` (sin SDK) y `cs-check --fixtures` con las variantes `*-cognito` y los sabotajes de
+`scripts/lib/token-sabotages.js`, cada uno en exactamente sus casos.
+
 `resolvedBy` (12e-a): el finder `FindBy<Campo>Containing` en los dos adaptadores y `CallerIdentityResolver`, que el endpoint
 llama antes de despachar (`test/caller-resolution.test.js`). El diseño escribe `resolvedBy` como texto (`Entidad.campo`):
 léelo con `resolvedByOf` de `repositories.js`, nunca como objeto — la nota del mensaje del broker salió con `undefined` así

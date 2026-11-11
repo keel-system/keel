@@ -26,6 +26,9 @@ import { rowClass } from './persistence.js';
 import { messageComponents, messageNamespace } from './services.js';
 import { cacheMember } from './cache.js';
 import { carriesEntryGate } from '@keel-system/keel-core/gen';
+import { credentialClientId, tokenContract } from '@keel-system/keel-core/gen/identity-providers';
+import { translatedClients } from '@keel-system/keel-core/gen/security-config';
+import { configNamespace } from './config.js';
 
 export const READ_SCOPE = 'ReadScope';
 export const READ_SCOPES = 'ReadScopes';
@@ -421,11 +424,15 @@ function readScopeTestsFile(model) {
   }
   const edge = [];
   const blocks = new Map();
+  // El cliente exento con la forma del proveedor: su claim y su id; si el proveedor genera el id, el mapa del perfil test.
+  const [clientClaim] = tokenContract(model.stack?.auth).clientClaims;
+  const translates = translatedClients(model).length > 0;
   for (const operation of scopedReadsOf(model)) blocks.set(readScopesMethod(operation.readScope), operation.readScope);
   for (const [method, read] of blocks) {
     if (read.kind === 'scoping') {
       const role = read.exemptRoles[0];
       const client = read.exemptClients[0];
+      const clientId = client ? credentialClientId(model.stack?.auth, client) : null;
       edge.push(`    [Fact]
     public void RS10_${method}_ElClaimAusenteEsElConjuntoVacioYSoloLaExencionLoVeTodo()
     {
@@ -434,8 +441,9 @@ function readScopeTestsFile(model) {
         var some = As(Token("custodio", [], (${csString(read.claim)}, "a b")));
         Assert.Equal(ReadScopeKind.Within, some.Kind);
         Assert.True(some.Values.SetEquals(["a", "b"]));${role ? `
-        Assert.Equal(ReadScopeKind.Unrestricted, As(Token("admin", [${csString(`ROLE_${role}`)}])).Kind);` : ''}${client ? `
-        Assert.Equal(ReadScopeKind.Unrestricted, As(Token(${csString(client)}, [], ("azp", ${csString(client)}))).Kind);` : ''}
+        Assert.Equal(ReadScopeKind.Unrestricted, As(Token("admin", [${csString(`ROLE_${role}`)}])).Kind);` : ''}${client ? `${translates ? `
+        ServiceClientIds.Configure(ServiceConfiguration.Load(name => name == "PROFILE" ? "test" : null));` : ''}
+        Assert.Equal(ReadScopeKind.Unrestricted, As(Token(${csString(clientId)}, [], (${csString(clientClaim)}, ${csString(clientId)}))).Kind);` : ''}
 
         static ReadScope As(Principal principal)
         {
@@ -496,6 +504,7 @@ function readScopeTestsFile(model) {
     namespaceOf(model, 'repositories'),
     namespaceOf(model, 'security'),
     namespaceOf(model, 'errors'),
+    ...(translates && edge.length > 0 ? [configNamespace(model)] : []),
     ...(cachedKeys.length > 0 ? [namespaceOf(model, 'appSupport'), ...messageUsings] : [])
   ];
   const body = `/// <summary>

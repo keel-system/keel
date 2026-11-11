@@ -12,6 +12,7 @@ import { tmpDir } from './tmp.js';
 import { FINDER_DESIGNS } from '../../../keel-core/test/helpers/finder-designs.js';
 import { CONDITIONAL_WRITE_DESIGNS } from '../../../keel-core/test/helpers/conditional-write-designs.js';
 import { READ_SCOPE_DESIGNS } from '../../../keel-core/test/helpers/read-scope-designs.js';
+import { IDENTITY_DESIGNS } from '../../../keel-core/test/helpers/identity-designs.js';
 
 const here = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.join(here, '..', '..', '..');
@@ -341,7 +342,27 @@ export const CS_VARIANTS = [
         layers['use-cases'].operations[operation].input.fields.amount.constraints.scalePolicy = 'round';
       }
     }
-  }
+  },
+  // El contrato del token con Cognito (fase 2 de PLAN-PROVEEDOR-IDENTIDAD.md): la prueba emitida TokenContractTests con
+  // los casos de D1 a D4. asset-vault (scopes prefijados, exentos y alcance), shop-api (identidad desde `email`),
+  // notification-mailer (identidad del cliente con `resolvedBy`) y su silueta 1:1 de identity-designs.js.
+  ...['asset-vault', 'shop-api', 'notification-mailer'].map((from) => ({
+    name: `${from}-cognito`,
+    from,
+    auth: 'cognito',
+    mutate: (manifest, layers, name) => {
+      manifest.service.name = name;
+    }
+  })),
+  ...IDENTITY_DESIGNS.map((design) => ({
+    name: `${design.name}-cognito`,
+    from: design.from,
+    auth: 'cognito',
+    mutate(manifest, layers, name) {
+      manifest.service.name = name;
+      design.mutate(layers);
+    }
+  }))
 ];
 
 /**
@@ -349,9 +370,10 @@ export const CS_VARIANTS = [
  * persistencia: PostgreSQL o MongoDB); con mensajería, RabbitMQ (el default del stack es Kafka); con
  * pagos, Stripe salvo que la variante diga otra pasarela (sin una, la capa no se emite); y la telemetría que pida la variante.
  */
-export function variantStack(layers, { broker = null, paymentGateway = null, telemetry = null, database = null } = {}) {
+export function variantStack(layers, { broker = null, paymentGateway = null, telemetry = null, database = null, auth = null } = {}) {
   const stack = {
     ...(database ? { database } : {}),
+    ...(auth ? { auth } : {}),
     ...(layers.messaging ? { broker: broker ?? 'rabbitmq' } : {}),
     ...(layers.payments ? { paymentGateway: paymentGateway ?? 'stripe' } : {}),
     ...(telemetry ? { telemetry } : {})

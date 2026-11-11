@@ -31,7 +31,7 @@ import { credentialFinderName, portClass, repositoriesNamespace } from './reposi
 import { configNamespace } from './config.js';
 import { wireNamespace } from './wire.js';
 import { localIssuer } from '@keel-system/keel-core/gen/identity-realm';
-import { LOCAL_API_KEY, TEST_JWKS_VARIABLE, localClientApiKey, securityConfigFiles } from '@keel-system/keel-core/gen/security-config';
+import { LOCAL_API_KEY, TEST_JWKS_VARIABLE, localClientApiKey, securityConfigFiles, translatedClients } from '@keel-system/keel-core/gen/security-config';
 import { securityPlan, usesHttpSecurity, usesJwt, usesCallerScope } from '@keel-system/keel-core/gen/features';
 export { securityPlan, usesHttpSecurity, usesJwt, usesCallerScope };
 export { localIssuer };
@@ -125,6 +125,7 @@ export function generate(model) {
     files.push(file(model, 'security', 'CorsPolicy', corsPolicyBody(model), ['System.Text.RegularExpressions', 'Microsoft.AspNetCore.Http', configNamespace(model)]));
   }
   if (usesCallerIdentity(model)) files.push(file(model, 'security', 'CallerIdentity', callerIdentityBody(model), [namespaceOf(model, 'errors')]));
+  if (translatedClients(model).length > 0) files.push(file(model, 'security', 'ServiceClientIds', serviceClientIdsBody(), [configNamespace(model)]));
   const resolution = callerResolution(model);
   if (resolution) {
     files.push(file(model, 'security', 'CallerIdentityResolver', callerIdentityResolverBody(model, resolution), [repositoriesNamespace(model), 'System.Globalization']));
@@ -367,7 +368,8 @@ ${chains.join('\n')}
 function jwtAuthenticatorBody(model) {
   const sec = model.security;
   const claims = tokenClaims(model.stack?.auth);
-  const { prefixedScopes, audienceInScopePrefix, displayName } = tokenContract(model.stack?.auth);
+  const { prefixedScopes, audienceInScopePrefix, displayName, accepted } = tokenContract(model.stack?.auth);
+  const translates = translatedClients(model).length > 0;
   // Sin roles, permisos ni scopes en ninguna regla, Spring usa su conversor por defecto, cuyo principal es el `sub`:
   // el nombre que ve la identidad del llamante tiene que ser el mismo.
   const principalClaim = sec.usesAuthorities ? claims.principalClaim : 'sub';
@@ -440,7 +442,10 @@ ${grants.join('\n')}
 
     private readonly string? issuerUri;
     private readonly string? jwkSetUri;
-    private readonly string? inlineJwks;
+    private readonly string? inlineJwks;${prefixedScopes ? `
+
+    /// <summary>El resource server de este servicio (security.audience): solo los scopes con su prefijo dan authority.</summary>
+    private readonly string resourceServer;` : ''}
     private readonly JsonWebTokenHandler handler = new();
     private SigningKeys? keys;
 
@@ -451,7 +456,9 @@ ${grants.join('\n')}
         ArgumentNullException.ThrowIfNull(configuration);
         issuerUri = Setting(configuration, "security:oauth2:issuer-uri");
         jwkSetUri = Setting(configuration, "security:oauth2:jwk-set-uri");
-        inlineJwks = Setting(configuration, "security:oauth2:jwks");
+        inlineJwks = Setting(configuration, "security:oauth2:jwks");${prefixedScopes ? `
+        resourceServer = Setting(configuration, "security:audience") ?? ${csString(audienceOf(model))};` : ''}${translates ? `
+        ServiceClientIds.Configure(configuration);` : ''}
     }
 
     /// <summary>El principal del token, o <see cref="InvalidCredentialException"/> si no vale (401).</summary>
@@ -478,7 +485,13 @@ ${grants.join('\n')}
         {
             throw new InvalidCredentialException(result.Exception?.Message ?? "El token no es válido", result.Exception);
         }
-        return ToPrincipal((JsonWebToken)result.SecurityToken);
+${accepted ? `        var principal = ToPrincipal((JsonWebToken)result.SecurityToken${prefixedScopes ? ', resourceServer' : ''});
+        // Un token del mismo emisor y con la misma firma que no es un access token: lo que lo distingue es este claim.
+        if (!string.Equals(ClaimValues.Text(principal.Claims, ${csString(accepted.claim)}), ${csString(accepted.value)}, StringComparison.Ordinal))
+        {
+            throw new InvalidCredentialException("El token no es un access token");
+        }
+        return principal;` : `        return ToPrincipal((JsonWebToken)result.SecurityToken${prefixedScopes ? ', resourceServer' : ''});`}
     }
 
 ${issuedFor}
@@ -551,7 +564,7 @@ ${issuedFor}
         return [.. new JsonWebKeySet(await response.Content.ReadAsStringAsync(cancellationToken)).GetSigningKeys()];
     }
 
-    private static Principal ToPrincipal(JsonWebToken token)
+    private static Principal ToPrincipal(JsonWebToken token${prefixedScopes ? ', string resourceServer' : ''})
     {
         var claims = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         using (var document = JsonDocument.Parse(Base64UrlEncoder.Decode(token.EncodedPayload)))
@@ -563,7 +576,7 @@ ${issuedFor}
         }
         var roles = RolesOf(claims);
         var authorities = new HashSet<string>(roles.Select(role => "ROLE_" + role), StringComparer.Ordinal);
-        foreach (var scope in ScopesOf(claims))
+        foreach (var scope in ScopesOf(claims${prefixedScopes ? ', resourceServer' : ''}))
         {
             authorities.Add("SCOPE_" + scope);
         }
@@ -587,11 +600,12 @@ ${issuedFor}
 ${roles}
     }
 
-    private static IEnumerable<string> ScopesOf(Dictionary<string, JsonElement> claims) =>
+    private static IEnumerable<string> ScopesOf(Dictionary<string, JsonElement> claims${prefixedScopes ? ', string resourceServer' : ''}) =>
         (ClaimValues.Text(claims, "scope") ?? string.Empty)
             .Split(' ', StringSplitOptions.RemoveEmptyEntries)${prefixedScopes ? `
-            // ${displayName}: <resource-server>/<scope>. Sin prefijo, se queda igual.
-            .Select(value => value[(value.IndexOf('/', StringComparison.Ordinal) + 1)..])` : ''};
+            // ${displayName}: <resource-server>/<scope>. Solo valen los de este servicio.
+            .Where(value => value.StartsWith(resourceServer + "/", StringComparison.Ordinal) && value.Length > resourceServer.Length + 1)
+            .Select(value => value[(resourceServer.Length + 1)..])` : ''};
 
     private static string? Setting(ServiceConfiguration configuration, string key) =>
         configuration.Get(key) is { } value && !string.IsNullOrWhiteSpace(value) ? value.Trim() : null;
@@ -789,12 +803,19 @@ public sealed partial class CorsPolicy
 function callerIdentityBody(model) {
   const identity = model.security.callerIdentity;
   const optionalOps = model.services.flatMap((group) => group.operations).some((operation) => operation.optionalAuth);
+  const { clientClaims, opaqueClients } = tokenContract(model.stack?.auth);
+  const clientRead = clientClaims.map((claim) => `ClaimValues.Text(principal.Claims, ${csString(claim)})`).join(' ?? ');
+  // D4: con `resolvedBy` no se traduce, la lista del recurso guarda los ids.
+  const oneToOne = opaqueClients && identity.source === 'serviceClient' && !identity.resolvedBy;
   const extract =
     identity.source === 'claim'
       ? `        var value = ClaimValues.Text(principal.Claims, ${csString(identity.claim ?? 'sub')});`
-      : `        // El cliente máquina de la credencial: Keycloak lo pone en azp y otros proveedores en client_id; con
+      : opaqueClients
+        ? `        // El cliente máquina de la credencial, con el id que generó el proveedor.
+        var value = ${oneToOne ? `ServiceClientIds.DeclaredClientName(${clientRead})` : clientRead};`
+        : `        // El cliente máquina de la credencial: Keycloak lo pone en azp y otros proveedores en client_id; con
         // client_credentials, el nombre del principal también es el cliente.
-        var value = ClaimValues.Text(principal.Claims, "azp") ?? ClaimValues.Text(principal.Claims, "client_id") ?? principal.Name;`;
+        var value = ${clientRead} ?? principal.Name;`;
   return `/// <summary>
 /// De dónde sale, por HTTP, la identidad de QUIÉN pide el trabajo (security.authentication.callerIdentity):
 /// ${identity.source === 'claim' ? `el claim <c>${identity.claim ?? 'sub'}</c> del token` : 'el cliente máquina de la credencial'}, que llega al campo <c>${identity.field}</c> del mensaje.
@@ -867,6 +888,52 @@ public sealed class CallerIdentityResolver(${resolution.port} repository)
 }`;
 }
 
+// ─── ServiceClientIds.cs ────────────────────────────────────────────────────────────────────────
+
+// El mapa nombre → id de los clientes máquina, con un proveedor que genera ese id (security.client-ids). Estático y no un
+// servicio del contenedor: CallerIdentity es estático y JwtCallerScope se construye sin configuración. Lo carga
+// JwtAuthenticator al construirse; una variable obligatoria sin valor ya no deja arrancar (ServiceConfiguration, P2).
+function serviceClientIdsBody() {
+  return `/// <summary>El id que el proveedor de identidad generó para cada cliente máquina del diseño (security.client-ids).</summary>
+public static class ServiceClientIds
+{
+    private const string Prefix = "security:client-ids:";
+
+    private static Dictionary<string, string> ids = new(StringComparer.Ordinal);
+
+    /// <summary>Lee el mapa de la configuración.</summary>
+    public static void Configure(ServiceConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        var loaded = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in configuration.Values)
+        {
+            if (key.StartsWith(Prefix, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(value))
+            {
+                loaded[key[Prefix.Length..]] = value.Trim();
+            }
+        }
+        Volatile.Write(ref ids, loaded);
+    }
+
+    /// <summary>El id configurado de un cliente declarado, o null si no lo hay.</summary>
+    public static string? ClientIdOf(string declaredName) => Volatile.Read(ref ids).GetValueOrDefault(declaredName);
+
+    /// <summary>El nombre declarado de un id; un id que no es de ningún cliente declarado sigue crudo y no encuentra recurso.</summary>
+    public static string? DeclaredClientName(string? clientId)
+    {
+        foreach (var (name, id) in Volatile.Read(ref ids))
+        {
+            if (string.Equals(id, clientId, StringComparison.Ordinal))
+            {
+                return name;
+            }
+        }
+        return clientId;
+    }
+}`;
+}
+
 // ─── El alcance por recurso: ICallerScope ───────────────────────────────────────────────────────
 
 function callerScopePortBody(model) {
@@ -898,12 +965,24 @@ function jwtCallerScopeBody(model) {
   const scoping = model.security.scoping;
   const exempt = scoping.exemptRoles;
   const clients = scoping.exemptClients ?? [];
+  const { clientClaims, opaqueClients } = tokenContract(model.stack?.auth);
+  const translates = translatedClients(model).length > 0 && clients.length > 0;
+  const fromToken = clientClaims.map((claim) => `NonEmpty(ClaimValues.Text(principal.Claims, ${csString(claim)}))`).join(' ?? ');
+  // Con ids generados por el proveedor, un usuario que se llamase como un cliente pasaría por él.
+  const clientRead = opaqueClients ? `principal.Kind == PrincipalKind.Token ? ${fromToken} : NonEmpty(principal.Name)` : `${fromToken} ?? NonEmpty(principal.Name)`;
+  const exemptCheck = translates
+    ? 'ExemptClients.Any(name => string.Equals(client, ServiceClientIds.ClientIdOf(name), StringComparison.Ordinal))'
+    : 'ExemptClients.Contains(client, StringComparer.Ordinal)';
+  const recognizedBy = opaqueClients
+    ? `máquina de scoping.exemptClients, reconocidos por el id que el proveedor generó para cada uno (security.client-ids).
+/// La exención es solo del alcance: las reglas de acceso ya se aplicaron.`
+    : `máquina de scoping.exemptClients, reconocidos por el cliente de la credencial (<c>azp</c>, <c>client_id</c> o el
+/// nombre del principal, el mismo criterio que la identidad del llamante). La exención es solo del alcance: las reglas
+/// de acceso ya se aplicaron.`;
   return `/// <summary>
 /// Alcance por recurso leído del token de la petición en curso (security.authentication.scoping): el claim
 /// <c>${scoping.claim}</c> como lista o como texto separado por comas o espacios; exentos, los roles del diseño y los clientes
-/// máquina de scoping.exemptClients, reconocidos por el cliente de la credencial (<c>azp</c>, <c>client_id</c> o el
-/// nombre del principal, el mismo criterio que la identidad del llamante). La exención es solo del alcance: las reglas
-/// de acceso ya se aplicaron.
+/// ${recognizedBy}
 /// </summary>
 public sealed class JwtCallerScope : ${CALLER_SCOPE_PORT}
 {
@@ -923,8 +1002,8 @@ public sealed class JwtCallerScope : ${CALLER_SCOPE_PORT}
         {
             return true;
         }
-        var client = NonEmpty(ClaimValues.Text(principal.Claims, "azp")) ?? NonEmpty(ClaimValues.Text(principal.Claims, "client_id")) ?? NonEmpty(principal.Name);
-        return client is not null && ExemptClients.Contains(client, StringComparer.Ordinal);
+        var client = ${clientRead};
+        return client is not null && ${exemptCheck};
     }
 
     public IReadOnlySet<string> ScopedValues()

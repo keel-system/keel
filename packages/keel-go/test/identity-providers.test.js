@@ -272,9 +272,9 @@ const ALLOWED_DIFFERENCES = {
   ],
   dotnet: [
     /^config\/parameters\/(develop|local|production|test)\/security\.yaml$/,
-    /^src\/[A-Za-z]+\.Infrastructure\/Security\/JwtAuthenticator\.cs$/,
+    /^src\/[A-Za-z]+\.Infrastructure\/Security\/(JwtAuthenticator|CallerIdentity|JwtCallerScope|ServiceClientIds)\.cs$/,
     /^tests\/[A-Za-z]+\.IntegrationTests\/(HarnessSmoke\.cs|Support\/(Credentials|FlowTest)\.cs)$/,
-    /^tests\/[A-Za-z]+\.UnitTests\/TestCredential\.cs$/
+    /^tests\/[A-Za-z]+\.UnitTests\/(TestCredential|TokenContractTests|ApiTests|ReadScopeTests)\.cs$/
   ],
   go: [
     /^config\/parameters\/(develop|local|production|test)\/security\.yaml$/,

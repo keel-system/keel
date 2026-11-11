@@ -45,6 +45,9 @@ import { solution } from '../src/scaffold/render.js';
 import { build } from '../src/commands/build.js';
 import { licenseProblems, verifiedLicense } from '../src/lib/dotnet-stack.js';
 import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
+import { tokenCases } from '@keel-system/keel-core/gen/token-cases';
+import { tokenCaseMethod } from '../src/scaffold/token-contract-test.js';
+import { TOKEN_SABOTAGES } from './lib/token-sabotages.js';
 import { resolveRuntime, startDatabase, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const keep = process.argv.includes('--keep');
@@ -202,6 +205,9 @@ const FIXTURE_SABOTAGES = {
     'manifest.Append("id:").Append(dataId)'
   ]
 };
+// El contrato del token: cada sabotaje cae en EXACTAMENTE los casos IDT-* de su defecto, y lo dice un paso propio.
+for (const [id, { edits }] of Object.entries(TOKEN_SABOTAGES)) FIXTURE_SABOTAGES[id] = edits;
+
 if (sabotage && !SABOTAGES[sabotage] && !FIXTURE_SABOTAGES[sabotage]) {
   console.error(`Sabotaje desconocido: ${sabotage}. Los hay del proyecto (${Object.keys(SABOTAGES).join(', ')}) y de las fixtures (${Object.keys(FIXTURE_SABOTAGES).join(', ')}).`);
   process.exit(2);
@@ -501,11 +507,12 @@ function compileAllFixtures() {
     console.error(`--only=${only.join(',')}: ningún diseño se llama así.`);
     process.exit(2);
   }
-  for (const { name, from, mutate, broker, paymentGateway, telemetry, database } of designs) {
+  const models = new Map();
+  for (const { name, from, mutate, broker, paymentGateway, telemetry, database, auth } of designs) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, from));
     if (mutate) mutate(manifest, layers, name);
     // El stack de cada una, con sus defaults (RabbitMQ, Stripe): variantStack de test/helpers/workspace.js.
-    const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: variantStack(layers, { broker, paymentGateway, telemetry, database }) });
+    const { files, model } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: variantStack(layers, { broker, paymentGateway, telemetry, database, auth }) });
     for (const file of files) {
       const target = path.join(root, name, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -514,16 +521,20 @@ function compileAllFixtures() {
       if (file.path === 'global.json') fs.writeFileSync(path.join(root, 'global.json'), file.content);
       if (file.path.endsWith('.csproj')) projects.push(`${name}/${file.path}`);
     }
+    models.set(name, model);
   }
   if (sabotage && FIXTURE_SABOTAGES[sabotage]) {
-    const [file, from, to] = FIXTURE_SABOTAGES[sabotage];
-    const target = path.join(root, file);
-    const text = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
-    if (!text.includes(from)) {
-      console.error(`El sabotaje '${sabotage}' no se aplica a lo emitido hoy (¿cambió el texto?).`);
-      process.exit(2);
+    // Un sabotaje es una edición [archivo, texto, sustituto] o una lista de ellas.
+    const entry = FIXTURE_SABOTAGES[sabotage];
+    for (const [file, from, to] of Array.isArray(entry[0]) ? entry : [entry]) {
+      const target = path.join(root, file);
+      const text = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
+      if (!text.includes(from)) {
+        console.error(`El sabotaje '${sabotage}' no se aplica a lo emitido hoy en ${file} (¿cambió el texto, o falta --only con ese diseño?).`);
+        process.exit(2);
+      }
+      fs.writeFileSync(target, text.replace(from, to));
     }
-    fs.writeFileSync(target, text.replace(from, to));
     console.log(`(sabotaje de las fixtures: ${sabotage})`);
   }
   // Las sondas comunes referencian fixtures concretas: con --only, solo las pruebas emitidas de los diseños pedidos.
@@ -551,6 +562,7 @@ function compileAllFixtures() {
   const tested = dotnet(root, ['test', '--solution', 'Fixtures.slnx', '--no-build', '-c', 'Release']);
   const totals = [...tested.output.matchAll(/total: (\d+)/g)].map((match) => Number(match[1]));
   const total = totals.length > 0 ? Math.max(...totals) : null;
+  if (TOKEN_SABOTAGES[sabotage]) tokenSabotageStep(models, tested.output);
   if (!step('las pruebas emitidas de todas las fixtures y las sondas del dominio y de la API pasan', tested.ok, total ? `${total} pruebas` : '')) {
     console.error(tested.output.split('\n').filter((line) => /con errores|failed|error/i.test(line)).slice(0, 80).join('\n'));
     // Los nombres no bastan para un fallo de limpieza o de tiempos: la salida entera, fuera de la raíz temporal.
@@ -562,6 +574,25 @@ function compileAllFixtures() {
 }
 
 await fixtureLicenses(compileAllFixtures());
+
+/**
+ * Con un sabotaje del token, los casos IDT-* que cayeron tienen que ser EXACTAMENTE los marcados con su defecto en los
+ * diseños que toca: ni uno de menos (no lo vería) ni uno de más (rompe otra regla).
+ */
+function tokenSabotageStep(models, output) {
+  const { defects, edits } = TOKEN_SABOTAGES[sabotage];
+  const touched = new Set(edits.map(([file]) => file.split('/')[0]));
+  const expected = [...touched]
+    .flatMap((design) => {
+      const model = models.get(design);
+      const tests = `${solution(model).unitTests.name}.TokenContractTests`;
+      return tokenCases(model).filter((entry) => defects.includes(entry.defect)).map((entry) => `${tests}.${tokenCaseMethod(entry.id)}`);
+    })
+    .sort();
+  // Microsoft.Testing.Platform nombra cada prueba caída («failed» o, con la interfaz en español, «con errores»).
+  const fell = [...new Set([...output.matchAll(/(?:failed|con errores) ([\w.]+\.TokenContractTests\.IDT_\w+)/g)].map((match) => match[1]))].sort();
+  step(`el sabotaje ${sabotage} cae en exactamente sus casos (${expected.join(', ')})`, expected.length > 0 && JSON.stringify(fell) === JSON.stringify(expected), `cayeron: ${fell.join(', ') || 'ninguno'}`);
+}
 
 const failed = results.filter((result) => !result.ok).length;
 if (keep) {

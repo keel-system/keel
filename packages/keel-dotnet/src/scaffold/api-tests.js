@@ -7,6 +7,7 @@
 // Las peticiones las elige del DISEÑO keel-core/gen/api-cases.js, la misma elección que en keel-nest: si un caso
 // no tiene operación que lo ejercite, no se emite.
 
+import { tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { FRAMEWORK_RESPONSES as FW, missingParameterMessage, missingPartMessage } from '@keel-system/keel-core/gen/api-errors';
@@ -286,6 +287,15 @@ const CREDENTIAL_HEADER = `
  * keel-nest): el 401 antes de enrutar, la clave o el token que no valen (malformado, caducado, firmado con otra clave) y
  * el 403 de una regla.
  */
+/**
+ * Los claims del token del 403: ninguna authority, y el claim con el que el proveedor marca el token como access token
+ * (sin él, el servidor respondería 401 y no 403).
+ */
+function bareClaims(model) {
+  const { accepted } = tokenContract(model.stack?.auth);
+  return `"""${JSON.stringify({ sub: 'keel-sin-permisos', ...(accepted ? { [accepted.claim]: accepted.value } : {}) })}"""`;
+}
+
 function securityTests(model) {
   if (!usesTestCredential(model)) return [];
   const cases = neutralSecurityCases(model, securityPlan(model));
@@ -335,7 +345,7 @@ function securityTests(model) {
     [Fact]
     public async Task UnaCredencialValidaSinLoQueExigeLaReglaEs403()
     {
-        var bare = TestCredential.TokenWith("""{"sub":"keel-sin-permisos"}""");
+        var bare = TestCredential.TokenWith(${bareClaims(model)});
         using var response = await Send(${csString(cases.forbidden.method)}, ${csString(cases.forbidden.url)}, credential: ("Authorization", "Bearer " + bare));
         await ExpectError(response, ${expected('accessDenied', FRAMEWORK_ERRORS.accessDenied.code)});
     }`);

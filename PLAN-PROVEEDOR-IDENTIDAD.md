@@ -229,7 +229,7 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
 | Fase | Estado | Medido con |
 |---|---|---|
 | 1. contrato del proveedor | hecha el 2026-11-10 (sin el 1.5, opcional) | Lo emitido, idéntico en 4 generadores × 19 fixtures × 3 valores de `auth`; `keel-core/test/token-cases.test.js` y `keel-go/test/identity-providers.test.js`, falsada con tres sabotajes; las seis suites |
-| 2. servidor equivalente | a medias: 2.1 hecho y 2.2/2.3 en keel-spring y keel-nest (2026-11-10); faltan keel-dotnet y keel-go | keel-spring: `token-check` (4 diseños) y sus 4 sabotajes. keel-nest: `test/token-contract.test.js` ejecuta lo emitido, 3 sabotajes, y `ts-check --auth=cognito` 13/13. Lo emitido con `keycloak` y sin proveedor, idéntico salvo la prueba nueva |
+| 2. servidor equivalente | a medias: 2.1 hecho y 2.2/2.3 en keel-spring, keel-nest (2026-11-10) y keel-dotnet (2026-11-11); falta keel-go | keel-spring: `token-check` (4 diseños) y sus 4 sabotajes. keel-nest: `test/token-contract.test.js` ejecuta lo emitido, 3 sabotajes, y `ts-check --auth=cognito` 13/13. keel-dotnet: `cs-check --fixtures` con cuatro variantes `*-cognito` y 3 sabotajes, cada uno en exactamente sus casos. Lo emitido con `keycloak` y sin proveedor, idéntico salvo la prueba nueva |
 | 3. lo que debe cumplir el proveedor | pendiente | |
 | 4. emulador fiel y arnés | pendiente | |
 | 5. Cognito real | diferida (fuera del cierre) | |
@@ -259,6 +259,15 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
   403 (lo vio `ts-check`). **keel-dotnet (`api-tests.js:338`) y keel-go (`api-tests.js:545`) tienen ese mismo token.**
 - Local sigue con `client_id` igual al nombre: `clientIdLines` pone el nombre en `local` y `develop`, y cambia con T3 en la fase 4.
 - **Fase 3.2 o antes:** la descripción de `SECURITY_AUDIENCE` en `keel-spring/.../readme.js` dice «claim `aud`», falso con Cognito.
-- Siguiente: **fase 2, incremento 2.3 en keel-dotnet** (con la prueba emitida del 2.2 y `cs-check`), y después keel-go, en un contexto
-  nuevo. Patrón: lo de keel-nest. Hay que ampliar `ALLOWED_DIFFERENCES` de `keel-go/test/identity-providers.test.js` en cada generador,
-  y RS-10 de keel-nest, keel-dotnet y keel-go sigue con `azp` escrito a mano. P5 puede esperar a la fase 4.
+- keel-dotnet (2026-11-11): `TokenContractTests.cs` (`src/scaffold/token-contract-test.js`) carga el perfil `test` REAL con
+  `ServiceConfiguration.Load`, así que mide también la audiencia y el mapa `client-ids` de `security.yaml`; un método por caso con el
+  id en el nombre, que es lo que lee `cs-check`. El mapa vive en `ServiceClientIds.cs` (estático: `CallerIdentity` es estático y
+  `JwtCallerScope` se construye sin configuración) y lo carga el constructor de `JwtAuthenticator`. Las variantes `*-cognito` están en
+  `CS_VARIANTS` (`variantStack` admite `auth`), los sabotajes en `scripts/lib/token-sabotages.js` (`cs-check --fixtures
+  --only=asset-vault-cognito,mailer-one-to-one-cognito --sabotage=<id>`: el paso «cae en exactamente sus casos» en verde y la suite
+  en rojo). RS-10 de keel-dotnet ya no lleva `azp` escrito a mano: con Cognito usa `client_id`, el id opaco y el mapa del perfil
+  `test`, y por eso `client-translation` también lo tumba.
+- Siguiente: **fase 2, incremento 2.3 en keel-go**, en un contexto nuevo. Patrón: keel-dotnet (la prueba emitida ejecutada por
+  `go-check`, con el perfil `test` real si se puede). Hay que ampliar `ALLOWED_DIFFERENCES` de `keel-go/test/identity-providers.test.js`
+  (`api_test.go` ya está; el token del 403 está en `api-tests.js:545`), y RS-10 de keel-nest y keel-go sigue con `azp` escrito a
+  mano. P5 puede esperar a la fase 4.
