@@ -77,7 +77,7 @@ export const IDENTITY_PROVIDERS = {
       // Cognito genera el id del app client: el valor del claim no es el nombre que declara el diseño.
       client: { claims: ['client_id'], valueIsDeclaredName: false },
       // Un ID token del mismo pool tiene el mismo emisor y la misma firma: solo este claim los distingue.
-      accepted: { claim: 'token_use', value: 'access' },
+      accepted: { claim: 'token_use', value: 'access', rejected: 'id' },
       accessTokenClaims: COGNITO_ACCESS_TOKEN_CLAIMS,
       customClaims: {
         user: 'disparador de pre-generación de tokens V2 (Essentials y Plus; en Lite, con las funciones de seguridad avanzada)',
