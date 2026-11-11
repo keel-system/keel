@@ -19,7 +19,8 @@ import { planService as planSpring } from '../../keel-spring/src/scaffold/index.
 import { planService as planNest } from '../../keel-nest/src/scaffold/index.js';
 import { planService as planDotnet } from '../../keel-dotnet/src/scaffold/index.js';
 import { planService as planGo } from '../src/scaffold/index.js';
-import { FIXTURES_DIR } from './helpers/workspace.js';
+import { FIXTURES_DIR, makeWorkspace, mountDesign, runCommand } from './helpers/workspace.js';
+import { resolveStack, writeStackConfig } from '@keel-system/keel-core/gen/stack';
 
 const packagesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GENERATORS = { spring: planSpring, nest: planNest, dotnet: planDotnet, go: planGo };
@@ -345,5 +346,28 @@ for (const [name, plan] of Object.entries(GENERATORS)) {
       assert.doesNotMatch(fake, /Cognito/, `${name}: el aviso del ficticio habla de Cognito`);
       assert.deepEqual(emulated(generate(plan, 'asset-vault', PLAIN.id).model), [], `${name}: un proveedor sin emulación declarada no avisa`);
     });
+  });
+}
+
+// El aviso de lo que el proveedor tiene que traer configurado (`checkIdentitySupport`) lo imprime el BUILD de cada
+// generador, no el plan: en keel-nest, keel-dotnet y keel-go quedó dentro del `if (layers.payments)` de la pasarela, y
+// solo avisaba en un diseño con pagos. Se ejecuta el comando entero, que es donde estaba el fallo.
+const BUILDS = {
+  spring: () => import('../../keel-spring/src/commands/build.js'),
+  nest: () => import('../../keel-nest/src/commands/build.js'),
+  dotnet: () => import('../../keel-dotnet/src/commands/build.js'),
+  go: () => import('../src/commands/build.js')
+};
+for (const [name, load] of Object.entries(BUILDS)) {
+  test(`${name}: build avisa de lo que Cognito tiene que traer configurado aunque el diseño no tenga pagos`, async () => {
+    const { build } = await load();
+    const workspace = makeWorkspace(`keel-identity-build-${name}-`);
+    const specDir = mountDesign(workspace, 'asset-vault');
+    const projectDir = path.join(workspace, 'services', `asset-vault-${name}`);
+    fs.mkdirSync(projectDir, { recursive: true });
+    writeStackConfig(projectDir, resolveStack({ database: 'mongodb', broker: 'rabbitmq', auth: 'cognito', cache: 'redis', storage: 'minio' }, loadService(specDir).layers));
+    const { exitCode, output } = await runCommand(workspace, build, 'specs/asset-vault', { defaults: true, acceptUnready: true });
+    assert.equal(exitCode, undefined, output.slice(-2000));
+    assert.match(output, /security: scoping-user: Cognito solo pone el claim 'vaults' en el access token/, `${name}: sin el aviso de D6`);
   });
 }

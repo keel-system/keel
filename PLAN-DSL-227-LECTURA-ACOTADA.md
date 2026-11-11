@@ -297,7 +297,24 @@ keel-spring `read-scope-check` con MockMvc y un decodificador JWT doble. **Sabot
   dejan de estar declaradas y tienen que salir iguales.
 
 **8. Corridas de control.** Las lanza el usuario, dos a la vez como mucho: `asset-vault` y `shop-api` en los cuatro
-generadores. Se registran en `docs/corridas/` con la huella y los `designGaps`.
+generadores con Keycloak, y cuatro más con Cognito, cruzadas (decisión del usuario, 2026-11-11): cada generador una vez y
+cada diseño dos, con el mismo stack que su gemela de Keycloak, así que lo único que cambia es el proveedor. Se registran en
+`docs/corridas/` con la huella y los `designGaps`.
+
+| Workspace (`D:\keel-example\`) | Diseño | Generador | Proveedor | Lo que añade |
+|---|---|---|---|---|
+| `vault-227-spring-mongo-rabbit` | asset-vault | keel-spring | Keycloak | hecha (32/32) |
+| `shop-227-spring-postgre` | shop-api | keel-spring | Keycloak | hecha (92/92) |
+| `vault-227-{nest,dotnet,go}-mongo-rabbit` | asset-vault | los otros tres | Keycloak | la gemela de keel-spring |
+| `shop-227-{nest,dotnet,go}-postgre` | shop-api | los otros tres | Keycloak | la gemela de keel-spring |
+| `vault-227-spring-mongo-rabbit-cognito` | asset-vault | keel-spring | Cognito | D6 (el claim `vaults` por el emulador), D3 (el cliente exento con id opaco), los scopes prefijados de las máquinas |
+| `vault-227-go-mongo-rabbit-cognito` | asset-vault | keel-go | Cognito | lo mismo en keel-go |
+| `shop-227-nest-postgre-cognito` | shop-api | keel-nest | Cognito | D5 (la identidad por `email`), las personas de `tokenAs` por el emulador |
+| `shop-227-dotnet-postgre-cognito` | shop-api | keel-dotnet | Cognito | lo mismo en keel-dotnet |
+
+Las de Cognito miden contra el emulador, no contra un pool real (fase 5 de `PLAN-PROVEEDOR-IDENTIDAD.md`): un verde dice
+que el servidor cumple el contrato del token que el emulador reproduce, con el disparador que exigen D5 y D6 dado por
+hecho.
 
 ## Puerta de cierre
 
@@ -330,7 +347,7 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
 | 5. `level: optional` | hecho (2026-11-10) | OA-1 a OA-3 sobre `conduit-optional` en los cuatro, con `oa-degrade` y `oa-ignore-token` cada uno en exactamente su caso: keel-spring `read-scope-check` (MockMvc con la cadena generada, 12/12); keel-nest `test/optional-auth.test.js` (el hook, las reglas, el JWT y el lector emitidos sobre Fastify); keel-dotnet la prueba emitida `OptionalAuthTests` con `cs-check --fixtures --only=conduit-optional`; keel-go `optional_auth_test.go` con `go-check --read-scope` (8/8); suites de los cinco paquetes |
 | 6. derivados y docs | hecho (2026-11-10) | `keel-nest/test/openapi.test.js` sobre los cinco sujetos: el mismo documento en los cuatro generadores, OA-4, el 404/403 de `readMiss` y el listado acotado, sin deriva para `CHK-DOCS-OPENAPI-DRIFT`; falsado (sin la alternativa vacía cae solo `conduit-optional`; sin la cláusula de `not-found`, solo `conduit-scoped`); `redocly lint` válido en los cinco (los avisos, los mismos que en las fixtures base); suites de los cinco paquetes |
 | 7. fixtures y keel-recover | hecho, salvo la paridad en vivo (2026-11-10) | `keel validate --ready` de las tres fixtures con los mismos criterios que antes (asset-vault 12/13, el que falta es DESIGN.md fuera de un workspace; shop-api y conduit con los mismos rojos previos y FL-ART-009 sin ejecutar); `design-matrix` 206 falsados, ninguno `sin-mutacion`; suites de los seis paquetes; `db-check` de keel-go sobre shop-api en PostgreSQL y MySQL, con `rank-sort` cayendo en `TestOrderMain_SortsByOrderStatusRank`. La paridad de shop-api y conduit necesita los servicios regenerados en marcha: pasa al inc. 8 |
-| 8. corridas de control | en curso: keel-spring hecho (asset-vault 32/32, shop-api 92/92, 2026-11-10); faltan keel-nest, keel-dotnet y keel-go | `docs/corridas/2026-11-10-*-227-spring-control.md` |
+| 8. corridas de control | en curso: keel-spring hecho (asset-vault 32/32, shop-api 92/92, 2026-11-10); faltan las seis de Keycloak de keel-nest, keel-dotnet y keel-go y las cuatro de Cognito (preparadas el 2026-11-11) | `docs/corridas/2026-11-10-*-227-spring-control.md` |
 
 ## Para retomar
 
@@ -540,4 +557,14 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
   cinco criterios previos al plan). Cada corrida: `cd services/<servicio>-<generador>` y `/keel-generate-<generador>`; se
   registra en `docs/corridas/` con la huella. La paridad de keel-recover (shop-api y conduit) se valida después.
 - **Corridas de keel-spring hechas (2026-11-10)**: asset-vault 32/32 y shop-api 92/92, registradas en `docs/corridas/`. Tres defectos del generador arreglados antes de las otras seis: `max-part-count` de keel-spring a dos veces el máximo válido; `ensurePersona` rechaza en los cuatro un `sub` de más de 36 caracteres (`PERSONA_SUB_MAX`, `gen/identity-realm.js`); y la skill de los cuatro da la forma de `design-gaps.yaml` (`DESIGN_GAPS_FORM`, atada al schema). Medido con las seis suites, `compile-check` de keel-spring y `security-check` de keel-dotnet y keel-go; la guarda, falsada en `keel-nest/test/persona-sub.test.js`. Pendiente, menor: el comentario de `test-credentials.env` sobre el secreto del recurso acotado. Los seis workspaces restantes, refrescados con `build --refresh`.
-- Siguiente: **incremento 8, corridas de control** (las lanza el usuario).
+- **Corridas pendientes puestas al día (2026-11-11).** Los seis workspaces de Keycloak sin correr se refrescaron con
+  `build --refresh --prune` (shop-api con `--accept-unready`): ganan lo de las fases 2 a 4 del plan del proveedor (la
+  prueba del contrato del token, `docs/keel/identity-contract.md` y, en shop-api, el arnés que reconcilia el rol de la
+  persona). Sus diseños son los de las fixtures de hoy. Y cuatro workspaces nuevos con Cognito, copia del de Keycloak del
+  mismo diseño con `auth: cognito` en `keel-stack.json` (tabla del § 8). **Lo que destapó prepararlos**: el aviso de lo que
+  el proveedor tiene que traer configurado (`checkIdentitySupport`, D5/D6) solo lo imprimía el `build` de keel-spring; en
+  los otros tres quedó dentro del `if (layers.payments)` de la pasarela. Arreglado, con una red en
+  `keel-go/test/identity-providers.test.js` que ejecuta el `build` de los cuatro (falsada: sin el arreglo cae solo ese
+  generador).
+- Siguiente: **incremento 8, corridas de control** (las lanza el usuario). Cada una: `cd D:\keel-example\<workspace>\services\<servicio>-<generador>`
+  y `/keel-generate-<generador>`; en keel-nest, `npm install` antes.
