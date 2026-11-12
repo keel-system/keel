@@ -1,5 +1,9 @@
 # DSL 2.27 — la autorización a nivel de fila en lectura
 
+**Estado: cerrado (2026-11-11)**, movido a `completed_plans/`. Incrementos 0 a 7 hechos y, del 8, ocho de las once
+corridas de control en verde, cada generador con las dos fixtures y cada proveedor en los cuatro: el usuario las dio por
+suficientes. Lo que queda abierto, fuera del plan, está en § Lo que queda fuera.
+
 Origen: R3 de `docs/evaluacion-dsl-2.24.md` (R3a, R3b y R3c). Este plan la lleva al DSL y a los cuatro generadores con
 la regla de siempre: **el mismo diseño genera servidores equivalentes**. Cada pieza nueva tiene una red que la ejecuta y
 un sabotaje que demuestra que esa red la ve.
@@ -307,8 +311,8 @@ cada diseño dos, con el mismo stack que su gemela de Keycloak, así que lo úni
 | `shop-227-spring-postgre` | shop-api | keel-spring | Keycloak | hecha (92/92) |
 | `vault-227-nest-mongo-rabbit` | asset-vault | keel-nest | Keycloak | hecha (32/32, 2026-11-11, a la primera) |
 | `vault-227-dotnet-mongo-rabbit` | asset-vault | keel-dotnet | Keycloak | hecha (32/32, 2026-11-11) |
-| `vault-227-go-mongo-rabbit` | asset-vault | keel-go | Keycloak | la gemela de keel-spring |
-| `shop-227-{nest,dotnet}-postgre` | shop-api | keel-nest, keel-dotnet | Keycloak | la gemela de keel-spring |
+| `vault-227-go-mongo-rabbit` | asset-vault | keel-go | Keycloak | sin correr al cerrar (refrescada con los arreglos de keel-go) |
+| `shop-227-{nest,dotnet}-postgre` | shop-api | keel-nest, keel-dotnet | Keycloak | sin correr al cerrar |
 | `shop-227-go-postgre` | shop-api | keel-go | Keycloak | hecha (92/92, 2026-11-11, a la primera) |
 | `vault-227-spring-mongo-rabbit-cognito` | asset-vault | keel-spring | Cognito | hecha (32/32, 2026-11-11): D6 y D3 en verde por el emulador |
 | `vault-227-go-mongo-rabbit-cognito` | asset-vault | keel-go | Cognito | hecha (32/32, 2026-11-11): D6 y D3 en verde por el emulador |
@@ -331,6 +335,28 @@ hecho.
 
 Un generador que no llegue a la puerta rechaza la capacidad en su `supported-features.js` con su motivo.
 
+**Al cerrar (2026-11-11)**: los cuatro generadores pasan la puerta, salvo la paridad de `shop-api` y `conduit`, que no se
+ejecutó en vivo y queda fuera del plan (§ Lo que queda fuera). Las corridas: ocho de once en verde y a la primera, salvo
+la de shop-api en keel-dotnet con Cognito (dos fallos de `code` arreglados por el propio pipeline). Cada generador corrió
+las dos fixtures, y cada proveedor en los cuatro generadores: las tres de Keycloak sin correr repetían una combinación ya
+medida con el otro proveedor.
+
+## Lo que queda fuera
+
+- **La paridad en vivo de keel-recover** (pendiente del inc. 7): `keel-recover characterize` de FL-ART-009, FL-ORD-005 y
+  FL-ACC-009 contra los sandboxes, y `keel-recover parity` de `shop-api` y `conduit` contra los servicios regenerados, sin
+  las fronteras `F-OPTIONAL-AUTH` ni `F-ORDER-LIST-SCOPING`: las diferencias de `favorited`/`following` y la del listado
+  tienen que salir iguales.
+- **Los designGaps repetidos de las corridas**, para `/keel-evolve` en las fixtures:
+  - `quarantine-last-scanned-at` (asset-vault, cuatro corridas): si `quarantine` renueva `lastScannedAt`.
+  - `cart-line-sum-over-max` (shop-api, cuatro corridas): la suma de `addToCart`/`mergeCart` que pasa del máximo de
+    `count`. **Ya da servidores distintos**: keel-go rechaza con 400 y keel-dotnet acepta.
+  - `cart-line-concurrent-add` (shop-api, keel-dotnet): la carrera de dos altas del mismo producto contra la unicidad
+    `(cart, productId)`, sin error declarado.
+- **Las tres corridas de Keycloak sin correr**: sus workspaces siguen en `D:\keel-example\` refrescados; si se lanzan, se
+  registran en `docs/corridas/` como cualquier otra.
+- Menor: el comentario de `test-credentials.env` sobre el secreto del recurso acotado.
+
 ## Cómo se ejecuta
 
 - Desde `main`, sin subagentes ni worktrees, y keel-spring primero: las pruebas de paridad de los otros tres comparan con lo que emite keel-spring.
@@ -350,7 +376,7 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
 | 5. `level: optional` | hecho (2026-11-10) | OA-1 a OA-3 sobre `conduit-optional` en los cuatro, con `oa-degrade` y `oa-ignore-token` cada uno en exactamente su caso: keel-spring `read-scope-check` (MockMvc con la cadena generada, 12/12); keel-nest `test/optional-auth.test.js` (el hook, las reglas, el JWT y el lector emitidos sobre Fastify); keel-dotnet la prueba emitida `OptionalAuthTests` con `cs-check --fixtures --only=conduit-optional`; keel-go `optional_auth_test.go` con `go-check --read-scope` (8/8); suites de los cinco paquetes |
 | 6. derivados y docs | hecho (2026-11-10) | `keel-nest/test/openapi.test.js` sobre los cinco sujetos: el mismo documento en los cuatro generadores, OA-4, el 404/403 de `readMiss` y el listado acotado, sin deriva para `CHK-DOCS-OPENAPI-DRIFT`; falsado (sin la alternativa vacía cae solo `conduit-optional`; sin la cláusula de `not-found`, solo `conduit-scoped`); `redocly lint` válido en los cinco (los avisos, los mismos que en las fixtures base); suites de los cinco paquetes |
 | 7. fixtures y keel-recover | hecho, salvo la paridad en vivo (2026-11-10) | `keel validate --ready` de las tres fixtures con los mismos criterios que antes (asset-vault 12/13, el que falta es DESIGN.md fuera de un workspace; shop-api y conduit con los mismos rojos previos y FL-ART-009 sin ejecutar); `design-matrix` 206 falsados, ninguno `sin-mutacion`; suites de los seis paquetes; `db-check` de keel-go sobre shop-api en PostgreSQL y MySQL, con `rank-sort` cayendo en `TestOrderMain_SortsByOrderStatusRank`. La paridad de shop-api y conduit necesita los servicios regenerados en marcha: pasa al inc. 8 |
-| 8. corridas de control | en curso: keel-spring hecho (asset-vault 32/32, shop-api 92/92, 2026-11-10); keel-spring con Cognito hecho (asset-vault 32/32, 2026-11-11); keel-nest y keel-dotnet: asset-vault con Keycloak (32/32) y shop-api con Cognito (92/92), 2026-11-11; keel-go: asset-vault con Cognito (32/32) y shop-api con Keycloak (92/92), 2026-11-11; faltan tres de Keycloak (shop-api en keel-nest y keel-dotnet; asset-vault en keel-go) | `docs/corridas/2026-11-10-*-227-spring-control.md`, `2026-11-11-*-227-*.md` |
+| 8. corridas de control | hecho, ocho de once (2026-11-11; las tres que faltan, de Keycloak, el usuario las dio por innecesarias): keel-spring hecho (asset-vault 32/32, shop-api 92/92, 2026-11-10); keel-spring con Cognito hecho (asset-vault 32/32, 2026-11-11); keel-nest y keel-dotnet: asset-vault con Keycloak (32/32) y shop-api con Cognito (92/92), 2026-11-11; keel-go: asset-vault con Cognito (32/32) y shop-api con Keycloak (92/92), 2026-11-11; sin correr, tres de Keycloak (shop-api en keel-nest y keel-dotnet; asset-vault en keel-go) | `docs/corridas/2026-11-10-*-227-spring-control.md`, `2026-11-11-*-227-*.md` |
 
 ## Para retomar
 
@@ -587,5 +613,7 @@ Un generador que no llegue a la puerta rechaza la capacidad en su `supported-fea
   go1.27.3, GO-2026-6865 en `klauspost/compress v1.19.2`): `GO_TOOLCHAIN` a go1.27.4 y compress fijado con persistencia
   documental; y `NextLongID()`, que las notas citaban y keel-go no emitía (`src/scaffold/long-ids.js`,
   `test/long-ids.test.js`). `cart-line-sum-over-max` ya diverge entre servidores: keel-go rechaza con 400 y keel-dotnet
-  acepta. `vault-227-go-mongo-rabbit` se refresca con el arreglo antes de correrla.
+  acepta. `vault-227-go-mongo-rabbit` refrescada con el arreglo (`917e9a90`, huella 0).
+- **Plan cerrado (2026-11-11)** con ocho de las once corridas, por decisión del usuario. Lo abierto, en § Lo que queda
+  fuera.
 
