@@ -41,6 +41,8 @@ import {
 import { entityFinders, portFinderParts, relationalFinderMethods, sortConstants } from './finders.js';
 import { readScopePortMethods, readScopeRelationalHelpers, readScopeRelationalMethods } from './read-scope.js';
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
+import * as lifecycle from './data-lifecycle.js';
+import { parametersClass, parametersPath } from './service-parameters.js';
 import { repositoryRoots, isPaginated, resolvedByOf } from '@keel-system/keel-core/gen/features';
 export { repositoryRoots, isPaginated };
 
@@ -372,8 +374,10 @@ function renderPort(model, entity) {
   methods.push(...portReconciliationMethods(model, entity));
   methods.push(
     `  /**\n   * Guarda el agregado entero (sus entidades internas y sus listas) y devuelve lo guardado. Con\n   * bloqueo optimista, una versión obsoleta sale como conflicto de concurrencia.\n   */\n  abstract save(entity: ${entity.name}): Promise<${entity.name}>;`,
-    `  abstract deleteById(${id?.name ?? 'id'}: ${idType}): Promise<void>;`
+    lifecycle.deletePortMethod(model, entity, id?.name ?? 'id', idType)
   );
+  // La restauración de un borrado lógico (DSL 2.28, D6): la borrada por su clave y la restauración por id.
+  methods.push(...lifecycle.restorePortMethods(model, entity, id?.name ?? 'id', idType, finder, imports));
   const body = `${finderParts.declarations.map((declaration) => `${declaration}\n\n`).join('')}/**
  * Puerto de persistencia del agregado ${entity.name}. Clase abstracta y no interfaz: sirve también de
  * token de inyección, sin que el dominio importe nada del framework. El adaptador vive en
@@ -434,10 +438,13 @@ function renderAdapter(model, entity) {
   const relations = relationsTree(model, entity);
   const hasRelations = Object.keys(relations).length > 0;
   const findOptions = (where) => `{ where: ${where}${hasRelations ? ', relations: RELATIONS' : ''} }`;
+  // Las lecturas VIVAS (DSL 2.28, D2): con borrado lógico, toda carga y todo listado del puerto deja fuera lo borrado.
+  // findAllById no: es la lectura por referencia, y una raíz borrada sigue siendo historia de quien la referencia (D3).
+  const liveOptions = (where) => findOptions(lifecycle.liveWhere(entity, where, imports));
   const methods = [];
 
   methods.push(`  async findById(${idName}: ${idType}): Promise<${entity.name} | null> {
-    const found = await this.manager.findOne(${ormClass(entity.name)}, ${findOptions(`{ ${idName} }`)});
+    const found = await this.manager.findOne(${ormClass(entity.name)}, ${liveOptions(`{ ${idName} }`)});
     return found == null ? null : toDomain${entity.name}(found);
   }`);
   if (loadsExpecting(model, entity)) {
@@ -458,7 +465,7 @@ function renderAdapter(model, entity) {
     const ownerType = ownerId?.tsType ?? 'string';
     const param = `${inverse.relation}Id`;
     methods.push(`  async ${inverse.finder}(${param}: ${ownerType}): Promise<${entity.name}[]> {
-    const found = await this.manager.find(${ormClass(entity.name)}, ${findOptions(`{ ${param} }`)});
+    const found = await this.manager.find(${ormClass(entity.name)}, ${liveOptions(`{ ${param} }`)});
     return found.map(toDomain${entity.name});
   }`);
   }
@@ -468,7 +475,7 @@ function renderAdapter(model, entity) {
     for (const param of finder.params) imports.push(...param.imports, ...(param.fold ? [{ symbol: 'TextFold', from: TEXT_FOLD_TS }] : []));
     const where = finder.params.flatMap((param) => param.where.map(([prop, expr]) => (prop === expr ? prop : `${prop}: ${expr}`)));
     methods.push(`  async ${finder.name}(${finder.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null> {
-    const found = await this.manager.findOne(${ormClass(entity.name)}, ${findOptions(`{ ${where.join(', ')} }`)});
+    const found = await this.manager.findOne(${ormClass(entity.name)}, ${liveOptions(`{ ${where.join(', ')} }`)});
     return found == null ? null : toDomain${entity.name}(found);
   }`);
   }
@@ -478,7 +485,7 @@ function renderAdapter(model, entity) {
     imports.push(...batch.param.imports, { symbol: 'In', from: 'typeorm' });
     methods.push(`  async ${batch.name}(${batch.signature}): Promise<${entity.name}[]> {
     if (${batch.plural}.length === 0) return [];
-    const found = await this.manager.find(${ormClass(entity.name)}, ${findOptions(`{ ${batch.param.name}: In([...${batch.plural}]) }`)});
+    const found = await this.manager.find(${ormClass(entity.name)}, ${liveOptions(`{ ${batch.param.name}: In([...${batch.plural}]) }`)});
     return found.map(toDomain${entity.name});
   }`);
   }
@@ -487,7 +494,7 @@ function renderAdapter(model, entity) {
     for (const param of occupant.params) imports.push(...param.imports, ...(param.fold ? [{ symbol: 'TextFold', from: TEXT_FOLD_TS }] : []));
     const where = occupant.params.flatMap((param) => param.where.map(([prop, expr]) => (prop === expr ? prop : `${prop}: ${expr}`)));
     methods.push(`  async ${occupant.name}(${occupant.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null> {
-    const found = await this.manager.findOne(${ormClass(entity.name)}, ${findOptions(`{ ${where.join(', ')} }`)});
+    const found = await this.manager.findOne(${ormClass(entity.name)}, ${liveOptions(`{ ${where.join(', ')} }`)});
     return found == null ? null : toDomain${entity.name}(found);
   }`);
   }
@@ -508,7 +515,7 @@ function renderAdapter(model, entity) {
     imports.push({ symbol: 'FindOptionsOrder', from: 'typeorm', type: true });
     methods.push(`  async list(pageable: Pageable): Promise<Page<${entity.name}>> {
     const [rows, total] = await this.manager.findAndCount(${ormClass(entity.name)}, {
-      ${hasRelations ? 'relations: RELATIONS,\n      ' : ''}order: withStableOrder(pageable),
+      ${lifecycle.lifecycleOf(model, entity)?.logical ? `where: ${lifecycle.liveWhere(entity, '{}', imports)},\n      ` : ''}${hasRelations ? 'relations: RELATIONS,\n      ' : ''}order: withStableOrder(pageable),
       skip: pageable.page * pageable.size,
       take: pageable.size
     });
@@ -530,13 +537,19 @@ function renderAdapter(model, entity) {
   methods.push(...adapterGuardMethods(model, entity, imports, findOptions, idType, idName));
   methods.push(...adapterReconciliationMethods(model, entity, imports, findOptions));
   methods.push(saveMethod(model, entity, imports));
-  methods.push(`  async deleteById(${idName}: ${idType}): Promise<void> {
+  // Con borrado lógico (DSL 2.28), deleteById MARCA, y la restauración y la carga de la borrada van con él.
+  const keyWhere = finder ? `{ ${finder.params.flatMap((param) => param.where.map(([prop, expr]) => (prop === expr ? prop : `${prop}: ${expr}`))).join(', ')} }` : null;
+  methods.push(
+    ...(lifecycle.relationalAdapterMethods(model, entity, { idName, idType, orm: ormClass(entity.name), relations: hasRelations, keyFinder: finder, imports, keyWhere }) ?? [
+      `  async deleteById(${idName}: ${idType}): Promise<void> {
     await this.transactions.inTransaction(async (manager) => {
       // Se carga y se borra el GRAFO: las filas de las hijas y de las listas van antes que la raíz.
       const found = await manager.findOne(${ormClass(entity.name)}, ${findOptions(`{ ${idName} }`)});
       if (found != null) await manager.remove(found);
     });
-  }`);
+  }`
+    ])
+  );
 
   const sortable = sortableProperties(model, entity);
   const body = `${hasRelations ? `/** El agregado entero: lo que se carga con la raíz y se borra con ella. */\nconst RELATIONS = ${literal(relations)} as const;\n\n` : ''}${isPaginated(model, entity) || entityFinders(model, entity).length > 0 ? stableOrderHelper(entity, sortable) : ''}${sortConstants(model, entity, imports, PAGE_TS)}${readScopeRelationalHelpers(model, entity)}/**
@@ -616,7 +629,10 @@ export function constructorOf(model, entity, imports) {
     deps.push({ token: bridgeClass(model), name: 'events', type: bridgeClass(model) });
   }
   // El almacén del cronómetro y los plazos vigentes (DSL 2.26) van los últimos: el adaptador arma al guardar.
-  for (const dep of [...claimDependencies(model, entity), ...reconciliationDependencies(model, entity), ...armingDependencies(model, entity)]) {
+  // La ventana de una restauración que lee un parámetro del servicio (DSL 2.28), antes del cronómetro.
+  const lifecycleDeps = lifecycle.lifecycleDependencies(model, entity, { parametersClass: parametersClass(model), parametersPath: parametersPath(model) })
+    .filter((dep) => !claimDependencies(model, entity).some((other) => other.name === dep.name));
+  for (const dep of [...claimDependencies(model, entity), ...reconciliationDependencies(model, entity), ...lifecycleDeps, ...armingDependencies(model, entity)]) {
     imports.push(...dep.imports);
     deps.push(dep);
   }

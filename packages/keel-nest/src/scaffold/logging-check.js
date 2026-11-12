@@ -15,6 +15,8 @@
 // Las reglas son datos (exportadas): el test recorre esta misma lista y la falsa regla a regla, así que una regla
 // nueva no entra sin su caso.
 
+import { personalFieldNames } from '@keel-system/keel-core/gen/personal-data';
+
 /** Las herramientas de línea de comandos que build genera: su salida es la consola, a propósito. */
 export const CLI_FILES = ['src/infrastructure/persistence/schema-baseline.ts'];
 
@@ -55,6 +57,22 @@ export const LOGGING_RULES = [
   }
 ];
 
+/**
+ * La regla de los datos PERSONALES (DSL 2.28, D10, PD-1): un campo que el diseño marca `personal` dentro de una llamada de
+ * log (`command.email`, `card.displayName`). Por nombre, como el resto del gate: un homónimo de otra entidad que no es
+ * personal también casa, y es preferible al revés. Null si el diseño no marca ninguno. La misma regla que keel-spring,
+ * sobre la propiedad de TypeScript en vez del accesor de Java.
+ */
+export function personalRule(model) {
+  const names = personalFieldNames(model);
+  if (names.length === 0) return null;
+  return {
+    id: 'personal',
+    pattern: String.raw`${LOG_CALL}[^;]*\.(?:${names.join('|')})\b`,
+    why: `loguea un campo que el diseño marca personal (DSL 2.28: ${names.join(', ')}): su valor no puede acabar en el backend de logs; loguea el id del agregado`
+  };
+}
+
 export function generate(model) {
   if (!(model.services ?? []).some((service) => (service.operations ?? []).length > 0)) return [];
   return [{ path: 'infra/check-logging.sh', content: script(model) }];
@@ -85,7 +103,7 @@ fi
 ${sourceGate({
   title: 'HIGIENE DE LOGS Y CONTEXTO',
   label: 'logging',
-  rules: LOGGING_RULES.map(({ id, pattern, paths, exclude, why }) => ({ id, pattern, paths, exclude, why })),
+  rules: [...LOGGING_RULES.map(({ id, pattern, paths, exclude, why }) => ({ id, pattern, paths, exclude, why })), ...[personalRule(model)].filter(Boolean)],
   footer: model.stack?.telemetry === 'otel'
     ? 'Ver docs/keel/conventions/observability.md § Reglas para quien escribe código.'
     : 'Loguea con new Logger(Contexto) de Nest: el logger del servicio pone el formato, el nivel y la correlación.'

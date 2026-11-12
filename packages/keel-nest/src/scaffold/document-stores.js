@@ -28,6 +28,7 @@ import { guardClaimsFor } from './claim.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
 import { BSON_VALUES_TS } from './document-persistence.js';
 import { sweepPassSignal } from './timer.js';
+import { DELETED_AT, isLogicallyDeleted } from '@keel-system/keel-core/gen/relational';
 
 // Las rutas son las de la rama relacional: las importan el relay, los listeners y los handlers.
 const OUTBOX_RELAY_STORE_TS = 'src/infrastructure/messaging/outbox/outbox-relay-store.ts';
@@ -447,6 +448,8 @@ export function documentSweepClaimMethods(model, entity) {
     const order = keyOf(model, entity, claimOrderField(entity, claim));
     const setup = [];
     const filter = [`${tsString(field)}: { $in: [${states}] }`];
+    // Lo borrado lógicamente (DSL 2.28) no es candidato de ningún barrido.
+    if (isLogicallyDeleted(entity)) filter.push(`${DELETED_AT.field}: null`);
     if (claim.stalled) {
       const seconds = claim.stalled.parameter
         ? `this.parameters.${claim.stalled.parameter.name} * ${claim.stalled.parameter.unitSeconds}`
@@ -502,7 +505,7 @@ export function documentReconciliationMethods(model, entity) {
     // cada pasada hasta caducar, y los de detrás no se reconciliarían antes.
     const held = await this.reconciliationClaims.held(${tsString(claim.activation)}, claimExpiredBefore);
     const candidates = await this.collection
-      .find({ ${tsString(field)}: { $in: [${states}] }, ${tsString(awaiting)}: { $lt: staleBefore }, _id: { $nin: held as never[] } })
+      .find({ ${tsString(field)}: { $in: [${states}] }, ${tsString(awaiting)}: { $lt: staleBefore }${isLogicallyDeleted(entity) ? `, ${DELETED_AT.field}: null` : ''}, _id: { $nin: held as never[] } })
       .sort({ ${tsString(awaiting)}: 1 })
       .limit(window.batchSize)
       .toArray();

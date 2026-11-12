@@ -22,6 +22,7 @@ import { usesPersistence } from './persistence-entities.js';
 import { PERSISTENCE_ERRORS_TS } from './repositories.js';
 import { usesMessaging, usesSubscriptionMessages } from './messaging.js';
 import { usesApi } from '@keel-system/keel-core/gen/features';
+import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
 export { usesApi };
 
 export const CORRELATION_TS = 'src/infrastructure/correlation/correlation-context.ts';
@@ -72,7 +73,7 @@ export function generate(model) {
               ]
             : [])
         ],
-        filterBody(usesPersistence(model))
+        filterBody(usesPersistence(model), usesPersonalData(model))
       )
     }
   ];
@@ -535,7 +536,15 @@ const PERSISTENCE_BRANCH = `    // ── Persistencia
     if (persisted != null) return this.fromDomain(persisted);
 `;
 
-function filterBody(persistence = false) {
+// Con datos personales (DSL 2.28, D10, PD-2) la violación sin constraint conocida no lleva su pila al log: el mensaje
+// del motor viaja en ella, y el de una unicidad lleva el valor que chocó. Queda la clase.
+const PERSONAL_LEAK = "this.log.warn('Violación de integridad no asociada a ninguna constraint conocida', exception instanceof Error ? exception.stack : String(exception));";
+const PERSONAL_SAFE = [
+  '// Sin la pila: lleva el mensaje del motor, y con datos personales (DSL 2.28) el valor que chocó.',
+  "      this.log.warn(`Violación de integridad no asociada a ninguna constraint conocida (${exception instanceof Error ? exception.name : 'error'})`);"
+].join('\n');
+
+function filterBody(persistence = false, personal = false) {
   const validation = FRAMEWORK_ERRORS.validation.code;
   const domainBranches = domainErrorResponses().map(({ name, http, error, fallback }) => {
     return `    if (exception instanceof ${name}) return this.domain(${http}, '${error}', exception, '${fallback}');`;
@@ -593,7 +602,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
       }
       return ErrorResponse.of(404, '${FW.notFound.error}', null, '${FW.notFound.message}');
     }
-${persistence ? PERSISTENCE_BRANCH : ''}    // ── Errores de dominio (jerarquía DomainException)
+${persistence ? (personal ? PERSISTENCE_BRANCH.replace(PERSONAL_LEAK, PERSONAL_SAFE) : PERSISTENCE_BRANCH) : ''}    // ── Errores de dominio (jerarquía DomainException)
     if (exception instanceof DomainException) return this.fromDomain(exception);
     // Una excepción HTTP del propio framework: un 400 es el lector JSON de http-platform (petición
     // malformada); cualquier otra trae su propio cuerpo y sale con él — es lo que hacen las sondas

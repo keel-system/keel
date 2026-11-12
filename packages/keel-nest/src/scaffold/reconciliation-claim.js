@@ -26,6 +26,7 @@ import { storeEntity } from './messaging-stores.js';
 import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
 import { sweepPassImport, sweepPassSignal } from './timer.js';
 import { needsReadCommitted } from '@keel-system/keel-core/gen/infra-catalog';
+import { DELETED_AT, isLogicallyDeleted } from '@keel-system/keel-core/gen/relational';
 
 const CONFIG_TS = 'src/infrastructure/config/configuration.ts';
 const RECONCILIATION_DIR = 'src/infrastructure/persistence/reconciliation';
@@ -262,6 +263,8 @@ export function adapterReconciliationMethods(model, entity, imports, findOptions
   const { enumType, field } = entity.lifecycle;
   const orm = ormClass(entity.name);
   imports.push({ symbol: enumType, from: classPath(DIRS.enums, enumType) }, { symbol: 'LessThan', from: 'typeorm' }, { symbol: 'Brackets', from: 'typeorm' });
+  // Lo borrado lógicamente (DSL 2.28) no es candidato de la reconciliación.
+  if (isLogicallyDeleted(entity)) imports.push({ symbol: 'IsNull', from: 'typeorm' });
   // READ COMMITTED en MySQL, por lo mismo que el reclamo de una cola: la lectura con bloqueo de REPEATABLE READ
   // toma también los huecos entre claves y frena los INSERT de filas nuevas.
   const isolation = needsReadCommitted(engineOf(model)) ? ", { isolation: 'READ COMMITTED' }" : '';
@@ -284,7 +287,7 @@ export function adapterReconciliationMethods(model, entity, imports, findOptions
         manager
           .createQueryBuilder(${orm}, 'e')
           .select(['e.id'])
-          .where(new Brackets((either) => either.where(states.map((state) => ({ ${field}: state, ${claim.awaitingField}: LessThan(staleBefore) })))))
+          .where(new Brackets((either) => either.where(states.map((state) => ({ ${field}: state, ${claim.awaitingField}: LessThan(staleBefore)${isLogicallyDeleted(entity) ? `, ${DELETED_AT.field}: IsNull()` : ''} })))))
           .andWhere(
             'NOT EXISTS (SELECT 1 FROM ${RECONCILIATION_CLAIM.table} c WHERE c.activation = :activation AND c.entity_id = e.id AND c.claimed_at > :claimExpiredBefore)',
             { activation: ${tsString(claim.activation)}, claimExpiredBefore }

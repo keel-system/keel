@@ -31,7 +31,7 @@ import { callerResolution } from './security.js';
 import { mailPorts, sendsMail } from './mail.js';
 import { ANNOTATIONS_TS, ENTRY_GATE_TS, HANDLERS_TS, MESSAGES_TS } from './mediator.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
-import { repositoryRoots, portClass, portPath, occupantFinders, naturalKeyBatchFinder, PAGE_TS } from './repositories.js';
+import { repositoryRoots, portClass, portPath, occupantFinders, naturalKeyBatchFinder, naturalKeyFinder, PAGE_TS } from './repositories.js';
 import { deadlineHandlerNote, lateTransitionNote } from '@keel-system/keel-core/gen/deadlines';
 import { clockDependencies, lateTransitionHint } from './timer.js';
 import { relievingOperations, idempotencyOutcomeCode, scheduleDispatch, dispatchNote, carriesEntryGate, entryGateNote, usesEntryGate, ownershipNotes } from '@keel-system/keel-core/gen';
@@ -39,6 +39,7 @@ import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { COMMAND_DISPATCHER_TS } from './mediator.js';
 import { OPERATION_CACHE_TS } from './cache.js';
 import { cacheNote } from '@keel-system/keel-core/gen/cache-plan';
+import { deletedRootOf, logicalDeletionNote, restoreNote } from '@keel-system/keel-core/gen/data-lifecycle';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from '@keel-system/keel-core/gen/request-idempotency';
 import { IDEMPOTENCY_STORE_TS, usesRequestIdempotency } from './request-idempotency.js';
@@ -302,8 +303,9 @@ function renderHandler(model, operation) {
 
   const dependencies = [];
   // El puerto del repositorio del agregado de la operación (el de su raíz si opera sobre una hija),
-  // como en keel-spring: lo que el handler necesita para cumplir su caso de uso, inyectado.
-  const repository = repositoryOf(model, operation);
+  // como en keel-spring: lo que el handler necesita para cumplir su caso de uso, inyectado. La raíz que restaura o borra
+  // una operación del ciclo de vida (DSL 2.28) cuenta como la suya aunque su payload no la nombre (`restoreMyCard`).
+  const repository = repositoryOf(model, operation) ?? lifecycleRootOf(model, operation);
   if (repository) {
     imports.push({ symbol: portClass(repository), from: portPath(repository) });
     dependencies.push({ type: portClass(repository), name: decap(portClass(repository)) });
@@ -469,7 +471,7 @@ function handlerNotes(model, operation) {
   const dispatch = dispatchNote(model, operation, { call: 'await this.commandDispatcher.{variant}(new {message}(...))' });
   const gate = entryGateNote(model, operation, { read: 'command.entryGate', value: (entry) => `EntryGate.${entry}` });
   // La escritura condicional (api.concurrency): cargar con loadExpecting y devolver la versión persistida.
-  const repository = repositoryOf(model, operation);
+  const repository = repositoryOf(model, operation) ?? lifecycleRootOf(model, operation);
   const conditional = conditionalHandlerNote(model, operation, operation.messageKind === 'query' ? 'query' : 'command', repository ? decap(portClass(repository)) : 'repository');
   if (conditional) notes.push(conditional);
   if (dispatch) notes.push(dispatch);
@@ -504,6 +506,18 @@ function handlerNotes(model, operation) {
   if (listed) notes.push(listed);
   const inverse = inverseCollectionsNote(operation, { port: (name) => `await this.${decap(`${name}Repository`)}`, id: '<id del agregado>' });
   if (inverse) notes.push(inverse);
+  // El ciclo de vida del dato (DSL 2.28): el borrado que marca y la restauración. Notas neutrales, las mismas en los cuatro.
+  const deletedRoot = deletedRootOf(model, operation);
+  const deletion = logicalDeletionNote(model, operation, { deleteCall: `await this.${decap(`${deletedRoot?.name ?? 'Raiz'}Repository`)}.deleteById(...)` });
+  if (deletion) notes.push(deletion);
+  if (operation.restores) {
+    const port = `this.${decap(`${operation.restores}Repository`)}`;
+    const restored = model.entities.find((candidate) => candidate.name === operation.restores);
+    const keyFinder = restored ? naturalKeyFinder(model, restored) : null;
+    const byKey = keyFinder ? `await ${port}.${keyFinder.name.replace(/^findBy/, 'findDeletedBy')}(...)` : '<el id de la borrada>';
+    const restore = restoreNote(model, operation, { findCall: byKey, restoreCall: `await ${port}.restore(<su id>)` });
+    if (restore) notes.push(restore);
+  }
   const content = unsupportedContentTypeRaise(model);
   for (const note of uploadNotes(model, operation, { sizeCode: effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge), contentCode: content?.code, contentError: content?.raise })) notes.push(note);
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
@@ -860,4 +874,10 @@ function idempotencyNotes(model, operation) {
       `adaptador la traduce a IdempotencyConflictException (${race}). NO la captures. Y por eso el orden de arriba: con save ` +
       'al final, la perdedora choca antes contra la primera restricción de negocio y sale su code, no el de la clave en curso.'
   ];
+}
+
+/** La raíz que restaura o borra una operación del ciclo de vida (DSL 2.28), cuando su grupo no la nombra. */
+function lifecycleRootOf(model, operation) {
+  const name = operation.restores ?? deletedRootOf(model, operation)?.name;
+  return name ? (model.entities ?? []).find((entity) => entity.name === name && entity.persisted && entity.isAggregateRoot) ?? null : null;
 }

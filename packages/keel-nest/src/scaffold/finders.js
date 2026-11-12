@@ -8,6 +8,7 @@ import { persistedMembers } from '@keel-system/keel-core/gen/relational';
 import { screamingSnake } from '@keel-system/keel-core/gen/naming';
 import { classPath, DIRS, fieldImports, tsString } from './render.js';
 import { RELATIONAL_SCOPE_LINE, readScopeImport } from './read-scope.js';
+import { RELATIONAL_LIVE_LINE } from './data-lifecycle.js';
 
 export const entityFinders = (model, entity) => findersOf(model, entity.name);
 export const hasFilter = (finder) => finder.criteria.length > 0;
@@ -109,10 +110,15 @@ export function relationalFinderMethods(model, entity, imports, { ormClass, hasR
       const statement = `and(${tsString(ormProperty(model, entity, criterion))}, ${condition});`;
       lines.push(criterion.required ? `    ${statement}` : `    if (filter.${criterion.name} != null) ${statement}`);
     }
-    // El alcance se SUMA a los criterios (D4): la misma condición da las filas y el total.
+    // El alcance (D4) y lo borrado (DSL 2.28, D2) se SUMAN a los criterios, la vida la última: así sustituir en vez de
+    // sumar (lc-implicit-replace) se lleva todo lo de antes y se ve. La misma condición da las filas y el total.
     if (finder.scope) {
       imports.push(readScopeImport());
       lines.push(RELATIONAL_SCOPE_LINE);
+    }
+    if (finder.live) {
+      imports.push({ symbol: 'IsNull', from: 'typeorm' });
+      lines.push(RELATIONAL_LIVE_LINE);
     }
     const order = finder.result === 'page' ? 'withStableOrder(pageable)' : `withStableOrder({ page: 0, size: 0, sort: ${sortConstant(finder)} })`;
     const options = `{

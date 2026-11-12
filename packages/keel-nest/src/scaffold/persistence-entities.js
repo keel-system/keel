@@ -40,11 +40,13 @@ import {
   snakeCase,
   camelCase,
   partialIndexSpecs,
-  discriminatorColumn
+  discriminatorColumn,
+  isLogicallyDeleted
 } from '@keel-system/keel-core/gen';
 import { hasPatternFilter } from '@keel-system/keel-core/gen/text-filters';
 import { DIRS, classPath, capitalize, decapitalize, isNullable, tsModule, tsString } from './render.js';
 import { usesRelational, usesDocument, usesPersistence } from '@keel-system/keel-core/gen/features';
+import { lifecycleMarks, markComment } from './data-lifecycle.js';
 export { usesRelational, usesDocument, usesPersistence };
 
 export const ORM_DIR = 'infrastructure/persistence/entities';
@@ -438,6 +440,11 @@ function renderEntity(model, entity) {
     });
   }
 
+  // Las marcas del ciclo de vida del dato (DSL 2.28): deleted_at y anonymized_at, del generador y fuera del dominio.
+  for (const mark of lifecycleMarks(model, entity)) {
+    addColumn({ name: mark.column, spec: { base: 'timestamp', propertyName: mark.field }, tsType: 'Date', nullable: true, comment: markComment(mark) });
+  }
+
   const header = [`@Entity({ name: ${tsString(entity.tableName)} })`];
   header.push(...tableConstraints(model, entity, members, props, typeorm));
 
@@ -447,8 +454,11 @@ function renderEntity(model, entity) {
   // dentro de la condición y NULL fuera (un índice único no restringe las filas con NULL). Declarada y
   // no como parte funcional anónima: esa es opaca a la introspección del esquema (keel-spring midió
   // que tumbaba el arranque de Hibernate). El predicado compara con la CONSTANTE del enum guardada.
+  // Con borrado lógico (DSL 2.28, D4) también las unicidades SIN condición: solo cuentan las filas vivas, y llegan aquí
+  // con el mismo nombre (keel-core las resuelve, sombra plegada incluida, en columnList).
   for (const spec of partialIndexSpecs(model, engine).filter((candidate) => candidate.entity === entity.name)) {
-    const columns = spec.fields.flatMap((name) => columnsFor(model, entity, members, name)).map((column) => tsString(props.get(column) ?? column));
+    const raw = spec.when ? spec.fields.flatMap((name) => columnsFor(model, entity, members, name)) : spec.columnList.map((column) => column.replace(/^["`]|["`]$/g, ''));
+    const columns = raw.map((column) => tsString(props.get(column) ?? column));
     typeorm.add('Index');
     if (engine === 'postgresql') {
       header.push(`@Index(${tsString(spec.name)}, [${columns.join(', ')}], { unique: true, where: ${tsString(spec.predicate)} })`);
@@ -457,7 +467,7 @@ function renderEntity(model, entity) {
       const property = camelCase(flag);
       typeorm.add('Column');
       properties.push(
-        `  // Discriminador de ${spec.name}: 1 con ${spec.when.field} = ${JSON.stringify(spec.when.equals)}, NULL fuera. Lo calcula el motor.\n` +
+        `  // Discriminador de ${spec.name}: 1 ${spec.when ? `con ${spec.when.field} = ${JSON.stringify(spec.when.equals)}${spec.live ? ' en una fila viva' : ''}` : 'en una fila viva (deleted_at nulo, DSL 2.28)'}, NULL fuera. Lo calcula el motor.\n` +
           `  @Column({ name: ${tsString(flag)}, type: 'tinyint', nullable: true, generatedType: 'STORED', asExpression: ${tsString(`CASE WHEN ${spec.predicate} THEN 1 END`)}, insert: false, update: false })\n` +
           `  ${property}: number | null;`
       );
@@ -492,20 +502,23 @@ function tableConstraints(model, entity, members, props, typeorm) {
     return shadow && !shadow.filterOnly ? shadow : null;
   };
   const list = (columns) => `[${columns.map((column) => tsString(propOf(column))).join(', ')}]`;
+  // Con borrado lógico (DSL 2.28, D4) ninguna unicidad sin condición es constraint de tabla: se evalúa solo entre filas
+  // vivas, y eso es un índice parcial (renderEntity, con partialIndexSpecs), con el MISMO nombre.
+  const live = isLogicallyDeleted(entity);
 
-  if (entity.naturalKey?.length > 0) {
+  if (!live && entity.naturalKey?.length > 0) {
     const columns = entity.naturalKey.flatMap((name) => (shadowOf(name) ? [shadowOf(name).column] : columnsFor(model, entity, members, name, model.warnings)));
     typeorm.add('Unique');
     lines.push(`@Unique(${tsString(`uk_${entity.tableName}_natural`)}, ${list(columns)})`);
   }
-  for (const field of uniqueFields(entity)) {
+  for (const field of live ? [] : uniqueFields(entity)) {
     const target = shadowOf(field.name)?.column ?? snakeCase(field.name);
     typeorm.add('Unique');
     lines.push(`@Unique(${tsString(`uk_${entity.tableName}_${snakeCase(field.name)}`)}, ${list([target])})`);
   }
   const { handled } = collectionIndexesOf(entity, members);
   for (const index of entity.indexes ?? []) {
-    if (index.when || handled.has(index)) continue;
+    if (index.when || handled.has(index) || (live && index.unique)) continue;
     const probe = [];
     const columns = index.fields.flatMap((name) => columnsFor(model, entity, members, name, probe));
     // Un índice sobre lo que no es columna de esta tabla rompe el DDL: lo avisa keel-spring con el
@@ -639,8 +652,12 @@ function transformersFile(model) {
  */
 export const UUID_BINARY: ValueTransformer = {
   to: (value: string | null | undefined) => (value == null ? value : Buffer.from(value.replaceAll('-', ''), 'hex')),
-  from: (value: Buffer | null) => {
+  from: (value: Buffer | string | null) => {
     if (value == null) return null;
+    // Idempotente: al recargar las columnas generadas tras un INSERT (la unicidad entre vivas o la condicionada, en
+    // MySQL), TypeORM vuelve a pasar por aquí el id que ya convirtió. Trocear el texto otra vez lo deformaba
+    // (\`58aa892b--1ac-2-…\`) y \`save\` devolvía un id que no existe (medido con db-check, DSL 2.28).
+    if (typeof value === 'string') return value;
     const hex = value.toString('hex');
     return \`\${hex.slice(0, 8)}-\${hex.slice(8, 12)}-\${hex.slice(12, 16)}-\${hex.slice(16, 20)}-\${hex.slice(20)}\`;
   }

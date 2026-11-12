@@ -87,3 +87,19 @@ test('la escritura condicional entera, en las dos ramas (api.concurrency, concur
     checkTree(files);
   }
 });
+
+// El ciclo de vida del dato (DSL 2.28): *.deletion, *.restorableFor, *.retention y *.restores, que ninguna fixture declara
+// hasta el incremento 6 de PLAN-DSL-228-CICLO-DE-VIDA.md. Los sujetos son los de keel-core (los mismos que mide keel-spring).
+test('el ciclo de vida del dato entero (persistence *.deletion, *.restorableFor, *.retention y use-cases *.restores)', async () => {
+  const { DATA_LIFECYCLE_DESIGNS } = await import('../../keel-core/test/helpers/data-lifecycle-designs.js');
+  for (const design of DATA_LIFECYCLE_DESIGNS) {
+    const { files } = planFixture(design.from, { mutate: design.mutate });
+    assert.deepEqual(checkTree(files), [], design.name);
+    const find = (pattern) => files.find((file) => pattern.test(file.path))?.content ?? '';
+    if (/^cards/.test(design.name)) {
+      assert.match(find(/contact-card-repository\.ts$/), /abstract restore\(id: string\)/, design.name);
+      assert.match(find(/restore-my-card-command-handler\.ts$/), /Restauración \(restores: ContactCard/, design.name);
+    }
+    assert.ok(files.some((file) => /-retention-timer\.ts$/.test(file.path)), `${design.name}: sin el recurrente de la retención`);
+  }
+});

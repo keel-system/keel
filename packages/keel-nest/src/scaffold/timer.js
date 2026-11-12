@@ -57,6 +57,7 @@ import { TABLE_PURGES_TS, tablePurges } from './purge.js';
 import { schedulerClass, schedulerPath } from './scheduling.js';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
 import { ATTRIBUTES, OBSERVATIONS, TIMER_LAG, TIMER_PARKED } from '@keel-system/keel-core/gen/telemetry-vocabulary';
+import { RETENTION_SETTINGS_TS, retentionKindLines, retentionProviders } from './data-lifecycle.js';
 
 export { usesDeadlines, usesTimer, deadlineOf, TIMER_DATABASES };
 
@@ -411,7 +412,9 @@ function timerKindsFile(model) {
     ...timerSchedules(model).map(
       (schedule) => `  /** El \`schedule\` de ${schedule.operation}: un recurrente en modo clúster, con drenaje. */
   ${scheduleKindConstant(schedule.operation)}: ${tsString(schedule.kind)},`
-    )
+    ),
+    // Las retenciones (DSL 2.28, D8): un recurrente en modo clúster por raíz.
+    ...retentionKindLines(model)
   ];
   return tsModule(
     TIMER_KINDS_TS,
@@ -1566,7 +1569,15 @@ function timerModuleFile(model) {
   const handlerList = handlers.map((handler) => handler.symbol);
   const purgeTimers = timerPurges(model).map((purge) => ({ symbol: purgeTimerClass(purge.table), from: purgeTimerPath(purge.table) }));
   const scheduleTimers = timerSchedules(model).map((schedule) => ({ symbol: scheduleTimerClass(schedule.operation), from: scheduleTimerPath(schedule.operation) }));
-  const recurringList = ['KeelTimerPurge', ...purgeTimers.map((purge) => purge.symbol), ...scheduleTimers.map((schedule) => schedule.symbol)];
+  // Las retenciones (DSL 2.28): el componente que barre y su recurrente.
+  const retentions = retentionProviders(model);
+  const retains = retentions.length > 0;
+  const recurringList = [
+    'KeelTimerPurge',
+    ...purgeTimers.map((purge) => purge.symbol),
+    ...scheduleTimers.map((schedule) => schedule.symbol),
+    ...retentions.filter((provider) => provider.recurring).map((provider) => provider.symbol)
+  ];
   const deadlineProviders = deadlines
     ? `
         { provide: ${CLOCK_PORT.name}, useClass: SystemClock },
@@ -1605,7 +1616,9 @@ function timerModuleFile(model) {
       { symbol: timerStoreImplClass(model), from: timerStoreImplPath(model) },
       ...handlers,
       ...purgeTimers,
-      ...scheduleTimers
+      ...scheduleTimers,
+      ...retentions.map(({ symbol, from }) => ({ symbol, from })),
+      ...(retains ? [{ symbol: 'RETENTION_SETTINGS', from: RETENTION_SETTINGS_TS }, { symbol: 'retentionSettings', from: RETENTION_SETTINGS_TS }] : [])
     ],
     `/**
  * El cronómetro del servicio (DSL 2.26), lo que necesitan los demás: ${deadlines ? 'el reloj inyectable, la duración vigente de cada plazo y ' : ''}el
@@ -1618,11 +1631,11 @@ export class TimerModule {
     return {
       module: TimerModule,
       providers: [
-        { provide: TIMER_SETTINGS, useValue: timerSettings(configuration) },${deadlineProviders}
+        { provide: TIMER_SETTINGS, useValue: timerSettings(configuration) },${retains ? '\n        { provide: RETENTION_SETTINGS, useValue: retentionSettings(configuration) },' : ''}${deadlineProviders}
         TimerArmedSignal,
         { provide: TimerStore, useClass: ${timerStoreImplClass(model)} }
       ],
-      exports: [TIMER_SETTINGS, ${deadlines ? `${CLOCK_PORT.name}, ${deadlinesClass(model)}, ` : ''}TimerArmedSignal, TimerStore]
+      exports: [TIMER_SETTINGS, ${retains ? 'RETENTION_SETTINGS, ' : ''}${deadlines ? `${CLOCK_PORT.name}, ${deadlinesClass(model)}, ` : ''}TimerArmedSignal, TimerStore]
     };
   }
 }
@@ -1633,7 +1646,7 @@ export class TimerModule {
  */
 @Module({${deadlines ? '\n  imports: [UseCaseModule],' : ''}
   providers: [
-${[...handlerList, ...recurringList].map((symbol) => `    ${symbol},`).join('\n')}
+${[...handlerList, ...retentions.filter((provider) => !provider.recurring).map((provider) => provider.symbol), ...recurringList].map((symbol) => `    ${symbol},`).join('\n')}
     { provide: TIMER_HANDLERS, useFactory: (${deadlines ? '...handlers: TimerHandler[]' : ''}) => ${deadlines ? 'handlers' : '[]'}, inject: [${handlerList.join(', ')}] },
     { provide: TIMER_RECURRINGS, useFactory: (...recurrings: RecurringTimerHandler[]) => recurrings, inject: [${recurringList.join(', ')}] },
     TimerPoller

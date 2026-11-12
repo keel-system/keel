@@ -31,6 +31,9 @@ import { CONDITIONAL_WRITE_DESIGNS } from '../../keel-core/test/helpers/conditio
 import { conditionalWriteBlock } from './lib/conditional-probes.js';
 import { READ_SCOPE_SABOTAGE_SPECS, isReadScopeSabotage, readScopeBlock, readScopeCases, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
 import { READ_SCOPE_DESIGNS } from '../../keel-core/test/helpers/read-scope-designs.js';
+import { DATA_LIFECYCLE_DESIGNS } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
+import { LIFECYCLE_SABOTAGE_SPECS, isLifecycleSabotage, lifecycleBlock, lifecycleCases, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
+import { partialFilterObject } from '../src/scaffold/data-lifecycle.js';
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import os from 'node:os';
 import path from 'node:path';
@@ -57,7 +60,7 @@ import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantF
 import { guardClaimsFor } from '../src/scaffold/claim.js';
 
 const keep = process.argv.includes('--keep');
-// --subject=<etiqueta>: uno solo de SUBJECTS (para iterar; la red completa es sin él).
+// --subject=<etiqueta>[,<etiqueta>…]: solo esos de SUBJECTS (para iterar; la red completa es sin él).
 const onlySubject = process.argv.find((arg) => arg.startsWith('--subject='))?.split('=')[1] ?? null;
 // --sabotage=<id> rompe lo emitido EN MEMORIA, antes de escribirlo, conservando la forma: la red tiene que salir en rojo
 // en las comprobaciones de esa regla. [sufijo del archivo, texto o expresión, sustituto].
@@ -88,7 +91,10 @@ const SABOTAGES = {
   // El relay por réplica (DSL 2.26, inc. 9): con --subject=notification-mailer-mongo, caen RW-1 o RW-3 del bloque del outbox.
   ...Object.fromEntries(Object.entries(RELAY_WAKE_SABOTAGES).map(([id, { spec }]) => [id, spec])),
   // La lectura acotada (DSL 2.27): con --subject=vault-scoped-mongo o conduit-scoped, cada uno cae en exactamente sus casos RS.
-  ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document]))
+  ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document])),
+  // El ciclo de vida del dato (DSL 2.28): con --subject=cards-logical-mongo o codes-anonymize-mongo, cada uno cae en
+  // exactamente sus casos LC/RT/PD.
+  ...Object.fromEntries(Object.entries(LIFECYCLE_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document]))
 };
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -160,6 +166,13 @@ const SUBJECTS = [
     label: design.name,
     withoutLayers: [],
     mutate: design.mutate
+  })),
+  // El ciclo de vida del dato sobre documentos (DSL 2.28, LC-*, RT-* y PD-2): los MISMOS diseños que mide keel-spring.
+  ...DATA_LIFECYCLE_DESIGNS.filter((design) => design.name.endsWith('-mongo')).map((design) => ({
+    name: design.from,
+    label: design.name,
+    withoutLayers: [],
+    mutate: design.mutate
   }))
 ];
 const results = [];
@@ -212,6 +225,8 @@ function probeScript(model, db) {
   // El cronómetro (DSL 2.26), también antes de los imports.
   const deadlineEntity = modelDeadlines(model)[0]?.entity;
   const timerCode = deadlineEntity ? timerBlock(model, ctx, { adapterArgs: adapterArgs(model, deadlineEntity), replicaTx: 'new TransactionContext(client, settings)' }) : '';
+  // El ciclo de vida del dato (DSL 2.28), también antes de los imports.
+  const lifecycleCode = lifecycleBlock(model, ctx, { document: true, engine: 'mongodb', sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterArgs(model, owner)})` });
   const shapes = expectedShapes(model);
   const enums = new Set([
     ...Object.values(shapes.entities).flat(),
@@ -225,7 +240,8 @@ function probeScript(model, db) {
   const adapters = roots.map((root) => `import { ${adapterClass(root)} } from '${distOf(adapterPath(root))}';`);
   const indexes = documentIndexes(model, []).map(({ collection, specs }) => ({
     collection,
-    specs: specs.map((spec) => ({ name: spec.name, paths: spec.paths, unique: spec.unique, partialFilter: spec.partialFilter }))
+    // El filtro parcial que se espera: la condición del diseño y, con borrado lógico (DSL 2.28), la vida.
+    specs: specs.map((spec) => ({ name: spec.name, paths: spec.paths, unique: spec.unique, partialFilter: partialFilterObject(spec) ?? null }))
   }));
   return {
     root: roots.map((root) => root.name).join(', '),
@@ -275,7 +291,7 @@ for (const { collection, specs } of INDEXES) {
     if (JSON.stringify(Object.keys(got.key)) !== JSON.stringify(spec.paths)) problems.push(\`claves \${JSON.stringify(got.key)}\`);
     if (Object.values(got.key).some((direction) => Number(direction) !== 1)) problems.push('dirección');
     if (Boolean(got.unique) !== spec.unique) problems.push(\`unique \${got.unique}\`);
-    const filter = spec.partialFilter ? { [spec.partialFilter.path]: spec.partialFilter.equals } : undefined;
+    const filter = spec.partialFilter ?? undefined;
     if (JSON.stringify(got.partialFilterExpression) !== JSON.stringify(filter)) problems.push(\`filtro \${JSON.stringify(got.partialFilterExpression)}\`);
     check(\`\${collection}: índice \${spec.name} es el del contrato\`, problems.length === 0, problems.join(', '));
   }
@@ -285,6 +301,7 @@ ${blocks.join('\n')}
 ${race}
 ${stores}
 ${timerCode}
+${lifecycleCode}
 ${purgeTimerBlock(model)}
 
 await client.close();
@@ -453,7 +470,10 @@ ${credentialFinders(model, root).map((credential) => `  // La credencial que NO 
   check('${name}: ${credential.name} resuelve por una credencial que no es la primera', (await repository.${credential.name}(original.${credential.field.name}[original.${credential.field.name}.length - 1]))?.${idName} === original.${idName});
   check('${name}: ${credential.name} con una credencial ajena devuelve null', (await repository.${credential.name}('nadie-' + randomUUID())) == null);`).join('\n')}
   await repository.deleteById(original.${idName});
-  check('${name}: deleteById borra el documento', (await repository.findById(original.${idName})) == null && (await collection.countDocuments({ _id: raw._id })) === 0);
+  ${root.deletion === 'logical'
+    ? `// Con borrado lógico (DSL 2.28) el documento se QUEDA, marcado: lo que mide la vida es el bloque LC.
+  check('${name}: deleteById marca el documento (borrado lógico)', (await repository.findById(original.${idName})) == null && (await collection.findOne({ _id: raw._id }))?.deletedAt != null);`
+    : `check('${name}: deleteById borra el documento', (await repository.findById(original.${idName})) == null && (await collection.countDocuments({ _id: raw._id })) === 0);`}
 } catch (error) {
   // Un fallo inesperado es una comprobación roja con su causa, no una sonda muerta sin resumen.
   check('${name}: la sonda recorre la raíz sin un error inesperado', false, String(error?.stack ?? error).slice(0, 400));
@@ -551,7 +571,7 @@ try {
   process.exit(1);
 }
 try {
-  for (const subject of SUBJECTS.filter((candidate) => !onlySubject || (candidate.label ?? candidate.name) === onlySubject)) {
+  for (const subject of SUBJECTS.filter((candidate) => !onlySubject || onlySubject.split(',').includes(candidate.label ?? candidate.name))) {
     const { manifest, layers } = loadService(path.join(FIXTURES_DIR, subject.name));
     for (const layer of subject.withoutLayers) {
       delete manifest.layers[layer];
@@ -601,6 +621,13 @@ try {
     if (isReadScopeSabotage(sabotage) && readScopeCases(model).length > 0) {
       const verdict = readScopeSabotageVerdict(checks, sabotage, model);
       for (const check of checks.filter((entry) => !entry.ok && /^RS-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
+      step(`${label}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
+    // El ciclo de vida del dato (DSL 2.28): verde si caen EXACTAMENTE sus casos LC/RT/PD de este sujeto (y ningún otro).
+    if (isLifecycleSabotage(sabotage) && lifecycleCases(model).length > 0) {
+      const verdict = lifecycleSabotageVerdict(checks, sabotage, model, { engine: 'mongodb' });
+      for (const check of checks.filter((entry) => !entry.ok && /^(LC|RT|PD)-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
       step(`${label}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
       continue;
     }

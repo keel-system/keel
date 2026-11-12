@@ -782,7 +782,28 @@ export const MECHANISMS = {
     }
   },
   'data-lifecycle': {
-    pending: 'el ciclo de vida del dato (DSL 2.28) llega en el incremento 2 de PLAN-DSL-228-CICLO-DE-VIDA.md: hasta entonces supported-features.js lo rechaza entero (dataLifecyclePendingErrors)'
+    parity: {
+      skip: 'ninguna fixture declara el ciclo de vida del dato hasta el incremento 6 de PLAN-DSL-228-CICLO-DE-VIDA.md: los sujetos son los diseños derivados de keel-core/test/helpers/data-lifecycle-designs.js (cards-logical y cards-logical-mongo, el mismo diseño salvo el modelo; codes-anonymize y codes-anonymize-mongo; codes-delete y vault-logical-scoped), los MISMOS que mide keel-spring; test/data-lifecycle-parity.test.js fija la forma y la compara con keel-spring (los mismos casos, índices, kind y claves del barrido)',
+      test: 'test/data-lifecycle-parity.test.js'
+    },
+    emitter: 'src/scaffold/data-lifecycle.js (marcas, lecturas vivas, deleteById que marca, restore, retención y su recurrente) · repositories.js y document-repositories.js · finders.js · persistence-entities.js y document-persistence.js (la unicidad entre vivas) · claim.js, reconciliation-claim.js y document-stores.js · timer.js · services.js · logging-check.js, persistence-runtime.js y rest-support.js (PD-1 y PD-2)',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'cards-logical, codes-anonymize, codes-delete y vault-logical-scoped contra el adaptador de TypeORM (scripts/lib/lifecycle-probes.js): LC-1 a LC-10, RT-1 a RT-4 y PD-2; PD-1 es el gate ejecutado con bash en test/data-lifecycle-parity.test.js. La unicidad entre vivas es el índice parcial en PostgreSQL y la columna generada en MySQL (T2). Medido aquí y no supuesto: en PostgreSQL el mensaje del driver de una unicidad violada NO lleva el valor (va en detail, que ningún log copia), así que pd-log-value solo cae en MySQL; en MySQL lo lleva, y lo copiaban el logger de TypeORM y la rama sin constraint del filtro de la API. Y en MySQL, con una columna generada (el discriminador de la unicidad entre vivas o de la condicionada), TypeORM recarga la fila tras el INSERT y volvía a pasar el id por UUID_BINARY.from, que lo deformaba: save devolvía un id que no existe. El transformador es idempotente desde entonces. Falsado: lc-no-filter cae en LC-1 y LC-2, lc-count en LC-2, lc-get-leak en LC-3 y LC-4, lc-unique-all-rows en LC-5, lc-restore-window en LC-7, lc-embed-hidden en LC-9, lc-implicit-replace en LC-10, rt-early en RT-1, rt-anonymize-miss en RT-2, rt-every-replica en RT-3 y pd-log-value en PD-2'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'cards-logical-mongo y codes-anonymize-mongo contra el driver de MongoDB en un replica set real, con las MISMAS sondas que la rama relacional; el índice parcial lleva deletedAt: null (T1). Medido: el mensaje E11000 SÍ lleva el valor duplicado, así que pd-log-value cae aquí. Falsado: lc-get-leak en LC-3 y LC-4, lc-unique-all-rows en LC-5, lc-restore-window en LC-7, rt-early en RT-1, rt-anonymize-miss en RT-2, rt-every-replica en RT-3 y pd-log-value en PD-2. LC-1, LC-2, LC-9 y LC-10 no tienen sujeto documental (ningún diseño derivado lista, embebe ni acota con borrado lógico sobre documentos): su código es el mismo filtro deletedAt: null que miden LC-3 y LC-4, pero sin ejecutar'
+      }
+    }
   }
 };
 

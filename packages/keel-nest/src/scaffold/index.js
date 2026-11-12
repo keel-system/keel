@@ -64,6 +64,7 @@ import * as reconciliationClaim from './reconciliation-claim.js';
 import * as idempotencyCheck from './idempotency-check.js';
 import * as conditionalWrites from './conditional-writes.js';
 import * as readScope from './read-scope.js';
+import * as dataLifecycle from './data-lifecycle.js';
 import { readScopeGenerationErrors } from '@keel-system/keel-core/gen/read-scope';
 import * as domainGuardsCheck from './domain-guards-check.js';
 import * as architecture from './architecture.js';
@@ -160,6 +161,8 @@ const GENERATORS = [
   purge,
   // El cronómetro del servicio y los plazos de negocio (DSL 2.26): se gatea a sí mismo por el diseño.
   timer,
+  // La retención de los agregados (DSL 2.28): qué ha vencido y qué se hace con ello; la dispara el cronómetro.
+  dataLifecycle,
   // El gate de los plazos: lo que el agente escribe para que caduquen de verdad.
   deadlinesCheck,
   // Los reclamos de barrido (incremento 10c): la configuración de los lotes y los plazos; los métodos van en
@@ -222,6 +225,9 @@ export function planService({ manifest, layers, fixtures = null, workspace, stac
   // Los plazos (DSL 2.26) necesitan un motor con las sentencias del cronómetro medidas: se rechaza aquí, que conoce el stack.
   const timerErrors = timer.timerStackErrors(model);
   if (timerErrors.length > 0) throw new Error(timerErrors.join('\n'));
+  // El ciclo de vida del dato (DSL 2.28) que keel-nest no sabe generar: lo que no sabe anonimizar.
+  const lifecycleErrors = dataLifecycle.lifecycleStackErrors(model);
+  if (lifecycleErrors.length > 0) throw new Error(lifecycleErrors.join('\n'));
   // La lectura acotada (DSL 2.27) que no se puede generar por construcción (T7, T8 y compañía): la frontera neutral.
   const scopeErrors = readScopeGenerationErrors(model);
   if (scopeErrors.length > 0) throw new Error(scopeErrors.join('\n'));

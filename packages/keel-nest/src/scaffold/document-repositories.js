@@ -33,6 +33,7 @@ import { entityFinders, finderSignature, RANGE_OPERATORS, sortConstant, sortCons
 import { AUDIT_ACTOR_TS } from './audit-actor.js';
 import { DOCUMENT_SCOPE_LINE, readScopeDocumentHelpers, readScopeDocumentMethods, readScopeImport } from './read-scope.js';
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
+import * as lifecycle from './data-lifecycle.js';
 import { sortablePaths } from '@keel-system/keel-core/gen/document';
 
 // ─── Valores ─────────────────────────────────────────────────────────────────
@@ -46,7 +47,7 @@ function refIdField(model, relation) {
 }
 
 /** La expresión que lleva un valor ESCALAR del dominio al documento (`expr` es el valor del dominio). */
-function writeScalar(field, expr, use) {
+export function writeScalar(field, expr, use) {
   if (field.kind === 'enum') {
     use.enum(field.namedType);
     return use.helper('toEnumName', `${field.namedType}, ${expr}`);
@@ -419,8 +420,11 @@ export function renderDocumentAdapter(model, entity) {
   const idType = id?.tsType ?? 'string';
   const idFilter = `{ ${DOCUMENT_ID}: ${id ? writeScalar(id, idName, use) : idName} }`;
   const methods = [];
+  // Las lecturas VIVAS (DSL 2.28, D2): con borrado lógico, toda carga y todo listado del puerto deja fuera lo borrado
+  // (`deletedAt: null` casa con el campo nulo y con el ausente). findAllById no: es la lectura por referencia (D3).
+  const live = (filter) => lifecycle.liveFilter(entity, filter);
   methods.push(`  async findById(${idName}: ${idType}): Promise<${entity.name} | null> {
-    const found = await this.collection.findOne(${idFilter}, { session: this.session });
+    const found = await this.collection.findOne(${live(idFilter)}, { session: this.session });
     return found == null ? null : toDomain${entity.name}(found);
   }`);
   // La carga que compara la versión (api.concurrency, D4), la misma que la del adaptador relacional.
@@ -444,7 +448,7 @@ export function renderDocumentAdapter(model, entity) {
     const param = `${inverse.relation}Id`;
     const field = `${inverse.relation.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}_id`;
     methods.push(`  async ${inverse.finder}(${param}: ${ownerType}): Promise<${entity.name}[]> {
-    const found = await this.collection.find({ ${field}: ${ownerId ? writeScalar(ownerId, param, use) : param} }, { session: this.session }).toArray();
+    const found = await this.collection.find(${live(`{ ${field}: ${ownerId ? writeScalar(ownerId, param, use) : param} }`)}, { session: this.session }).toArray();
     return found.map(toDomain${entity.name});
   }`);
   }
@@ -453,7 +457,7 @@ export function renderDocumentAdapter(model, entity) {
   for (const finder of finders) {
     for (const param of finder.params) imports.push(...param.imports);
     // El finder de un índice condicionado recibe también el estado (es un parámetro más del puerto).
-    const filter = keyFilter(model, entity, finder, use);
+    const filter = live(keyFilter(model, entity, finder, use));
     methods.push(`  async ${finder.name}(${finder.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null> {
     const found = await this.collection.findOne(${filter}, { session: this.session });
     return found == null ? null : toDomain${entity.name}(found);
@@ -466,7 +470,7 @@ export function renderDocumentAdapter(model, entity) {
     methods.push(`  async ${batch.name}(${batch.signature}): Promise<${entity.name}[]> {
     if (${batch.plural}.length === 0) return [];
     const found = await this.collection
-      .find({ ${tsString(keyOf(model, entity, batch.field.name))}: { $in: ${batch.plural}.map((value) => ${writeScalar(batch.field, 'value', use)}) } }, { session: this.session })
+      .find(${live(`{ ${tsString(keyOf(model, entity, batch.field.name))}: { $in: ${batch.plural}.map((value) => ${writeScalar(batch.field, 'value', use)}) } }`)}, { session: this.session })
       .toArray();
     return found.map(toDomain${entity.name});
   }`);
@@ -475,7 +479,7 @@ export function renderDocumentAdapter(model, entity) {
   for (const credential of credentialFinders(model, entity)) {
     // La lista es un array del propio documento: MongoDB casa un array con uno de sus elementos.
     methods.push(`  async ${credential.name}(${credential.param}: string): Promise<${entity.name} | null> {
-    const found = await this.collection.findOne({ ${tsString(keyOf(model, entity, credential.field.name))}: ${writeScalar(credential.field, credential.param, use)} }, { session: this.session });
+    const found = await this.collection.findOne(${live(`{ ${tsString(keyOf(model, entity, credential.field.name))}: ${writeScalar(credential.field, credential.param, use)} }`)}, { session: this.session });
     return found == null ? null : toDomain${entity.name}(found);
   }`);
   }
@@ -487,12 +491,12 @@ export function renderDocumentAdapter(model, entity) {
     // Una tras otra y no en paralelo: dentro de una transacción el driver no admite operaciones
     // concurrentes sobre la misma sesión.
     const documents = await this.collection
-      .find({}, { session: this.session })
+      .find(${live('{}')}, { session: this.session })
       .sort(withStableOrder(pageable))
       .skip(pageable.page * pageable.size)
       .limit(pageable.size)
       .toArray();
-    const total = await this.collection.countDocuments({}, { session: this.session });
+    const total = await this.collection.countDocuments(${live('{}')}, { session: this.session });
     return pageOf(documents.map(toDomain${entity.name}), pageable, total);
   }`);
   }
@@ -515,10 +519,16 @@ export function renderDocumentAdapter(model, entity) {
   methods.push(...claimMethods);
   methods.push(...documentGuardMethods(model, entity, idFilter, idType, idName));
   methods.push(saveMethod(model, entity, use));
-  methods.push(`  async deleteById(${idName}: ${idType}): Promise<void> {
+  // Con borrado lógico (DSL 2.28), deleteById MARCA, y la restauración y la carga de la borrada van con él.
+  const keyFinder = naturalKeyFinder(model, entity);
+  methods.push(
+    ...(lifecycle.documentAdapterMethods(model, entity, { idName, idType, idFilter, keyFilter: keyFinder ? keyFilter(model, entity, keyFinder, use) : null, keyFinder, imports }) ?? [
+      `  async deleteById(${idName}: ${idType}): Promise<void> {
     // El agregado es el documento: borrarlo borra también sus hijas, que van dentro.
     await this.transactions.inTransaction((session) => this.collection.deleteOne(${idFilter}, { session }));
-  }`);
+  }`
+    ])
+  );
 
   for (const name of helpers) imports.push({ symbol: name, from: BSON_VALUES_TS });
   const paginated =
@@ -612,11 +622,12 @@ function documentFinderMethods(model, entity, use, imports) {
       const statement = `conditions.push(${condition});`;
       lines.push(criterion.required ? `    ${statement}` : `    if (filter.${criterion.name} != null) ${statement}`);
     }
-    // El alcance se SUMA a los criterios (D4), y la misma consulta da el total.
+    // El alcance (D4) y lo borrado (DSL 2.28) se SUMAN a los criterios, la vida la última, y la misma consulta da el total.
     if (finder.scope) {
       imports.push(readScopeImport());
       lines.push(DOCUMENT_SCOPE_LINE);
     }
+    if (finder.live) lines.push(lifecycle.DOCUMENT_LIVE_LINE);
     lines.push('    const query: Filter<StoredDocument> = conditions.length === 0 ? {} : { $and: conditions };');
     if (finder.result === 'page') imports.push({ symbol: 'pageOf', from: PAGE_TS });
     const tail =

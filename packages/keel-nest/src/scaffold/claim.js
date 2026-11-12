@@ -18,6 +18,7 @@
 // (`operation.claim[]`, `claimOrderField`, `sweepConfig`): las mismas decisiones que en keel-spring.
 
 import { claimOrderField, claimsForEntity, screamingSnake, sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
+import { DELETED_AT, isLogicallyDeleted } from '@keel-system/keel-core/gen/relational';
 import { DIRS, classPath, tsModule, tsString } from './render.js';
 import { engineOf, ormClass, usesPersistence } from './persistence-entities.js';
 import { parametersClass, parametersPath } from './service-parameters.js';
@@ -198,6 +199,11 @@ export function adapterClaimMethods(model, entity, imports, findOptions) {
         `    const staleBefore = new Date(Date.now() - (${seconds}) * 1000);`
       );
       extra.push(`${claim.stalled.stampField}: LessThan(staleBefore)`);
+    }
+    // Lo borrado lógicamente (DSL 2.28) no es candidato de ningún barrido.
+    if (isLogicallyDeleted(entity)) {
+      operators.add('IsNull');
+      extra.push(`${DELETED_AT.field}: IsNull()`);
     }
     if (claim.due) {
       operators.add('LessThanOrEqual');

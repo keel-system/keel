@@ -7,6 +7,7 @@
 
 import fs from 'node:fs';
 import { CONDITIONAL_WRITE_DESIGNS } from '../../../keel-core/test/helpers/conditional-write-designs.js';
+import { DATA_LIFECYCLE_DESIGNS } from '../../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { READ_SCOPE_DESIGNS } from '../../../keel-core/test/helpers/read-scope-designs.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -144,7 +145,10 @@ export const DERIVED_SILHOUETTES = [
   ...CONDITIONAL_WRITE_DESIGNS.map((design) => ({ name: design.name, fixture: design.from, withoutLayers: [], mutate: design.mutate })),
   // La lectura acotada (DSL 2.27): los diseños de keel-core/test/helpers/read-scope-designs.js, los MISMOS que mide
   // keel-spring, conduit-optional (level: optional) incluido.
-  ...READ_SCOPE_DESIGNS.map((design) => ({ name: design.name, fixture: design.from, withoutLayers: [], mutate: design.mutate }))
+  ...READ_SCOPE_DESIGNS.map((design) => ({ name: design.name, fixture: design.from, withoutLayers: [], mutate: design.mutate })),
+  // El ciclo de vida del dato (DSL 2.28): los diseños de keel-core/test/helpers/data-lifecycle-designs.js, los MISMOS que
+  // mide keel-spring (borrado lógico con restauración, retención con delete y anonymize, y compuesto con el alcance).
+  ...DATA_LIFECYCLE_DESIGNS.map((design) => ({ name: design.name, fixture: design.from, withoutLayers: [], mutate: design.mutate }))
 ];
 
 /** La autoría declarada por el dominio de Template y de su hija TemplateVariable (la misma que keel-dotnet). */

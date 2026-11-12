@@ -52,6 +52,7 @@ import {
   PERSISTENCE_ERRORS_TS
 } from './repositories.js';
 import { envFor, runtimeDefault } from '@keel-system/keel-core/gen/runtime-env';
+import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
 
 export const DATA_SOURCE_OPTIONS_TS = 'src/infrastructure/persistence/data-source-options.ts';
 export const PERSISTENCE_MODULE_TS = 'src/infrastructure/persistence/persistence-module.ts';
@@ -122,6 +123,19 @@ database:
 }
 
 // ─── El DataSource ───────────────────────────────────────────────────────────
+
+/**
+ * La línea con que el logger de TypeORM escribe una consulta que falla. Con datos personales (DSL 2.28, D10, PD-2) el
+ * mensaje del motor no sale: el de una unicidad violada lleva el valor (MySQL: `Duplicate entry 'ana@x.com' for key …`).
+ * Quedan la clase del error y la sentencia, que va sin sus parámetros. Lo mide db-check (PD-2).
+ */
+function personalQueryError(model) {
+  if (!usesPersonalData(model)) return "    this.logger.warn(`La consulta falló: ${error instanceof Error ? error.message : error} — ${sql}`);";
+  return [
+    '    // Sin el mensaje del motor: con datos personales (DSL 2.28) el de una unicidad violada lleva el valor que chocó.',
+    "    this.logger.warn(`La consulta falló: ${error instanceof Error ? error.name : 'error'} (detalle del motor omitido: puede llevar datos personales) — ${sql}`);"
+  ].join('\n');
+}
 
 function dataSourceOptionsFile(model) {
   const engine = engineOf(model);
@@ -227,7 +241,7 @@ class NestTypeOrmLogger implements TypeOrmLogger {
   }
 
   logQueryError(error: string | Error, sql: string): void {
-    this.logger.warn(\`La consulta falló: \${error instanceof Error ? error.message : error} — \${sql}\`);
+${personalQueryError(model)}
   }
 
   logQuerySlow(time: number, sql: string): void {

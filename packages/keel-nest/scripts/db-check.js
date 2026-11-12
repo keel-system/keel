@@ -35,6 +35,10 @@ import { CONDITIONAL_WRITE_DESIGNS } from '../../keel-core/test/helpers/conditio
 import { conditionalWriteBlock } from './lib/conditional-probes.js';
 import { READ_SCOPE_SABOTAGE_SPECS, isReadScopeSabotage, readScopeBlock, readScopeCases, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
 import { READ_SCOPE_DESIGNS } from '../../keel-core/test/helpers/read-scope-designs.js';
+import { DATA_LIFECYCLE_DESIGNS } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
+import { LIFECYCLE_SABOTAGE_SPECS, isLifecycleSabotage, lifecycleBlock, lifecycleCases, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
+import { DELETED_AT, ANONYMIZED_AT } from '@keel-system/keel-core/gen/relational';
+import { lifecycleMarks } from '../src/scaffold/data-lifecycle.js';
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import { DRAIN_SABOTAGES, drainSabotageVerdict, isDrainSabotage } from './lib/timer-probes.js';
 import { RELAY_WAKE_SABOTAGES, isRelayWakeSabotage, relayWakeBlock, relayWakeSabotageVerdict } from './lib/relay-wake-probes.js';
@@ -128,7 +132,10 @@ const SABOTAGES = {
   // El relay por réplica (DSL 2.26, inc. 9): con --subject=notification-mailer, caen RW-1 o RW-3 del bloque del outbox.
   ...Object.fromEntries(Object.entries(RELAY_WAKE_SABOTAGES).map(([id, { spec }]) => [id, spec])),
   // La lectura acotada (DSL 2.27): con --subject=shop-scoped o vault-scoped, cada uno cae en exactamente sus casos RS.
-  ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational]))
+  ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational])),
+  // El ciclo de vida del dato (DSL 2.28): con --subject=cards-logical, codes-anonymize, codes-delete o vault-logical-scoped,
+  // cada uno cae en exactamente sus casos LC/RT/PD.
+  ...Object.fromEntries(Object.entries(LIFECYCLE_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational]))
 };
 const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -148,11 +155,11 @@ function sabotaged(file) {
 }
 const keep = args.includes('--keep');
 const only = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ?? null;
-// --subject=<nombre>: uno solo de SUBJECTS (para iterar; la red completa es sin él).
+// --subject=<nombre>[,<nombre>…]: solo esos de SUBJECTS (para iterar; la red completa es sin él).
 const onlySubject = args.find((arg) => arg.startsWith('--subject='))?.split('=')[1] ?? null;
 const ENGINES = (only ? [only] : ['postgresql', 'mysql']).filter((engine) => DATABASES[engine]);
 // Las formas del esquema que cubre cada sujeto (ver la cabecera).
-const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional', 'verification-codes', 'vault-scoped', 'shop-scoped'];
+const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional', 'verification-codes', 'vault-scoped', 'shop-scoped', 'cards-logical', 'codes-anonymize', 'codes-delete', 'vault-logical-scoped'];
 // Los sujetos DERIVADOS, por nombre: los finders de las búsquedas (DSL 2.22) en la forma de lista con un subcampo de value
 // object, el MISMO diseño que mide keel-dotnet (keel-core/test/helpers/finder-designs.js); y la autoría, que ninguna
 // fixture relacional declara: por política sobre product-catalog y DECLARADA sobre notification-mailer (raíz e hija),
@@ -169,7 +176,9 @@ const DERIVED = {
   // La escritura condicional (api.concurrency, CW-1 a CW-5): el MISMO diseño que mide keel-dotnet.
   ...Object.fromEntries(CONDITIONAL_WRITE_DESIGNS.filter((design) => design.name === 'catalog-conditional').map((design) => [design.name, design])),
   // La lectura acotada (DSL 2.27, RS-1 a RS-8): los MISMOS diseños relacionales que mide keel-spring.
-  ...Object.fromEntries(READ_SCOPE_DESIGNS.filter((design) => ['vault-scoped', 'shop-scoped'].includes(design.name)).map((design) => [design.name, design]))
+  ...Object.fromEntries(READ_SCOPE_DESIGNS.filter((design) => ['vault-scoped', 'shop-scoped'].includes(design.name)).map((design) => [design.name, design])),
+  // El ciclo de vida del dato (DSL 2.28, LC-1 a LC-10, RT-1 a RT-4 y PD-2): los MISMOS diseños relacionales que mide keel-spring.
+  ...Object.fromEntries(DATA_LIFECYCLE_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design]))
 };
 const results = [];
 
@@ -228,6 +237,8 @@ function expectedSchema(model, engine) {
       t.fks.add(owner.foreignKey);
     }
     if (entity.usesOptimisticLocking && !entity.declaresLockVersion) t.columns.set(LOCK_VERSION.column, { nullable: true, length: null, scale: null, collation: null });
+    // Las marcas del ciclo de vida del dato (DSL 2.28): del generador, nulas.
+    for (const mark of lifecycleMarks(model, entity)) t.columns.set(mark.column, { nullable: true, length: null, scale: null, collation: null });
     if (entity.auditTimestamps === 'all') for (const audit of AUDIT_COLUMNS.timestamps) t.columns.set(audit.column, { nullable: false, length: null, scale: null, collation: null });
     // Los condicionados: el índice con su nombre y, en MySQL, la columna que discrimina.
     for (const spec of partialIndexSpecs(model, engine).filter((candidate) => candidate.entity === entity.name)) {
@@ -281,6 +292,8 @@ function probeScript(model, engine, db, expected) {
   const reconciliationCode = reconciliationBlock(model, ctx);
   // El cronómetro (DSL 2.26): antes de listar los imports, que el bloque también añade.
   const timerCode = timerBlock(model, ctx, { adapterArgs: adapterCtorArgs(model, modelDeadlines(model)[0]?.entity, ctx), replicaTx: 'new TransactionContext(dataSource, settings)' });
+  // El ciclo de vida del dato (DSL 2.28), también antes de los imports.
+  const lifecycleCode = lifecycleBlock(model, ctx, { document: false, engine, sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterCtorArgs(model, owner, ctx)})` });
   const imports = [...ctx.imports].map((entry) => {
     const [symbol, file] = entry.split('|');
     return `import { ${symbol} } from '${distOf(file)}';`;
@@ -380,6 +393,7 @@ ${reconciliationCode}
 ${timerCode}
 ${purgeBlock(model)}
 ${purgeTimerBlock(model)}
+${lifecycleCode}
 
 await dataSource.destroy();
 console.log('@@RESULTS@@' + JSON.stringify(results));
@@ -513,7 +527,7 @@ ${credentialFinders(model, root).map((credential) => `  // La credencial que NO 
   check('${name}: ${credential.name} resuelve por una credencial que no es la primera', (await repository.${credential.name}(original.${credential.field.name}[original.${credential.field.name}.length - 1]))?.${idName} === original.${idName});
   check('${name}: ${credential.name} con una credencial ajena devuelve null', (await repository.${credential.name}('nadie-' + randomUUID())) == null);`).join('\n')}
   await repository.deleteById(original.${idName});
-  check('${name}: deleteById borra el agregado y su grafo', (await repository.findById(original.${idName})) == null);
+  check('${name}: ${root.deletion === 'logical' ? 'deleteById lo deja fuera de las lecturas (borrado lógico)' : 'deleteById borra el agregado y su grafo'}', (await repository.findById(original.${idName})) == null);
 }`;
 }
 
@@ -1581,7 +1595,7 @@ for (const engine of ENGINES) {
     continue;
   }
   try {
-    for (const subject of SUBJECTS.filter((name) => !onlySubject || name === onlySubject)) {
+    for (const subject of SUBJECTS.filter((name) => !onlySubject || onlySubject.split(',').includes(name))) {
       const { manifest, layers } = loadService(path.join(FIXTURES_DIR, DERIVED[subject]?.from ?? subject));
       DERIVED[subject]?.mutate(layers);
       // Con mensajería, sobre RabbitMQ: el broker que keel-nest genera.
@@ -1629,6 +1643,13 @@ for (const engine of ENGINES) {
       if (isReadScopeSabotage(sabotage) && readScopeCases(model).length > 0) {
         const verdict = readScopeSabotageVerdict(checks, sabotage, model);
         for (const check of checks.filter((entry) => !entry.ok && /^RS-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
+        step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+        continue;
+      }
+      // El ciclo de vida del dato (DSL 2.28): verde si caen EXACTAMENTE sus casos LC/RT/PD de este sujeto (y ningún otro).
+      if (isLifecycleSabotage(sabotage) && lifecycleCases(model).length > 0) {
+        const verdict = lifecycleSabotageVerdict(checks, sabotage, model, { engine });
+        for (const check of checks.filter((entry) => !entry.ok && /^(LC|RT|PD)-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
         step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
         continue;
       }

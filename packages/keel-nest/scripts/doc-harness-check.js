@@ -32,6 +32,7 @@ import { build } from '../src/commands/build.js';
 import { planService } from '../src/scaffold/index.js';
 import { resolveRuntime } from './lib/database-container.js';
 import { documentIndexes, INDEX_EXPORT_FILE } from '@keel-system/keel-core/gen/document';
+import { partialFilterObject } from '../src/scaffold/data-lifecycle.js';
 
 const keep = process.argv.includes('--keep');
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.slice('--sabotage='.length) ?? null;
@@ -215,7 +216,7 @@ function baselineSteps() {
         missing.push(`${collection}.${spec.name}`);
         continue;
       }
-      const filter = spec.partialFilter ? { [spec.partialFilter.path]: spec.partialFilter.equals } : undefined;
+      const filter = partialFilterObject(spec);
       if (
         JSON.stringify(Object.keys(got.key)) !== JSON.stringify(spec.paths) ||
         got.unique !== spec.unique ||

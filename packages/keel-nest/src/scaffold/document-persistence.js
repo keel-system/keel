@@ -41,6 +41,7 @@ import { reconciliationBindings } from './reconciliation-claim.js';
 import { SWEEP_SETTINGS_TS, usesSweepClaims } from './claim.js';
 import { usesRequestIdempotency, IDEMPOTENCY_STORE_TS, IDEMPOTENCY_STORE_IMPL_TS } from './request-idempotency.js';
 import { localMongoUrl } from '@keel-system/keel-core/gen/infra-catalog';
+import { partialFilterLiteral } from './data-lifecycle.js';
 export { localMongoUrl };
 
 export const MONGO_SETTINGS_TS = 'src/infrastructure/persistence/mongo-settings.ts';
@@ -290,7 +291,9 @@ function documentIndexesFile(model) {
       const keys = spec.paths.map((path) => `${tsString(path)}: 1`).join(', ');
       const options = [`name: ${tsString(spec.name)}`];
       if (spec.unique) options.push('unique: true');
-      if (spec.partialFilter) options.push(`partialFilterExpression: { ${tsString(spec.partialFilter.path)}: ${JSON.stringify(spec.partialFilter.equals)} }`);
+      // La condición del diseño y, con borrado lógico (DSL 2.28, D4), la vida: `deletedAt: null` (T1, medido).
+      const partial = partialFilterLiteral(spec);
+      if (partial) options.push(`partialFilterExpression: ${partial}`);
       return `      { keys: { ${keys} }, options: { ${options.join(', ')} } }`;
     });
     return `  {\n    collection: ${tsString(collection)},\n    indexes: [\n${indexes.join(',\n')}\n    ]\n  }`;
