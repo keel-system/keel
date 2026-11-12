@@ -397,13 +397,20 @@ que la ficha se carga con `loadScoped(…)`/`loadScopedBy<Clave>(…)` y el list
 `query.readScope()`, fuera de un comentario. Un `findById` ahí compila, pasa todo escenario de un solo llamante y deja
 leer la fila de otro: es del agente de código → `remaining`.
 
-**Ejecuta `bash infra/check-logging.sh`.** Se genera siempre y tiene cuatro reglas:
+**El ciclo de vida del dato** (DSL 2.28) no tiene script: en cada handler cuya nota diga «Borrado lógico» o
+«Restauración», la llamada es la del puerto que dice la nota, sin un filtro de lo borrado ni una comprobación de la
+ventana a mano (duplicarlo compila y desincroniza el total de la página o el error) → si lo hay, `remaining`.
+
+**Ejecuta `bash infra/check-logging.sh`.** Se genera siempre y tiene cuatro reglas, más una quinta si el diseño marca
+campos `personal`:
 
 - `concat`: concatenar dentro de un `log.*(`.
 - `wholeObject`: pasar un objeto de entrada entero (`command`, `dto`, `request`, `payload`…) como
   argumento, porque su `toString()` lleva al backend de logs los datos de quien llama.
 - `context`: crear un executor que no propaga el contexto.
 - `errorLevel`: un `log.error` en `domain/` o `application/`.
+- `personal` (DSL 2.28): el accesor de un campo que el diseño marca personal dentro de un `log.*(`. Es no conductual:
+  lo corriges tú logueando el id del agregado.
 
 Nace verde —build no escribe ninguna de esas formas—, así que un hallazgo es siempre código nuevo
 del agente de código. `concat`, `wholeObject` y `context` son correcciones **no conductuales**

@@ -8,9 +8,11 @@
 //   · la traza que llega al colector (un receptor OTLP de node:http, que lee el protobuf del exportador) y los logs de consola con
 //     su trace.id;
 //   · en production, el scrape en el puerto de gestión y no en el principal;
-//   · con seguridad, el scrape entra sin token mientras la API exige credencial.
+//   · con seguridad, el scrape entra sin token mientras la API exige credencial;
+//   · PD-3 (DSL 2.28): con un email personal y único, dos altas con el mismo valor por HTTP contra MySQL (cuyo driver
+//     copia el valor en el mensaje de la unicidad violada) y ni lo que recibe el colector ni la consola lo llevan.
 //
-//   node packages/keel-go/scripts/telemetry-check.js [--keep] [--sabotage=<id>]
+//   node packages/keel-go/scripts/telemetry-check.js [--keep] [--sabotage=<id>] [--only=PD-3]
 //   npm run telemetry-check --workspace packages/keel-go
 //
 // --sabotage=<id> rompe lo emitido CONSERVANDO LA FORMA (sigue compilando), y el check tiene que salir rojo en su caso:
@@ -18,6 +20,8 @@
 //   management      en production el scrape también se sirve en el puerto principal (TEL-10)
 //   server-parent   la entrada HTTP no continúa la traza de quien llama (TEL-3, TEL-8, y TEL-9: el log ya no lleva su traza)
 //   timer-kind      el disparo del cronómetro se observa sin su kind (TEL-12)
+//   pd-log-value    la violación de una unicidad conocida en MySQL sale sin traducir: el error del driver, con el valor,
+//                   llega al span del caso de uso y al catch-all del borde (PD-3)
 //
 // Códigos de salida: 0 todo OK · 1 hay casos rojos · 2 el arnés no pudo correr. Necesita Go, red y podman o docker.
 
@@ -37,8 +41,11 @@ import { FIXTURES_DIR } from '../test/helpers/workspace.js';
 import { tmpDir } from '../test/helpers/tmp.js';
 import { DB_NAME, freePort, resolveRuntime, run, startDatabase, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 import { decodeTraces } from '../../keel-dotnet/scripts/lib/otlp-traces.js';
+import { PERSONAL_TELEMETRY_DESIGN, personalSentinel } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
 
 const keep = process.argv.includes('--keep');
+// --only=PD-3: solo la app de PD-3 (para iterar; la puerta es la corrida entera).
+const onlyPersonal = process.argv.includes('--only=PD-3');
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const isWindows = process.platform === 'win32';
@@ -49,10 +56,12 @@ const SABOTAGES = {
   management: ['internal/platform/telemetry/http.go', 'servesScrape := t.settings.PrometheusEnabled && t.settings.ManagementPort == 0', 'servesScrape := t.settings.PrometheusEnabled'],
   'server-parent': ['internal/platform/telemetry/http.go', 'ctx := t.extract(r.Context(), r.Header)', 'ctx := r.Context()'],
   // Solo donde hay cronómetro (profile-directory no tiene ningún reloj): ver OPTIONAL.
-  'timer-kind': ['cmd/server/main.go', 'Labels: map[string]string{telemetry.AttrTimerKind: kind}, ', '']
+  'timer-kind': ['cmd/server/main.go', 'Labels: map[string]string{telemetry.AttrTimerKind: kind}, ', ''],
+  // Solo en los proyectos sobre MySQL, el de PD-3 entre ellos.
+  'pd-log-value': ['internal/infrastructure/mysql/errors.go', '\t\t\treturn known\n', '\t\t\treturn err\n']
 };
 // Los sabotajes que no aplican a todos los proyectos del check: donde su texto no está, no se aplican.
-const OPTIONAL = new Set(['timer-kind']);
+const OPTIONAL = new Set(['timer-kind', 'pd-log-value']);
 if (sabotage && !SABOTAGES[sabotage]) {
   console.error(`Sabotaje desconocido: ${sabotage}. Los hay: ${Object.keys(SABOTAGES).join(', ')}.`);
   process.exit(2);
@@ -70,7 +79,8 @@ const CASES = {
   'TEL-9': 'los logs de consola (ECS) llevan el trace.id y el correlationId de la petición',
   'TEL-10': 'production: el scrape vive en el puerto de gestión y no en el principal; las sondas, en el principal',
   'TEL-11': 'con seguridad, el scrape entra sin token mientras la API exige credencial',
-  'TEL-12': 'el cronómetro publica su retraso (con el valor de lo vencido), sus aparcados y la duración de cada disparo por kind'
+  'TEL-12': 'el cronómetro publica su retraso (con el valor de lo vencido), sus aparcados y la duración de cada disparo por kind',
+  'PD-3': 'al violar la unicidad de un campo personal por HTTP, ni las trazas ni los logs que salen de la app llevan su valor'
 };
 
 const results = [];
@@ -94,8 +104,12 @@ async function get(url, headers = {}) {
 }
 
 /** Escribe el proyecto de una fixture, aplica el sabotaje y lo compila. */
-function materialize(root, name, stack, dirName = name) {
-  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
+function materialize(root, name, stack, dirName = name, { derived = null, prepare = null } = {}) {
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, derived?.from ?? name));
+  if (derived) {
+    derived.mutate(layers);
+    manifest.service.name = derived.name;
+  }
   const { files, model } = planService({ manifest, layers, workspace: root, stack });
   const dir = path.join(root, dirName);
   for (const file of files) {
@@ -103,6 +117,7 @@ function materialize(root, name, stack, dirName = name) {
     fs.mkdirSync(path.dirname(out), { recursive: true });
     fs.writeFileSync(out, file.content);
   }
+  if (prepare) prepare(dir);
   if (sabotage) {
     const [file, from, to] = SABOTAGES[sabotage];
     const target = path.join(dir, file);
@@ -121,12 +136,15 @@ function materialize(root, name, stack, dirName = name) {
 /** El colector: un receptor OTLP/HTTP que guarda los spans que le llegan (protobuf, el formato del exportador). */
 async function startReceiver() {
   const spans = [];
+  // Los cuerpos tal cual (trazas y logs): en protobuf una cadena viaja en UTF-8, así que PD-3 busca el valor en los bytes.
+  const raw = [];
   const server = http.createServer((request, response) => {
     const chunks = [];
     request.on('data', (chunk) => chunks.push(chunk));
     request.on('end', () => {
       let body = Buffer.concat(chunks);
       if (request.headers['content-encoding'] === 'gzip') body = zlib.gunzipSync(body);
+      raw.push(body);
       if (request.url === '/v1/traces') {
         try {
           spans.push(...decodeTraces(body));
@@ -139,7 +157,7 @@ async function startReceiver() {
     });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  return { endpoint: `http://127.0.0.1:${server.address().port}`, spans, close: () => server.close() };
+  return { endpoint: `http://127.0.0.1:${server.address().port}`, spans, raw, close: () => server.close() };
 }
 
 async function startApp(project, env) {
@@ -173,6 +191,75 @@ async function startApp(project, env) {
       if (child.exitCode == null) child.kill('SIGKILL');
     }
   };
+}
+
+/** El handler de issueCode de PD-3, como lo escribiría el agente: crear el código y guardarlo. */
+function writePersonalHandler(dir) {
+  const handler = path.join(dir, 'internal', 'application', 'issue_code_command_handler.go');
+  const text = fs.readFileSync(handler, 'utf8');
+  const body = '\treturn IssueCodeResponseDto{}, fmt.Errorf("%w: %s", ErrNotImplemented, "issueCode")';
+  if (!text.includes(body) || !text.includes('\t"fmt"\n')) throw new Error('PD-3: el handler emitido de issueCode ya no es el que la sonda sabe completar');
+  fs.writeFileSync(
+    handler,
+    text.replace('\t"fmt"\n', '\t"time"\n\n\t"github.com/google/uuid"\n').replace(
+      body,
+      [
+        '\tcode := domain.RehydrateVerificationCode(domain.VerificationCodeState{ID: uuid.Must(uuid.NewV7()), Email: cmd.Email, Code: "123456", Status: domain.CodeStatusPending, IssuedAt: time.Now().UTC()})',
+        '\tsaved, err := h.verificationCodeRepository.Save(ctx, code)',
+        '\tif err != nil {',
+        '\t\treturn IssueCodeResponseDto{}, err',
+        '\t}',
+        '\treturn ToIssueCodeResponseDto(saved), nil'
+      ].join('\n')
+    )
+  );
+}
+
+/** Dónde aparece el valor en lo que salió de la app: unos cientos de caracteres alrededor, para el informe. */
+const around = (text, value) => {
+  const at = text.indexOf(value);
+  return text.slice(Math.max(0, at - 300), at + 200);
+};
+
+/** PD-3: dos altas con el mismo valor personal; la segunda viola la unicidad en el motor. */
+async function personalCase(project, database, receiver) {
+  const app = await startApp(project, {
+    PROFILE: 'develop',
+    DB_URL: database.url,
+    DB_USERNAME: database.user,
+    DB_PASSWORD: database.password,
+    OTEL_EXPORTER_OTLP_ENDPOINT: receiver.endpoint,
+    TELEMETRY_EXPORT_ENABLED: 'true'
+  });
+  try {
+    const value = personalSentinel(randomBytes(4).toString('hex'));
+    const trace = caller();
+    const post = async () => {
+      const response = await fetch(`${app.base}${project.model.api.routeBase}/codes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', traceparent: trace.traceparent },
+        body: JSON.stringify({ email: value })
+      });
+      return { status: response.status, text: await response.text() };
+    };
+    const first = await post();
+    const second = await post();
+    // El exportador agrupa: se espera a que llegue algún span de esta traza.
+    for (let attempt = 0; attempt < 30 && !receiver.spans.some((span) => span.traceId === trace.traceId); attempt++) await sleep(500);
+    const reached = receiver.spans.some((span) => span.traceId === trace.traceId);
+    const exported = receiver.raw.map((body) => body.toString('latin1').replace(/[^\x20-\x7e]+/g, ' ')).filter((text) => text.includes(value));
+    const printed = app.output().split(/\r?\n/).filter((line) => line.includes(value));
+    const leaks = [...exported, ...printed].map((text) => around(text, value));
+    record(
+      `${PERSONAL_TELEMETRY_DESIGN.name}@mysql`,
+      'PD-3',
+      first.status === 201 && second.status === 409 && reached && leaks.length === 0,
+      `altas ${first.status} y ${second.status} (${second.text.slice(0, 160)}); trazas recibidas: ${reached}; el valor sale por OTLP: ${exported.length}, por consola: ${printed.length}` +
+        (leaks.length > 0 ? `\n${leaks.slice(0, 3).join('\n---\n')}` : '')
+    );
+  } finally {
+    await app.stop();
+  }
 }
 
 const caller = () => {
@@ -318,93 +405,104 @@ let fatal = null;
 const receiver = await startReceiver();
 try {
   if (sabotage) console.log(`(sabotaje: ${sabotage})`);
-  process.stdout.write('compilando job-dispatch y profile-directory con telemetría… ');
-  const project = materialize(root, 'job-dispatch', { database: 'postgresql', telemetry: 'otel' });
-  const secured = materialize(root, 'profile-directory', { database: 'postgresql', telemetry: 'otel', auth: 'keycloak' });
-  // El mismo servicio sobre MySQL: otro driver, el mismo pool de database/sql.
-  const onMysql = materialize(root, 'job-dispatch', { database: 'mysql', telemetry: 'otel' }, 'job-dispatch-mysql');
-  console.log('OK');
+  if (!onlyPersonal) {
+    process.stdout.write('compilando job-dispatch y profile-directory con telemetría… ');
+    const project = materialize(root, 'job-dispatch', { database: 'postgresql', telemetry: 'otel' });
+    const secured = materialize(root, 'profile-directory', { database: 'postgresql', telemetry: 'otel', auth: 'keycloak' });
+    // El mismo servicio sobre MySQL: otro driver, el mismo pool de database/sql.
+    const onMysql = materialize(root, 'job-dispatch', { database: 'mysql', telemetry: 'otel' }, 'job-dispatch-mysql');
+    console.log('OK');
 
-  const postgres = await startDatabase(runtime, 'postgresql');
-  databases.push(postgres);
-  const dbEnv = { DB_URL: postgres.url, DB_USERNAME: postgres.user, DB_PASSWORD: postgres.password };
+    const postgres = await startDatabase(runtime, 'postgresql');
+    databases.push(postgres);
+    const dbEnv = { DB_URL: postgres.url, DB_USERNAME: postgres.user, DB_PASSWORD: postgres.password };
 
-  const poolMax = 7;
-  const app = await startApp(project, {
-    PROFILE: 'develop',
-    ...dbEnv,
-    DB_POOL_MAX_SIZE: String(poolMax),
-    OTEL_EXPORTER_OTLP_ENDPOINT: receiver.endpoint,
-    TELEMETRY_EXPORT_ENABLED: 'true',
-    ...LONG_SLEEP
-  });
-  let timer;
-  try {
-    const trace = caller();
-    const correlationId = `tel-check-${randomBytes(4).toString('hex')}`;
-    for (let i = 0; i < 3; i++) {
-      await get(`${app.base}${trafficPath(project.model)}`, { traceparent: trace.traceparent, 'x-correlation-id': correlationId });
+    const poolMax = 7;
+    const app = await startApp(project, {
+      PROFILE: 'develop',
+      ...dbEnv,
+      DB_POOL_MAX_SIZE: String(poolMax),
+      OTEL_EXPORTER_OTLP_ENDPOINT: receiver.endpoint,
+      TELEMETRY_EXPORT_ENABLED: 'true',
+      ...LONG_SLEEP
+    });
+    let timer;
+    try {
+      const trace = caller();
+      const correlationId = `tel-check-${randomBytes(4).toString('hex')}`;
+      for (let i = 0; i < 3; i++) {
+        await get(`${app.base}${trafficPath(project.model)}`, { traceparent: trace.traceparent, 'x-correlation-id': correlationId });
+      }
+      await developCases('job-dispatch@postgresql', app, project.model, receiver, trace, correlationId, poolMax);
+      timer = await timerLag(app, 'postgresql', postgres);
+    } finally {
+      await app.stop();
     }
-    await developCases('job-dispatch@postgresql', app, project.model, receiver, trace, correlationId, poolMax);
-    timer = await timerLag(app, 'postgresql', postgres);
-  } finally {
-    await app.stop();
-  }
-  await timerCase('job-dispatch@postgresql', project, 'postgresql', postgres, dbEnv, timer);
+    await timerCase('job-dispatch@postgresql', project, 'postgresql', postgres, dbEnv, timer);
 
-  const mysql = await startDatabase(runtime, 'mysql');
-  databases.push(mysql);
-  const mysqlApp = await startApp(onMysql, {
-    PROFILE: 'develop',
-    DB_URL: mysql.url,
-    DB_USERNAME: mysql.user,
-    DB_PASSWORD: mysql.password,
-    DB_POOL_MAX_SIZE: String(poolMax),
-    OTEL_EXPORTER_OTLP_ENDPOINT: receiver.endpoint,
-    TELEMETRY_EXPORT_ENABLED: 'true',
-    ...LONG_SLEEP
-  });
-  let mysqlTimer;
-  try {
-    const trace = caller();
-    const correlationId = `tel-check-${randomBytes(4).toString('hex')}`;
-    for (let i = 0; i < 3; i++) {
-      await get(`${mysqlApp.base}${trafficPath(onMysql.model)}`, { traceparent: trace.traceparent, 'x-correlation-id': correlationId });
+    const mysql = await startDatabase(runtime, 'mysql');
+    databases.push(mysql);
+    const mysqlApp = await startApp(onMysql, {
+      PROFILE: 'develop',
+      DB_URL: mysql.url,
+      DB_USERNAME: mysql.user,
+      DB_PASSWORD: mysql.password,
+      DB_POOL_MAX_SIZE: String(poolMax),
+      OTEL_EXPORTER_OTLP_ENDPOINT: receiver.endpoint,
+      TELEMETRY_EXPORT_ENABLED: 'true',
+      ...LONG_SLEEP
+    });
+    let mysqlTimer;
+    try {
+      const trace = caller();
+      const correlationId = `tel-check-${randomBytes(4).toString('hex')}`;
+      for (let i = 0; i < 3; i++) {
+        await get(`${mysqlApp.base}${trafficPath(onMysql.model)}`, { traceparent: trace.traceparent, 'x-correlation-id': correlationId });
+      }
+      await developCases('job-dispatch@mysql', mysqlApp, onMysql.model, receiver, trace, correlationId, poolMax);
+      mysqlTimer = await timerLag(mysqlApp, 'mysql', mysql);
+    } finally {
+      await mysqlApp.stop();
     }
-    await developCases('job-dispatch@mysql', mysqlApp, onMysql.model, receiver, trace, correlationId, poolMax);
-    mysqlTimer = await timerLag(mysqlApp, 'mysql', mysql);
-  } finally {
-    await mysqlApp.stop();
-  }
-  await timerCase('job-dispatch@mysql', onMysql, 'mysql', mysql, { DB_URL: mysql.url, DB_USERNAME: mysql.user, DB_PASSWORD: mysql.password }, mysqlTimer);
+    await timerCase('job-dispatch@mysql', onMysql, 'mysql', mysql, { DB_URL: mysql.url, DB_USERNAME: mysql.user, DB_PASSWORD: mysql.password }, mysqlTimer);
 
-  // production: el scrape solo en el puerto de gestión.
-  const production = await startApp(project, { PROFILE: 'production', ...dbEnv, OTEL_EXPORTER_OTLP_ENDPOINT: receiver.endpoint });
-  try {
-    for (let attempt = 0; attempt < 20 && (await get(`${production.management}${METRICS_TRANSPORT.scrapePath}`)).status !== 200; attempt++) await sleep(250);
-    const onManagement = await get(`${production.management}${METRICS_TRANSPORT.scrapePath}`);
-    const onMain = await get(`${production.base}${METRICS_TRANSPORT.scrapePath}`);
-    const ready = await get(`${production.base}/readyz`);
-    record(
-      'job-dispatch@production',
-      'TEL-10',
-      onManagement.status === 200 && onManagement.text.includes(GO_RUNTIME.heapUsed) && onMain.status === 404 && ready.status === 200,
-      `gestión ${onManagement.status}, principal ${onMain.status}, /readyz ${ready.status}`
-    );
-  } finally {
-    await production.stop();
+    // production: el scrape solo en el puerto de gestión.
+    const production = await startApp(project, { PROFILE: 'production', ...dbEnv, OTEL_EXPORTER_OTLP_ENDPOINT: receiver.endpoint });
+    try {
+      for (let attempt = 0; attempt < 20 && (await get(`${production.management}${METRICS_TRANSPORT.scrapePath}`)).status !== 200; attempt++) await sleep(250);
+      const onManagement = await get(`${production.management}${METRICS_TRANSPORT.scrapePath}`);
+      const onMain = await get(`${production.base}${METRICS_TRANSPORT.scrapePath}`);
+      const ready = await get(`${production.base}/readyz`);
+      record(
+        'job-dispatch@production',
+        'TEL-10',
+        onManagement.status === 200 && onManagement.text.includes(GO_RUNTIME.heapUsed) && onMain.status === 404 && ready.status === 200,
+        `gestión ${onManagement.status}, principal ${onMain.status}, /readyz ${ready.status}`
+      );
+    } finally {
+      await production.stop();
+    }
+
+    // Con seguridad: el colector no tiene token; la API sí lo exige. Sin proveedor de identidad (el JWKS se lee perezoso), basta
+    // con que el rechazo sea el 401 del plan de acceso.
+    const securedApp = await startApp(secured, { PROFILE: 'develop', ...dbEnv, OTEL_EXPORTER_OTLP_ENDPOINT: receiver.endpoint });
+    try {
+      const scrape = await get(`${securedApp.base}${METRICS_TRANSPORT.scrapePath}`);
+      const api = await get(`${securedApp.base}${trafficPath(secured.model)}`);
+      record('profile-directory@postgresql', 'TEL-11', scrape.status === 200 && api.status === 401, `scrape ${scrape.status}, API sin token ${api.status}`);
+    } finally {
+      await securedApp.stop();
+    }
   }
 
-  // Con seguridad: el colector no tiene token; la API sí lo exige. Sin proveedor de identidad (el JWKS se lee perezoso), basta
-  // con que el rechazo sea el 401 del plan de acceso.
-  const securedApp = await startApp(secured, { PROFILE: 'develop', ...dbEnv, OTEL_EXPORTER_OTLP_ENDPOINT: receiver.endpoint });
-  try {
-    const scrape = await get(`${securedApp.base}${METRICS_TRANSPORT.scrapePath}`);
-    const api = await get(`${securedApp.base}${trafficPath(secured.model)}`);
-    record('profile-directory@postgresql', 'TEL-11', scrape.status === 200 && api.status === 401, `scrape ${scrape.status}, API sin token ${api.status}`);
-  } finally {
-    await securedApp.stop();
-  }
+  // PD-3, con su propio MySQL: el esquema lo crea la baseline de goose al arrancar.
+  const personal = materialize(root, PERSONAL_TELEMETRY_DESIGN.name, { database: 'mysql', telemetry: 'otel' }, PERSONAL_TELEMETRY_DESIGN.name, {
+    derived: PERSONAL_TELEMETRY_DESIGN,
+    prepare: writePersonalHandler
+  });
+  const personalDb = await startDatabase(runtime, 'mysql');
+  databases.push(personalDb);
+  await personalCase(personal, personalDb, receiver);
 } catch (error) {
   fatal = String(error?.message ?? error);
 } finally {
@@ -413,8 +511,8 @@ try {
   if (keep) console.log(`  (--keep) proyectos en ${root} (se borran al salir del proceso)`);
 }
 
-// Los diez casos de develop en cada motor (TEL-12 incluido), production y la seguridad.
-const expected = 22;
+// Los diez casos de develop en cada motor (TEL-12 incluido), production, la seguridad y PD-3.
+const expected = onlyPersonal ? 1 : 23;
 const failed = results.filter((result) => !result.ok).length;
 if (fatal) {
   console.error(`\nsin veredicto: ${fatal}`);

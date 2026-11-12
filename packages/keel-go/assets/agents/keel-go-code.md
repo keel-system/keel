@@ -71,6 +71,12 @@ escenario que ya estaba en verde.
      tal cual, como dice la nota —nunca `FindByID` ni un filtro a mano: no llegaría al total de la página ni a la caché,
      y el 404 o el 403 de `readMiss` lo da el adaptador—. Con `level: optional`, el campo de la identidad llega vacío
      sin token (`nil` o `""`, lo dice la nota): es «anónimo», no un error, y el token roto ya fue un 401 en el borde.
+   - **El ciclo de vida del dato** (DSL 2.28). Con `deletion: logical`, `DeleteByID(ctx, id)` del puerto MARCA la fila: el
+     handler que borra no cambia, y nada filtra lo borrado a mano —lo hace el adaptador en toda carga, listado y
+     total—. La operación con `restores` encuentra la borrada con `FindDeletedBy<Clave>(ctx, valor)` y llama a `Restore(ctx, id)`; la
+     ventana y la clave ocupada las comprueba el adaptador, no el handler. La retención la ejecuta el cronómetro, no
+     un caso de uso. Un campo `personal` del diseño no va nunca en un log ni en un atributo de span: loguea el id del
+     agregado (`check-logging.sh` lo veta con su regla `personal`). Lo inventaría `{{keel:docs}}/personal-data.md`.
    - **Las operaciones por reloj** (`schedule`): la tarea (`internal/infrastructure/scheduler/<grupo>_tasks.go`), su
      cron con el segundo repartido y el reloj son de build; con persistencia, el arranque monta esa tarea en el
      cronómetro (`timer.NewSchedule`): cada tick lo ejecuta UNA réplica, al menos una vez, y el tick repite la pasada

@@ -67,6 +67,12 @@ corto a romper un escenario que ya estaba en verde.
      nota —nunca `findById` ni un filtro a mano: no llegaría al total de la página ni a la caché, y el 404 o el
      403 de `readMiss` lo da el adaptador—. Con `level: optional`, el campo de la identidad llega null
      sin token: es «anónimo», no un error, y el token roto ya fue un 401 en el borde.
+   - **El ciclo de vida del dato** (DSL 2.28). Con `deletion: logical`, `deleteById(id)` del puerto MARCA la fila: el
+     handler que borra no cambia, y nada filtra lo borrado a mano —lo hace el adaptador en toda carga, listado y
+     total—. La operación con `restores` encuentra la borrada con `findDeletedBy<Clave>(valor)` y llama a `restore(id)`; la
+     ventana y la clave ocupada las comprueba el adaptador, no el handler. La retención la ejecuta el cronómetro, no
+     un caso de uso. Un campo `personal` del diseño no va nunca en un log ni en un atributo de span: loguea el id del
+     agregado (`check-logging.sh` lo veta con su regla `personal`). Lo inventaría `{{keel:docs}}/personal-data.md`.
    - **La mensajería**, si el diseño la declara: lee el SKILL.md de `{{keel:skills}}/keel-nest-<broker>/`
      (el broker de `keel-stack.json`). Escribes el envío —la implementación de `OutboxDispatcher` con
      `reliability: outbox`, o de cada `<Evento>Publisher` con `best-effort`— y los listeners (con RabbitMQ, uno

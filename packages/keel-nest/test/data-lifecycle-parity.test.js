@@ -12,7 +12,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadService } from '@keel-system/keel-core';
 import { logicalDeletionNote, retentionParameters, deletedRootOf } from '@keel-system/keel-core/gen/data-lifecycle';
-import { DATA_LIFECYCLE_DESIGNS } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
+import { DATA_LIFECYCLE_DESIGNS, PERSONAL_TELEMETRY_DESIGN } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { planService, scaffoldService } from '../src/scaffold/index.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
 import { lifecycleCases } from '../scripts/lib/lifecycle-probes.js';
@@ -175,4 +175,23 @@ test('T5: borrar y restaurar vacían la caché de las lecturas de la raíz, y el
   assert.match(invalidations, /\[DeleteMyCardCommand, \[GET_MY_CARD_CACHE\]\]/);
   assert.match(invalidations, /\[RestoreMyCardCommand, \[GET_MY_CARD_CACHE\]\]/);
   assert.match(fileOf(files, 'timer/contact-card-retention-timer.ts'), /if \(processed > 0\) \{\s+await this\.operationCache\.clear\(GET_MY_CARD_CACHE\);/);
+});
+
+// PD-3 (DSL 2.28): con datos personales el span registra solo la CLASE de la excepción. La violación de una unicidad en
+// MySQL llega cruda al span del caso de uso (la traduce el filtro de la API, fuera de él) y su mensaje lleva el valor: lo
+// midió el colector OTLP falso de telemetry-check, que es la red en vivo (`--only=PD-3`, `--sabotage=pd-log-value`).
+test('PD-3: con datos personales los spans registran solo la clase de la excepción; sin ellos, la excepción entera', () => {
+  const telemetryOf = (mutate) => {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, PERSONAL_TELEMETRY_DESIGN.from));
+    if (mutate) mutate(layers);
+    const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: 'mysql', telemetry: 'otel' } });
+    return files.find((file) => file.path === 'src/infrastructure/telemetry/telemetry.ts').content;
+  };
+  const personal = telemetryOf(PERSONAL_TELEMETRY_DESIGN.mutate);
+  assert.ok(personal.includes("return error instanceof Error ? { name: error.name } : 'error';"));
+  assert.equal(personal.match(/span\.recordException\(exceptionOf\(error\)\);/g)?.length, 2, 'el caso de uso y el cliente saliente');
+  assert.doesNotMatch(personal, /span\.recordException\(error instanceof Error/);
+  const plain = telemetryOf(null);
+  assert.doesNotMatch(plain, /exceptionOf/);
+  assert.equal(plain.match(/span\.recordException\(error instanceof Error \? error : String\(error\)\);/g)?.length, 2);
 });

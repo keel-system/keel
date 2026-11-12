@@ -14,6 +14,7 @@ import { mediatorCacheInvalidations, OPERATION_CACHE_PKG, CACHED_OPERATIONS_PKG 
 import { usesTelemetry, OBSERVATIONS } from './telemetry.js';
 import { ATTRIBUTES } from '../lib/telemetry-probes.js';
 import { WRITE_CONFLICT_ATTEMPTS } from '@keel-system/keel-core/gen/transactions';
+import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
 
 export const INTERFACES_PKG = 'application.interfaces';
 export const ANNOTATIONS_PKG = 'application.annotations';
@@ -309,7 +310,7 @@ ${rows});
   );
 }
 
-function useCaseHelpers(telemetry) {
+function useCaseHelpers(telemetry, personal = false) {
   // El desenlace va en la OBSERVACIÓN y no solo en el log, y no es simetría: sin la etiqueta
   // `keel.outcome` no hay PromQL que separe los fallos del resto, así que la alerta de tasa de
   // error consultaría una etiqueta inexistente — no dispararía nunca y nadie se enteraría.
@@ -325,8 +326,12 @@ function useCaseHelpers(telemetry) {
             observation.lowCardinalityKeyValue("${ATTRIBUTES.outcome}", "rejected");
             throw ex;
         } catch (RuntimeException | Error ex) {
-            observation.lowCardinalityKeyValue("${ATTRIBUTES.outcome}", "error");
-            observation.error(ex);
+            observation.lowCardinalityKeyValue("${ATTRIBUTES.outcome}", "error");${personal ? `
+            // Con datos personales (DSL 2.28, PD-3) el span lleva solo la CLASE de una excepción de acceso a datos: su
+            // mensaje es el del motor, y al violar una unicidad lleva el valor que chocó («Duplicate entry 'ana@…'»).
+            // La traduce el @ControllerAdvice, fuera de esta observación.
+            observation.error(ex instanceof DataAccessException ? new IllegalStateException(ex.getClass().getName()) : ex);` : `
+            observation.error(ex);`}
             throw ex;
         } finally {
             observation.stop();
@@ -551,7 +556,7 @@ function renderMediator(model) {
   const registryAssign =
     (telemetry ? '\n        this.observationRegistry = observationRegistry;' : '') +
     (cache ? '\n        this.operationCache = operationCache;' : '');
-  const helpers = cache ? withCacheInvalidation(useCaseHelpers(telemetry), invalidations) : useCaseHelpers(telemetry);
+  const helpers = cache ? withCacheInvalidation(useCaseHelpers(telemetry, telemetry && usesPersonalData(model)), invalidations) : useCaseHelpers(telemetry, telemetry && usesPersonalData(model));
 
   let members;
   let dispatchers;
@@ -642,6 +647,7 @@ ${dispatchers}
   }
   if (telemetry) {
     imports.push('io.micrometer.observation.Observation', 'io.micrometer.observation.ObservationRegistry');
+    if (usesPersonalData(model)) imports.push('org.springframework.dao.DataAccessException');
   }
   if (cache) {
     imports.push(

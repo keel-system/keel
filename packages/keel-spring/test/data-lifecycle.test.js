@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadService } from '@keel-system/keel-core';
-import { DATA_LIFECYCLE_DESIGNS } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
+import { DATA_LIFECYCLE_DESIGNS, PERSONAL_TELEMETRY_DESIGN } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { planService, scaffoldService } from '../src/scaffold/index.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
 import { casesOf } from '../src/lib/lifecycle-probes.js';
@@ -155,4 +155,22 @@ test('T5: borrar y restaurar vacían la caché de las lecturas de la raíz, y el
   assert.match(mediator, /Map\.entry\(DeleteMyCardCommand\.class, List\.of\(CachedOperations\.GET_MY_CARD_CACHE\)\)/);
   assert.match(mediator, /Map\.entry\(RestoreMyCardCommand\.class, List\.of\(CachedOperations\.GET_MY_CARD_CACHE\)\)/);
   assert.match(fileOf(files, 'ContactCardRetentionTimer.java'), /if \(processed > 0\) \{\s+operationCache\.clear\(CachedOperations\.GET_MY_CARD_CACHE\);/);
+});
+
+// PD-3 (DSL 2.28): con datos personales y telemetría, el span del caso de uso no recibe el mensaje de una excepción de
+// acceso a datos, que al violar una unicidad lleva el valor (la traduce el @ControllerAdvice, fuera de la observación).
+// En keel-nest esa misma fuga la midió el colector OTLP falso de su telemetry-check; aquí la red en vivo está pendiente.
+test('PD-3: con datos personales el span del caso de uso lleva solo la clase de una DataAccessException; sin ellos, como siempre', () => {
+  const mediator = (mutate) => {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, PERSONAL_TELEMETRY_DESIGN.from));
+    if (mutate) mutate(layers);
+    const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: 'mysql', telemetry: 'otel' } });
+    return files.find((file) => file.path.endsWith('/UseCaseMediator.java')).content;
+  };
+  const personal = mediator(PERSONAL_TELEMETRY_DESIGN.mutate);
+  assert.ok(personal.includes('observation.error(ex instanceof DataAccessException ? new IllegalStateException(ex.getClass().getName()) : ex);'));
+  assert.match(personal, /^import org\.springframework\.dao\.DataAccessException;$/m);
+  const plain = mediator(null);
+  assert.ok(plain.includes('observation.error(ex);'));
+  assert.doesNotMatch(plain, /DataAccessException/);
 });

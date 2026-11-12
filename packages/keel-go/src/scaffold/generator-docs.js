@@ -17,6 +17,7 @@ import path from 'node:path';
 import { HARNESSES, applyTokens, emitHarnessFiles } from '@keel-system/keel-core';
 import { contractDocs } from '@keel-system/keel-core/gen/contract-docs';
 import { identityContractFile } from '@keel-system/keel-core/gen/identity-support';
+import { personalDataInventory } from '@keel-system/keel-core/gen/personal-data';
 import { describeStack } from '@keel-system/keel-core/gen/stack';
 import { assetsDir, SKILL } from '../lib/assets.js';
 import { layout } from './render.js';
@@ -89,6 +90,9 @@ export function generate(model) {
   // Lo que el proveedor de identidad tiene que traer para servir a este diseño (keel-core/gen/identity-support.js).
   const identityContract = identityContractFile(model);
   if (identityContract) files.push(identityContract);
+  // Qué datos personales guarda, cuánto viven y qué garantiza el servidor sobre ellos (keel-core/gen/personal-data.js).
+  const personalData = personalDataInventory(model);
+  if (personalData) files.push(personalData);
   for (const harness of HARNESSES) files.push(...harnessArtifacts(model, harness));
   return files;
 }

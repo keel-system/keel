@@ -19,6 +19,9 @@ import { lifecycleCases } from '../scripts/lib/lifecycle-probes.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 import { tmpDir } from './helpers/tmp.js';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
+import { planService as planNest } from '../../keel-nest/src/scaffold/index.js';
+import { planService as planDotnet } from '../../keel-dotnet/src/scaffold/index.js';
+import { PERSONAL_DATA_FILE } from '@keel-system/keel-core/gen/personal-data';
 import { casesOf as springCases } from '../../keel-spring/src/lib/lifecycle-probes.js';
 
 const design = (name) => DATA_LIFECYCLE_DESIGNS.find((entry) => entry.name === name);
@@ -179,3 +182,26 @@ test('T5: borrar y restaurar vacían la caché de las lecturas de la raíz, y el
   assert.match(main, /operationCache := application\.NewOperationCache\(cacheStore, logger\)/);
   assert.match(main, /NewContactCardRetention\(transactions, retention\.ContactCard\.BatchSize, func\(ctx context\.Context\) \{\n\t\toperationCache\.Clear\(ctx, application\.GetMyCardCache\)\n\t\}\)/);
 });
+
+// El inventario de datos personales (D10) es el MISMO byte a byte en los cuatro proyectos: lo escribe keel-core, y cada
+// generador solo lo coloca. Un diseño sin campos personales no lo lleva.
+test('docs/keel/personal-data.md: el mismo en los cuatro, y ausente sin campos personales', () => {
+  const generators = { spring: planSpring, nest: planNest, dotnet: planDotnet, go: planService };
+  for (const { name } of DATA_LIFECYCLE_DESIGNS) {
+    const docs = Object.entries(generators).map(([generator, planOf]) => [generator, plan(name, { generator: planOf }).files.find((file) => file.path === PERSONAL_DATA_FILE)]);
+    const [, reference] = docs[0];
+    for (const [generator, doc] of docs) {
+      assert.equal(doc?.content, reference?.content, `${name}: ${generator} difiere de keel-spring`);
+    }
+  }
+  const withPersonal = plan('codes-anonymize').files.find((file) => file.path === PERSONAL_DATA_FILE);
+  assert.ok(withPersonal, 'codes-anonymize marca campos personales y no lleva el inventario');
+  assert.match(withPersonal.content, /\| VerificationCode \| /);
+  const plain = planService({ ...loadPlain('verification-codes'), workspace: FIXTURES_DIR, stack: { database: 'postgresql' } });
+  assert.equal(plain.files.find((file) => file.path === PERSONAL_DATA_FILE), undefined);
+});
+
+function loadPlain(fixture) {
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, fixture));
+  return { manifest, layers };
+}

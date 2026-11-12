@@ -19,6 +19,8 @@ import { planService as planGo } from '../../keel-go/src/scaffold/index.js';
 import { conditionalWritesOf } from '@keel-system/keel-core/gen/conditional-writes';
 import { CONDITIONAL_WRITE_DESIGNS } from '../../keel-core/test/helpers/conditional-write-designs.js';
 import { READ_SCOPE_DESIGNS } from '../../keel-core/test/helpers/read-scope-designs.js';
+import { DATA_LIFECYCLE_DESIGNS } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
+import { deletedRootOf } from '@keel-system/keel-core/gen/data-lifecycle';
 import { planFixture, transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 import { tmpDir } from './helpers/tmp.js';
@@ -236,3 +238,64 @@ for (const derived of READ_SCOPE_DESIGNS) {
     assert.deepEqual(findings.filter((finding) => finding.id === 'CHK-DOCS-OPENAPI-DRIFT').map((finding) => finding.message), []);
   });
 }
+
+// El ciclo de vida del dato (DSL 2.28): sus sujetos son los diseños derivados que miden los cuatro generadores. El mismo
+// documento en los cuatro; cada campo personal del cable lleva `x-personal`, y ninguno que no lo sea; el borrado lógico y
+// la restauración dicen en su respuesta de éxito lo que el cliente no deduce de la forma; y sin deriva para
+// CHK-DOCS-OPENAPI-DRIFT.
+for (const derived of DATA_LIFECYCLE_DESIGNS) {
+  test(`${derived.name}: el openapi marca los datos personales y documenta el borrado lógico, el mismo en los cuatro generadores`, () => {
+    const load = () => {
+      const service = loadService(path.join(FIXTURES_DIR, derived.from));
+      derived.mutate(service.layers);
+      return service;
+    };
+    const { manifest, layers } = load();
+    const database = layers.persistence?.default?.model === 'document' ? 'mongodb' : 'postgresql';
+    const documents = [planSpring, planDotnet, planGo].map((plan) => {
+      const service = load();
+      return plan({ ...service, workspace: FIXTURES_DIR, stack: { database } }).files.find((f) => f.path === DOC)?.content;
+    });
+    const nest = planFixture(derived.from, { mutate: derived.mutate, stack: { database } });
+    const fromNest = nest.files.find((f) => f.path === DOC)?.content;
+    if (!fromNest) return; // sin api no hay contrato que derivar
+    for (const other of documents) assert.equal(other, fromNest, 'el mismo contrato en los cuatro generadores');
+
+    const document = YAML.parse(fromNest);
+    assert.deepEqual(danglingRefs(document), []);
+    // Los nombres personales del dominio, y los que lleva marcados el documento: toda marca es de un campo personal.
+    const personal = new Set(nest.model.entities.flatMap((entity) => entity.fields.filter((field) => field.personal).map((field) => field.name)));
+    const marked = [];
+    for (const schema of Object.values(document.components?.schemas ?? {})) {
+      for (const [name, property] of Object.entries(schema.properties ?? {})) if (property['x-personal']) marked.push(name);
+    }
+    for (const methods of Object.values(document.paths)) {
+      for (const op of Object.values(methods)) {
+        for (const parameter of op.parameters ?? []) if (parameter.schema?.['x-personal']) marked.push(parameter.name);
+      }
+    }
+    for (const name of marked) assert.ok(personal.has(name), `${name} lleva x-personal y no es personal en el dominio`);
+    const operations = nest.model.services.flatMap((s) => s.operations).filter((op) => op.route);
+    const find = (name) => Object.values(document.paths).flatMap((methods) => Object.values(methods)).find((op) => op.operationId === name);
+    const success = (name) => Object.entries(find(name).responses).find(([key]) => key.startsWith('2'))[1].description;
+    for (const operation of operations) {
+      const root = deletedRootOf(nest.model, operation);
+      if (root?.deletion === 'logical') assert.match(success(operation.name), /Borrado lógico \(persistence\.\w+\.deletion: logical\)/, operation.name);
+      if (operation.restores) assert.match(success(operation.name), new RegExp(`Restaura ${operation.restores} borrado lógicamente`), operation.name);
+    }
+
+    const docsDir = tmpDir('keel-openapi-lc-');
+    fs.writeFileSync(path.join(docsDir, 'openapi.yaml'), fromNest);
+    const { findings } = checkDerivedCoherence({ layers: { api: layers.api, 'use-cases': layers['use-cases'], domain: layers.domain }, manifest, docsDir });
+    assert.deepEqual(findings.filter((finding) => finding.id === 'CHK-DOCS-OPENAPI-DRIFT').map((finding) => finding.message), []);
+  });
+}
+
+test('cards-logical: el email viaja marcado x-personal, el borrado lo dice y la restauración nombra su ventana y su error', () => {
+  const derived = DATA_LIFECYCLE_DESIGNS.find((entry) => entry.name === 'cards-logical');
+  const nest = planFixture(derived.from, { mutate: derived.mutate, stack: { database: 'postgresql' } });
+  const text = nest.files.find((f) => f.path === DOC).content;
+  assert.match(text, /email:\n(?: {8,}.*\n)*? {8,}x-personal: true/);
+  assert.match(text, /Se puede deshacer con restoreMyCard durante 30 días\./);
+  assert.match(text, /pasados 30 días desde el borrado, `CARD_NOT_RESTORABLE`/);
+});

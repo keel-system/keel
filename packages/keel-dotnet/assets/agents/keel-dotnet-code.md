@@ -63,6 +63,12 @@ escenario que ya estaba en verde.
      `FindById` ni un filtro a mano: no llegaría al total de la página ni a la caché, y el 404 o el 403 de `readMiss` lo
      da el adaptador—. Con `level: optional`, el campo de la identidad llega null sin token: es «anónimo», no un
      error, y el token roto ya fue un 401 en el borde.
+   - **El ciclo de vida del dato** (DSL 2.28). Con `deletion: logical`, `DeleteById(id, …)` del puerto MARCA la fila: el
+     handler que borra no cambia, y nada filtra lo borrado a mano —lo hace el adaptador en toda carga, listado y
+     total—. La operación con `restores` encuentra la borrada con `FindDeletedBy<Clave>(valor, …)` y llama a `Restore(id, …)`; la
+     ventana y la clave ocupada las comprueba el adaptador, no el handler. La retención la ejecuta el cronómetro, no
+     un caso de uso. Un campo `personal` del diseño no va nunca en un log ni en un atributo de span: loguea el id del
+     agregado (`check-logging.sh` lo veta con su regla `personal`). Lo inventaría `{{keel:docs}}/personal-data.md`.
    - **Los mappers**: los `Todo.Value<T>(...)` que build dejó donde no supo derivar un campo.
    - **Los puertos**: lo que pidan las `preconditions` y `rules` (un `ExistsBy…`, un contador) se añade al puerto
      de `Domain/Repository/` **y** a su adaptador de `Infrastructure/Persistence/Repositories/`, con el

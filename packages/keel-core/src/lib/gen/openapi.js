@@ -26,6 +26,7 @@ import {
   conditionalWritePolicy,
   returnsVersioned
 } from './conditional-writes.js';
+import { lifecycleContractClause } from './data-lifecycle.js';
 
 const API_KEY_HEADER = 'X-API-Key';
 const OPENAPI_VERSION = '3.1.0';
@@ -102,7 +103,7 @@ function operationObject(context, operation) {
   }
   if (!shape.asBody && !operation.multipart) {
     for (const field of inputs) {
-      parameters.push({ name: field.name, in: 'query', required: Boolean(field.required), schema: fieldSchema(context, field, { input: true }), description: field.description ?? undefined });
+      parameters.push({ name: field.name, in: 'query', required: Boolean(field.required), schema: personalMark(fieldSchema(context, field, { input: true }), field), description: field.description ?? undefined });
     }
   }
   if (operation.paginated) {
@@ -165,7 +166,7 @@ function responses(context, operation, inputs) {
   const { model } = context;
   const result = {};
   const status = String(operation.route.status);
-  const success = { description: successDescription(operation) };
+  const success = { description: successDescription(context.model, operation) };
   const dto = operation.responseDto;
   if (dto && operation.route.status !== 204) {
     const item = context.schema(dto.name, () => dtoSchema(context, dto.fields));
@@ -237,11 +238,16 @@ function responses(context, operation, inputs) {
  * La descripción de la respuesta de éxito. Un listado acotado (DSL 2.27, `reads`) lo dice: el cliente no puede
  * deducirlo de la forma, y la página y su total cuentan solo lo que el llamante puede ver.
  */
-function successDescription(operation) {
-  const base = operation.description ?? 'Éxito';
+function successDescription(model, operation) {
+  const parts = [operation.description ?? 'Éxito'];
   const read = operation.readScope;
-  if (!read || read.shape === 'single') return base;
-  return `${base}\n\nSolo las filas del alcance del llamante (${read.block}.reads)${read.shape === 'page' ? ': el total y las páginas cuentan solo esas' : ''}.`;
+  if (read && read.shape !== 'single') {
+    parts.push(`Solo las filas del alcance del llamante (${read.block}.reads)${read.shape === 'page' ? ': el total y las páginas cuentan solo esas' : ''}.`);
+  }
+  // El ciclo de vida del dato (DSL 2.28): un borrado lógico o una restauración, con su ventana.
+  const lifecycle = lifecycleContractClause(model, operation);
+  if (lifecycle) parts.push(lifecycle);
+  return parts.join('\n\n');
 }
 
 /**
@@ -279,7 +285,7 @@ function objectSchema(context, fields, { input }) {
   const properties = {};
   const required = [];
   for (const field of fields) {
-    properties[field.wireName ?? field.name] = fieldSchema(context, field, { input });
+    properties[field.wireName ?? field.name] = personalMark(fieldSchema(context, field, { input }), field);
     if (field.required) required.push(field.wireName ?? field.name);
   }
   return { type: 'object', properties, required: required.length > 0 ? required : undefined };
@@ -298,7 +304,7 @@ function dtoSchema(context, fields) {
     const name = field.wireName ?? field.name;
     const nullable = mayBeNull(field);
     const schema = fieldSchema(context, field, { input: false });
-    properties[name] = nullable && !omitNulls ? orNull(schema) : schema;
+    properties[name] = personalMark(nullable && !omitNulls ? orNull(schema) : schema, field);
     if (!omitNulls || !nullable) required.push(name);
   }
   return { type: 'object', properties, required: required.length > 0 ? required : undefined, additionalProperties: false };
@@ -449,6 +455,15 @@ function withRules(schema, rules, { list = false } = {}) {
     }
   }
   return out;
+}
+
+/**
+ * Un dato personal del titular (DSL 2.28, `personal`) lo dice en el contrato con la extensión `x-personal`, para que un
+ * consumidor sepa qué campos tratar como tales sin leer el diseño. Va en el esquema de la propiedad, junto a un `$ref` si
+ * lo hay (OpenAPI 3.1 lo admite).
+ */
+function personalMark(schema, field) {
+  return field.personal ? { ...schema, 'x-personal': true } : schema;
 }
 
 function orNull(schema) {

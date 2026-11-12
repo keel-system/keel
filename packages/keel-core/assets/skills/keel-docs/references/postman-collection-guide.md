@@ -182,6 +182,13 @@ Si el diseño declara `api.concurrency`, las escrituras listadas comparan la ver
 - Un **listado** acotado devuelve solo las filas del llamante: su test asserta lo que diga el Then (las filas propias, el
   total), nunca un recuento que dependa de lo que crearon otros flujos.
 
+### Borrado lógico y restauración (`deletion: logical`, `restores`)
+
+- Tras borrar, **toda** lectura de la fila responde como si no existiera: la ficha, **404** con el `code` de no encontrado; el listado, sin ella y con su total rebajado. Borrar otra vez también es **404**, nunca 410.
+- El escenario que vuelve a usar la clave de una fila borrada (el mismo email, el mismo código) espera el **201** del alta, no el 409 de la unicidad: las claves de lo borrado quedan libres.
+- La restauración se prueba dentro de su ventana (la fila vuelve a leerse) y, si el Then lo pide, con la clave ocupada por otra viva (**409** de esa unicidad). Fuera de la ventana no se puede llegar por HTTP sin esperar días: si un escenario lo exige, repórtalo en vez de falsear el reloj desde la colección.
+- Un campo `x-personal` del `openapi.yaml` lleva en el body de ejemplo un valor **inventado** y reconocible (`ana.ejemplo@example.com`), nunca uno que pueda ser de una persona real.
+
 ### Carpeta «Operaciones»
 
 Una request por endpoint de `api` (explícito o derivado de `auto`) que ningún

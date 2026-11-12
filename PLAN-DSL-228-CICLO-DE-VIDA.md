@@ -1,6 +1,6 @@
 # DSL 2.28: el ciclo de vida del dato (R4)
 
-**Estado: en curso.** Incremento 0 (keel-core) hecho el 2026-11-11, incrementos 1 (keel-spring), 2 (keel-nest), 3 (keel-dotnet) y 4 (keel-go) el 2026-11-12. Siguiente: incremento 5 (derivados y documentación).
+**Estado: en curso.** Incremento 0 (keel-core) hecho el 2026-11-11, incrementos 1 (keel-spring), 2 (keel-nest), 3 (keel-dotnet), 4 (keel-go) y 5 (derivados y documentación) el 2026-11-12. Siguiente: incremento 6 (fixtures).
 
 Origen: R4 de `docs/evaluacion-dsl-2.24.md`. Este plan la lleva al DSL y a los cuatro generadores con la regla de
 siempre: **el mismo diseño genera servidores equivalentes**. Cada pieza nueva tiene una red que la ejecuta y un sabotaje
@@ -230,6 +230,36 @@ Lo que se añade a piezas que ya existen:
 - **Nada cambia para quien no declara el ciclo de vida**: lo emitido para todas las fixtures con los tres motores es el mismo
   byte a byte antes y después (13 070 archivos).
 
+**Decidido y medido al escribir el incremento 5 (derivados y documentación, 2026-11-12):**
+
+- **El contrato.** Cada propiedad o parámetro de un campo `personal` lleva `x-personal: true` (junto a un `$ref` si lo hay,
+  que OpenAPI 3.1 admite), y la respuesta de éxito del borrado lógico y de la restauración cuenta lo que el cliente no
+  deduce de la forma (`lifecycleContractClause`, neutral en `data-lifecycle.js`). Lo mide `keel-nest/test/openapi.test.js`
+  sobre los seis sujetos: el mismo documento en los cuatro, toda marca es de un campo personal y sin deriva para
+  `CHK-DOCS-OPENAPI-DRIFT`; `redocly lint` los da por válidos (el único aviso, `info-license`, es el de siempre).
+- **El inventario** `docs/keel/personal-data.md` lo coloca el `generator-docs.js` de cada generador, como
+  `identity-contract.md`; `keel-go/test/data-lifecycle-parity.test.js` afirma que es el mismo byte a byte en los cuatro y que
+  no existe sin campos personales.
+- **PD-3 es la app ARRANCADA**: el `telemetry-check` de keel-nest, keel-dotnet y keel-go gana la variante
+  `codes-personal@mysql` (`PERSONAL_TELEMETRY_DESIGN` en `data-lifecycle-designs.js`: verification-codes con el email
+  personal y ÚNICO, sin seguridad). La sonda escribe el handler de `issueCode` (es código del agente), manda dos altas con el
+  mismo valor por HTTP contra MySQL —cuyo driver copia el valor en el mensaje de la unicidad violada; el de PostgreSQL no— y
+  busca ese valor en todo lo que recibe el colector OTLP falso (en los bytes crudos del protobuf) y en la consola.
+  `--only=PD-3` corre solo esa app.
+- **Un defecto destapado, en keel-nest**: el span del caso de uso registraba la `QueryFailedError` cruda (`exception.message`
+  y la pila con `Duplicate entry 'pd3-…'`), porque la traducción a `EMAIL_ALREADY_EXISTS` la hace el filtro de la API, FUERA
+  del span. Con datos personales, el span registra solo la clase (`exceptionOf`, también en el cliente saliente). keel-dotnet
+  y keel-go ya salían verdes (medido, no supuesto).
+- **Los sabotajes de PD-3**, cada uno tumba PD-3 por la fuga y no por otra cosa: en keel-nest, el span vuelve a registrar la
+  excepción entera; en keel-dotnet, el `pd-log-value` de `db-check` (EF vuelve a escribir el fallo de la sentencia en el
+  log); en keel-go, la constraint conocida sale sin traducir (el mensaje del driver acaba en `exception.message` del span y
+  en el catch-all del borde, y el alta responde 500).
+- **keel-spring tenía el mismo patrón** que keel-nest: el mediator pasa a `observation.error(ex)` la
+  `DataIntegrityViolationException` cruda, que traduce el `@ControllerAdvice` después. Con datos personales y telemetría pasa
+  solo la clase de una `DataAccessException`. **Su red en vivo queda pendiente**: su `telemetry-check` ejercita los puertos y
+  el mediator con JUnit, sin HTTP ni colector, y el handler es el stub del agente; lo mide solo
+  `test/data-lifecycle.test.js` (cadenas).
+
 ## Núcleo neutral (keel-core/src/lib/gen)
 
 - **`personal-data.js`**:
@@ -405,29 +435,24 @@ Un generador que no llegue a la puerta rechaza la capacidad con su motivo.
 | 2. keel-nest | hecho (2026-11-12) | `db-check` (PostgreSQL y MySQL, 4 sujetos) y `doc-check` (2 sujetos) con los once sabotajes, cada uno en exactamente sus casos; `test/data-lifecycle-parity.test.js` (PD-1 con bash, paridad con keel-spring); `ts-check`; la suite de keel-nest |
 | 3. keel-dotnet | hecho (2026-11-12) | `db-check` (PostgreSQL y MySQL, 4 sujetos) y `doc-check` (2 sujetos) con los sabotajes que tienen qué romper, cada uno en exactamente sus casos; `test/data-lifecycle-parity.test.js` (PD-1 con bash, paridad con keel-spring); `cs-check --fixtures` de las seis variantes; la suite de keel-dotnet |
 | 4. keel-go | hecho (2026-11-12) | `db-check` (PostgreSQL y MySQL, 4 sujetos) y `doc-check` (2 sujetos) con los sabotajes que tienen qué romper, cada uno en exactamente sus casos; `test/data-lifecycle-parity.test.js` (PD-1 con bash, paridad con keel-spring); `go-check --fixtures`; lo emitido para las fixtures, idéntico byte a byte; la suite de keel-go |
-| 5. Derivados y documentación | pendiente | |
+| 5. Derivados y documentación | hecho (2026-11-12) | `keel-nest/test/openapi.test.js` (seis sujetos, cuatro generadores) y `redocly lint`; el inventario igual en los cuatro; PD-3 en el `telemetry-check` de keel-nest, keel-dotnet y keel-go, en verde y cada uno falsado con `--sabotage=pd-log-value`; la suite entera |
 | 6. Fixtures | pendiente | |
 | 7. Corridas de control | pendiente | |
 
 ## Para retomar
 
-Los incrementos 0 a 4 están hechos: los cuatro generadores emiten el ciclo de vida del dato, y la fila `data-lifecycle` de
-sus cuatro matrices está `verificado` y `falsified: true`. Qué añadió el 4 (keel-go), además de lo de § «Decidido y medido al
-escribir el incremento 4»:
+Los incrementos 0 a 5 están hechos. Qué añadió el 5, además de lo de § «Decidido y medido al escribir el incremento 5»:
 
-- **`src/scaffold/data-lifecycle.js`**: las marcas, el predicado de vida (`liveSuffix`, `f.alive()`, `DOCUMENT_ALIVE`),
-  `DeleteByID` que marca, `FindDeletedBy<Clave>` y `Restore` en los dos adaptadores, `<Raíz>Retention` (relacional y
-  documental) con su `Recurring`, `RetentionSettings` y `retention.yaml`, los kinds y el cableado del cronómetro
-  (`retentionKindRows`, `retentionWiring`) y `lifecycleStackErrors`.
-- **Enganchado en** `repositories.js`, `document-repositories.js`, `finders.js`, `persistence.js` (marcas y unicidades entre
-  vivas), `document-persistence.js` (`partialFilterEntries`), `claim.js`, `reconciliation-claim.js`, `timer.js`, `cache.js` (la
-  caché en una variable cuando la retención la vacía), `services.js` (notas) y `logging-check.js` (PD-1);
-  `supported-features.js` ya no lo rechaza.
-- **La red**: `scripts/lib/lifecycle-probes.js` en `db-check` y `doc-check` (`lifecycle_probe_test.go`), con `--only` en
-  lista; los sujetos son parches de `UNCOVERED_BRANCHES`, así que `go-syntax`, `go-idioms`, `uncovered-branches.test.js` y
-  `go-check` los recorren. La sonda de los índices vivos de `doc-check` compara también el filtro de vida.
+- **Derivados**: `x-personal` y las cláusulas del borrado y la restauración en `gen/openapi.js`; `docs/keel/personal-data.md`
+  en los cuatro proyectos.
+- **Documentación**: `/keel-design` (qué es personal en el dominio; borrar, restaurar y retener en la persistencia, §3.13),
+  `/keel-docs` y su guía de Postman (`x-personal`, borrado lógico y restauración), la tabla de evidencia de `/keel-recover`
+  (marca de borrado, restauración, TTL o cron, datos de una persona), los agentes de código y de calidad de los cuatro y la
+  fila de `CLAUDE.md`. Las filas de `capability-coverage` ya estaban: se borran en el 6.
+- **PD-3**: la variante `codes-personal@mysql` de los `telemetry-check` y el arreglo de keel-nest (`exceptionOf`) y de
+  keel-spring (el mediator), este sin red en vivo.
 
-Siguiente, el incremento 5 (derivados y documentación), con su guion de § Incrementos: `openapi.js` con `x-personal` y sus
-tres oráculos, `docs/keel/personal-data.md` en los cuatro, las skills (`/keel-docs`, `/keel-design`, `/keel-recover`), los
-agentes de código y de calidad de los cuatro, `capability-coverage` y la fila en `CLAUDE.md` § Dónde se añade cada cosa. PD-3
-(trazas y logs con el colector OTLP falso) quedó para ese incremento en los cuatro generadores.
+Siguiente, el incremento 6 (fixtures), con su guion de § Incrementos: `profile-directory` con el email personal y único,
+`deleteMyCard` lógico y `restoreMyCard`; `verification-codes` y su gemela `-mongo` con retención `anonymize`; las dos en
+`--ready` con su careo, sus escenarios y su `DESIGN.md`, y las filas de `capability-coverage` fuera. Abierto: la red en vivo
+de PD-3 en keel-spring.

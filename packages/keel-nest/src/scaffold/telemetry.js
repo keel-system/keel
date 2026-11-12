@@ -15,6 +15,7 @@
 // de Fastify, el mediator, el relay del outbox, el consumo, los clientes salientes, los puertos de storage y
 // correo). Los spans de los drivers (SQL, Mongo, Redis) son otro tramo: `telemetry-store-spans` de la matriz.
 
+import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
 import { collectorHostEndpoint, TELEMETRY_INFRA } from '@keel-system/keel-core/gen/infra-catalog';
 import {
   ATTRIBUTES,
@@ -116,8 +117,20 @@ export class TelemetryLifecycle implements OnApplicationShutdown {
 }`);
 }
 
+// Con datos personales (DSL 2.28, D10, PD-3) un span lleva solo la CLASE de la excepción. Su mensaje y su pila pueden llevar
+// el valor: la violación de una unicidad en MySQL («Duplicate entry 'ana@…'») llega cruda al span del caso de uso, porque la
+// traduce el filtro de la API, fuera de él. Medido en telemetry-check con el colector OTLP falso.
+const PERSONAL_EXCEPTION_TS = `/** Lo que un span registra de una excepción: solo su clase, porque el diseño guarda datos personales (DSL 2.28). */
+function exceptionOf(error: unknown): { name: string } | string {
+  return error instanceof Error ? { name: error.name } : 'error';
+}
+
+`;
+
 function telemetryTs(model) {
   const labels = (keys) => JSON.stringify(keys);
+  const personal = usesPersonalData(model);
+  const recorded = personal ? 'exceptionOf(error)' : 'error instanceof Error ? error : String(error)';
   const instrumentation = instrumentationFor(model)
     .map((entry) => `  ${entry.id}: ${JSON.stringify(entry.property)}`)
     .join(',\n');
@@ -346,7 +359,7 @@ export class Telemetry {
             outcome = 'rejected';
           } else {
             outcome = 'error';
-            span.recordException(error instanceof Error ? error : String(error));
+            span.recordException(${recorded});
             span.setStatus({ code: SpanStatusCode.ERROR });
           }
           throw error;
@@ -406,7 +419,7 @@ export class Telemetry {
         } catch (error) {
           const failed = (error as { status?: unknown } | null)?.status;
           if (typeof failed === 'number') status = String(failed);
-          span.recordException(error instanceof Error ? error : String(error));
+          span.recordException(${recorded});
           span.setStatus({ code: SpanStatusCode.ERROR });
           throw error;
         } finally {
@@ -653,7 +666,7 @@ const SEVERITY: Record<string, SeverityNumber> = {
   FATAL: SeverityNumber.FATAL
 };
 
-/** El exemplar de un punto: solo si la traza se muestrea (un id de una traza que no se exportó no lleva a nada). */
+${personal ? PERSONAL_EXCEPTION_TS : ''}/** El exemplar de un punto: solo si la traza se muestrea (un id de una traza que no se exportó no lleva a nada). */
 function exemplarOf(span: Span | null): { exemplarLabels?: Record<string, string> } {
   const ids = span?.spanContext();
   if (!ids || !trace.isSpanContextValid(ids) || (ids.traceFlags & TraceFlags.SAMPLED) === 0) return {};

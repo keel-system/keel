@@ -79,3 +79,24 @@ export const DATA_LIFECYCLE_DESIGNS = [
     }
   }
 ];
+
+/**
+ * El sujeto de PD-3, la app ARRANCADA con telemetría: el código con email personal y ÚNICO, sin seguridad, para que dos
+ * altas por HTTP con el mismo valor lleguen a violar la constraint en el motor. No está en DATA_LIFECYCLE_DESIGNS: las sondas
+ * de los adaptadores no lo necesitan, y solo lo usan los `telemetry-check`. El handler de `issueCode` lo escribe la propia
+ * sonda (es código del agente), así que lo que mide es lo que escribe build: los logs, los spans y la traducción del error.
+ */
+export const PERSONAL_TELEMETRY_DESIGN = {
+  name: 'codes-personal',
+  from: 'verification-codes',
+  mutate(layers) {
+    codesRetention(layers, 'anonymize');
+    layers.domain.entities.VerificationCode.fields.email.unique = true;
+    layers['use-cases'].operations.issueCode.errors = [
+      { code: 'EMAIL_ALREADY_EXISTS', when: 'Ya hay un código emitido para esa dirección.', http: 409 }
+    ];
+  }
+};
+
+/** Un valor personal reconocible y distinto en cada corrida: lo que PD-3 busca en todo lo que sale de la app. */
+export const personalSentinel = (suffix) => `pd3-${suffix}@example.com`;

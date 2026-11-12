@@ -397,6 +397,32 @@ export function restoreNote(model, operation, { findCall, restoreCall }) {
   );
 }
 
+/**
+ * Lo que el CONTRATO formal (`gen/openapi.js`) dice del ciclo de vida en la respuesta de éxito de una operación: que un
+ * borrado es lógico (y se puede deshacer), o que una operación restaura y con qué ventana. El cliente no lo deduce de la
+ * forma. Null si la operación no borra lógicamente ni restaura.
+ */
+export function lifecycleContractClause(model, operation) {
+  const root = deletedRootOf(model, operation);
+  if (root?.deletion === 'logical') {
+    const restorer = lifecycleRoots(model).find((entry) => entry.entity === root.name)?.restore;
+    return (
+      `Borrado lógico (persistence.${root.name}.deletion: logical): desde ahora ninguna lectura lo ve y sus claves únicas ` +
+      'quedan libres; borrarlo otra vez responde el error de no encontrado, nunca 410.' +
+      (restorer ? ` Se puede deshacer con ${restorer.operation} durante ${windowText(restorer)}.` : '')
+    );
+  }
+  if (operation?.restores) {
+    const restore = lifecycleRoots(model).find((entry) => entry.entity === operation.restores)?.restore;
+    if (!restore) return null;
+    return (
+      `Restaura ${operation.restores} borrado lógicamente (restores): sin uno borrado, el error de no encontrado; pasados ` +
+      `${windowText(restore)} desde el borrado, \`${restore.error}\`; y si otro vivo ocupa ya su clave única, el 409 de esa unicidad.`
+    );
+  }
+  return null;
+}
+
 /** Los campos personales del modelo, por entidad: lo que el gate de logs del agente veta y lo que lista el inventario. */
 export function personalFields(model) {
   return (model.entities ?? [])
