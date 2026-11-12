@@ -61,7 +61,7 @@ const SABOTAGES = {
   'pool-name': (sln, model) => [`${sln.infrastructure.dir}/Telemetry/KeelTelemetry.cs`, `PoolValue("${poolMeter(model).max}", null)`, `PoolValue("${poolMeter(model).max}imum", null)`],
   management: (sln) => [`${sln.infrastructure.dir}/Telemetry/TelemetryRegistration.cs`, 'scrape.RequireHost(', '_ = ('],
   'server-parent': (sln) => [`${sln.infrastructure.dir}/Telemetry/KeelTelemetry.cs`, 'var span = Begin(method + " " + path, ActivityKind.Server, parent);', 'var span = Begin(method + " " + path, ActivityKind.Server, null);'],
-  // Solo donde hay cronómetro (profile-directory no tiene ningún reloj): null es «no aplica a este proyecto».
+  // Solo donde hay cronómetro (job-dispatch, y profile-directory desde su retención, DSL 2.28): null es «no aplica a este proyecto».
   'timer-kind': (sln, model) => (usesTimer(model) ? [`${sln.infrastructure.dir}/Timers/TimerPoller.cs`, '{ [TelemetryAttributes.TimerKind] = kind }', '{ }'] : null),
   // El de PD-3, el mismo que en db-check (scripts/lib/lifecycle-probes.js): solo el proyecto con datos personales lo lleva.
   'pd-log-value': (sln, model) =>
@@ -500,8 +500,17 @@ try {
     }
 
     // Con seguridad: el colector no tiene token; la API sí lo exige. Sin proveedor de identidad (el JWKS se resuelve
-    // perezoso), basta con que el rechazo sea el 401 del plan de acceso.
-    const securedApp = await startApp(secured, { PROFILE: 'develop', ...dbEnv, OTEL_EXPORTER_OTLP_ENDPOINT: receiver.endpoint });
+    // perezoso), basta con que el rechazo sea el 401 del plan de acceso. Con su propia base: desde su retención (DSL 2.28)
+    // también tiene keel_timer, y su baseline no puede crearla sobre la que ya creó el de job-dispatch.
+    const securedDb = await startDatabase(runtime, 'postgresql');
+    databases.push(securedDb);
+    const securedApp = await startApp(secured, {
+      PROFILE: 'develop',
+      DB_URL: securedDb.url,
+      DB_USERNAME: securedDb.user,
+      DB_PASSWORD: securedDb.password,
+      OTEL_EXPORTER_OTLP_ENDPOINT: receiver.endpoint
+    });
     try {
       const scrape = await get(`${securedApp.base}${METRICS_TRANSPORT.scrapePath}`);
       const api = await get(`${securedApp.base}${trafficPath(secured.model)}`);

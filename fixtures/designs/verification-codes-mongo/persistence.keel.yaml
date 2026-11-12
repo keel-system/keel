@@ -6,6 +6,12 @@ entities:
     persisted: true
     indexes:
       - [email]
+    # v1.1.0 (DSL 2.28): pasados 30 días desde la emisión, el código se conserva para las cuentas pero sin la
+    # dirección, que es el único dato personal: el email pasa a anon-<id>.
+    retention:
+      from: issuedAt
+      keep: { days: 30 }
+      then: anonymize
 
 audit:
   timestamps: none

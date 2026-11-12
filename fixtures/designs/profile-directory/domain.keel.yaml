@@ -14,12 +14,20 @@ entities:
       subject:
         type: string
         required: true
+        personal: true
         constraints: { maxLength: 255 }
         description: Claim sub del titular; nunca sale del cuerpo ni de la ruta.
       displayName:
         type: string
+        personal: true
         constraints: { maxLength: 100 }
         description: Nombre visible; lo escribe el titular.
+      email:
+        type: string
+        unique: true
+        personal: true
+        constraints: { maxLength: 254 }
+        description: Correo de contacto del titular; dos fichas vivas no lo comparten.
 
 aggregates:
   ContactCard:

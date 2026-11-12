@@ -1,42 +1,77 @@
-# Careo de flujos (flow-walkthrough.md), pasada 3, completa (la última del presupuesto). La hizo
-# keel-flow-review con contexto limpio sobre el manifiesto, las capas y validation-scenarios.md, tras
-# cerrarse FL-CRD-002-B con resolution: design (getMyCard declara su regla de búsqueda). Las
-# decisiones (resolution) son del diseñador.
-reviewedAt: 1.0.0
-passes: 3
-scenariosSha256: d6ce975d041d61e66db2c8ba3fff1877645d0dacf1eaf0e83b9a63d4409fbcb5
-conventionsSha256: 0952b068e22b26ec0dfe7a4dad5a2736e41188d7fdb394dcadad81eea88b599b
+# Careo de flujos (flow-walkthrough.md) de la v1.1.0, pasada 1, completa. Hecho a mano al migrar la fixture
+# (incremento 6 de PLAN-DSL-228-CICLO-DE-VIDA.md, 2026-11-12), recorriendo cada flujo paso a paso contra el
+# manifiesto, las cinco capas y las convenciones, como lo hace keel-flow-review; las decisiones (resolution) son
+# del diseñador. El hallazgo de FL-CRD-003-D es el mismo de la v1.0.0, al que se vuelve a llegar.
+reviewedAt: 1.1.0
+passes: 1
+scenariosSha256: ea418087ff4e2d9001911f021eadc932ef375ff08fb0cfcdb502c9990da129c4
+conventionsSha256: 92a2882b89f1fd9d09f5be14358aee5c35ea061be1df1cfcd4a790326739178b
 flows:
   - { id: FL-CRD-001, sha256: 04180943c4f83024258406e2b6e0ee189a396ccd8f330720593915aa590b71a8 }
-  - { id: FL-CRD-001-B, sha256: 9f08e5afcd657726ae368705d204c45639709d39c29f5de53d18526229c4e765 }
-  - { id: FL-CRD-001-C, sha256: 8c979a983d42489919e777855844e9db8edbc065c3bc28222f8247d5667192ff }
-  - { id: FL-CRD-001-D, sha256: c702c01288cb69745d2b3139699a317174efefbf2b53c2aaf2044db5496e28d9 }
-  - { id: FL-CRD-001-E, sha256: 6f0b0f0a9461ec39a1f9207f4e310f5072b8dec41b1a6bae3e97f3897cf2c659 }
-  - { id: FL-CRD-001-F, sha256: 6a36d1656d5292de2c3f53207be8646adb8d74b5bd4d496e84254d328aadcf0b }
-  - { id: FL-CRD-002, sha256: 2badee3ff85a0d47ebad2fb782df9b7ac95d2b10fce38d56dbf94161a9caf684 }
+  - { id: FL-CRD-001-B, sha256: 2ecd18f694119628f378d535587a86d09287004f58e3c31306182a13c02e2a78 }
+  - { id: FL-CRD-001-C, sha256: 8d86f57a01eca19c80e1ff5e60935f55db80561fc7169e597ad3b6442b0f7f4b }
+  - { id: FL-CRD-001-D, sha256: ed88696f275273465c8a7d8fc086a274f19f795ffefdb4deaa4558c65273d8c5 }
+  - { id: FL-CRD-001-E, sha256: 6b1f8f496b285cdac461ab7441f3ae2c8a28be660c2140149a4dee868192b4cb }
+  - { id: FL-CRD-001-F, sha256: 7af665e532fcf27ca939e0da133c2f721fe87bc72e3dddde7d2f9bd9a715546c }
+  - { id: FL-CRD-002, sha256: 7d455cacbc1c7af1b9994ea4ac0e61e35a5172f7025a41ba781912be8384d340 }
   - { id: FL-CRD-002-B, sha256: b9aee32d51d799bbe6b22f5f87ea146c5430e7b8f6cbdd088c271c92b8106923 }
-  - { id: FL-CRD-002-C, sha256: ba1381a3dd32d95d74c3e1d962e530c053710cb6496a997881fb8e37c0612bed }
+  - { id: FL-CRD-002-C, sha256: 262f1778254fffa7dcf4d5da759f8b5e80041172facc140f794874224b013b6b }
+  - { id: FL-CRD-002-D, sha256: 8582a4bc6366afebb9657fd38e1d3595d6307fe78740867b6b46007202193c71 }
   - { id: FL-CRD-003, sha256: c7616dfaef44df1effa9b8c00b91bf9cfa40a4fc3dd160e9ede7350f6b940ccf }
-  - { id: FL-CRD-003-B, sha256: 4c6e817809d24268b144b124e728003a70f272a9524df8058f24c99e3f545cc6 }
+  - { id: FL-CRD-003-B, sha256: 56d34893123be6c0f04bef8d5b0adc34ef39b16a5ba1432eb74de16a2f368271 }
   - { id: FL-CRD-003-C, sha256: 049a9b102cbc9555670f8fa14fc7e7f629ae5859730ed2f57f4dda46368ea703 }
-  - { id: FL-CRD-003-D, sha256: 11295aabc689a14b56da1d83b6a12c056da35c50bc720c38c5ecada96c13cf1e }
+  - { id: FL-CRD-003-D, sha256: 4c376d4205d038ee723152ab61bdb03c21651afe98bc6175818dd9d9df41b957 }
+  - { id: FL-CRD-004, sha256: 36c7c51dc1b128a842be29bb7fdc1197dd086d9ccb249a6155a49fe590a231a5 }
+  - { id: FL-CRD-004-B, sha256: 6110a0d27895861a261b592e6b66b64808a981fe7ddbaf6b6faadab96d0f5ed1 }
+  - { id: FL-CRD-004-C, sha256: 39c23e20f683bd65a0606d33a53652c3f2e5e0a7d785554a6a7b5c383e948109 }
+  - { id: FL-CRD-004-D, sha256: 05df4600640e5e3ba42cd4a92eb6c456733e0985a2c6e863a117a0ee11cef65c }
+  - { id: FL-CRD-005, sha256: bdb6a86d2e1e8d2320e1985ee16d17d20b1becd46a170f6cee63fe71ee2bbef9 }
+  - { id: FL-CRD-005-B, sha256: ad1d04ab03dd3edcf2619bb052afdc721b216e1e6b8678c9545cdb104c181bd4 }
+  - { id: FL-CRD-006, sha256: 266026f6a5cd3b84a96be0af414fa7c3a42a368d4d8b3f23a5300f031ed4e98b }
+  - { id: FL-CRD-006-B, sha256: 3361a6f799e7a868cb4f543e4c74f09314df9d66c4e6e626109b30049320314d }
+  - { id: FL-CRD-007, sha256: 31468fad4195ffb67c9a4ade4bf7f5499247db774231a47cc04455cfc73f0249 }
+  - { id: FL-CRD-007-B, sha256: 4f123ce2ae569524a564aea05d04e4aaeacb6e1115afc86cf1683b9f9029a8b2 }
 findings:
   - flow: FL-CRD-003-D
     step: "When"
     kind: unreachable-given
     artifact: security.roles
     evidence: >-
-      Mismo hallazgo que la pasada 1, al que se llega por separado. El When usa «el token de un usuario
-      autenticado sin ningún rol»; security declara un único rol (card-holder) y ninguna identidad
-      autenticada sin rol. validation-scenarios.md (§ superficies, Auth) pide que las identidades que
-      nombran los escenarios sean las que declara el diseño —«se nombran los de security.roles, o no
-      hay token que emitir. Si el escenario necesita una identidad que el diseño no tiene […] lo que
-      falta es declararla»—. CHK-SCEN-UNDECLARED-ROLE no salta porque el escenario no nombra ningún
-      rol, sino su ausencia, así que el hueco queda fuera de la comprobación mecánica. Que el proveedor
-      de prueba siembre un usuario sin roles es una convención del generador que el diseño no fija.
+      El When usa «el token de un usuario autenticado sin ningún rol»; security declara un único rol
+      (card-holder) y ninguna identidad autenticada sin rol. CHK-SCEN-UNDECLARED-ROLE no salta porque el
+      escenario no nombra ningún rol, sino su ausencia. Que el proveedor de prueba siembre un usuario sin roles
+      es una convención del generador que el diseño no fija. Mismo hallazgo que en la v1.0.0.
     proposal: >-
-      Aceptarlo apoyándose en que el realm de prueba de los generadores siembra un usuario sin roles
-      (y citarlo en las Convenciones de determinación, junto a los 401/403), o declarar en security un
-      rol sin permisos solo para ejercitar el 403 y nombrarlo en el escenario.
+      Aceptarlo apoyándose en que el realm de prueba de los generadores siembra un usuario sin roles, o
+      declarar en security un rol sin permisos solo para ejercitar el 403.
     resolution: accepted
-    reason: "Aceptado: «autenticado sin el permiso» es la ausencia de un rol, no una identidad de negocio. El realm de prueba de los dos generadores siembra un usuario sin roles (no-role) precisamente para este 403, y un rol vacío en el diseño sería ruido en el catálogo."
+    reason: "Aceptado, como en la v1.0.0: «autenticado sin el permiso» es la ausencia de un rol, no una identidad de negocio. El realm de prueba de los cuatro generadores siembra un usuario sin roles (no-role) precisamente para este 403."
+  - flow: FL-CRD-007
+    step: "Given"
+    kind: unreachable-given
+    artifact: persistence.entities.ContactCard.restorableFor
+    evidence: >-
+      El Given pide una ficha «borrada hace 31 días», y ninguna operación del diseño fija el momento del borrado:
+      deleteMyCard lo estampa ahora. La marca la pone el generador (D1 de la 2.28) y no está en el contrato, y el
+      arnés no trae un helper que la envejezca, como sí trae ageForDeadline para un plazo o ageForReconciliation
+      para un barrido. Lo que hay son los genéricos dbSql y mongoEval, y la convención «edad de un borrado» dice
+      que el arnés retrasa esa marca en la base.
+    proposal: >-
+      Aceptarlo: el agente de pruebas envejece la marca con dbSql o mongoEval sobre la columna o el campo que
+      escribe build (deleted_at / deletedAt), igual que en las sondas LC-7 y RT-4 de los cuatro generadores. Si una
+      corrida lo tropieza, el helper se añade al arnés de los cuatro como ageForDeadline.
+    resolution: accepted
+    reason: "Aceptado: la marca tiene nombre fijo en los cuatro generadores (DELETED_AT de relational.js) y el arnés ya expone el acceso a la base. Las corridas de control (incremento 7) dirán si hace falta el helper."
+  - flow: FL-CRD-007-B
+    step: "When"
+    kind: unobservable
+    artifact: persistence.entities.ContactCard.retention
+    evidence: >-
+      La purga borra la fila entera, y desde la API una ficha purgada y una ficha que nunca existió se ven igual.
+      Lo único observable es el cambio de desenlace de restoreMyCard: 409 CARD_NOT_RESTORABLE antes de la purga
+      (FL-CRD-007) y 404 CARD_NOT_FOUND después. Si el barrido no llegara a correr, el Then 1 saldría rojo con el
+      409, que es lo que hace del cambio una prueba y no una coincidencia.
+    proposal: >-
+      Aceptarlo: el par FL-CRD-007 / FL-CRD-007-B discrimina, y el Then 2 afirma que lo que no ha vencido sigue.
+    resolution: accepted
+    reason: "Aceptado: el 409 previo del mismo flujo es la línea base que hace observable la purga sin leer la base."

@@ -1,60 +1,17 @@
 // Los diseños DERIVADOS con los que se mide el ciclo de vida del dato (DSL 2.28: `personal`, `deletion: logical`,
 // `restorableFor`/`restores` y `retention`) en los cuatro generadores, el mismo patrón que read-scope-designs.js.
 //
-// Ninguna fixture lo declara hasta el incremento 6 de PLAN-DSL-228-CICLO-DE-VIDA.md: los generadores que todavía no lo
-// emiten lo rechazarían. Entonces profile-directory y verification-codes lo declaran, y estos sujetos siguen midiendo
-// lo que las fixtures no tienen: las dos ramas de persistencia de cada una, las dos salidas de una retención y la
-// composición con la lectura acotada (LC-10).
+// Desde el incremento 6 de PLAN-DSL-228-CICLO-DE-VIDA.md las fixtures lo declaran: profile-directory v1.1.0 (email
+// personal y único, borrado lógico, restauración y purga a los 30 días del borrado) y verification-codes[-mongo] v1.1.0
+// (email personal, retención con `anonymize`). Estos sujetos miden lo que las fixtures no tienen: la rama documental de
+// la ficha, la otra salida de la retención y la composición con la lectura acotada (LC-10).
 
-/** La ficha con email personal y único, borrado lógico y restauración durante 30 días; purgada a los 30 del borrado. */
+/** La ficha tal como la declara profile-directory, sobre el modelo de persistencia `model`. */
 function cardsLogical(layers, model) {
   layers.persistence.default = { ...layers.persistence.default, model };
-  const card = layers.domain.entities.ContactCard;
-  card.fields.email = {
-    type: 'string',
-    unique: true,
-    personal: true,
-    constraints: { maxLength: 254 },
-    description: 'Correo de contacto del titular; dos fichas vivas no lo comparten.'
-  };
-  card.fields.displayName.personal = true;
-  Object.assign(layers.persistence.entities.ContactCard, {
-    deletion: 'logical',
-    restorableFor: { days: 30, error: 'CARD_NOT_RESTORABLE' },
-    retention: { from: 'deleted', keep: { days: 30 }, then: 'delete' }
-  });
-  const operations = layers['use-cases'].operations;
-  operations.saveMyCard.input.fields.email = { type: 'string', constraints: { maxLength: 254 } };
-  operations.saveMyCard.errors = [
-    { code: 'EMAIL_ALREADY_EXISTS', when: 'Otra ficha viva ya usa ese correo.', http: 409 }
-  ];
-  operations.deleteMyCard = {
-    description: 'Borra la ficha del titular del token; se puede restaurar durante 30 días.',
-    kind: 'command',
-    input: { fields: { callerSubject: { type: 'string', required: true, description: 'Claim sub del token.' } } },
-    output: 'void',
-    errors: [{ code: 'CARD_NOT_FOUND', when: 'El titular no tiene ficha.', http: 404 }]
-  };
-  operations.restoreMyCard = {
-    description: 'Deshace el borrado de la ficha del titular durante los 30 días siguientes.',
-    kind: 'command',
-    restores: 'ContactCard',
-    input: { fields: { callerSubject: { type: 'string', required: true, description: 'Claim sub del token.' } } },
-    output: 'void',
-    errors: [
-      { code: 'CARD_NOT_FOUND', when: 'El titular no tiene ninguna ficha borrada.', http: 404 },
-      { code: 'CARD_NOT_RESTORABLE', when: 'La ficha se borró hace más de 30 días.', http: 409 },
-      { code: 'EMAIL_ALREADY_EXISTS', when: 'Otra ficha viva ocupa ya su correo.', http: 409 }
-    ]
-  };
-  layers.api.endpoints.deleteMyCard = { method: 'DELETE', path: '/me/card', successStatus: 204 };
-  layers.api.endpoints.restoreMyCard = { method: 'POST', path: '/me/card/restore', successStatus: 204 };
-  for (const name of ['deleteMyCard', 'restoreMyCard']) {
-    layers.security.access.rules[name] = { level: 'required', permissions: ['card:self'] };
-  }
 }
 
-/** El código con email personal y su retención: 30 días desde que se emitió, y después `then`. */
+/** El código con email personal y su retención: 30 días desde que se emitió, y después `then` (la fixture, `anonymize`). */
 function codesRetention(layers, then) {
   layers.domain.entities.VerificationCode.fields.email.personal = true;
   layers.persistence.entities.VerificationCode.retention = { from: 'issuedAt', keep: { days: 30 }, then };
@@ -100,3 +57,26 @@ export const PERSONAL_TELEMETRY_DESIGN = {
 
 /** Un valor personal reconocible y distinto en cada corrida: lo que PD-3 busca en todo lo que sale de la app. */
 export const personalSentinel = (suffix) => `pd3-${suffix}@example.com`;
+
+/**
+ * El diseño SIN nada de la 2.28: ningún campo `personal`, borrado físico escrito donde había `deletion`, y fuera
+ * `restorableFor`, `retention` y las operaciones que restauran (con su endpoint y su regla de acceso). La base explícita de
+ * «sin ciclo de vida» desde que las fixtures lo declaran: antes la daban profile-directory y verification-codes tal cual.
+ */
+export function withoutLifecycle(layers) {
+  for (const entity of Object.values(layers.domain?.entities ?? {})) {
+    for (const field of Object.values(entity.fields ?? {})) delete field.personal;
+  }
+  for (const entity of Object.values(layers.persistence?.entities ?? {})) {
+    if (entity.deletion !== undefined) entity.deletion = 'physical';
+    delete entity.restorableFor;
+    delete entity.retention;
+  }
+  const operations = layers['use-cases']?.operations ?? {};
+  for (const [name, operation] of Object.entries(operations)) {
+    if (!operation.restores) continue;
+    delete operations[name];
+    delete layers.api?.endpoints?.[name];
+    delete layers.security?.access?.rules?.[name];
+  }
+}

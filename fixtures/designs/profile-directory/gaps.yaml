@@ -1,25 +1,27 @@
 # El análisis de huecos de este diseño (gap-analysis.md), hecho al preparar la corrida del incremento 8
-# de keel-nest (2026-10-07). Las decisiones las tomó quien preparaba la corrida por delegación del
-# diseñador: van como decididas en el artefacto que las sostiene, y las de la clase 16 como riesgo
-# aceptado, que es lo que la doctrina pide cuando el diseñador dijo «lo que recomiendes».
+# de keel-nest (2026-10-07) y vuelto a recorrer en la v1.1.0 (incremento 6 de PLAN-DSL-228-CICLO-DE-VIDA.md,
+# 2026-11-12), que añade el email, el borrado lógico, la restauración y la retención. Las decisiones las tomó
+# quien preparaba la fixture por delegación del diseñador: van como decididas en el artefacto que las
+# sostiene, y las de la clase 16 como riesgo aceptado, que es lo que la doctrina pide cuando el diseñador dijo
+# «lo que recomiendes».
 reviewedBy: keel-gap-sweep
-reviewedAt: 1.0.0
+reviewedAt: 1.1.0
 
 coverage:
   - class: 2
-    units: [ saveMyCard ]
+    units: [ saveMyCard, deleteMyCard, restoreMyCard ]
     result: findings
   - class: 3
     units: [ ContactCard ]
     result: findings
   - class: 4
-    units: [ saveMyCard ]
+    units: [ saveMyCard, deleteMyCard, restoreMyCard ]
     result: findings
   - class: 5
     units: [ getMyCard ]
     result: clean
   - class: 9
-    units: [ getMyCard, saveMyCard ]
+    units: [ getMyCard, saveMyCard, deleteMyCard, restoreMyCard ]
     result: clean
   - class: 12
     units: [ service ]
@@ -28,10 +30,13 @@ coverage:
     units: [ ContactCard ]
     result: findings
   - class: 15
-    units: [ getMyCard, saveMyCard ]
+    units: [ getMyCard, saveMyCard, deleteMyCard, restoreMyCard ]
     result: findings
   - class: 16
-    units: [ '3.2', '3.3', '3.7', '3.9', '3.9b' ]
+    units: [ '3.2', '3.3', '3.7', '3.9', '3.9b', '3.13' ]
+    result: findings
+  - class: 19
+    units: [ ContactCard ]
     result: findings
 
 findings:
@@ -39,25 +44,32 @@ findings:
   - class: 2
     unit: saveMyCard
     what: >-
-      El command no declara ningún error: el diseño no dice qué ve el titular cuando su escritura no se
-      puede hacer (forma del cuerpo, permiso, choque de la primera escritura).
-    severity: risk
-    state: accepted
-    reason: "Aceptado (CHK-USECASES-COMMAND-NO-ERRORS en decisions.yaml): la forma del cuerpo la rechaza
-      el borde con 400 VALIDATION_ERROR, el permiso la regla de acceso con 401/403, y el choque de la
-      primera escritura es el 409 de la clave natural (clase 4). No hay un desenlace de negocio propio
-      que nombrar."
+      En la v1.0.0 el command no declaraba ningún error. Con el email único, el choque de correo entre dos
+      fichas vivas es un desenlace de negocio que el titular tiene que poder distinguir.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.1.0: EMAIL_ALREADY_EXISTS (409) y, para la carrera de la primera escritura,
+      CARD_ALREADY_EXISTS (409, naturalKeyError). FL-CRD-002-D provoca el primero."
+  - class: 2
+    unit: restoreMyCard
+    what: >-
+      Restaurar tiene cuatro desenlaces además del éxito: no hay nada borrado, la ventana pasó, el titular ya
+      tiene otra ficha viva, u otra ficha viva usa su correo.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.1.0: CARD_NOT_FOUND (404), CARD_NOT_RESTORABLE (409), CARD_ALREADY_EXISTS y
+      EMAIL_ALREADY_EXISTS (409), cada uno con su escenario (FL-CRD-004-D, 007, 005-B y 006-B)."
 
   # --- Clase 3 ---
   - class: 3
     unit: ContactCard
     what: >-
-      saveMyCard puede llegar sin displayName: el diseño no decía si omitirlo conserva el nombre
-      anterior o lo borra.
+      saveMyCard puede llegar sin displayName o sin email: el diseño no decía si omitirlos conserva el
+      valor anterior o lo borra.
     severity: gap
     state: decided
-    reason: "Decidido en v1.0.0: el reemplazo es ENTERO y un displayName que no llega deja la ficha con
-      null (rule de saveMyCard). FL-CRD-001-E lo afirma."
+    reason: "Decidido en v1.0.0 y extendido al email en v1.1.0: el reemplazo es ENTERO y un campo que no llega
+      se queda a null (rule de saveMyCard). FL-CRD-001-E lo afirma."
 
   # --- Clase 4 ---
   - class: 4
@@ -67,9 +79,9 @@ findings:
       intentan crearla: la clave natural (subject) deja pasar una.
     severity: risk
     state: accepted
-    reason: "Aceptado: la que pierde recibe 409 CONTACT_CARD_SUBJECT_ALREADY_EXISTS (el code de framework
-      de la clave natural) y, como el PUT reemplaza, reintentarla da el resultado esperado. Solo ocurre
-      con el mismo titular guardando dos veces a la vez antes de tener ficha; no compensa un mecanismo."
+    reason: "Aceptado: la que pierde recibe 409 CARD_ALREADY_EXISTS (naturalKeyError desde la v1.1.0) y, como el
+      PUT reemplaza, reintentarla da el resultado esperado. Solo ocurre con el mismo titular guardando dos
+      veces a la vez antes de tener ficha; no compensa un mecanismo."
   - class: 4
     unit: saveMyCard
     what: >-
@@ -78,12 +90,29 @@ findings:
     state: decided
     reason: "Decidido en v1.0.0: gana el último (persistence.consistency.optimisticLocking: none, registro
       estructural § 3.9). Solo puede ser el mismo titular escribiendo dos veces su propia ficha."
+  - class: 4
+    unit: restoreMyCard
+    what: >-
+      Restaurar devuelve a viva una ficha cuya clave pudo ocuparse mientras estaba borrada: su subject (otra
+      ficha del mismo titular) o su email (la ficha de otra persona).
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.1.0: la restauración no desplaza a nadie; responde el 409 de la unicidad ocupada y
+      la ficha sigue borrada (FL-CRD-005-B y FL-CRD-006-B)."
+  - class: 4
+    unit: deleteMyCard
+    what: >-
+      Un borrado que cruza con un guardado del mismo titular desde otra pestaña.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: si el borrado llega primero, el guardado crea una ficha nueva (FL-CRD-005); si llega
+      después, borra la ficha guardada. Las dos son lo que el titular hizo, en el orden en que llegó."
 
   # --- Clase 12 ---
   - class: 12
     unit: service
     what: >-
-      Ausencia vs nulo: una ficha sin nombre, ¿trae displayName: null o no trae la clave?
+      Ausencia vs nulo: una ficha sin nombre o sin correo, ¿trae la clave a null o no la trae?
     severity: gap
     state: decided
     reason: "Decidido en v1.0.0: conventions.nulls: include en el manifiesto; viaja como null. FL-CRD-001-E
@@ -91,23 +120,24 @@ findings:
   - class: 12
     unit: service
     what: >-
-      Texto: el diseño no decía si displayName se normaliza (recorte de espacios, mayúsculas) ni si
-      subject distingue mayúsculas.
+      Texto: el diseño no decía si displayName y email se normalizan (recorte de espacios, mayúsculas), si la
+      unicidad del email distingue mayúsculas ni si subject las distingue.
     severity: gap
     state: decided
-    reason: "Decidido en v1.0.0: displayName se guarda tal cual llega, y subject es el sub del token, un
-      identificador opaco que se compara exacto (no participa en ninguna búsqueda ni lo escribe nadie más
-      que el servidor). Convenciones de determinación de validation-scenarios.md."
+    reason: "Decidido en v1.0.0 y v1.1.0: displayName y email se guardan tal cual llegan, y la unicidad del email
+      compara exacto (ana@ y Ana@ son correos distintos, caso borde de FL-CRD-002-D). subject es el sub del
+      token, un identificador opaco que se compara exacto. Convenciones de determinación de
+      validation-scenarios.md."
 
   # --- Clase 14 ---
   - class: 14
     unit: ContactCard
     what: >-
-      No hay operación para borrar la propia ficha: una vez creada, se conserva para siempre.
-    severity: risk
-    state: accepted
-    reason: "Aceptado en v1.0.0: el titular puede dejarla sin nombre (saveMyCard con {}), y el borrado a
-      petición del interesado entra en una versión con su operación propia, no como efecto de otra."
+      En la v1.0.0 no había operación para borrar la propia ficha: una vez creada, se conservaba para siempre.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.1.0: deleteMyCard la borra lógicamente, restoreMyCard la devuelve durante 30 días y
+      la retención la purga a los 30 días del borrado (registro estructural § 3.13)."
 
   # --- Clase 15 ---
   - class: 15
@@ -127,14 +157,31 @@ findings:
     state: decided
     reason: "Decidido en v1.0.0: la consumen aplicaciones con su propio backend; sin cors, el servicio no
       acepta peticiones cross-origin. Si un navegador la llamara, cors entra con su versión."
+  - class: 15
+    unit: restoreMyCard
+    what: >-
+      La restauración es un POST a /me/card/restore que responde 204 sin cuerpo: el cliente no recibe la ficha
+      restaurada.
+    severity: risk
+    state: decided
+    reason: "Decidido en v1.1.0: 204, igual que el borrado; la ficha se lee con getMyCard, que es lo que hacen los
+      escenarios. Un verbo en la ruta es la forma de una acción que no es un recurso."
+  - class: 15
+    unit: deleteMyCard
+    what: >-
+      Borrar una ficha que no existe, o que ya está borrada, ¿es 204 (idempotente) o 404?
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.1.0: 404 CARD_NOT_FOUND, el mismo en los dos casos para no revelar que hubo una ficha
+      (FL-CRD-004-B)."
 
   # --- Clase 16 ---
   - class: 16
     unit: '3.2'
-    what: Sin idempotency en saveMyCard, decidido por quien preparaba la corrida.
+    what: Sin idempotency en los commands, decidido por quien preparaba la corrida.
     severity: risk
     state: accepted
-    reason: "Aceptado: el PUT reemplaza, así que repetirlo no produce un segundo efecto (registro estructural)."
+    reason: "Aceptado: el PUT reemplaza, y borrar o restaurar dos veces da 404 sin efecto (registro estructural)."
   - class: 16
     unit: '3.3'
     what: Sin caché en getMyCard, decidido por quien preparaba la corrida.
@@ -159,3 +206,28 @@ findings:
     severity: risk
     state: accepted
     reason: "Aceptado: nadie lee el rastro y el autor es siempre el titular (subject)."
+  - class: 16
+    unit: '3.13'
+    what: deletion logical con 30 días de ventana y de retención, decidido por quien preparaba la fixture.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: es el contraste del borrado lógico que pidió el diseñador para la 2.28 (decisión 2 de
+      PLAN-DSL-228-CICLO-DE-VIDA.md); el porqué está en el registro estructural."
+
+  # --- Clase 19 ---
+  - class: 19
+    unit: ContactCard
+    what: >-
+      Qué es personal: en la v1.0.0 nada estaba marcado, y la ficha entera habla de una persona.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.1.0: subject, displayName y email llevan personal: true (REV-PERSONAL-CLASSIFICATION)."
+  - class: 19
+    unit: ContactCard
+    what: >-
+      Cuánto vive lo borrado, y si la purga puede dejar referencias colgando.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.1.0: retention from deleted, 30 días, then delete. Ningún otro agregado apunta a la
+      ficha, así que borrarla entera no deja nada colgando; y la ficha viva no caduca, porque es la que el
+      titular usa."

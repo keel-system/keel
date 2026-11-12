@@ -5,6 +5,12 @@ entities:
   ContactCard:
     persisted: true
     naturalKey: [subject]
+    naturalKeyError: CARD_ALREADY_EXISTS
+    # v1.1.0: borrar la ficha la oculta y se puede deshacer durante 30 días; pasados otros 30 desde el borrado, se
+    # purga. Mientras está borrada, su subject y su email quedan libres para una ficha nueva.
+    deletion: logical
+    restorableFor: { days: 30, error: CARD_NOT_RESTORABLE }
+    retention: { from: deleted, keep: { days: 30 }, then: delete }
 
 audit:
   timestamps: none

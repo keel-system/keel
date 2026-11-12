@@ -1,6 +1,6 @@
 # DSL 2.28: el ciclo de vida del dato (R4)
 
-**Estado: en curso.** Incremento 0 (keel-core) hecho el 2026-11-11, incrementos 1 (keel-spring), 2 (keel-nest), 3 (keel-dotnet), 4 (keel-go) y 5 (derivados y documentación) el 2026-11-12. Siguiente: incremento 6 (fixtures).
+**Estado: en curso.** Incremento 0 (keel-core) hecho el 2026-11-11, incrementos 1 (keel-spring), 2 (keel-nest), 3 (keel-dotnet), 4 (keel-go), 5 (derivados y documentación) y 6 (fixtures) el 2026-11-12. Siguiente: incremento 7 (corridas de control, las lanza el usuario).
 
 Origen: R4 de `docs/evaluacion-dsl-2.24.md`. Este plan la lleva al DSL y a los cuatro generadores con la regla de
 siempre: **el mismo diseño genera servidores equivalentes**. Cada pieza nueva tiene una red que la ejecuta y un sabotaje
@@ -260,6 +260,33 @@ Lo que se añade a piezas que ya existen:
   el mediator con JUnit, sin HTTP ni colector, y el handler es el stub del agente; lo mide solo
   `test/data-lifecycle.test.js` (cadenas).
 
+**Decidido al escribir el incremento 6 (fixtures, 2026-11-12):**
+
+- **profile-directory pasa a la v1.1.0, no a un patch.** Gana un campo y dos operaciones, y con `nulls: include` el
+  `email` aparece en todos los cuerpos exactos: casi todos los flujos cambian, y las convenciones también. Un patch
+  habría dejado el careo agotado sin resello posible (un cambio de convenciones es pasada completa), así que la versión
+  es nueva y todo se rehace sobre ella: revisión entera (con `REV-PERSONAL-CLASSIFICATION` y `REV-API-DELETE-BODY`),
+  barrido de huecos (clase 19 y § 3.13), registro estructural reafirmado y careo de la v1.1.0. El careo de la pasada 1 lo
+  hice a mano en el contexto principal, flujo a flujo, como las migraciones de la 2.27; tres hallazgos, los tres
+  aceptados con su motivo. 13/13 en `--ready` dentro de un workspace.
+- **El diseño de la ficha es el del sujeto `cards-logical`, más tres cosas**: `subject` también es `personal` (el `sub`
+  es un identificador seudónimo de la persona), `naturalKeyError: CARD_ALREADY_EXISTS` (con dos unicidades,
+  `CHK-PERSIST-UNIQUE-ERROR-UNDECLARED` lo exige, y es el 409 de restaurar con el titular en otra ficha viva) y las
+  `rules` de las operaciones nuevas. El sujeto `cards-logical` ya solo fija el modelo de persistencia.
+- **Siete familias de flujos**: las tres de la v1.0.0 con el correo y las operaciones nuevas en las credenciales, y
+  FL-CRD-004 (borrar, 404, borrar otra vez, restaurar), 005 (el `subject` libre y el 409 `CARD_ALREADY_EXISTS`), 006 (el
+  correo libre y el 409 `EMAIL_ALREADY_EXISTS`) y 007 (la ventana vencida y la purga, cuyo único rastro observable es que
+  `restoreMyCard` pase del 409 `CARD_NOT_RESTORABLE` al 404).
+- **Riesgo para el incremento 7**: el arnés no tiene un helper que envejezca la marca de borrado, como `ageForDeadline`
+  para un plazo. FL-CRD-007 la envejece con `dbSql`/`mongoEval` sobre `deleted_at`/`deletedAt` (Convenciones: edad de un
+  borrado) y adelanta la purga con `fireTimer("retention:ContactCard")`. Hallazgo del careo aceptado: si la corrida lo
+  tropieza, el helper entra en los cuatro arneses.
+- **verification-codes no estaba en `--ready`, y no se lleva ahí.** El guion decía «siguen en `--ready`», pero las dos
+  gemelas nunca lo estuvieron (8 de 13 criterios en rojo: sin escenarios, revisión, huecos ni careo; sus corridas de la
+  2.26 iban con `--accept-unready`). Cerrar su diseño es otro trabajo. Pasan a la v1.1.0 con el `email` personal y la
+  retención `from: issuedAt`, 30 días, `anonymize`, y siguen con los mismos 8 criterios que antes y ninguno nuevo.
+- **Fuera las filas de la 2.28 en las cuatro `capability-coverage`.**
+
 ## Núcleo neutral (keel-core/src/lib/gen)
 
 - **`personal-data.js`**:
@@ -347,7 +374,7 @@ Los sujetos van en `keel-core/test/helpers/data-lifecycle-designs.js`:
   `from: deleted`.
 - `vault-logical-scoped`: `asset-vault` con `reads` y borrado lógico, para LC-10.
 
-Ninguna fixture los declara hasta el incremento 6.
+Desde el incremento 6 los declaran profile-directory y verification-codes[-mongo]; los sujetos miden lo que ellas no tienen.
 
 ## Incrementos
 
@@ -436,23 +463,15 @@ Un generador que no llegue a la puerta rechaza la capacidad con su motivo.
 | 3. keel-dotnet | hecho (2026-11-12) | `db-check` (PostgreSQL y MySQL, 4 sujetos) y `doc-check` (2 sujetos) con los sabotajes que tienen qué romper, cada uno en exactamente sus casos; `test/data-lifecycle-parity.test.js` (PD-1 con bash, paridad con keel-spring); `cs-check --fixtures` de las seis variantes; la suite de keel-dotnet |
 | 4. keel-go | hecho (2026-11-12) | `db-check` (PostgreSQL y MySQL, 4 sujetos) y `doc-check` (2 sujetos) con los sabotajes que tienen qué romper, cada uno en exactamente sus casos; `test/data-lifecycle-parity.test.js` (PD-1 con bash, paridad con keel-spring); `go-check --fixtures`; lo emitido para las fixtures, idéntico byte a byte; la suite de keel-go |
 | 5. Derivados y documentación | hecho (2026-11-12) | `keel-nest/test/openapi.test.js` (seis sujetos, cuatro generadores) y `redocly lint`; el inventario igual en los cuatro; PD-3 en el `telemetry-check` de keel-nest, keel-dotnet y keel-go, en verde y cada uno falsado con `--sabotage=pd-log-value`; la suite entera |
-| 6. Fixtures | pendiente | |
+| 6. Fixtures | hecho (2026-11-12) | profile-directory 13/13 en `--ready` dentro de un workspace; verification-codes[-mongo] sin criterios nuevos; las cuatro `capability-coverage` sin filas de la 2.28; la suite entera; en vivo, con los sujetos derivados que cambiaron (cards-logical[-mongo], codes-*): `db-check`/`doc-check` de keel-nest, keel-dotnet y keel-go (PostgreSQL y MySQL), `timer-check` de keel-spring sobre el par, los cuatro `security-check` y el `telemetry-check` de keel-nest, keel-dotnet y keel-go, todo en verde (el de keel-dotnet arrancaba profile-directory sobre la base de job-dispatch y chocaba en `keel_timer`: ahora lleva la suya) |
 | 7. Corridas de control | pendiente | |
 
 ## Para retomar
 
-Los incrementos 0 a 5 están hechos. Qué añadió el 5, además de lo de § «Decidido y medido al escribir el incremento 5»:
+Los incrementos 0 a 6 están hechos. Lo del 6 está en § «Decidido al escribir el incremento 6».
 
-- **Derivados**: `x-personal` y las cláusulas del borrado y la restauración en `gen/openapi.js`; `docs/keel/personal-data.md`
-  en los cuatro proyectos.
-- **Documentación**: `/keel-design` (qué es personal en el dominio; borrar, restaurar y retener en la persistencia, §3.13),
-  `/keel-docs` y su guía de Postman (`x-personal`, borrado lógico y restauración), la tabla de evidencia de `/keel-recover`
-  (marca de borrado, restauración, TTL o cron, datos de una persona), los agentes de código y de calidad de los cuatro y la
-  fila de `CLAUDE.md`. Las filas de `capability-coverage` ya estaban: se borran en el 6.
-- **PD-3**: la variante `codes-personal@mysql` de los `telemetry-check` y el arreglo de keel-nest (`exceptionOf`) y de
-  keel-spring (el mediator), este sin red en vivo.
-
-Siguiente, el incremento 6 (fixtures), con su guion de § Incrementos: `profile-directory` con el email personal y único,
-`deleteMyCard` lógico y `restoreMyCard`; `verification-codes` y su gemela `-mongo` con retención `anonymize`; las dos en
-`--ready` con su careo, sus escenarios y su `DESIGN.md`, y las filas de `capability-coverage` fuera. Abierto: la red en vivo
-de PD-3 en keel-spring.
+Siguiente, el incremento 7: las corridas de control, que lanza el usuario (dos a la vez como mucho). profile-directory
+v1.1.0 genera sin `--accept-unready`; verification-codes lo sigue necesitando. Lo que hay que mirar en ellas: si el
+agente de pruebas se las arregla con `dbSql`/`mongoEval` para envejecer el borrado de FL-CRD-007 (si no, el helper
+`ageDeletion` en los cuatro arneses), la columna generada de MySQL (T2) en una corrida con ese motor, y los designGaps,
+copiados a `docs/corridas/` antes de tirar el proyecto. Abierto aparte: la red en vivo de PD-3 en keel-spring.

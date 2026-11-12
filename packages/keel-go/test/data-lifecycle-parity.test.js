@@ -12,7 +12,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadService } from '@keel-system/keel-core';
 import { logicalDeletionNote, retentionParameters, deletedRootOf } from '@keel-system/keel-core/gen/data-lifecycle';
-import { DATA_LIFECYCLE_DESIGNS } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
+import { DATA_LIFECYCLE_DESIGNS, withoutLifecycle } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { planService } from '../src/scaffold/index.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
 import { lifecycleCases } from '../scripts/lib/lifecycle-probes.js';
@@ -203,5 +203,6 @@ test('docs/keel/personal-data.md: el mismo en los cuatro, y ausente sin campos p
 
 function loadPlain(fixture) {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, fixture));
+  withoutLifecycle(layers);
   return { manifest, layers };
 }

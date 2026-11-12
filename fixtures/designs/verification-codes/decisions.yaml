@@ -7,4 +7,4 @@ decisions:
       El conflicto de dos escrituras concurrentes sobre el mismo código (verificarlo mientras
       el cronómetro lo caduca) es el canónico 409 CONCURRENT_MODIFICATION. Ninguna operación
       tiene un code de dominio que lo describa mejor.
-    since: 1.0.0
+    since: 1.1.0

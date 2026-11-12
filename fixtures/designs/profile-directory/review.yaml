@@ -1,27 +1,55 @@
+# Revisión semántica de la v1.1.0 (DSL 2.28: email personal y único, borrado lógico, restauración y retención).
+# Rehecha al migrar la fixture (incremento 6 de PLAN-DSL-228-CICLO-DE-VIDA.md, 2026-11-12), sobre las capas
+# enteras y no solo sobre lo nuevo: review.yaml caduca con el minor.
 reviewedBy: keel-design-review
-reviewedAt: 1.0.0
+reviewedAt: 1.1.0
 findings:
   - id: REV-DOMAIN-PROMISED-STATE
     scope: domain.entities.ContactCard
     verdict: ok
+    note: >-
+      La prosa promete que una ficha borrada se puede restaurar durante 30 días: lo sostienen deletion logical,
+      restorableFor y restoreMyCard, y la marca de borrado la pone el generador. No hay otro verbo de
+      conservación ni de ocultación sin campo detrás.
   - id: REV-USECASES-INTERNAL-REPEAT
     scope: use-cases.operations.saveMyCard
     verdict: accepted
     note: >-
       saveMyCard se reintenta sin idempotency a propósito: reemplaza la ficha entera del titular,
       identificada por su naturalKey (subject), así que una repetición deja el mismo estado y devuelve
-      la misma ficha. Registro estructural § 3.2.
+      la misma ficha. deleteMyCard y restoreMyCard repetidos dan 404 CARD_NOT_FOUND sin efecto. Registro
+      estructural § 3.2.
   - id: REV-USECASES-GUARD-ORDER
-    scope: use-cases.operations.saveMyCard
+    scope: use-cases.operations.restoreMyCard
     verdict: ok
+    note: >-
+      El orden de restoreMyCard es implementable con lo que hay en cada paso: buscar la borrada más reciente
+      del titular (404), comparar su marca con la ventana (CARD_NOT_RESTORABLE) y solo entonces devolverla a
+      viva, donde las dos unicidades responden con su 409 (CARD_ALREADY_EXISTS por el subject,
+      EMAIL_ALREADY_EXISTS por el correo). Los escenarios no dependen de cuál de los dos 409 gana cuando chocan
+      los dos: FL-CRD-005-B y FL-CRD-006-B provocan cada uno solo el suyo.
   - id: REV-SEC-RESOURCE-SCOPE
     scope: security.authentication.callerIdentity
     verdict: ok
     note: >-
       El alcance no se da por hecho en prosa: cada titular opera sobre SU ficha porque la identidad la
-      estampa el servidor desde el claim sub (callerIdentity) y la ficha se busca por ese subject. No
-      hay recursos de otros a los que acotar. FL-CRD-002 lo afirma.
+      estampa el servidor desde el claim sub (callerIdentity) y la ficha se busca por ese subject, también
+      al borrar y al restaurar. No hay recursos de otros a los que acotar. FL-CRD-002 lo afirma.
   - id: REV-PERSIST-MISSING-INDEX
     scope: persistence.entities.ContactCard
     verdict: ok
-    note: Las dos operaciones buscan por subject, que es la naturalKey (índice único).
+    note: >-
+      Las cuatro operaciones buscan por subject, que es la naturalKey (índice único entre vivas); la
+      restauración busca la borrada por la misma clave. email es único y lleva su propio índice.
+  - id: REV-PERSONAL-CLASSIFICATION
+    scope: domain.entities.ContactCard
+    verdict: ok
+    note: >-
+      Los tres campos que hablan de una persona van marcados: displayName y email, que escribe el titular, y
+      subject, el sub del token, que es un identificador seudónimo de esa persona y sigue siendo dato personal
+      aunque no diga su nombre. id es un uuid del servidor que no identifica a nadie fuera de este servicio.
+  - id: REV-API-DELETE-BODY
+    scope: api.endpoints.deleteMyCard
+    verdict: ok
+    note: >-
+      deleteMyCard es void con 204: el cliente no necesita nada de vuelta, y lo que queda lo lee con getMyCard.

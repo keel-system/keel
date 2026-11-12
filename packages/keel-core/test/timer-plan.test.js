@@ -24,6 +24,7 @@ import {
   clusterRecurrings,
   drainBudgetMs,
   drainReference,
+  generatorRetentions,
   generatorPurges,
   generatorSchedules,
   purgedByTimer,
@@ -61,13 +62,13 @@ test('cada purga del generador es la de una de sus tablas, con su kind en keel_t
   assert.ok(seen > 0, 'ninguna fixture tiene purgas: la prueba no mide nada');
 });
 
-test('el cronómetro existe con plazos, purgas o schedule, y entonces los lleva TODOS en modo clúster', () => {
+test('el cronómetro existe con plazos, purgas, schedule o retención, y entonces los lleva TODOS en modo clúster', () => {
   let withPurges = 0;
   for (const name of fixtures) {
     const subject = model(name);
     const purges = generatorPurges(subject);
     const schedules = generatorSchedules(subject);
-    const expected = Boolean(subject.layersPresent.persistence) && (usesDeadlines(subject) || purges.length > 0 || schedules.length > 0);
+    const expected = Boolean(subject.layersPresent.persistence) && (usesDeadlines(subject) || purges.length > 0 || schedules.length > 0 || generatorRetentions(subject).length > 0);
     assert.equal(usesTimer(subject), expected, name);
     if (!usesTimer(subject)) {
       assert.deepEqual(timerPurges(subject), [], name);
@@ -80,7 +81,7 @@ test('el cronómetro existe con plazos, purgas o schedule, y entonces los lleva 
     // La purga de la propia tabla (R7) va primero, y después las del generador, sin repetir un kind.
     const kinds = clusterRecurrings(subject).map((recurring) => recurring.kind);
     assert.equal(kinds[0], TIMER_PURGE_KIND, name);
-    assert.deepEqual(kinds.slice(1), [...purges, ...schedules].map((recurring) => recurring.kind), name);
+    assert.deepEqual(kinds.slice(1), [...purges, ...schedules, ...generatorRetentions(subject)].map((recurring) => recurring.kind), name);
     assert.deepEqual(timerSchedules(subject), schedules, name);
     assert.equal(new Set(kinds).size, kinds.length, `${name}: kinds repetidos`);
     for (const purge of purges) assert.ok(purgedByTimer(subject, purge.table), `${name}: ${purge.table}`);

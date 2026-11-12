@@ -12,7 +12,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadService } from '@keel-system/keel-core';
 import { logicalDeletionNote, retentionParameters, deletedRootOf } from '@keel-system/keel-core/gen/data-lifecycle';
-import { DATA_LIFECYCLE_DESIGNS, PERSONAL_TELEMETRY_DESIGN } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
+import { DATA_LIFECYCLE_DESIGNS, PERSONAL_TELEMETRY_DESIGN, withoutLifecycle } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { planService, scaffoldService } from '../src/scaffold/index.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
 import { lifecycleCases } from '../scripts/lib/lifecycle-probes.js';
@@ -163,6 +163,7 @@ test('con datos personales ni TypeORM ni el filtro de la API copian el mensaje d
   assert.match(fileOf(files, 'persistence/data-source-options.ts'), /detalle del motor omitido: puede llevar datos personales/);
   assert.match(fileOf(files, 'rest/api-exception-filter.ts'), /Violación de integridad no asociada a ninguna constraint conocida \(\$\{exception instanceof Error \? exception\.name : 'error'\}\)/);
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'profile-directory'));
+  withoutLifecycle(layers);
   const plain = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: 'postgresql' } }).files;
   assert.doesNotMatch(fileOf(plain, 'persistence/data-source-options.ts'), /detalle del motor omitido/);
   assert.match(fileOf(plain, 'rest/api-exception-filter.ts'), /exception instanceof Error \? exception\.stack : String\(exception\)\);/);
@@ -191,7 +192,7 @@ test('PD-3: con datos personales los spans registran solo la clase de la excepci
   assert.ok(personal.includes("return error instanceof Error ? { name: error.name } : 'error';"));
   assert.equal(personal.match(/span\.recordException\(exceptionOf\(error\)\);/g)?.length, 2, 'el caso de uso y el cliente saliente');
   assert.doesNotMatch(personal, /span\.recordException\(error instanceof Error/);
-  const plain = telemetryOf(null);
+  const plain = telemetryOf(withoutLifecycle);
   assert.doesNotMatch(plain, /exceptionOf/);
   assert.equal(plain.match(/span\.recordException\(error instanceof Error \? error : String\(error\)\);/g)?.length, 2);
 });

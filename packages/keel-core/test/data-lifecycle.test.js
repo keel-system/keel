@@ -31,7 +31,7 @@ import {
 } from '../src/lib/gen/data-lifecycle.js';
 import { implicitPredicates } from '../src/lib/gen/implicit-predicates.js';
 import { PERSONAL_DATA_FILE, personalDataInventory, personalFieldNames, usesPersonalData } from '../src/lib/gen/personal-data.js';
-import { DATA_LIFECYCLE_DESIGNS } from './helpers/data-lifecycle-designs.js';
+import { DATA_LIFECYCLE_DESIGNS, withoutLifecycle } from './helpers/data-lifecycle-designs.js';
 import { PROBE } from './helpers/probe-projection.js';
 
 const FIXTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'fixtures', 'designs');
@@ -71,7 +71,7 @@ test('cards-logical: borrado lógico con su restauración, su purga desde el bor
       retention: { kind: 'retention:ContactCard', from: 'deletedAt', fromDeleted: true, span: { days: 30 }, then: 'delete', anonymize: [] }
     }
   ]);
-  assert.deepEqual(personalFields(model), [{ entity: 'ContactCard', fields: ['displayName', 'email'] }]);
+  assert.deepEqual(personalFields(model), [{ entity: 'ContactCard', fields: ['subject', 'displayName', 'email'] }]);
   assert.deepEqual(deletedRoots(layers), ['ContactCard']);
   assert.deepEqual(dataLifecycleRoots(layers), ['ContactCard']);
   assert.equal(operationOf(model, 'restoreMyCard').restores, 'ContactCard');
@@ -153,9 +153,8 @@ test('la frontera común: rechaza cada pieza del ciclo de vida con el mismo mens
   for (const error of errors) {
     assert.match(error, /keel-x todavía no lo genera — llega en el incremento 9 de PLAN-DSL-228-CICLO-DE-VIDA\.md/);
   }
-  const { layers: physical } = designOf('profile-directory', (l) => {
-    l.persistence.entities.ContactCard.deletion = 'physical';
-  });
+  const { layers: physical } = designOf('profile-directory', withoutLifecycle);
+  assert.equal(physical.persistence.entities.ContactCard.deletion, 'physical');
   assert.deepEqual(dataLifecyclePendingErrors(physical, 'keel-x', 9), []);
 });
 
@@ -183,8 +182,8 @@ test('el inventario de datos personales: una fila por campo, con su borrado y su
   assert.match(inventory.content, /\| VerificationCode \| email \| sí \| físico \| 30 días desde `issuedAt`, y después se anonimiza \|/);
   assert.equal(personalDataInventory(derived('codes-anonymize').model).content, inventory.content, 'determinista');
   assert.match(personalDataInventory(derived('cards-logical').model).content, /30 días desde el borrado, y después se borra/);
-  assert.deepEqual(personalFieldNames(derived('cards-logical').model), ['displayName', 'email']);
-  const { model: plain } = designOf('verification-codes');
+  assert.deepEqual(personalFieldNames(derived('cards-logical').model), ['displayName', 'email', 'subject']);
+  const { model: plain } = designOf('verification-codes', withoutLifecycle);
   assert.equal(usesPersonalData(plain), false);
   assert.equal(personalDataInventory(plain), null);
 });
@@ -203,7 +202,7 @@ test('la unicidad entre vivas (D4): toda unicidad de una raíz con borrado lógi
   const known = new Set(uniqueConstraints(model).map((entry) => entry.constraint));
   for (const spec of specs) assert.ok(known.has(spec.name), spec.name);
   // Con borrado físico, nada cambia: sin índices parciales que el diseño no declaró.
-  const physical = designOf('profile-directory').model;
+  const physical = designOf('profile-directory', withoutLifecycle).model;
   assert.deepEqual(partialIndexSpecs({ ...physical, stack: { database: 'postgresql' } }, 'postgresql'), []);
 });
 

@@ -8,3 +8,11 @@ endpoints:
     method: PUT
     path: /me/card
     successStatus: 200
+  deleteMyCard:
+    method: DELETE
+    path: /me/card
+    successStatus: 204
+  restoreMyCard:
+    method: POST
+    path: /me/card/restore
+    successStatus: 204

@@ -22,3 +22,5 @@ access:
   rules:
     getMyCard: { level: required, permissions: [card:self] }
     saveMyCard: { level: required, permissions: [card:self] }
+    deleteMyCard: { level: required, permissions: [card:self] }
+    restoreMyCard: { level: required, permissions: [card:self] }

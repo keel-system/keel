@@ -19,7 +19,39 @@ operations:
       fields:
         callerSubject: { type: string, required: true, description: "Claim sub del token." }
         displayName:   { type: string, constraints: { maxLength: 100 } }
+        email:         { type: string, constraints: { maxLength: 254 } }
     output: { entity: ContactCard }
     rules:
       - "La ficha se identifica por subject = callerSubject: la primera vez se crea y después se reemplaza."
-      - "Reemplaza la ficha ENTERA: un displayName que no llega deja la ficha sin nombre (null), no conserva el anterior."
+      - "Reemplaza la ficha ENTERA: un displayName o un email que no llega deja ese campo a null, no conserva el anterior."
+    errors:
+      - { code: EMAIL_ALREADY_EXISTS, when: Otra ficha viva ya usa ese correo., http: 409 }
+      - { code: CARD_ALREADY_EXISTS, when: "Dos primeros guardados simultáneos del mismo titular: el que pierde la carrera.", http: 409 }
+
+  deleteMyCard:
+    description: Borra la ficha del titular del token; se puede restaurar durante 30 días.
+    kind: command
+    input:
+      fields:
+        callerSubject: { type: string, required: true, description: "Claim sub del token." }
+    output: void
+    rules:
+      - "La ficha se busca por subject = callerSubject; si no hay ninguna viva, CARD_NOT_FOUND."
+    errors:
+      - { code: CARD_NOT_FOUND, when: El titular no tiene ficha., http: 404 }
+
+  restoreMyCard:
+    description: Deshace el borrado de la ficha del titular durante los 30 días siguientes.
+    kind: command
+    restores: ContactCard
+    input:
+      fields:
+        callerSubject: { type: string, required: true, description: "Claim sub del token." }
+    output: void
+    rules:
+      - "Restaura la ficha borrada más reciente con subject = callerSubject; si no hay ninguna, CARD_NOT_FOUND."
+    errors:
+      - { code: CARD_NOT_FOUND, when: El titular no tiene ninguna ficha borrada., http: 404 }
+      - { code: CARD_NOT_RESTORABLE, when: La ficha se borró hace más de 30 días., http: 409 }
+      - { code: EMAIL_ALREADY_EXISTS, when: Otra ficha viva ocupa ya su correo., http: 409 }
+      - { code: CARD_ALREADY_EXISTS, when: El titular ya tiene otra ficha viva creada después del borrado., http: 409 }

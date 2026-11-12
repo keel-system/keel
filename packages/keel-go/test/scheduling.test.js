@@ -23,6 +23,7 @@ import { planService } from '../src/scaffold/index.js';
 import { PURGE_CASES, PURGE_CASES_CUTOFF, purgeStatements, tablePurges } from '../src/scaffold/purge.js';
 import { scheduledServices, tasksPath } from '../src/scaffold/scheduling.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
+import { withoutLifecycle } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
 
 const STACK = { database: 'postgresql', broker: 'rabbitmq' };
 const SCHEDULED = ['payout-runs', 'job-dispatch', 'job-dispatch-cycles', 'metering-digest'];
@@ -262,7 +263,10 @@ test('sin la capa api (metering-digest) el arranque cablea igual la base, el bro
 });
 
 test('sin nada que corra por reloj no se genera el reloj', () => {
-  const { files } = plan('profile-directory');
+  // profile-directory sin su retención (DSL 2.28), que es un recurrente del cronómetro.
+  const base = design('profile-directory');
+  withoutLifecycle(base.layers);
+  const { files } = planService({ ...base, workspace: FIXTURES_DIR, stack: STACK });
   assert.ok(!files.some((file) => file.path.startsWith(SCHEDULER)));
   assert.ok(!files.some((file) => file.path.endsWith('scheduling.yaml')));
   assert.doesNotMatch(content(files, 'go.mod'), /robfig/);

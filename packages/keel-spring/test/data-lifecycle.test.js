@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadService } from '@keel-system/keel-core';
-import { DATA_LIFECYCLE_DESIGNS, PERSONAL_TELEMETRY_DESIGN } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
+import { DATA_LIFECYCLE_DESIGNS, PERSONAL_TELEMETRY_DESIGN, withoutLifecycle } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { planService, scaffoldService } from '../src/scaffold/index.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
 import { casesOf } from '../src/lib/lifecycle-probes.js';
@@ -144,6 +144,7 @@ test('con datos personales el aspecto y Hibernate no copian el mensaje del motor
   assert.match(aspect, /String detail = exception instanceof DataAccessException/);
   assert.match(fileOf(files, 'parameters/local/logging.yaml'), /org\.hibernate\.orm\.jdbc\.error: OFF/);
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'profile-directory'));
+  withoutLifecycle(layers);
   const plain = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: 'postgresql' } }).files;
   assert.doesNotMatch(fileOf(plain, 'LogExceptionsAspect.java'), /DataAccessException/);
   assert.doesNotMatch(fileOf(plain, 'parameters/local/logging.yaml'), /orm\.jdbc\.error/);
@@ -170,7 +171,7 @@ test('PD-3: con datos personales el span del caso de uso lleva solo la clase de 
   const personal = mediator(PERSONAL_TELEMETRY_DESIGN.mutate);
   assert.ok(personal.includes('observation.error(ex instanceof DataAccessException ? new IllegalStateException(ex.getClass().getName()) : ex);'));
   assert.match(personal, /^import org\.springframework\.dao\.DataAccessException;$/m);
-  const plain = mediator(null);
+  const plain = mediator(withoutLifecycle);
   assert.ok(plain.includes('observation.error(ex);'));
   assert.doesNotMatch(plain, /DataAccessException/);
 });

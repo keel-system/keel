@@ -18,6 +18,7 @@ entities:
       email:
         type: string
         required: true
+        personal: true
         constraints: { maxLength: 254 }
         description: Dirección a la que se envió el código.
       code:

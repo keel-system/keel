@@ -11,7 +11,7 @@ keel: "2.28"
 # `use-cases` y `api` van BYTE A BYTE iguales en las dos. Cualquier cambio al diseño va en las dos.
 service:
   name: verification-codes-mongo
-  version: 1.0.0
+  version: 1.1.0
   description: Los mismos códigos de verificación que verification-codes, sobre un modelo documental.
   domain: identity
 parameters:

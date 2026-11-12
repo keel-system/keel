@@ -50,10 +50,6 @@ const MOTIVOS = {
  * muertas, para que la tabla no se convierta en la lista de lo que hubo alguna vez.
  */
 const EXCEPCIONES = new Map([
-  ['persistence.entities.*.deletion', { motivo: MOTIVOS.soloCadenas, porque: 'el ciclo de vida del dato (DSL 2.28): keel-spring lo genera desde el incremento 1 de PLAN-DSL-228-CICLO-DE-VIDA.md y lo compila y ejecuta lifecycle-check sobre los sujetos derivados (keel-core/test/helpers/data-lifecycle-designs.js), y test/data-lifecycle.test.js lo mira en cadenas; ninguna fixture lo declara hasta el incremento 6, y entonces esta fila se borra.' }],
-  ['persistence.entities.*.restorableFor', { motivo: MOTIVOS.soloCadenas, porque: 'el ciclo de vida del dato (DSL 2.28): keel-spring lo genera desde el incremento 1 de PLAN-DSL-228-CICLO-DE-VIDA.md y lo compila y ejecuta lifecycle-check sobre los sujetos derivados (keel-core/test/helpers/data-lifecycle-designs.js), y test/data-lifecycle.test.js lo mira en cadenas; ninguna fixture lo declara hasta el incremento 6, y entonces esta fila se borra.' }],
-  ['persistence.entities.*.retention', { motivo: MOTIVOS.soloCadenas, porque: 'el ciclo de vida del dato (DSL 2.28): keel-spring lo genera desde el incremento 1 de PLAN-DSL-228-CICLO-DE-VIDA.md y lo compila y ejecuta lifecycle-check sobre los sujetos derivados (keel-core/test/helpers/data-lifecycle-designs.js), y test/data-lifecycle.test.js lo mira en cadenas; ninguna fixture lo declara hasta el incremento 6, y entonces esta fila se borra.' }],
-  ['use-cases.operations.*.restores', { motivo: MOTIVOS.soloCadenas, porque: 'el ciclo de vida del dato (DSL 2.28): keel-spring lo genera desde el incremento 1 de PLAN-DSL-228-CICLO-DE-VIDA.md y lo compila y ejecuta lifecycle-check sobre los sujetos derivados (keel-core/test/helpers/data-lifecycle-designs.js), y test/data-lifecycle.test.js lo mira en cadenas; ninguna fixture lo declara hasta el incremento 6, y entonces esta fila se borra.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     {

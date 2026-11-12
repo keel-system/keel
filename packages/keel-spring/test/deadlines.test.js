@@ -16,6 +16,7 @@ import { planService, scaffoldService } from '../src/scaffold/index.js';
 import { buildModel } from '../src/lib/model.js';
 import { timerProbePatches } from '../src/lib/timer-probes.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
+import { withoutLifecycle } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
 
 function generated(fixture, database) {
   const service = loadService(path.join(FIXTURES_DIR, fixture));
@@ -92,6 +93,8 @@ test('el handler que sale del estado con plazo recibe el reloj y los plazos, y s
 
 test('un motor sin las sentencias del cronómetro medidas se rechaza en planService, con su motivo', () => {
   const service = loadService(path.join(FIXTURES_DIR, 'verification-codes'));
+  // Sin la retención (DSL 2.28), que se rechaza antes con su propio motivo: lo que se mide aquí es el plazo.
+  withoutLifecycle(service.layers);
   assert.throws(
     () => planService({ manifest: service.manifest, layers: service.layers, workspace: tmpDir('keel-deadlines-mariadb-'), stack: { database: 'mariadb' } }),
     /el cronómetro no tiene sentencias medidas para 'mariadb'/

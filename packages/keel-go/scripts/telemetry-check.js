@@ -55,7 +55,7 @@ const SABOTAGES = {
   'pool-name': ['internal/platform/telemetry/runtime.go', 'return float64(stats().MaxOpenConnections)', 'return float64(stats().OpenConnections)'],
   management: ['internal/platform/telemetry/http.go', 'servesScrape := t.settings.PrometheusEnabled && t.settings.ManagementPort == 0', 'servesScrape := t.settings.PrometheusEnabled'],
   'server-parent': ['internal/platform/telemetry/http.go', 'ctx := t.extract(r.Context(), r.Header)', 'ctx := r.Context()'],
-  // Solo donde hay cronómetro (profile-directory no tiene ningún reloj): ver OPTIONAL.
+  // Solo donde hay cronómetro (job-dispatch, y profile-directory desde su retención, DSL 2.28): ver OPTIONAL.
   'timer-kind': ['cmd/server/main.go', 'Labels: map[string]string{telemetry.AttrTimerKind: kind}, ', ''],
   // Solo en los proyectos sobre MySQL, el de PD-3 entre ellos.
   'pd-log-value': ['internal/infrastructure/mysql/errors.go', '\t\t\treturn known\n', '\t\t\treturn err\n']

@@ -12,7 +12,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadService } from '@keel-system/keel-core';
 import { logicalDeletionNote, retentionParameters, deletedRootOf } from '@keel-system/keel-core/gen/data-lifecycle';
-import { DATA_LIFECYCLE_DESIGNS } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
+import { DATA_LIFECYCLE_DESIGNS, withoutLifecycle } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { planService } from '../src/scaffold/index.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
 import { lifecycleCases } from '../scripts/lib/lifecycle-probes.js';
@@ -172,6 +172,7 @@ test('con datos personales ni EF ni el manejador de la API copian el mensaje del
   assert.match(middleware, /LogIntegrity\(integrity\.InnerException\?\.GetType\(\)\.Name \?\? nameof\(IntegrityViolationException\)\);/);
   assert.match(middleware, /private partial void LogIntegrity\(string cause\);/);
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'profile-directory'));
+  withoutLifecycle(layers);
   const plain = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: 'postgresql' } }).files;
   assert.doesNotMatch(fileOf(plain, 'Persistence/PersistenceRegistration.cs'), /ConfigureWarnings/);
   assert.match(fileOf(plain, 'Rest/ApiErrorMiddleware.cs'), /private partial void LogIntegrity\(Exception exception\);/);
