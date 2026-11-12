@@ -22,6 +22,7 @@ import { scheduleCron, scheduledOperations } from './scheduling.js';
 import { OUTBOX_EVENT, OUTBOX_PURGE, PROCESSED_EVENT, PROCESSED_EVENT_PURGE, usesOutbox, usesMessageDeduplication } from './messaging-stores.js';
 import { IDEMPOTENCY_RECORD, IDEMPOTENCY_RECORD_PURGE, usesRequestIdempotency } from './request-idempotency.js';
 import { RECONCILIATION_CLAIM, RECONCILIATION_PURGE, reconciliationClaims } from './reconciliation-stores.js';
+import { retentionKind, retentionParameters } from './data-lifecycle.js';
 
 /** Los motores en los que hay cronómetro: los relacionales con sentencias medidas (timer-sql-check) y MongoDB. */
 export const TIMER_DATABASES = Object.freeze([...TIMER_ENGINES, 'mongodb']);
@@ -52,7 +53,26 @@ export function generatorPurges(model) {
  */
 export function usesTimer(model) {
   if (!model.layersPresent?.persistence) return false;
-  return usesDeadlines(model) || (timerEngine(model) && (generatorPurges(model).length > 0 || generatorSchedules(model).length > 0));
+  return (
+    usesDeadlines(model) ||
+    generatorRetentions(model).length > 0 ||
+    (timerEngine(model) && (generatorPurges(model).length > 0 || generatorSchedules(model).length > 0))
+  );
+}
+
+/**
+ * Las retenciones del diseño (DSL 2.28, D8) como recurrentes del cronómetro: su `kind` (`retention:<Raíz>`) y sus
+ * parámetros. Como un plazo, una retención no tiene reloj por réplica al que volver: sobre un motor sin cronómetro la
+ * rechaza la frontera de cada generador.
+ */
+export function generatorRetentions(model) {
+  if (!model.layersPresent?.persistence) return [];
+  return (model.entities ?? [])
+    .filter((entity) => entity.persisted && entity.retention)
+    .map((entity) => {
+      const parameters = retentionParameters(entity.name);
+      return Object.freeze({ entity: entity.name, kind: retentionKind(entity.name), cron: parameters.cron, batchSize: parameters.batchSize });
+    });
 }
 
 /**
@@ -97,7 +117,8 @@ export function clusterRecurrings(model) {
   return [
     Object.freeze({ table: KEEL_TIMER.table, kind: TIMER_PURGE_KIND, cron: TIMER_PARAMETERS.purgeCron }),
     ...timerPurges(model),
-    ...timerSchedules(model)
+    ...timerSchedules(model),
+    ...generatorRetentions(model)
   ];
 }
 

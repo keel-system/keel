@@ -9,6 +9,7 @@
 
 import { lastKnownNeedsOf } from './last-known.js';
 import { kebabCase, screamingSnake } from './naming.js';
+import { deletedRootOf } from './data-lifecycle.js';
 
 /** Separador entre el nombre de la caché y la clave de la entrada (el `::` de RedisCacheManager). */
 export const CACHE_ENTRY_SEPARATOR = '::';
@@ -64,11 +65,24 @@ export function cacheInvalidations(model) {
     triggeredBy.get(subscription.trigger).push(subscription.name);
   }
   const result = [];
+  const rootOf = (entityName) => model.entities?.find((entity) => entity.name === entityName)?.aggregateRoot ?? entityName;
   for (const service of model.services ?? []) {
     for (const operation of service.operations ?? []) {
       const events = new Set([...(operation.emits ?? []), ...(triggeredBy.get(operation.name) ?? [])]);
+      // El ciclo de vida del dato (DSL 2.28, T5): borrar lógicamente o restaurar una raíz cambia lo que devuelven sus
+      // lecturas sin que el diseño declare ningún evento. Sin esto, la ficha borrada se seguiría sirviendo hasta el TTL.
+      const deleted = deletedRootOf(model, operation);
+      const lifecycleRoot = operation.restores ?? (deleted?.deletion === 'logical' ? deleted.name : null);
+      const lifecycleEvent = lifecycleRoot ? `${operation.restores ? 'la restauración' : 'el borrado lógico'} de ${lifecycleRoot}` : null;
       const hits = caches
-        .map((cache) => ({ cacheName: cache.cacheName, constant: cache.constant, events: cache.invalidatedBy.filter((event) => events.has(event)) }))
+        .map((cache) => ({
+          cacheName: cache.cacheName,
+          constant: cache.constant,
+          events: [
+            ...cache.invalidatedBy.filter((event) => events.has(event)),
+            ...(lifecycleEvent && cache.responseDto?.entity && rootOf(cache.responseDto.entity) === lifecycleRoot ? [lifecycleEvent] : [])
+          ]
+        }))
         .filter((hit) => hit.events.length > 0);
       if (hits.length > 0) result.push({ operation: operation.name, messageClass: operation.messageClass, caches: hits });
     }
@@ -112,4 +126,14 @@ export function cacheNote(model, operation, { call }) {
       ? `No escribas desalojos por ${cache.invalidatedBy.join(', ')}: el UseCaseMediator ya vacía la caché al confirmar.`
       : 'Ningún evento la invalida: solo caduca por su TTL.')
   );
+}
+
+/**
+ * Las cachés que tiene que vaciar la RETENCIÓN de una raíz (DSL 2.28, T5): las de las lecturas que la devuelven. El
+ * barrido no pasa por el mediator, así que la tabla de invalidaciones no lo alcanza: sin esto, lo borrado o anonimizado
+ * se seguiría sirviendo hasta el TTL.
+ */
+export function retentionCaches(model, entityName) {
+  const rootOf = (name) => model.entities?.find((entity) => entity.name === name)?.aggregateRoot ?? name;
+  return cachedOperations(model).filter((cache) => cache.responseDto?.entity && rootOf(cache.responseDto.entity) === entityName);
 }

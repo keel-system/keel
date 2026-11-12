@@ -43,6 +43,8 @@ export const NETS = {
     'npm run timer-check — el CRONÓMETRO y los PLAZOS (DSL 2.26) contra el motor: el rechazo tardío del dominio, el armado en la transacción, el reclamo con arriendo y valla, la revalidación, el sueño y el aparcado (DL-1 a DL-10)',
   'read-scope-check':
     'npm run read-scope-check — la LECTURA ACOTADA (DSL 2.27) contra el motor y en el borde: el listado y su total acotados, el camino de relaciones, loadScoped con su readMiss, el conjunto vacío, la composición con los filtros, la clave de caché, ReadScopes desde el token y el 403 (RS-1 a RS-11)',
+  'lifecycle-check':
+    'npm run lifecycle-check — el CICLO DE VIDA DEL DATO (DSL 2.28) contra el motor con el contexto del perfil local: las lecturas vivas y su total, la clave que se libera, la restauración con su ventana, la lectura por referencia, la vida sumada al alcance, la retención y sus dos réplicas, y el valor personal fuera de los logs (LC-1 a LC-10, RT-1 a RT-4, PD-2)',
   corrida: 'una corrida en vivo: no es determinista ni repetible en CI, así que nombra cuál',
   ninguna: 'nadie lo ejecuta'
 };
@@ -169,6 +171,10 @@ export const MECHANISM_CATALOG = {
   },
   'read-scope': {
     title: 'Lectura acotada (DSL 2.27, reads y readMiss): el predicado del alcance en el adaptador, su total, loadScoped, el ReadScope del borde y la clave de caché',
+    axis: 'model'
+  },
+  'data-lifecycle': {
+    title: 'Ciclo de vida del dato (DSL 2.28): el borrado lógico con sus lecturas vivas y su unicidad entre vivas, la restauración con su ventana, la retención sobre el cronómetro y los datos personales fuera de los logs',
     axis: 'model'
   }
 };

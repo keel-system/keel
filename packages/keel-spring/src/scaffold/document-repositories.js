@@ -41,6 +41,7 @@ import { finderFields, mongoFinderMethods } from './finders.js';
 import { readScopeMongoMethods } from './read-scope.js';
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import { textFoldImport } from './text-fold.js';
+import * as lifecycle from './data-lifecycle.js';
 
 export function generate(model) {
   if (!model.layersPresent.persistence || model.persistenceKind !== 'document') return [];
@@ -75,19 +76,19 @@ function renderMongoRepository(model, entity) {
   if (finder) {
     imports.add('java.util.Optional');
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
-    methods = `\n\n    Optional<${entity.name}Document> ${finder.store.name}(${finder.store.signature});`;
+    methods = `\n\n    Optional<${entity.name}Document> ${lifecycle.liveFinder(entity, finder.store.name)}(${finder.store.signature});`;
   }
   // El puerto es el MISMO en las dos ramas (lo reexporta repositories.js), así que lo que
   // se declare allí hay que implementarlo aquí o el adaptador no compila.
   for (const occupant of occupantFinders(model, entity)) {
     imports.add('java.util.Optional');
     for (const param of occupant.params) for (const name of param.imports) imports.add(name);
-    methods += `\n\n    Optional<${entity.name}Document> ${occupant.store.name}(${occupant.store.signature});`;
+    methods += `\n\n    Optional<${entity.name}Document> ${lifecycle.liveFinder(entity, occupant.store.name)}(${occupant.store.signature});`;
   }
   for (const unique of uniqueFieldFinders(model, entity)) {
     imports.add('java.util.Optional');
     for (const param of unique.params) for (const name of param.imports) imports.add(name);
-    methods += `\n\n    Optional<${entity.name}Document> ${unique.store.name}(${unique.store.signature});`;
+    methods += `\n\n    Optional<${entity.name}Document> ${lifecycle.liveFinder(entity, unique.store.name)}(${unique.store.signature});`;
   }
   for (const credential of credentialFinders(model, entity)) {
     imports.add('java.util.Optional');
@@ -95,21 +96,25 @@ function renderMongoRepository(model, entity) {
     // que la rama relacional lo deriva sobre su @ElementCollection.
     methods += `
 
-    Optional<${entity.name}Document> ${credential.name}(${credential.javaType} ${credential.field.replace(/s$/, '')});`;
+    Optional<${entity.name}Document> ${lifecycle.liveFinder(entity, credential.name)}(${credential.javaType} ${credential.field.replace(/s$/, '')});`;
   }
   const batchFinder = naturalKeyBatchFinder(model, entity);
   if (batchFinder) {
     imports.add('java.util.Collection');
     imports.add('java.util.List');
     for (const name of batchFinder.imports) imports.add(name);
-    methods += `\n\n    List<${entity.name}Document> ${batchFinder.name}(${batchFinder.signature});`;
+    methods += `\n\n    List<${entity.name}Document> ${lifecycle.liveFinder(entity, batchFinder.name)}(${batchFinder.signature});`;
   }
   for (const inverse of inverseFindersOf(model, entity.name)) {
     const owner = refIdJava(model, inverse.owner);
     imports.add('java.util.List');
     for (const name of owner.imports) imports.add(name);
-    methods += `\n\n    List<${entity.name}Document> ${inverse.finder}(${owner.javaType} ${inverse.relation}Id);`;
+    methods += `\n\n    List<${entity.name}Document> ${lifecycle.liveFinder(entity, inverse.finder)}(${owner.javaType} ${inverse.relation}Id);`;
   }
+  // El ciclo de vida del dato (DSL 2.28): la carga y el listado vivos y la carga de la borrada.
+  const listed = listsUnscoped(model, entity) && model.services.some((group) => group.entity === entity.name && group.operations.some((op) => op.paginated));
+  const lifecycleMethods = lifecycle.mongoRepositoryMethods(model, entity, id, finder, listed, imports);
+  if (lifecycleMethods.length > 0) methods += `\n\n${lifecycleMethods.join('\n\n')}`;
 
   const body = `public interface ${entity.name}MongoRepository extends MongoRepository<${entity.name}Document, ${id.javaType}> {${methods}\n}`;
 
@@ -141,7 +146,7 @@ function renderAdapter(model, entity, paginated, batchLookup, listed = paginated
   const methods = [
     `    @Override
     public Optional<${entity.name}> findById(${id.javaType} ${id.name}) {
-        return ${repoField}.findById(${id.name}).map(this::toDomain);
+        return ${repoField}.${lifecycle.liveFinder(entity, 'findById')}(${id.name}).map(this::toDomain);
     }`
   ];
   // La carga que compara la versión (api.concurrency, D4), la misma que la del adaptador relacional.
@@ -154,14 +159,14 @@ function renderAdapter(model, entity, paginated, batchLookup, listed = paginated
         return ${repoField}.findAllById(ids).stream().map(this::toDomain).toList();
     }`);
   }
-  methods.push(...inverseAdapterMethods(model, entity, repoField, imports));
+  methods.push(...inverseAdapterMethods(model, entity, repoField, imports, lifecycle.liveFinder(entity, '')));
   const finder = naturalKeyFinder(model, entity);
   if (finder) {
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
     if (finder.store.folds) imports.add(textFoldImport(model));
     methods.push(`    @Override
     public Optional<${entity.name}> ${finder.name}(${finder.signature}) {
-        return ${repoField}.${finder.store.name}(${finder.store.args}).map(this::toDomain);
+        return ${repoField}.${lifecycle.liveFinder(entity, finder.store.name)}(${finder.store.args}).map(this::toDomain);
     }`);
   }
   for (const occupant of occupantFinders(model, entity)) {
@@ -169,7 +174,7 @@ function renderAdapter(model, entity, paginated, batchLookup, listed = paginated
     if (occupant.store.folds) imports.add(textFoldImport(model));
     methods.push(`    @Override
     public Optional<${entity.name}> ${occupant.name}(${occupant.signature}) {
-        return ${repoField}.${occupant.store.name}(${occupant.store.args}).map(this::toDomain);
+        return ${repoField}.${lifecycle.liveFinder(entity, occupant.store.name)}(${occupant.store.args}).map(this::toDomain);
     }`);
   }
   for (const unique of uniqueFieldFinders(model, entity)) {
@@ -177,14 +182,14 @@ function renderAdapter(model, entity, paginated, batchLookup, listed = paginated
     if (unique.store.folds) imports.add(textFoldImport(model));
     methods.push(`    @Override
     public Optional<${entity.name}> ${unique.name}(${unique.signature}) {
-        return ${repoField}.${unique.store.name}(${unique.store.args}).map(this::toDomain);
+        return ${repoField}.${lifecycle.liveFinder(entity, unique.store.name)}(${unique.store.args}).map(this::toDomain);
     }`);
   }
   for (const credentialAdapter of credentialFinders(model, entity)) {
     const arg = credentialAdapter.field.replace(/s$/, '');
     methods.push(`    @Override
     public Optional<${entity.name}> ${credentialAdapter.name}(${credentialAdapter.javaType} ${arg}) {
-        return ${repoField}.${credentialAdapter.name}(${arg}).map(this::toDomain);
+        return ${repoField}.${lifecycle.liveFinder(entity, credentialAdapter.name)}(${arg}).map(this::toDomain);
     }`);
   }
   const batchFinder = naturalKeyBatchFinder(model, entity);
@@ -194,7 +199,7 @@ function renderAdapter(model, entity, paginated, batchLookup, listed = paginated
     for (const name of batchFinder.imports) imports.add(name);
     methods.push(`    @Override
     public List<${entity.name}> ${batchFinder.name}(${batchFinder.signature}) {
-        return ${repoField}.${batchFinder.name}(${batchFinder.args}).stream().map(this::toDomain).toList();
+        return ${repoField}.${lifecycle.liveFinder(entity, batchFinder.name)}(${batchFinder.args}).stream().map(this::toDomain).toList();
     }`);
   }
   if (paginated) {
@@ -205,7 +210,7 @@ function renderAdapter(model, entity, paginated, batchLookup, listed = paginated
     if (listed) {
       methods.push(`    @Override
     public Page<${entity.name}> list(Pageable pageable) {
-        return ${repoField}.findAll(withStableOrder(pageable)).map(this::toDomain);
+        return ${lifecycle.listCall(entity, repoField)}.map(this::toDomain);
     }`);
     }
     methods.push(`    /**
@@ -251,18 +256,27 @@ function renderAdapter(model, entity, paginated, batchLookup, listed = paginated
   // había, cada actualización dejaría la creación a null. No tiene equivalente
   // relacional: allí el merge de JPA conserva esas columnas solo.
   const carriesAudit = usesAuditableEntity(model);
+  // Y las marcas del ciclo de vida del dato (DSL 2.28) que el dominio no conoce: la de la anonimización.
+  const carried = lifecycle.carriedMarks(model, entity);
   const carryAuditArgs = [
     model.audit?.timestamps === 'all' ? 'existing.getCreatedAt()' : null,
     model.audit?.authorship === 'all' ? 'existing.getCreatedBy()' : null
   ].filter(Boolean);
-  const documentExpr = carriesAudit
+  const carryCalls = [
+    ...(carriesAudit ? [`document.carryCreationAudit(${carryAuditArgs.join(', ')});`] : []),
+    ...carried.map((mark) => `document.set${capitalize(mark.field)}(existing.get${capitalize(mark.field)}());`)
+  ];
+  const carryBody = carryCalls.length === 1
+    ? `existing -> ${carryCalls[0].replace(/;$/, '')}`
+    : `existing -> {\n${carryCalls.map((call) => `                    ${call}`).join('\n')}\n                }`;
+  const documentExpr = carryCalls.length > 0
     ? `${entity.name}Document document = toDocument(entity);
         ${repoField}
                 .findById(entity.${id.getter}())
-                .ifPresent(existing -> document.carryCreationAudit(${carryAuditArgs.join(', ')}));
+                .ifPresent(${carryBody});
         `
     : '';
-  const savedExpr = carriesAudit ? `${repoField}.save(document)` : `${repoField}.save(toDocument(entity))`;
+  const savedExpr = carryCalls.length > 0 ? `${repoField}.save(document)` : `${repoField}.save(toDocument(entity))`;
 
   // El armado del plazo (DSL 2.26): el estado que el documento tenía en la base dice si la entidad ENTRA en el estado.
   // Se lee antes de reemplazarlo, dentro de la transacción del caso de uso (MongoTransactionManager).
@@ -298,10 +312,12 @@ ${arming ? `${arming.after}\n` : ''}${emitsEvents ? '        entity.pullDomainEv
     public ${entity.name} save(${entity.name} entity) {
 ${saveBody}
     }`,
-    `    @Override
+    ...(lifecycle.mongoAdapterMethods(model, entity, id, repoField, finder, imports) ?? [
+      `    @Override
     public void deleteById(${id.javaType} ${id.name}) {
         ${repoField}.deleteById(${id.name});
     }`
+    ])
   );
 
   const mappers = involved.flatMap((involvedEntity) => [

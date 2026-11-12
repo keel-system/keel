@@ -269,7 +269,15 @@ export function usesPartialIndexes(model) {
 // diseñador —es su invariante— pero callar la diferencia deja un comentario que contradice
 // a la sentencia de debajo, y eso invita a "corregir" la sentencia.
 function storedNote(spec) {
+  if (!spec.when) return '';
   return String(spec.stored) === String(spec.when.equals) ? '' : ` (almacenado como ${sqlLiteral(spec.stored)})`;
+}
+
+// La condición en prosa: la del `when` del diseño, la vida de la fila (DSL 2.28: solo cuentan las vivas) o las dos.
+function conditionText(spec) {
+  const alive = 'la fila viva (deleted_at nulo, DSL 2.28)';
+  if (!spec.when) return alive;
+  return `${spec.when.field} = ${spec.when.equals}${spec.live ? ` y ${alive}` : ''}`;
 }
 
 export { sqlLiteral };
@@ -304,7 +312,7 @@ function partialIndexesSql(model) {
     // archivo es el texto del .sql de abajo: ahí el aviso está EN el artefacto que lo sufre.
     const lines = specs.map(
       (spec) =>
-        `--   ${spec.name}: UNIQUE (${spec.fields.join(', ')}) donde ${spec.when.field} = ${spec.when.equals}` +
+        `--   ${spec.name}: UNIQUE (${spec.fields.join(', ')}) donde ${conditionText(spec)}` +
         ` [entidad ${spec.entity}]`
     );
     return `${header}
@@ -321,7 +329,7 @@ ${lines.join('\n')}
   }
 
   return `${header}${sqlContract(model)}
-${specs.map((spec) => `-- ${spec.entity}: como máximo una fila por (${spec.fields.join(', ')}) con ${spec.when.field} = ${spec.when.equals}${storedNote(spec)}.
+${specs.map((spec) => `-- ${spec.entity}: como máximo una fila por (${spec.fields.join(', ')}) con ${conditionText(spec)}${storedNote(spec)}.
 ${dialect(spec)}`).join('\n\n')}
 `;
 }

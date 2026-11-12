@@ -4,6 +4,7 @@
 // (local literal → develop ${VAR:default} → production ${VAR} obligatoria).
 // El perfil activo se elige con la variable de entorno PROFILE (default local).
 
+import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
 import { identityProvider, tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { SCOPE_PREFIX_AUDIENCE_COMMENT, clientIdLines, needsAudience, translatedClients } from '@keel-system/keel-core/gen/security-config';
 import { localIssuer } from '@keel-system/keel-core/gen/identity-realm';
@@ -456,6 +457,16 @@ function loggingYaml(model, profile) {
       '    # Silencia el volcado por sesión que activa generate_statistics (ver el fragmento',
       '    # db de este mismo perfil). El contador que lee el arnés lo publica Micrometer.',
       '    org.hibernate.engine.internal.StatisticalLoggingSessionEventListener: WARN'
+    );
+  }
+  // Con datos personales (DSL 2.28, D10, PD-2): Hibernate escribe a WARN el mensaje del motor de cada SQLException, y el
+  // de una unicidad violada lleva el valor (`Key (email)=(ana@x.com)`). En Hibernate 7 el logger es org.hibernate.orm.jdbc.error
+  // (medido con lifecycle-check; el SqlExceptionHelper de antes ya no escribe). La excepción sigue subiendo y la traduce el
+  // ApiExceptionHandler; lo único que se apaga es esa copia en el log.
+  if (usesPersonalData(model) && model.persistenceKind !== 'document') {
+    lines.push(
+      '    # Hibernate 7 copia al log el mensaje del motor, con el valor que violó una unicidad (DSL 2.28, personal).',
+      '    org.hibernate.orm.jdbc.error: OFF'
     );
   }
   // Saca el correlationId que CorrelationContext deja en el MDC a cada línea de

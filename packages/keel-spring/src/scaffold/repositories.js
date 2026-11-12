@@ -22,6 +22,7 @@ import { isScopedRoot, readScopeJpaMethods, readScopePortMethods } from './read-
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import { partialUniqueIndexes } from './persistence-members.js';
 import { collectInternalEntities, keyShadow, naturalKeyBatchReason, uniqueFields } from '@keel-system/keel-core/gen/relational';
+import * as lifecycle from './data-lifecycle.js';
 
 export const PORT_PKG = 'domain.repository';
 export const REPO_PKG = 'infrastructure.persistence.repositories';
@@ -421,7 +422,9 @@ export function renderPort(model, entity, paginated, batchLookup) {
   // única forma de ORDENAR dos escrituras sobre la misma clave desde `application`, que no puede
   // importar Spring. Ver conditional-uniqueness.js.
   methods.push(...conditionalUniqueness.portMethods(model, entity));
-  methods.push(`    ${entity.name} save(${entity.name} entity);`, `    void deleteById(${id.javaType} ${id.name});`);
+  methods.push(`    ${entity.name} save(${entity.name} entity);`, lifecycle.deletePortMethod(model, entity, id));
+  // La restauración de un borrado lógico (DSL 2.28, D6): la borrada por su clave y la restauración por id.
+  methods.push(...lifecycle.restorePortMethods(model, entity, id, finder, imports));
 
   const body = `/**
  * Puerto de persistencia del agregado ${entity.name}; el adaptador JPA vive en
@@ -470,17 +473,17 @@ function renderJpaRepository(model, entity) {
     imports.add('java.util.Optional');
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
     // La clave natural es la otra lectura de UN agregado: mismo grafo, misma razón.
-    methods = `\n\n${graph}    Optional<${entity.name}Jpa> ${finder.store.name}(${finder.store.signature});`;
+    methods = `\n\n${graph}    Optional<${entity.name}Jpa> ${lifecycle.liveFinder(entity, finder.store.name)}(${finder.store.signature});`;
   }
   for (const occupant of occupantFinders(model, entity)) {
     imports.add('java.util.Optional');
     for (const param of occupant.params) for (const name of param.imports) imports.add(name);
-    methods += `\n\n${graph}    Optional<${entity.name}Jpa> ${occupant.store.name}(${occupant.store.signature});`;
+    methods += `\n\n${graph}    Optional<${entity.name}Jpa> ${lifecycle.liveFinder(entity, occupant.store.name)}(${occupant.store.signature});`;
   }
   for (const unique of uniqueFieldFinders(model, entity)) {
     imports.add('java.util.Optional');
     for (const param of unique.params) for (const name of param.imports) imports.add(name);
-    methods += `\n\n${graph}    Optional<${entity.name}Jpa> ${unique.store.name}(${unique.store.signature});`;
+    methods += `\n\n${graph}    Optional<${entity.name}Jpa> ${lifecycle.liveFinder(entity, unique.store.name)}(${unique.store.signature});`;
   }
   for (const credential of credentialFinders(model, entity)) {
     imports.add('java.util.Optional');
@@ -488,14 +491,14 @@ function renderJpaRepository(model, entity) {
     // elemento». Es la consulta que la clave natural no puede hacer.
     methods += `
 
-${graph}    Optional<${entity.name}Jpa> ${credential.name}(${credential.javaType} ${credential.field.replace(/s$/, '')});`;
+${graph}    Optional<${entity.name}Jpa> ${lifecycle.liveFinder(entity, credential.name)}(${credential.javaType} ${credential.field.replace(/s$/, '')});`;
   }
   for (const inverse of inverseFindersOf(model, entity.name)) {
     const owner = refIdJava(model, inverse.owner);
     imports.add('java.util.List');
     for (const name of owner.imports) imports.add(name);
     // Derivado sobre la columna de la FK inversa (`<relación>Id`), que es un miembro del espejo.
-    methods += `\n\n    List<${entity.name}Jpa> ${inverse.finder}(${owner.javaType} ${inverse.relation}Id);`;
+    methods += `\n\n    List<${entity.name}Jpa> ${lifecycle.liveFinder(entity, inverse.finder)}(${owner.javaType} ${inverse.relation}Id);`;
   }
   const batchFinder = naturalKeyBatchFinder(model, entity);
   if (batchFinder) {
@@ -504,7 +507,7 @@ ${graph}    Optional<${entity.name}Jpa> ${credential.name}(${credential.javaType
     for (const name of batchFinder.imports) imports.add(name);
     // Derivado por Spring Data igual que el unitario: el sufijo `In` sobre el último
     // componente de la clave es lo único que cambia.
-    methods += `\n\n${graph}    List<${entity.name}Jpa> ${batchFinder.name}(${batchFinder.signature});`;
+    methods += `\n\n${graph}    List<${entity.name}Jpa> ${lifecycle.liveFinder(entity, batchFinder.name)}(${batchFinder.signature});`;
   }
 
   // findById lo hereda de JpaRepository: su grafo hay que declararlo sobrescribiendo la
@@ -516,6 +519,14 @@ ${graph}    Optional<${entity.name}Jpa> ${credential.name}(${credential.javaType
 ${graph}    @Override
     Optional<${entity.name}Jpa> findById(${id.javaType} ${id.name});`;
   }
+
+  // El ciclo de vida del dato (DSL 2.28): la carga y el listado vivos, la carga de la borrada y lo vencido.
+  const listed = listsUnscoped(model, entity) && model.services.some((group) => group.entity === entity.name && group.operations.some((op) => op.paginated));
+  const lifecycleMethods = [
+    ...lifecycle.jpaRepositoryMethods(model, entity, id, graph, finder, listed, imports),
+    ...lifecycle.dueQueryMethod(model, entity, imports)
+  ];
+  if (lifecycleMethods.length > 0) methods += `\n\n${lifecycleMethods.join('\n\n')}`;
 
   const claimMethods = [
     ...claim.jpaRepositoryMethods(model, entity, imports),
@@ -560,7 +571,7 @@ function renderAdapter(model, entity, paginated, batchLookup, listed = paginated
   const methods = [
     `    @Override
     public Optional<${entity.name}> findById(${id.javaType} ${id.name}) {
-        return ${jpaField}.findById(${id.name}).map(this::toDomain);
+        return ${jpaField}.${lifecycle.liveFinder(entity, 'findById')}(${id.name}).map(this::toDomain);
     }`
   ];
   if (loadsExpecting(model, entity)) methods.push(loadExpectingAdapter(model, entity, id, imports));
@@ -572,14 +583,14 @@ function renderAdapter(model, entity, paginated, batchLookup, listed = paginated
         return ${jpaField}.findAllById(ids).stream().map(this::toDomain).toList();
     }`);
   }
-  methods.push(...inverseAdapterMethods(model, entity, jpaField, imports));
+  methods.push(...inverseAdapterMethods(model, entity, jpaField, imports, lifecycle.liveFinder(entity, '')));
   const finder = naturalKeyFinder(model, entity);
   if (finder) {
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
     if (finder.store.folds) imports.add(textFoldImport(model));
     methods.push(`    @Override
     public Optional<${entity.name}> ${finder.name}(${finder.signature}) {
-        return ${jpaField}.${finder.store.name}(${finder.store.args}).map(this::toDomain);
+        return ${jpaField}.${lifecycle.liveFinder(entity, finder.store.name)}(${finder.store.args}).map(this::toDomain);
     }`);
   }
   for (const occupant of occupantFinders(model, entity)) {
@@ -587,7 +598,7 @@ function renderAdapter(model, entity, paginated, batchLookup, listed = paginated
     if (occupant.store.folds) imports.add(textFoldImport(model));
     methods.push(`    @Override
     public Optional<${entity.name}> ${occupant.name}(${occupant.signature}) {
-        return ${jpaField}.${occupant.store.name}(${occupant.store.args}).map(this::toDomain);
+        return ${jpaField}.${lifecycle.liveFinder(entity, occupant.store.name)}(${occupant.store.args}).map(this::toDomain);
     }`);
   }
   for (const unique of uniqueFieldFinders(model, entity)) {
@@ -595,14 +606,14 @@ function renderAdapter(model, entity, paginated, batchLookup, listed = paginated
     if (unique.store.folds) imports.add(textFoldImport(model));
     methods.push(`    @Override
     public Optional<${entity.name}> ${unique.name}(${unique.signature}) {
-        return ${jpaField}.${unique.store.name}(${unique.store.args}).map(this::toDomain);
+        return ${jpaField}.${lifecycle.liveFinder(entity, unique.store.name)}(${unique.store.args}).map(this::toDomain);
     }`);
   }
   for (const credential of credentialFinders(model, entity)) {
     const arg = credential.field.replace(/s$/, '');
     methods.push(`    @Override
     public Optional<${entity.name}> ${credential.name}(${credential.javaType} ${arg}) {
-        return ${jpaField}.${credential.name}(${arg}).map(this::toDomain);
+        return ${jpaField}.${lifecycle.liveFinder(entity, credential.name)}(${arg}).map(this::toDomain);
     }`);
   }
   const batchFinder = naturalKeyBatchFinder(model, entity);
@@ -612,7 +623,7 @@ function renderAdapter(model, entity, paginated, batchLookup, listed = paginated
     for (const name of batchFinder.imports) imports.add(name);
     methods.push(`    @Override
     public List<${entity.name}> ${batchFinder.name}(${batchFinder.signature}) {
-        return ${jpaField}.${batchFinder.name}(${batchFinder.args}).stream().map(this::toDomain).toList();
+        return ${jpaField}.${lifecycle.liveFinder(entity, batchFinder.name)}(${batchFinder.args}).stream().map(this::toDomain).toList();
     }`);
   }
   if (paginated) {
@@ -623,7 +634,7 @@ function renderAdapter(model, entity, paginated, batchLookup, listed = paginated
     if (listed) {
       methods.push(`    @Override
     public Page<${entity.name}> list(Pageable pageable) {
-        return ${jpaField}.findAll(withStableOrder(pageable)).map(this::toDomain);
+        return ${lifecycle.listCall(entity, jpaField)}.map(this::toDomain);
     }`);
     }
     methods.push(`    /**
@@ -753,11 +764,13 @@ ${arming ? `${arming.after}\n` : ''}${emitsEvents ? '        entity.pullDomainEv
     public ${entity.name} save(${entity.name} entity) {
 ${saveBody}
     }`,
-    `    @Override
+    ...(lifecycle.jpaAdapterMethods(model, entity, id, jpaField, finder, imports) ?? [
+      `    @Override
     @Transactional
     public void deleteById(${id.javaType} ${id.name}) {
         ${jpaField}.deleteById(${id.name});
     }`
+    ])
   );
 
   // Entidades que alguien construye desde cero al mapear (relación one-to-one
@@ -1060,14 +1073,14 @@ export function inversePortMethods(model, entity, imports) {
 }
 
 /** Su implementación en un adaptador (relacional o documental), delegando en el finder derivado del almacén. */
-export function inverseAdapterMethods(model, entity, storeField, imports) {
+export function inverseAdapterMethods(model, entity, storeField, imports, liveSuffix = '') {
   return inverseFindersOf(model, entity.name).map((inverse) => {
     const owner = refIdJava(model, inverse.owner);
     imports.add('java.util.List');
     for (const name of owner.imports) imports.add(name);
     return `    @Override
     public List<${entity.name}> ${inverse.finder}(${owner.javaType} ${inverse.relation}Id) {
-        return ${storeField}.${inverse.finder}(${inverse.relation}Id).stream().map(this::toDomain).toList();
+        return ${storeField}.${inverse.finder}${liveSuffix}(${inverse.relation}Id).stream().map(this::toDomain).toList();
     }`;
   });
 }

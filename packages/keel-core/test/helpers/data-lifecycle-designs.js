@@ -67,6 +67,7 @@ export const DATA_LIFECYCLE_DESIGNS = [
   { name: 'codes-anonymize-mongo', from: 'verification-codes-mongo', mutate: (layers) => codesRetention(layers, 'anonymize') },
   { name: 'codes-delete', from: 'verification-codes', mutate: (layers) => codesRetention(layers, 'delete') },
   // La vida de la fila compuesta con la lectura acotada (LC-10): los archivos se borran lógicamente y sus lecturas se acotan.
+  // Los dueños también, y son los que el listado de archivos EMBEBE: la lectura por referencia que ve lo borrado (LC-9).
   {
     name: 'vault-logical-scoped',
     from: 'asset-vault',
@@ -74,6 +75,7 @@ export const DATA_LIFECYCLE_DESIGNS = [
       layers.persistence.default = { ...layers.persistence.default, model: 'relational' };
       layers.persistence.entities.Asset.deletion = 'logical';
       layers.persistence.entities.Asset.retention = { from: 'deleted', keep: { days: 90 }, then: 'delete' };
+      layers.persistence.entities.Owner.deletion = 'logical';
     }
   }
 ];

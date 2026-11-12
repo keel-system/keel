@@ -37,7 +37,8 @@ import { deadlinesClass, scheduleTimerClass } from './timer.js';
 import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { claimMechanism } from './claim.js';
 import { cacheNote } from '@keel-system/keel-core/gen/cache-plan';
-import { naturalKeyBatchFinder } from './repositories.js';
+import { naturalKeyBatchFinder, naturalKeyFinder } from './repositories.js';
+import { deletedRootOf, logicalDeletionNote, restoreNote } from '@keel-system/keel-core/gen/data-lifecycle';
 import { stubNote as conditionalUniquenessNote } from './conditional-uniqueness.js';
 import { callerResolution } from './security.js';
 import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
@@ -458,9 +459,12 @@ function renderHandler(model, service, operation) {
 
   const dependencies = [];
   const targetEntity = model.entities.find((entity) => entity.name === service.entity);
+  // La raíz que restaura o borra una operación del ciclo de vida (DSL 2.28) cuenta como la suya aunque su payload no la
+  // nombre (`restoreMyCard`): sin el puerto inyectado, la nota diría a qué llamar sin poder hacerlo.
+  const lifecycleRoot = operation.restores ?? deletedRootOf(model, operation)?.name;
   const repositoryEntity = model.entities.find(
     (entity) =>
-      entity.name === (targetEntity?.rootEntity ?? service.entity) && entity.persisted && entity.isAggregateRoot
+      entity.name === (targetEntity?.rootEntity ?? service.entity ?? lifecycleRoot) && entity.persisted && entity.isAggregateRoot
   );
   if (repositoryEntity) {
     const port = `${repositoryEntity.name}Repository`;
@@ -614,7 +618,19 @@ function renderHandler(model, service, operation) {
   if (listed) notes.push(listed);
   const inverse = inverseCollectionsNote(operation, { port: (name) => `${name[0].toLowerCase()}${name.slice(1)}Repository`, id: '<id del agregado>' });
   if (inverse) notes.push(inverse);
-  const content = unsupportedContentTypeRaise(model);
+  // El ciclo de vida del dato (DSL 2.28): el borrado que marca y la restauración. Notas neutrales, las mismas en los cuatro.
+  const deleted = deletedRootOf(model, operation);
+  const deletion = logicalDeletionNote(model, operation, { deleteCall: `${decap(`${deleted?.name ?? 'Raiz'}Repository`)}.deleteById(...)` });
+  if (deletion) notes.push(deletion);
+  if (operation.restores) {
+    const port = decap(`${operation.restores}Repository`);
+    const restored = model.entities.find((candidate) => candidate.name === operation.restores);
+    const keyFinder = restored ? naturalKeyFinder(model, restored) : null;
+    const byKey = keyFinder ? `${port}.${keyFinder.name.replace(/^findBy/, 'findDeletedBy')}(...)` : `<el id de la borrada>`;
+    const restore = restoreNote(model, operation, { findCall: byKey, restoreCall: `${port}.restore(<su id>)` });
+    if (restore) notes.push(restore);
+  }
+  const content =unsupportedContentTypeRaise(model);
   for (const note of uploadNotes(model, operation, { sizeCode: effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge), contentCode: content?.code, contentError: content?.raise })) notes.push(note);
   for (const text of operation.preconditions) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules) notes.push(`Regla (en orden): ${text}`);

@@ -5,6 +5,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { ANNOTATIONS_PKG } from './mediator.js';
+import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
 
 const LOGGING_PKG = 'infrastructure.configurations.logging';
 
@@ -54,6 +55,10 @@ public @interface LogExceptions {
 
 function renderAspect(model) {
   const annotationsPkg = subPackage(model, ANNOTATIONS_PKG);
+  // Con datos personales (DSL 2.28, D10) el mensaje de una excepción de acceso a datos NO sale: lleva el texto del motor,
+  // y el de una unicidad violada lleva el valor (`Key (email)=(ana@x.com) already exists`, PD-2).
+  const personal = usesPersonalData(model);
+  const detail = personal ? 'detail' : 'exception.getMessage()';
   const body = `/**
  * OJO con el sitio donde se captura la firma: va ANTES del proceed(), no dentro del catch.
  *
@@ -80,15 +85,20 @@ public class LogExceptionsAspect {
         String method = joinPoint.getSignature().toShortString();
         try {
             return joinPoint.proceed();
-        } catch (Throwable exception) {
+        } catch (Throwable exception) {${personal ? `
+            // El detalle del motor puede llevar el valor de un campo personal (DSL 2.28): de una excepción de acceso a
+            // datos solo sale su clase. La traduce después el ApiExceptionHandler, que no lo loguea.
+            String detail = exception instanceof DataAccessException
+                    ? "(detalle del motor omitido: puede llevar datos personales)"
+                    : exception.getMessage();` : ''}
             switch (logExceptions.level()) {
                 // Sin la pila, a propósito: la imprime UNA vez el adaptador por el que entró el
                 // fallo (ApiExceptionHandler, el contenedor del listener, el scheduler). Con ella
                 // aquí cada fallo salía con dos pilas idénticas en el mismo log.
-                case TRACE -> log.trace("Excepción en {}: {} ({})", method, exception.getMessage(), exception.getClass().getSimpleName());
-                case DEBUG -> log.debug("Excepción en {}: {} ({})", method, exception.getMessage(), exception.getClass().getSimpleName());
-                case INFO -> log.info("Excepción en {}: {} ({})", method, exception.getMessage(), exception.getClass().getSimpleName());
-                case WARN -> log.warn("Excepción en {}: {} ({})", method, exception.getMessage(), exception.getClass().getSimpleName());
+                case TRACE -> log.trace("Excepción en {}: {} ({})", method, ${detail}, exception.getClass().getSimpleName());
+                case DEBUG -> log.debug("Excepción en {}: {} ({})", method, ${detail}, exception.getClass().getSimpleName());
+                case INFO -> log.info("Excepción en {}: {} ({})", method, ${detail}, exception.getClass().getSimpleName());
+                case WARN -> log.warn("Excepción en {}: {} ({})", method, ${detail}, exception.getClass().getSimpleName());
             }
             throw exception;
         }
@@ -106,7 +116,8 @@ public class LogExceptionsAspect {
         'org.aspectj.lang.annotation.Aspect',
         'org.slf4j.Logger',
         'org.slf4j.LoggerFactory',
-        'org.springframework.stereotype.Component'
+        'org.springframework.stereotype.Component',
+        ...(personal ? ['org.springframework.dao.DataAccessException'] : [])
       ],
       body
     )

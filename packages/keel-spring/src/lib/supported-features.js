@@ -12,7 +12,6 @@ import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-par
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
 import { optionalAuthFrontierErrors } from '@keel-system/keel-core/gen/read-scope';
-import { dataLifecyclePendingErrors } from '@keel-system/keel-core/gen/data-lifecycle';
 import { declaredDeadlines } from '@keel-system/keel-core/gen/deadlines';
 
 /**
@@ -229,9 +228,9 @@ export function checkSupportedFeatures(manifest, layers) {
   // construcción (T7, T8) lo rechaza planService con la frontera neutral, que necesita el modelo. level: optional también
   // (permitAll + CallerIdentity.resolveOptional), salvo sobre una identidad que no es un token: la frontera neutral.
   errors.push(...optionalAuthFrontierErrors(layers, 'keel-spring'));
-  // El ciclo de vida del dato (DSL 2.28: personal, deletion: logical, restorableFor, retention) llega en el incremento 1
-  // de PLAN-DSL-228-CICLO-DE-VIDA.md: hasta entonces se rechaza entero, con el mismo mensaje en los cuatro.
-  errors.push(...dataLifecyclePendingErrors(layers, 'keel-spring', 1));
+  // El ciclo de vida del dato (DSL 2.28: personal, deletion: logical, restorableFor, retention) se genera entero
+  // (scaffold/data-lifecycle.js); lo que depende del motor elegido (la unicidad entre vivas, la retención sobre el
+  // cronómetro) y lo que no sabe anonimizar lo rechaza planService, que conoce el stack.
   // Los plazos de negocio (DSL 2.26) los genera el cronómetro (scaffold/timer.js). Lo que depende del motor elegido
   // —solo hay sentencias medidas para PostgreSQL, MySQL y MongoDB— lo rechaza planService, que sí conoce el stack.
 

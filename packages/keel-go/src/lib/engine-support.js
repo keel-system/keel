@@ -682,6 +682,9 @@ export const MECHANISMS = {
           'vault-scoped-mongo (el salto resuelve los _id de owners y filtra owner_id con $in) y conduit-scoped (el dueño por Article.author → Profile.subject, not-found y la carga por slug) contra el driver de MongoDB en un replica set real, con las MISMAS sondas que db-check y las sondas generales en verde también sobre conduit-scoped. Falsado con los mismos sabotajes, cada uno en exactamente sus casos (a conduit-scoped, sin listado acotado, solo le tocan rs-get-leak, rs-path y, sin caso que caiga, rs-empty-is-all)'
       }
     }
+  },
+  'data-lifecycle': {
+    pending: 'el ciclo de vida del dato (DSL 2.28) llega en el incremento 4 de PLAN-DSL-228-CICLO-DE-VIDA.md: hasta entonces supported-features.js lo rechaza entero (dataLifecyclePendingErrors)'
   }
 };
 

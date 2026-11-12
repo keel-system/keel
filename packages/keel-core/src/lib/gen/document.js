@@ -14,7 +14,7 @@
 // una referencia navegable.
 
 import { snakeCase } from './naming.js';
-import { persistedMembers, uniqueFields, indexName, storedWhenValue, partialUniqueIndexes, LOCK_VERSION, AUDIT_COLUMNS, usesAuditableEntity } from './relational.js';
+import { persistedMembers, uniqueFields, indexName, storedWhenValue, partialUniqueIndexes, LOCK_VERSION, AUDIT_COLUMNS, usesAuditableEntity, DELETED_AT, isLogicallyDeleted } from './relational.js';
 import { usesOutbox, usesMessageDeduplication, storeColumns } from './messaging-stores.js';
 import { usesRequestIdempotency } from './request-idempotency.js';
 import { reconciliationClaims, RECONCILIATION_CLAIM } from './reconciliation-stores.js';
@@ -272,6 +272,12 @@ export function documentIndexSpecs(model, entity, warnings) {
         : null,
       source: 'indexes'
     });
+  }
+  // Con borrado lógico (DSL 2.28, D4) toda unicidad cuenta solo los documentos VIVOS: el filtro parcial suma
+  // `deletedAt: null`, que MongoDB acepta y que casa con el campo ausente y con el nulo (T1, medido en mongo:7;
+  // `$exists: false` lo rechaza). Va en `live` y no en `partialFilter`, que es la condición del diseño.
+  if (isLogicallyDeleted(entity)) {
+    return specs.map((spec) => (spec.unique ? { ...spec, live: { path: DELETED_AT.field, equals: null } } : spec));
   }
   return specs;
 }

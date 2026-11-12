@@ -30,6 +30,8 @@ import {
   foreignKeyIndexColumns as neutralForeignKeyIndexColumns,
   tableOf
 } from '@keel-system/keel-core/gen/relational';
+import { isLogicallyDeleted } from '@keel-system/keel-core/gen/relational';
+import { jpaMarkDeclarations, lifecycleMarks } from './data-lifecycle.js';
 
 export const JPA_PKG = 'infrastructure.persistence.entities';
 
@@ -416,6 +418,14 @@ function renderJpaEntity(model, entity) {
     pushAccessor('lockVersion', 'Long');
   }
 
+  // Las marcas del ciclo de vida del dato (DSL 2.28): deletedAt y anonymizedAt, del generador y fuera del dominio.
+  {
+    const markImports = new Set();
+    declarations.push(...jpaMarkDeclarations(model, entity, markImports));
+    for (const name of markImports) imports.add(name);
+    for (const mark of lifecycleMarks(model, entity)) pushAccessor(mark.field, 'Instant');
+  }
+
   const header = ['@Entity'];
   if (!inheritsAuditable && declaredAudit.size > 0) {
     // Auditoría sobre campos declarados por el diseño: la entidad no hereda
@@ -452,7 +462,11 @@ function renderTableAnnotation(model, entity, members, imports) {
   const uniqueConstraints = [];
   const column = (name) => quoteIdentifier(name);
 
-  if (entity.naturalKey && entity.naturalKey.length > 0) {
+  // Con borrado lógico (DSL 2.28, D4) ninguna unicidad sin condición es constraint de tabla: se evalúa solo entre filas
+  // vivas, y eso es un índice parcial, que JPA no sabe expresar. Van al appendix de SQL (migrations.js), con el MISMO
+  // nombre, así que el traductor de errores las sigue encontrando.
+  const live = isLogicallyDeleted(entity);
+  if (!live && entity.naturalKey && entity.naturalKey.length > 0) {
     // Un miembro de la clave que pliega (`compare`, DSL 2.14) entra por su SOMBRA: la clave
     // natural es una unicidad como cualquier otra, y solo la columna plegada sabe que `ACME`
     // y `acme` son la misma.
@@ -475,7 +489,7 @@ function renderTableAnnotation(model, entity, members, imports) {
   // Con `compare` distinto de exact la constraint va sobre la SOMBRA plegada: `ACME` y `acme`
   // son el mismo nombre para el diseño, y solo la columna plegada lo sabe. El nombre de la
   // constraint no cambia —el ApiExceptionHandler la traduce por nombre—.
-  for (const field of uniqueFields(entity)) {
+  for (const field of live ? [] : uniqueFields(entity)) {
     // La sombra de un FILTRO (`filterOnly`) no lleva la unicidad: el campo se compara exacto.
     const folded = members.find((m) => m.kind === 'scalar' && m.name === field.name)?.folded;
     const shadow = folded && !folded.filterOnly ? folded : null;
@@ -521,7 +535,7 @@ function renderTableAnnotation(model, entity, members, imports) {
     return false;
   };
 
-  const annotatable = entity.indexes.filter((index) => !index.when).filter(resolves);
+  const annotatable = entity.indexes.filter((index) => !index.when && !(live && index.unique)).filter(resolves);
   const indexes = annotatable.map((index) => {
     // El nombre del índice conserva el nombre lógico del diseño (es su
     // identidad en persistence.keel.yaml); la columnList usa la columna real.

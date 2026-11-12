@@ -15,6 +15,7 @@ import { documentAnnotations, needsFieldType } from '../lib/type-mapper.js';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { capitalize } from './entities.js';
 import { persistedMembers, usesAuditableEntity } from './persistence-members.js';
+import { lifecycleMarks } from './data-lifecycle.js';
 
 export const DOC_PKG = 'infrastructure.persistence.documents';
 
@@ -279,6 +280,17 @@ function renderDocument(model, entity) {
     imports.add('org.springframework.data.annotation.Version');
     declarations.push('    @Version\n    @Field(name = "lock_version")\n    private Long lockVersion;');
     pushAccessor('lockVersion', 'Long');
+  }
+  // Las marcas del ciclo de vida del dato (DSL 2.28): deletedAt y anonymizedAt, del generador y fuera del dominio. Con el
+  // nombre del campo tal cual: es la ruta que filtran los índices parciales (`deletedAt: null`).
+  for (const mark of lifecycleMarks(model, entity)) {
+    imports.add('java.time.Instant');
+    declarations.push(
+      mark.field === 'deletedAt'
+        ? '    // Borrado lógico (DSL 2.28): cuándo se borró, o null si está vivo. Ninguna lectura del puerto ve un documento con él.\n    private Instant deletedAt;'
+        : '    // Cuándo lo anonimizó su retención (DSL 2.28, D11): lo saca del siguiente barrido.\n    private Instant anonymizedAt;'
+    );
+    pushAccessor(mark.field, 'Instant');
   }
 
   const header = [];

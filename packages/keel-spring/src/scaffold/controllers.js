@@ -8,6 +8,7 @@
 // vía UseCaseMediator. Incluye @Tag/@Operation (springdoc) y el
 // @RestControllerAdvice central en infrastructure/rest.
 
+import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
 import { callsPaymentGateway } from '../lib/payments-model.js';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { DOMAIN_ERROR_RESPONSES as DOMAIN, FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
@@ -534,7 +535,10 @@ function renderDataIntegrityHandler(model, imports, constantsOut) {
         if (translated != null) {
             return onDomainException(translated);
         }
-        log.warn("Violación de integridad no asociada a ninguna constraint conocida", exception);
+        ${usesPersonalData(model)
+          ? `// Sin la excepción: su mensaje lleva el del motor, y con datos personales (DSL 2.28) el valor que chocó.
+        log.warn("Violación de integridad no asociada a ninguna constraint conocida ({})", exception.getClass().getSimpleName());`
+          : 'log.warn("Violación de integridad no asociada a ninguna constraint conocida", exception);'}
         return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse(HttpStatus.CONFLICT.value(),
                 "Conflict", "${UNKNOWN_INTEGRITY_MESSAGE}"));
     }

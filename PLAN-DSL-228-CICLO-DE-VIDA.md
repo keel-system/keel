@@ -1,6 +1,6 @@
 # DSL 2.28: el ciclo de vida del dato (R4)
 
-**Estado: en curso.** Incremento 0 (keel-core) hecho el 2026-11-11. Siguiente: incremento 1 (keel-spring).
+**Estado: en curso.** Incremento 0 (keel-core) hecho el 2026-11-11 e incremento 1 (keel-spring) el 2026-11-12. Siguiente: incremento 2 (keel-nest).
 
 Origen: R4 de `docs/evaluacion-dsl-2.24.md`. Este plan la lleva al DSL y a los cuatro generadores con la regla de
 siempre: **el mismo diseño genera servidores equivalentes**. Cada pieza nueva tiene una red que la ejecuta y un sabotaje
@@ -130,6 +130,33 @@ Lo que se añade a piezas que ya existen:
   empresa.
 - **Los sujetos** (`test/helpers/data-lifecycle-designs.js`) son seis: `cards-logical` y `cards-logical-mongo`,
   `codes-anonymize` y `codes-anonymize-mongo`, `codes-delete` y `vault-logical-scoped`.
+
+**Decidido y medido al escribir el incremento 1 (2026-11-12):**
+
+- **La selección de lo vencido no es SQL neutral, es la consulta del adaptador** (`dueForRetention`, JPQL o `Criteria`),
+  y el borrado y la anonimización van por el repositorio del almacén. Lo neutral es el plan del recurrente
+  (`generatorRetentions` en `timer-plan.js`: su `kind`, su cron y su lote, con `retentionParameters` en
+  `data-lifecycle.js`). Una retención basta para que haya cronómetro (`usesTimer`).
+- **La unicidad entre vivas es `partialIndexSpecs`**, que ahora devuelve también las unicidades sin condición de una raíz
+  con borrado lógico (`liveUniqueColumns` en `relational.js`), con el MISMO nombre que en `uniqueConstraints`: el
+  traductor de errores las sigue encontrando. En documental, `documentIndexSpecs` les pone `live: { path: 'deletedAt',
+  equals: null }`. Las columnas `deleted_at`/`anonymized_at` son `DELETED_AT`/`ANONYMIZED_AT` de `relational.js`.
+- **T1, medido en mongo:7**: `partialFilterExpression: { deletedAt: null }` se acepta y casa con el campo ausente y con el
+  nulo; `$exists: false` lo rechaza el motor. No hace falta el campo `alive`.
+- **T2, medido en MySQL**: la columna generada `CASE WHEN deleted_at IS NULL THEN 1 END` (con `AND` si hay `when`).
+- **T4, medido**: en Hibernate 7 el mensaje del motor con el valor de la unicidad lo escribe `org.hibernate.orm.jdbc.error`,
+  no `SqlExceptionHelper`. Con datos personales, `logging.yaml` lo apaga y el aspecto `@LogExceptions` no copia el
+  mensaje de una `DataAccessException`.
+- **T5**: borrar lógicamente o restaurar invalida las cachés de las lecturas de esa raíz (`cacheInvalidations`, neutral),
+  y el barrido de retención vacía las suyas (`retentionCaches`), porque no pasa por el mediator.
+- **La restauración se busca por la clave natural**: el puerto gana `findDeletedBy<Clave>` (la borrada más reciente) y
+  `restore(id)`; `deletedRootOf`, `deletedLookupOf`, `logicalDeletionNote` y `restoreNote` son neutrales. Los handlers que
+  borran o restauran reciben el puerto aunque su payload no nombre la raíz.
+- **`vault-logical-scoped` borra también `Owner`**, la raíz que el listado embebe: es la única forma de medir LC-9 sin una
+  fixture.
+- **PD-3 de keel-spring no se mide en el incremento 1**: su `telemetry-check` no tiene colector OTLP falso (los otros
+  tres sí) y sus sujetos no marcan nada personal. Lo que PD-3 vigila en los logs ya lo mide PD-2; las trazas quedan para el
+  incremento 5, con el inventario.
 
 ## Núcleo neutral (keel-core/src/lib/gen)
 
@@ -302,7 +329,7 @@ Un generador que no llegue a la puerta rechaza la capacidad con su motivo.
 | Incremento | Estado | Medido con |
 |---|---|---|
 | 0. keel-core | hecho (2026-11-11) | suite de keel-core, `design-matrix`, la suite entera |
-| 1. keel-spring | pendiente | |
+| 1. keel-spring | hecho (2026-11-12) | `lifecycle-check` en PostgreSQL, MySQL y MongoDB con once sabotajes, `test/data-lifecycle.test.js` (PD-1 con bash), las suites de los cinco paquetes |
 | 2. keel-nest | pendiente | |
 | 3. keel-dotnet | pendiente | |
 | 4. keel-go | pendiente | |
@@ -312,28 +339,30 @@ Un generador que no llegue a la puerta rechaza la capacidad con su motivo.
 
 ## Para retomar
 
-El incremento 0 está hecho. Qué hay:
+Los incrementos 0 y 1 están hechos. Qué añadió el 1 (keel-spring), además de lo neutral que está en § «Decidido y medido
+al escribir el incremento 1»:
 
-- **DSL 2.28** en todos los sitios de la regla «Nueva versión del DSL».
-- **Schemas:** `personal` en `common`; `deletion`, `restorableFor` y `retention` en `persistence`; `restores` en
-  `use-cases`.
-- **Reglas:** las ocho `CHK-PERSIST-*` y las dos `CHK-SCEN-*`, en `checkDataLifecycle` y en el bloque de escenarios de
-  `crossrefs.js`, más `OBL-PERSONAL-RETENTION-UNDECIDED`. Todas con su mutación sobre la extensión `dataLifecycle` del
-  corpus.
-- **Lo estructural y la revisión:** la entrada 3.13 en `STRUCTURAL_DEFAULTS`, `structural-register.js` y
-  `structural-decisions.md`; la clase 19 de huecos y `REV-PERSONAL-CLASSIFICATION`.
-- **Núcleo neutral:** `gen/data-lifecycle.js` (desde las capas y desde el modelo, la aritmética, los casos y los
-  sabotajes), `gen/implicit-predicates.js` (`finder.live`) y `gen/personal-data.js` (el inventario).
-- **Modelo:** `field.personal`, `entity.aggregateRoot`, `entity.deletion`/`restorableFor`/`retention` y
-  `operation.restores`.
-- **Frontera y cobertura:** `dataLifecyclePendingErrors` en los cuatro `supported-features.js` y sus filas en los
-  `capability-coverage` y en el README de keel-go.
-- **Docs:** `dsl/persistence.md`, `domain.md` y `use-cases.md`, el historial de `dsl-reference.md` y
-  `validation-scenarios.md`.
+- **`src/scaffold/data-lifecycle.js`**: las marcas `deletedAt`/`anonymizedAt` del espejo, los finders vivos
+  (`liveFinder`, sufijo `AndDeletedAtIsNull`), `deleteById` que marca, `findDeletedBy<Clave>` y `restore` con su ventana,
+  `<Raíz>Retention` (JPA y Mongo) y `<Raíz>RetentionTimer` (recurrente del cronómetro, vacía sus cachés), y
+  `lifecycleStackErrors` (la unicidad entre vivas sin índice parcial, lo que no sabe anonimizar).
+- **Enganchado en** `repositories.js`, `document-repositories.js`, `finders.js` (la vida DETRÁS del alcance),
+  `persistence-entities.js` (sin `@UniqueConstraint` con borrado lógico), `document-entities.js`, `document-indexes.js`,
+  `migrations.js` (la prosa del appendix), `claim.js` y `reconciliation-claim.js` (los candidatos, vivos), `timer.js`,
+  `services.js` (notas y el puerto en los handlers que borran o restauran), `logging.js`, `controllers.js` y `config.js`
+  (PD-2) y `logging-check.js` (la regla `personal`, PD-1).
+- **La red**: `npm run lifecycle-check` (`scripts/lifecycle-check.js` + `src/lib/lifecycle-probes.js`), sobre los seis
+  sujetos y con `--database=mysql`. Sabotajes, todos en exactamente sus casos: `lc-no-filter`, `lc-count`, `lc-get-leak`
+  (también en Mongo), `lc-unique-all-rows` (PostgreSQL, MySQL y Mongo), `lc-restore-window` (los dos modelos),
+  `lc-embed-hidden`, `lc-implicit-replace`, `rt-early`, `rt-anonymize-miss` (los dos modelos), `rt-every-replica` y
+  `pd-log-value` (los dos modelos).
+- **La matriz**: fila `data-lifecycle` en keel-spring (`verificado`, `falsified`), la red `lifecycle-check` en
+  `gen/mechanisms.js` y la fila `pending` en las otras tres.
 
-Siguiente, el incremento 1 (keel-spring):
+Siguiente, el incremento 2 (keel-nest):
 
-1. Diseñar `retention-store.js` (la selección de vencidos y las columnas `deleted_at`/`anonymized_at` como datos) con
-   su consumidor.
-2. Quitar la llamada a `dataLifecyclePendingErrors` de keel-spring y sus filas de `capability-coverage`.
-3. Emitir las piezas, una por una, con `lifecycle-check` como red.
+1. Quitar `dataLifecyclePendingErrors` de su `supported-features.js` y la fila `pending` de su matriz.
+2. Emitir con TypeORM y su rama documental, consumiendo lo neutral del incremento 1 (`partialIndexSpecs` con `live`,
+   `documentIndexSpecs` con `live`, `generatorRetentions`, `cacheInvalidations`, las notas).
+3. Las sondas en `scripts/lib/lifecycle-probes.js` de `db-check`/`doc-check`, con los mismos casos y sabotajes, y
+   `test/data-lifecycle-parity.test.js` contra keel-spring. PD-3 en su `telemetry-check`, que sí tiene colector.

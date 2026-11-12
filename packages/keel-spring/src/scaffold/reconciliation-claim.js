@@ -22,6 +22,7 @@
 // candidatos entre réplicas (`SKIP LOCKED`), que sale de lib/claim-sql.js. Sin él el
 // reclamo sigue siendo correcto — lo garantiza la tabla, no la consulta.
 
+import { jpqlLive } from './data-lifecycle.js';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { screamingSnake } from '../lib/naming.js';
 import { claimSelectionSnippet, claimTransaction } from '../lib/claim-sql.js';
@@ -137,7 +138,7 @@ export function jpaRepositoryMethods(model, entity, imports) {
      * reconciliarían antes.
      */
 ${selection.annotations}
-    @Query("select e.id from ${entity.name}Jpa e where e.${field} in :states and e.${claim.awaitingField} < :staleBefore"
+    @Query("select e.id from ${entity.name}Jpa e where e.${field} in :states and e.${claim.awaitingField} < :staleBefore${jpqlLive(entity)}"
             + " and not exists (select 1 from ReconciliationClaimJpa c where c.id.activation = :activation and c.id.entityId = e.id and c.claimedAt > :claimExpiredBefore)"
             + " order by e.${claim.awaitingField} asc")
     List<UUID> candidatesFor${claim.suffix}(@Param("states") List<${enumType}> states, @Param("staleBefore") Instant staleBefore,

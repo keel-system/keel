@@ -43,6 +43,7 @@ import {
 } from '@keel-system/keel-core/gen/timer-store';
 import { ATTRIBUTES, OBSERVATIONS, TIMER_LAG, TIMER_PARKED, usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { TIMER_DATABASES, claimDrains, timerPurges, timerSchedules, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
+import { retentionKindConstant, retentionRoots, retentionTimer } from './data-lifecycle.js';
 
 export { usesDeadlines, usesTimer, TIMER_DATABASES };
 
@@ -56,6 +57,13 @@ const DEADLINE_PKG = 'domain.deadline';
  * midieron (timer-sql-check), y el rechazo tardío necesita un `code` con un solo status.
  */
 export function timerStackErrors(model) {
+  // Una retención (DSL 2.28, D8) es un recurrente del cronómetro, y como un plazo no tiene reloj por réplica al que volver.
+  if (retentionRoots(model).length > 0 && model.layersPresent.persistence && !TIMER_DATABASES.includes(model.stack?.database)) {
+    return [
+      `persistence.<Raíz>.retention (DSL 2.28): la retención corre sobre el cronómetro, y no tiene sentencias medidas para ` +
+        `'${model.stack?.database}' (las hay para ${TIMER_DATABASES.join(', ')}). Elige uno de esos motores o genera el diseño sin la retención.`
+    ];
+  }
   if (!usesDeadlines(model)) return [];
   const errors = [];
   if (!model.layersPresent.persistence) {
@@ -291,6 +299,8 @@ export function generate(model) {
     timerPurge(model),
     ...timerPurges(model).map((purge) => purgeTimer(model, purge)),
     ...timerSchedules(model).map((schedule) => scheduleTimer(model, schedule)),
+    // Las retenciones (DSL 2.28, D8): un recurrente en modo clúster por raíz.
+    ...retentionRoots(model).map(({ entity, root }) => retentionTimer(model, entity, root, { pkg: TIMER_PKG })),
     ...modelDeadlines(model).map((entry) => deadlineHandler(model, entry))
   ];
   if (usesSweepPass(model)) files.push(sweepPass(model));
@@ -393,6 +403,10 @@ function timerKinds(model) {
     ...timerSchedules(model).map(
       (schedule) => `    /** El \`schedule\` de ${schedule.operation}: un recurrente en modo clúster, con drenaje. */
     public static final String ${scheduleKindConstant(schedule.operation)} = "${schedule.kind}";`
+    ),
+    ...retentionRoots(model).map(
+      ({ entity, root }) => `    /** La retención de ${entity.name} (DSL 2.28): un recurrente en modo clúster. */
+    public static final String ${retentionKindConstant(entity.name)} = "${root.retention.kind}";`
     )
   ];
   return `/**

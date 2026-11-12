@@ -42,6 +42,7 @@
 // destino la hace el dominio, que es quien fija los campos que ese estado exige. Moverla
 // aquí dejaba `failed` sin `failureReason` ni `failedAt` (corrida notifications, 2026-09-30).
 
+import { jpqlLive } from './data-lifecycle.js';
 import { SWEEP_BATCH_DEFAULT } from '@keel-system/keel-core/gen';
 import { sweepPassSignal } from './timer.js';
 import { subPackage } from './render.js';
@@ -348,7 +349,7 @@ export function jpaRepositoryMethods(model, entity, imports) {
       : `@Param("id") UUID id, @Param("states") List<${enumType}> states, @Param("to") ${enumType} to${staleParam}${stampParam}`;
     return [
       `${selection.annotations}
-    @Query("select e.id from ${entity.name}Jpa e where e.${field} in :states${stale} order by e.${orderField} asc")
+    @Query("select e.id from ${entity.name}Jpa e where e.${field} in :states${stale}${jpqlLive(entity)} order by e.${orderField} asc")
     List<UUID> candidatesFor${claim.suffix}(@Param("states") List<${enumType}> states${staleParam}, Pageable pageable);`,
 
       `    /**

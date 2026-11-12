@@ -846,6 +846,32 @@ const SPRING_MECHANISMS = {
         why: 'vault-scoped-mongo (el salto resuelve los ids de Owner y filtra ownerId) y conduit-scoped (el dueño por Article.author → Profile.subject, not-found y carga por slug) contra Spring Data MongoDB en un replica set real, con las MISMAS sondas que la rama relacional. Falsado con los mismos sabotajes, cada uno en exactamente sus casos'
       }
     }
+  },
+  'data-lifecycle': {
+    emitter:
+      'src/scaffold/data-lifecycle.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js · src/scaffold/finders.js · src/scaffold/persistence-entities.js · src/scaffold/document-entities.js · src/scaffold/migrations.js · src/scaffold/document-indexes.js · src/scaffold/timer.js · src/scaffold/logging.js · src/scaffold/logging-check.js',
+    why: 'Un listado que devuelve la fila borrada, un total que la cuenta, una carga por clave que la encuentra, un índice único que no libera la clave, una ventana que no se comprueba, un barrido que se adelanta o se deja un campo personal sin vaciar y el email en el log compilan igual de bien y no rompen ningún escenario feliz: su fallo es un dato que sigue vivo o visible cuando el diseño dijo que no.',
+    parity: {
+      skip: 'ninguna fixture declara el ciclo de vida del dato hasta el incremento 6 de PLAN-DSL-228-CICLO-DE-VIDA.md: los sujetos son los diseños derivados de keel-core/test/helpers/data-lifecycle-designs.js (cards-logical y cards-logical-mongo, el mismo diseño salvo el modelo; codes-anonymize y codes-anonymize-mongo; codes-delete y vault-logical-scoped), que medirán también keel-nest, keel-dotnet y keel-go; la forma la fija test/data-lifecycle.test.js',
+      test: 'test/data-lifecycle.test.js'
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'lifecycle-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'cards-logical (borrado lógico, restauración con ventana, retención desde el borrado, email personal y único), codes-anonymize, codes-delete y vault-logical-scoped (la vida sumada al alcance y la lectura por referencia), con el contexto entero del perfil local contra el motor: LC-1 a LC-10, RT-1 a RT-4 y PD-2; PD-1 es el gate ejecutado con bash en test/data-lifecycle.test.js. Medido aquí y no supuesto: en Hibernate 7 el mensaje del motor con el valor de la unicidad lo escribe org.hibernate.orm.jdbc.error, no SqlExceptionHelper, y en MySQL la unicidad entre vivas es la columna generada (T2). Falsado: lc-no-filter cae en LC-1 y LC-2, lc-count en LC-2, lc-get-leak en LC-3 y LC-4, lc-unique-all-rows en LC-5 (en los dos motores), lc-restore-window en LC-7, lc-embed-hidden en LC-9, lc-implicit-replace en LC-10, rt-early en RT-1, rt-anonymize-miss en RT-2, rt-every-replica en RT-3 y pd-log-value en PD-2'
+      },
+      document: {
+        state: 'verificado',
+        net: 'lifecycle-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'cards-logical-mongo y codes-anonymize-mongo contra Spring Data MongoDB en un replica set real, con las MISMAS sondas que la rama relacional. Medido aquí (T1): el índice parcial con deletedAt: null casa con el campo ausente y con el nulo, y $exists: false lo rechaza el motor. Falsado: lc-get-leak, lc-unique-all-rows, lc-restore-window, rt-anonymize-miss y pd-log-value, cada uno en exactamente sus casos'
+      }
+    }
   }
 };
 

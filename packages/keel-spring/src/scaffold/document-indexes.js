@@ -87,7 +87,7 @@ function renderIndexConfig(model) {
 
   // Solo si algún índice lleva condición: importar PartialIndexFilter y Criteria
   // siempre dejaría dos imports sin usar en la mayoría de los proyectos.
-  if (collections.some(({ specs }) => specs.some((spec) => spec.partialFilter))) {
+  if (collections.some(({ specs }) => specs.some((spec) => spec.partialFilter || spec.live))) {
     imports.add('org.springframework.data.mongodb.core.index.PartialIndexFilter');
     imports.add('org.springframework.data.mongodb.core.query.Criteria');
   }
@@ -99,8 +99,13 @@ function renderIndexConfig(model) {
       // La unicidad condicionada: el índice existe solo para los documentos que
       // cumplen el filtro. Sin él, `.unique()` sobre esas claves prohibiría también
       // las versiones históricas, que es el invariante contrario al declarado.
-      const partial = spec.partialFilter
-        ? `\n                            .partial(PartialIndexFilter.of(Criteria.where("${spec.partialFilter.path}").is(${javaLiteral(spec.partialFilter.equals)})))`
+      // Y con borrado lógico (DSL 2.28) solo cuentan los documentos vivos: `deletedAt` nulo o ausente.
+      const conditions = [
+        ...(spec.partialFilter ? [`"${spec.partialFilter.path}").is(${javaLiteral(spec.partialFilter.equals)})`] : []),
+        ...(spec.live ? [`"${spec.live.path}").is(null)`] : [])
+      ];
+      const partial = conditions.length > 0
+        ? `\n                            .partial(PartialIndexFilter.of(Criteria.where(${conditions.join('.and(')}))`
         : '';
       return `            ${indexField}.createIndex(
                     new Index()${keys}${unique}${partial}

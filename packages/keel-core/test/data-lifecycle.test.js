@@ -188,3 +188,79 @@ test('el inventario de datos personales: una fila por campo, con su borrado y su
   assert.equal(usesPersonalData(plain), false);
   assert.equal(personalDataInventory(plain), null);
 });
+
+// ─── Lo que pide el primer generador (inc. 1) ────────────────────────────────
+
+test('la unicidad entre vivas (D4): toda unicidad de una raíz con borrado lógico es un índice parcial con su mismo nombre', async () => {
+  const { partialIndexSpecs, uniqueConstraints } = await import('../src/lib/gen/relational.js');
+  const { model } = derived('cards-logical');
+  const specs = partialIndexSpecs({ ...model, stack: { database: 'postgresql' } }, 'postgresql').filter((spec) => spec.entity === 'ContactCard');
+  assert.deepEqual(specs.map((spec) => [spec.name, spec.columns, spec.predicate, spec.live]), [
+    ['uk_contact_cards_natural', 'subject', 'deleted_at IS NULL', true],
+    ['uk_contact_cards_email', 'email', 'deleted_at IS NULL', true]
+  ]);
+  // Los nombres son los del traductor de errores: una unicidad entre vivas sigue traduciéndose al error del diseño.
+  const known = new Set(uniqueConstraints(model).map((entry) => entry.constraint));
+  for (const spec of specs) assert.ok(known.has(spec.name), spec.name);
+  // Con borrado físico, nada cambia: sin índices parciales que el diseño no declaró.
+  const physical = designOf('profile-directory').model;
+  assert.deepEqual(partialIndexSpecs({ ...physical, stack: { database: 'postgresql' } }, 'postgresql'), []);
+});
+
+test('la unicidad entre vivas en documental (T1): el filtro parcial suma deletedAt nulo, solo a las únicas', async () => {
+  const { documentIndexSpecs } = await import('../src/lib/gen/document.js');
+  const { model } = derived('cards-logical-mongo');
+  const specs = documentIndexSpecs(model, model.entities.find((entity) => entity.name === 'ContactCard'), []);
+  assert.ok(specs.length > 0);
+  for (const spec of specs) assert.deepEqual(spec.live, spec.unique ? { path: 'deletedAt', equals: null } : undefined, spec.name);
+});
+
+test('la retención es un recurrente del cronómetro en modo clúster (D8), con sus parámetros', async () => {
+  const { clusterRecurrings, generatorRetentions, usesTimer } = await import('../src/lib/gen/timer-plan.js');
+  const { model } = derived('codes-delete');
+  assert.ok(usesTimer(model));
+  assert.deepEqual(generatorRetentions(model), [
+    {
+      entity: 'VerificationCode',
+      kind: 'retention:VerificationCode',
+      cron: { key: 'retention.verification-code.cron', env: 'RETENTION_VERIFICATION_CODE_CRON', default: '0 30 2 * * *', cron: true },
+      batchSize: { key: 'retention.verification-code.batch-size', env: 'RETENTION_VERIFICATION_CODE_BATCH_SIZE', default: 500 }
+    }
+  ]);
+  assert.ok(clusterRecurrings(model).some((recurring) => recurring.kind === 'retention:VerificationCode'));
+  // Una retención basta para que haya cronómetro, aunque no haya plazos ni purgas.
+  const { model: cards } = derived('cards-logical');
+  assert.ok(usesTimer(cards));
+});
+
+test('T5: borrar o restaurar invalida la caché de las lecturas de la raíz, y la retención sabe cuáles vaciar', async () => {
+  const { cacheInvalidations, retentionCaches } = await import('../src/lib/gen/cache-plan.js');
+  const { model } = derived('cards-logical');
+  const cached = designOf('profile-directory', (layers) => {
+    DATA_LIFECYCLE_DESIGNS.find((entry) => entry.name === 'cards-logical').mutate(layers);
+    layers['use-cases'].operations.getMyCard.cache = { ttlSeconds: 60, keyFields: ['callerSubject'] };
+  }).model;
+  assert.deepEqual(cacheInvalidations(model), []);
+  assert.deepEqual(
+    cacheInvalidations(cached).map((entry) => [entry.operation, entry.caches.map((cache) => cache.events).flat()]),
+    [
+      ['deleteMyCard', ['el borrado lógico de ContactCard']],
+      ['restoreMyCard', ['la restauración de ContactCard']]
+    ]
+  );
+  assert.deepEqual(retentionCaches(cached, 'ContactCard').map((cache) => cache.operation), ['getMyCard']);
+});
+
+test('las notas del handler: el borrado que marca y la restauración, con las llamadas del generador', async () => {
+  const { deletedRootOf, deletedLookupOf, logicalDeletionNote, restoreNote } = await import('../src/lib/gen/data-lifecycle.js');
+  const { model } = derived('cards-logical');
+  assert.equal(deletedRootOf(model, operationOf(model, 'deleteMyCard')).name, 'ContactCard');
+  assert.equal(deletedRootOf(model, operationOf(model, 'saveMyCard')), null);
+  assert.deepEqual(deletedLookupOf(model.entities.find((entity) => entity.name === 'ContactCard')), { fields: ['subject'] });
+  const deletion = logicalDeletionNote(model, operationOf(model, 'deleteMyCard'), { deleteCall: 'repo.deleteById(id)' });
+  assert.match(deletion, /repo\.deleteById\(id\) MARCA la fila/);
+  assert.match(deletion, /Se puede deshacer con restoreMyCard durante 30 días\./);
+  const restore = restoreNote(model, operationOf(model, 'restoreMyCard'), { findCall: 'repo.findDeleted(x)', restoreCall: 'repo.restore(id)' });
+  assert.match(restore, /repo\.findDeleted\(x\)[\s\S]*repo\.restore\(id\)[\s\S]*CARD_NOT_RESTORABLE/);
+  assert.equal(logicalDeletionNote(model, operationOf(model, 'saveMyCard'), { deleteCall: 'x' }), null);
+});

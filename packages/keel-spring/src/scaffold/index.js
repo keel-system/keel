@@ -75,6 +75,8 @@ import * as mail from './mail.js';
 import * as payments from './payments.js';
 import * as services from './services.js';
 import * as timer from './timer.js';
+import * as dataLifecycle from './data-lifecycle.js';
+import { enginesWithPartialIndex } from './migrations.js';
 import * as readme from './readme.js';
 import * as contextMd from './context-md.js';
 import * as generatorDocs from './generator-docs.js';
@@ -171,6 +173,8 @@ const GENERATORS = [
   services,
   // El cronómetro del servicio y los plazos de negocio (DSL 2.26): se gatea a sí mismo por el diseño.
   timer,
+  // La retención de los agregados (DSL 2.28): qué ha vencido y qué se hace con ello; la dispara el cronómetro.
+  dataLifecycle,
   // Después de services: su matriz cita clases que los generadores de arriba nombran,
   // aunque el script solo las busque en tiempo de ejecución.
   idempotencyCheck,
@@ -238,6 +242,9 @@ export function planService({ manifest, layers, fixtures = null, workspace, stac
   const timerErrors = timer.timerStackErrors(model);
   if (timerErrors.length > 0) throw new Error(timerErrors.join('\n'));
   // La lectura acotada (DSL 2.27) que no se puede generar por construcción (T7, T8 y compañía): la frontera neutral.
+  // El ciclo de vida del dato (DSL 2.28) que este motor no puede sostener: la unicidad entre vivas, lo que se anonimiza.
+  const lifecycleErrors = dataLifecycle.lifecycleStackErrors(model, enginesWithPartialIndex());
+  if (lifecycleErrors.length > 0) throw new Error(lifecycleErrors.join('\n'));
   const scopeErrors = readScopeGenerationErrors(model);
   if (scopeErrors.length > 0) throw new Error(scopeErrors.join('\n'));
   return { model, stack: resolved, files: GENERATORS.flatMap((generator) => generator.generate(model)) };

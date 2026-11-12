@@ -197,6 +197,23 @@ export function retentionKind(entityName) {
   return `retention:${entityName}`;
 }
 
+/** Un nombre de entidad en kebab (`VerificationCode` → `verification-code`) y en mayúsculas (`VERIFICATION_CODE`). */
+const kebabOf = (name) => name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+
+/**
+ * Los parámetros del barrido de una retención (D8), con la forma de los de las purgas del generador: clave, variable y
+ * default, los mismos en los cuatro servidores. El cron corre en modo CLÚSTER sobre el cronómetro (una réplica por tick);
+ * el lote acota cada transacción, y el tick repite mientras el lote salga lleno.
+ */
+export function retentionParameters(entityName) {
+  const kebab = kebabOf(entityName);
+  const env = kebab.replaceAll('-', '_').toUpperCase();
+  return Object.freeze({
+    cron: Object.freeze({ key: `retention.${kebab}.cron`, env: `RETENTION_${env}_CRON`, default: '0 30 2 * * *', cron: true }),
+    batchSize: Object.freeze({ key: `retention.${kebab}.batch-size`, env: `RETENTION_${env}_BATCH_SIZE`, default: 500 })
+  });
+}
+
 /**
  * Las raíces persistidas de las que el diseño ya dice algo del ciclo de vida (un campo personal en su agregado, un
  * deletion, un restorableFor o una retention): las unidades de la clase 19 del análisis de huecos. Cadenas estables, que
@@ -318,6 +335,66 @@ export function lifecycleRoots(model) {
     out.push(Object.freeze({ entity: entity.name, logical, restore, retention }));
   }
   return out;
+}
+
+/**
+ * La raíz que BORRA una operación expuesta con DELETE, desde el modelo: la de su payload, o la única raíz persistida del
+ * servicio si el nombre no la dice (`deleteMyCard`), igual que `deletedRoots` desde las capas. Null si no borra nada.
+ */
+export function deletedRootOf(model, operation) {
+  if (String(operation?.route?.method ?? '').toUpperCase() !== 'DELETE') return null;
+  const roots = (model.entities ?? []).filter((entity) => entity.persisted && entity.isAggregateRoot);
+  const target = (model.entities ?? []).find((entity) => entity.name === operation.targetEntity);
+  const root = target ? roots.find((entity) => entity.name === (target.aggregateRoot ?? target.name)) : roots.length === 1 ? roots[0] : null;
+  return root ?? null;
+}
+
+/**
+ * Cómo encuentra el handler de una restauración la fila borrada (D6): por id siempre, y por la clave natural si la raíz la
+ * tiene, porque una operación del titular (`restoreMyCard`) no conoce el id. Varias borradas pueden compartir la clave
+ * (D4 la libera al borrar): se devuelve la borrada MÁS RECIENTE, la única que tiene sentido deshacer.
+ */
+export function deletedLookupOf(entity) {
+  const key = entity?.naturalKey ?? [];
+  return key.length > 0 ? Object.freeze({ fields: [...key] }) : null;
+}
+
+/** La ventana de una restauración, en texto: `30 días` o `el parámetro p (días)`. */
+function windowText(restore) {
+  return Number.isInteger(restore.days) ? `${restore.days} días` : `los días del parámetro ${restore.parameter}`;
+}
+
+/**
+ * La nota del handler de una operación que BORRA una raíz con borrado lógico, la misma en los cuatro generadores.
+ * `deleteCall` es la llamada al puerto en el lenguaje del generador.
+ */
+export function logicalDeletionNote(model, operation, { deleteCall }) {
+  const root = deletedRootOf(model, operation);
+  if (!root || root.deletion !== 'logical') return null;
+  const restorer = lifecycleRoots(model).find((entry) => entry.entity === root.name)?.restore;
+  return (
+    `Borrado lógico (persistence.${root.name}.deletion: logical, DSL 2.28): ${deleteCall} MARCA la fila y no la elimina. ` +
+    'Desde ese momento ninguna lectura del puerto la ve —carga por id o por clave, listados y su total— y sus claves únicas ' +
+    'quedan libres; solo la siguen viendo las referencias desde otro agregado. No filtres lo borrado a mano: lo hace el ' +
+    'adaptador. Borrar una ya borrada no la encuentra la carga, así que responde el error de no encontrado, nunca 410.' +
+    (restorer ? ` Se puede deshacer con ${restorer.operation} durante ${windowText(restorer)}.` : '')
+  );
+}
+
+/**
+ * La nota del handler de la operación que RESTAURA (`restores`), la misma en los cuatro. `findCall` y `restoreCall` son
+ * las llamadas al puerto en el lenguaje del generador (la carga de la borrada y la restauración).
+ */
+export function restoreNote(model, operation, { findCall, restoreCall }) {
+  if (!operation?.restores) return null;
+  const restore = lifecycleRoots(model).find((entry) => entry.entity === operation.restores)?.restore;
+  if (!restore) return null;
+  return (
+    `Restauración (restores: ${operation.restores}, DSL 2.28): encuentra la fila BORRADA con ${findCall} —las cargas ` +
+    `normales no la ven— y llama a ${restoreCall}, que la deja viva. Sin fila borrada, el error de no encontrado. Fuera de ` +
+    `la ventana (${windowText(restore)} desde el borrado) el adaptador lanza ${restore.error}, y si otra fila viva ocupa ya ` +
+    'su clave única, la constraint responde con el 409 de esa unicidad. No compruebes la ventana ni la clave a mano.'
+  );
 }
 
 /** Los campos personales del modelo, por entidad: lo que el gate de logs del agente veta y lo que lista el inventario. */

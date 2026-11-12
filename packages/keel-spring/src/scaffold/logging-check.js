@@ -19,6 +19,7 @@
 // Loguear un CAMPO (`command.orderId()`) no casa, que es justo la forma correcta.
 
 import { CONTEXT_EXECUTORS_CLASS } from './concurrency.js';
+import { personalFieldNames } from '@keel-system/keel-core/gen/personal-data';
 
 export function generate(model) {
   if (!model.services?.some((service) => service.operations.length > 0)) return [];
@@ -30,6 +31,18 @@ export function generate(model) {
 const LOG_CALL = '(log|LOG|logger|LOGGER)[.](trace|debug|info|warn|error)[[:space:]]*[(]';
 const CONCAT = `${LOG_CALL}[^;]*("[[:space:]]*[+]|[+][[:space:]]*")`;
 const WHOLE_OBJECT = `${LOG_CALL}[^;]*,[[:space:]]*(command|query|dto|request|payload|body|message)[[:space:]]*[,)]`;
+
+/**
+ * El accesor de un campo PERSONAL dentro de una llamada de log (DSL 2.28, D10, PD-1): `command.email()` o
+ * `card.getEmail()`. Por nombre, como el resto del gate: grep no ve tipos, así que un campo homónimo de otra entidad que
+ * no es personal también casa, y es preferible al revés. Null si el diseño no marca ninguno.
+ */
+export function personalAccessorPattern(model) {
+  const names = personalFieldNames(model);
+  if (names.length === 0) return null;
+  const accessors = names.flatMap((name) => [name, `get${name[0].toUpperCase()}${name.slice(1)}`]);
+  return `${LOG_CALL}[^;]*[.](${accessors.join('|')})[[:space:]]*[(][[:space:]]*[)]`;
+}
 
 /**
  * Las formas de lanzar trabajo a otro hilo que PIERDEN el contexto (MDC, observación activa y
@@ -117,7 +130,11 @@ EOF
 
 scan 'concat' '${CONCAT}' 'concatena dentro del log: usa parámetros {} (o addKeyValue) para que los valores salgan como campos y no se construya la cadena con el nivel apagado'
 scan 'wholeObject' '${WHOLE_OBJECT}' 'loguea un objeto de entrada entero: su toString() lleva al backend de logs los datos de quien llama; loguea solo ids o campos concretos'
-
+${personalAccessorPattern(model)
+  ? `# Un dato PERSONAL del diseño (DSL 2.28: ${personalFieldNames(model).join(', ')}): ningún log lo lleva. Loguea el id del agregado.
+scan 'personal' '${personalAccessorPattern(model)}' 'loguea un campo que el diseño marca personal (DSL 2.28): su valor no puede acabar en el backend de logs; loguea el id del agregado'
+`
+  : ''}
 # Un ERROR desde el dominio o los casos de uso. Ahí un fallo se LANZA como excepción: la frontera
 # (UseCaseMediator y el adaptador de entrada) lo registra una vez, con su nivel y su pila. Un
 # log.error además duplica la línea y, peor, suele acompañar a un fallo que se traga —se loguea y

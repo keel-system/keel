@@ -172,7 +172,11 @@ export {
   sqlLiteral,
   discriminatorColumn,
   partialIndexSpecs,
-  relievingOperations
+  relievingOperations,
+  DELETED_AT,
+  ANONYMIZED_AT,
+  isLogicallyDeleted,
+  liveUniqueColumns
 } from './relational.js';
 export {
   DOCUMENT_STORAGE,

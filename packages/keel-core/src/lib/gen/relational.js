@@ -601,28 +601,79 @@ export function partialIndexSpecs(model, dialect = model.stack?.database) {
   const quote = (name) => quoteIdentifierFor(dialect, name);
   for (const entity of model.entities.filter((e) => e.persisted)) {
     const members = persistedMembers(model, entity);
+    const live = isLogicallyDeleted(entity);
+    const alive = `${quote(DELETED_AT.column)} IS NULL`;
+    const base = (name, columnList, fields) => ({
+      entity: entity.name,
+      name,
+      table: quote(entity.tableName),
+      // El nombre CRUDO, además del citado: `information_schema` guarda el identificador.
+      tableName: entity.tableName,
+      columns: columnList.join(', '),
+      columnList,
+      fields,
+      live
+    });
     for (const index of partialUniqueIndexes(entity)) {
       const columnList = index.fields.flatMap((field) => columnsFor(model, entity, members, field, model.warnings)).map(quote);
       const [whenColumn] = columnsFor(model, entity, members, index.when.field, model.warnings);
       const stored = storedWhenValue(model, entity, index.when);
+      const condition = `${quote(whenColumn)} = ${sqlLiteral(stored)}`;
       specs.push({
-        entity: entity.name,
-        name: indexName(entity, index),
-        table: quote(entity.tableName),
-        // El nombre CRUDO, además del citado: `information_schema` guarda el identificador.
-        tableName: entity.tableName,
-        columns: columnList.join(', '),
-        columnList,
+        ...base(indexName(entity, index), columnList, index.fields),
         whenColumn: quote(whenColumn),
-        predicate: `${quote(whenColumn)} = ${sqlLiteral(stored)}`,
+        predicate: live ? `${condition} AND ${alive}` : condition,
         // Junto al literal del diseño, para que la prosa pueda decir los dos cuando difieren.
         stored,
-        fields: index.fields,
         when: index.when
       });
     }
+    // Con borrado lógico (DSL 2.28, D4) toda unicidad de la raíz se evalúa solo entre filas VIVAS: la clave de quien se
+    // borró se puede volver a usar. Ningún ORM la expresa sin el predicado, así que deja de ser constraint de tabla y
+    // pasa aquí, con el MISMO nombre: el traductor de errores la sigue encontrando por él.
+    if (live) {
+      for (const unique of liveUniqueColumns(model, entity, members)) {
+        specs.push({ ...base(unique.name, unique.columns.map(quote), unique.fields), whenColumn: null, predicate: alive, stored: null, when: null });
+      }
+    }
   }
   return specs;
+}
+
+/** La columna del borrado lógico (DSL 2.28, D1): la pone el generador y no está en el dominio ni en el contrato. */
+export const DELETED_AT = Object.freeze({ field: 'deletedAt', column: 'deleted_at' });
+
+/** La marca de la anonimización (D11): un agregado anonimizado sigue vencido, y sin ella el barrido lo volvería a tomar. */
+export const ANONYMIZED_AT = Object.freeze({ field: 'anonymizedAt', column: 'anonymized_at' });
+
+/** ¿Se borra la entidad lógicamente? Solo una raíz persistida puede (CHK-PERSIST-DELETION-NOT-ROOT). */
+export function isLogicallyDeleted(entity) {
+  return entity?.deletion === 'logical';
+}
+
+/**
+ * Las unicidades SIN condición de una entidad, con el nombre que les da `uniqueConstraints` y las columnas que las
+ * llevan (la sombra plegada si la tiene: `keyShadow`): la clave natural, los campos `unique` y los índices únicos sin
+ * `when`. Con borrado físico son constraints de tabla; con lógico, índices parciales sobre las vivas.
+ */
+export function liveUniqueColumns(model, entity, members = persistedMembers(model, entity)) {
+  const shadowColumn = (name) => {
+    const field = entity.fields.find((candidate) => candidate.name === name);
+    const shadow = field ? keyShadow(field) : null;
+    return shadow ? [shadow.column] : null;
+  };
+  const columnsOf = (name) => shadowColumn(name) ?? columnsFor(model, entity, members, name, model.warnings);
+  const out = [];
+  if (entity.naturalKey?.length > 0) {
+    out.push({ name: `uk_${entity.tableName}_natural`, fields: entity.naturalKey, columns: entity.naturalKey.flatMap(columnsOf) });
+  }
+  for (const field of uniqueFields(entity)) {
+    out.push({ name: `uk_${entity.tableName}_${snakeCase(field.name)}`, fields: [field.name], columns: columnsOf(field.name) });
+  }
+  for (const index of (entity.indexes ?? []).filter((candidate) => candidate.unique && !candidate.when)) {
+    out.push({ name: indexName(entity, index), fields: index.fields, columns: index.fields.flatMap((name) => columnsFor(model, entity, members, name, model.warnings)) });
+  }
+  return out;
 }
 
 /**

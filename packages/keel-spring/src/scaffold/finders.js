@@ -9,6 +9,7 @@ import { screamingSnake } from '@keel-system/keel-core/gen/naming';
 import { subPackage } from './render.js';
 import { textFoldImport } from './text-fold.js';
 import { JPA_SCOPE_LINE, MONGO_SCOPE_LINES, readScopeImport } from './read-scope.js';
+import { JPA_LIVE_LINE, MONGO_LIVE_LINE } from './data-lifecycle.js';
 
 export const entityFinders = (model, entity) => findersOf(model, entity.name);
 const hasFilter = (finder) => finder.criteria.length > 0;
@@ -127,8 +128,11 @@ export function jpaFinderMethods(model, entity, imports, jpaField) {
       }
       lines.push(`            if (filter.${criterion.name}() != null) {`, `                where.add(${predicate});`, '            }');
     }
-    // El alcance se SUMA a los criterios (D4): la misma Specification da las filas y el total.
+    // El alcance (D4) y lo borrado (DSL 2.28, D2) se SUMAN a los criterios, la vida la última: así sustituir en vez de
+    // sumar (lc-implicit-replace) se lleva todo lo de antes y se ve. La misma Specification da las filas
+    // y el total.
     if (finder.scope) lines.push(JPA_SCOPE_LINE);
+    if (finder.live) lines.push(JPA_LIVE_LINE);
     const call =
       finder.result === 'page'
         ? `return ${jpaField}.findAll(specification, withStableOrder(pageable)).map(this::toDomain);`
@@ -174,8 +178,9 @@ export function mongoFinderMethods(model, entity, imports) {
             : `Criteria.where("${property}").${MONGO_OPERATOR[criterion.op]}(${value})`;
       lines.push(`        if (filter.${criterion.name}() != null) {`, `            where.add(${condition});`, '        }');
     }
-    // El alcance se SUMA a los criterios (D4), y la misma consulta da el total.
+    // El alcance (D4) y lo borrado (DSL 2.28) se SUMAN a los criterios, la vida la última, y la misma consulta da el total.
     if (finder.scope) lines.push(...MONGO_SCOPE_LINES);
+    if (finder.live) lines.push(MONGO_LIVE_LINE);
     const tail =
       finder.result === 'page'
         ? `        long total = mongoTemplate.count(query, ${mirror}.class);
