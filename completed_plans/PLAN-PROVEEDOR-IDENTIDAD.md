@@ -4,6 +4,9 @@ Origen: la revisión del 2026-11-10 de qué pasa con la lectura acotada (DSL 2.2
 día tras evaluar el plan contra el código. Es independiente de `PLAN-DSL-227-LECTURA-ACOTADA.md`. Regla de siempre: **cada
 pieza nueva tiene una red que la ejecuta y un sabotaje que demuestra que esa red la ve.**
 
+**Estado: cerrado (2026-11-11)**, movido a `completed_plans/`. Fases 1 a 4 hechas; el 1.5 (opcional) sin hacer y la fase 5
+diferida, las dos fuera de la puerta de cierre. Lo que queda abierto está en § Al cerrar.
+
 **Objetivo.** Dado un diseño que requiere un proveedor de identidad, keel genera un servidor equivalente con el proveedor
 elegido, y se puede afirmar que ese servidor funcionará con él. No hace falta generar todos los proyectos con Cognito: lo que
 se garantiza es el contrato entre el servidor y el token. Y queda un camino medido para añadir otro proveedor.
@@ -265,6 +268,30 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
 - Lo generado con Cognito dice que no se ha verificado contra un pool real, y la fase 5 sigue escrita con lo que queda sin
   demostrar.
 
+**Al cerrar (2026-11-11)**, la puerta se cumple:
+
+- Las seis suites en verde.
+- Lo emitido con `auth: keycloak`, idéntico al de antes del plan en 4 generadores × 19 fixtures, salvo lo nuevo de todo
+  proveedor (la prueba `IDT-*` y `docs/keel/identity-contract.md`) y los dos defectos que destapó el 4.4 (el rol de la
+  persona de `tokenAs` y el 404 de keel-spring), cambiados a propósito.
+- El proveedor ficticio genera en los cuatro, y `keel-go/test/identity-providers.test.js` no admite una rama por nombre fuera
+  del descriptor.
+- La prueba `IDT-*` en todo proyecto con proveedor, con `token-use`, `scope-prefix` y `client-translation` cayendo cada uno en
+  exactamente sus casos en los cuatro generadores.
+- `emulationWarning` y `identity-contract.md` dicen que Cognito no se ha verificado contra un pool real; la fase 5 sigue
+  escrita.
+
+Además del plan, las cuatro corridas de control con Cognito del DSL 2.27 (`docs/corridas/2026-11-11-*-cognito-control.md`)
+salieron en verde con el emulador fiel: asset-vault en keel-spring y keel-go (32/32, D3 y D6) y shop-api en keel-nest y
+keel-dotnet (92/92, D5 y las personas de `tokenAs`).
+
+## Al cerrar
+
+- **1.5, captura de tokens reales**: sin hacer. Solo si alguien aporta un pool.
+- **Fase 5, Cognito real**: diferida hasta que un diseño vaya a producción con Cognito, en su pool.
+- `npm run golden -- --check` de keel-spring y keel-nest ya estaba en rojo antes del plan (agentes y skills). Es ajeno al
+  plan y sigue sin regenerar.
+
 ## Cómo se ejecuta
 
 - Una fase por hilo. Desde `main`, sin subagentes ni worktrees, y keel-spring primero.
@@ -280,6 +307,7 @@ ninguna red de keel: lo cubre el documento del incremento 3.2.
 | 3. lo que debe cumplir el proveedor | hecha el 2026-11-11 | `keel-core/test/identity-support.test.js` (una prueba por exigencia, falsada con dos sabotajes), las redes de fase 3 de `keel-go/test/identity-providers.test.js` en los cuatro, `keel-recover/test/target.test.js`; las seis suites. Lo emitido con `keycloak`, idéntico salvo el documento nuevo |
 | 4. emulador fiel y arnés | hecha el 2026-11-11 | 4.4: `security-check` de keel-spring, Keycloak 16/16 y Cognito 19/19 con sus sabotajes. Las siete redes del 4.3, relanzadas y en verde tras arreglar OA-2. 4.1: `identity-provisioning.test.js`, tres sabotajes cada uno en su caso, `compile-check asset-vault --auth=cognito`; lo emitido sin Cognito, idéntico. 4.2: medido contra mock-oauth2-server 6.0.1. 4.3: `emulator-check` 10/10 y tres sabotajes; `emulator-harness-check` (keel-spring, keel-dotnet, keel-go) y `test/emulator-harness.test.js` (keel-nest) 16/16 con dos sabotajes cada uno en sus casos; las seis suites y las cuatro redes de sintaxis con shop-api, conduit y asset-vault en Cognito; lo emitido con `keycloak` y sin proveedor, idéntico en 4 × 19 |
 | 5. Cognito real | diferida (fuera del cierre) | |
+| Cierre | cerrado el 2026-11-11 | La puerta de cierre (§ Al cerrar), y las cuatro corridas con Cognito del DSL 2.27 en verde |
 
 ## Para retomar
 
