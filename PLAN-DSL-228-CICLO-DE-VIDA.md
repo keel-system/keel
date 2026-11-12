@@ -1,6 +1,6 @@
 # DSL 2.28: el ciclo de vida del dato (R4)
 
-**Estado: aprobado (2026-11-11), sin empezar.** Siguiente: incremento 0 (keel-core).
+**Estado: en curso.** Incremento 0 (keel-core) hecho el 2026-11-11. Siguiente: incremento 1 (keel-spring).
 
 Origen: R4 de `docs/evaluacion-dsl-2.24.md`. Este plan la lleva al DSL y a los cuatro generadores con la regla de
 siempre: **el mismo diseño genera servidores equivalentes**. Cada pieza nueva tiene una red que la ejecuta y un sabotaje
@@ -71,7 +71,7 @@ restoreMyCard: { kind: command, restores: ContactCard, ... }
 | D5 | Una fila borrada responde 404 con el error de no encontrado del diseño, nunca 410. Borrar una ya borrada también es 404 | No revela que existió, y es el mismo orden que `READ_MISS_ORDER` |
 | D6 | `restorableFor` exige una operación con `restores: <Raíz>`, y al revés. El puerto gana `restore(id)`: fuera de la ventana devuelve el `error` declarado, y si una fila viva ya ocupa la clave, el 409 de la unicidad que ya existe (`naturalKeyError`/`indexes[].error`) | Cada desenlace tiene un `code` alcanzable |
 | D7 | `retention.from: deleted` cuenta desde el borrado lógico, y es la forma de «borrar de verdad a los 30 días». Sin `retention`, lo borrado se conserva oculto indefinidamente | Un solo mecanismo de reloj para los dos casos |
-| D8 | La retención es un **recurrente del cronómetro** (`kind: retention.<Raíz>`), por lotes y fuera de la transacción del sondeador, como los `<Tabla>PurgeTimer` de la 2.26. Una fila con `from` nulo no vence nunca | Reutiliza el reloj único y su medida de dos réplicas |
+| D8 | La retención es un **recurrente del cronómetro** (`kind: retention:<Raíz>`, la forma de `deadline:<Entidad>.<estado>`), por lotes y fuera de la transacción del sondeador, como los `<Tabla>PurgeTimer` de la 2.26. Una fila con `from` nulo no vence nunca | Reutiliza el reloj único y su medida de dos réplicas |
 | D9 | `then: anonymize` deja a null los campos `personal` opcionales y escribe `anon-<id>` en los `required` de texto, en la raíz y en sus hijas. Un `required` personal que no sea texto, o cuyo `pattern`/`format`/`maxLength` no admita el sustituto, es un CHK en rojo | Decisión 3 del usuario; el sustituto conserva la unicidad |
 | D10 | `personal` es una clasificación ortogonal a `sensitive`. De ella se derivan: el gate de logs del agente (prohíbe loguear el accesor de un campo personal), que ningún log ni span generado lleve el valor (incluido el mensaje del driver al violar una unicidad, el `Key (email)=(…)` de PostgreSQL), el alcance de `anonymize` y el inventario `docs/keel/personal-data.md` | Que un auditor sepa qué campos personales acaban en un log sin leer el código de cuatro generadores |
 
@@ -90,7 +90,8 @@ Cada regla lleva su id, su entrada en `checks.js` o en `obligations.js` con su `
 | `CHK-PERSIST-RESTORE-UNPAIRED` | `restorableFor` sin operación `restores`, o al revés, o `restores` sobre una raíz sin `deletion: logical` |
 | `CHK-PERSIST-RESTORE-ERROR` | El `error` de `restorableFor` no está declarado en la operación que restaura |
 | `CHK-PERSIST-RETENTION-FROM` | `from` no es un timestamp de la raíz, o es `deleted` sin `deletion: logical` |
-| `CHK-PERSIST-RETENTION-REFERENCED` | `then: delete` sobre una raíz que referencia otra raíz por FK (`crossAggregateForeignKeys`) |
+| `CHK-PERSIST-RETENTION-REFERENCED` | `then: delete` sobre una raíz a la que apunta una relación desde otro agregado (`incomingReferences`) |
+| `CHK-PERSIST-LIFECYCLE-PARAM-UNKNOWN` | La duración de `keep` o de `restorableFor` cita un parámetro que no existe o no es `int` |
 | `CHK-PERSIST-ANONYMIZE-NOTHING` | `anonymize` en un agregado sin campos `personal` |
 | `CHK-PERSIST-ANONYMIZE-SUBSTITUTE` | Un `required` personal que el sustituto no puede satisfacer (D9) |
 | `OBL-PERSONAL-RETENTION-UNDECIDED` | Una raíz con campos `personal` sin `retention`. Se acepta en `decisions.yaml` por raíz con su motivo, igual que la de shop-api |
@@ -103,10 +104,32 @@ Lo que se añade a piezas que ya existen:
   que tenga una operación DELETE, con la sección nueva en `structural-decisions.md`. Así un borrado físico pasa a
   estar decidido y no se queda en tácito.
 - **Una clase de huecos nueva.** «Ciclo de vida del dato» entra en `gap-classes.js` y en `gap-analysis.md`. Sus
-  unidades son las raíces persistidas.
+  unidades son las raíces persistidas de las que el diseño ya dice algo (un campo `personal` en su agregado, o
+  `deletion`/`restorableFor`/`retention`). Aplicada a toda raíz persistida, todas las fixtures listas habrían salido
+  en rojo en `--ready`; las preguntas de las demás las abren la obligación y la entrada 3.13.
 - **Una revisión nueva.** `REV-PERSONAL-CLASSIFICATION` en `reviews.js` y en `review-checklist.md`: si hay campos
   personales sin marcar (nombre, teléfono, dirección). Lo tiene que juzgar un lector, porque detectarlo por el
   nombre del campo sería una heurística.
+
+**Decidido al escribir el incremento 0 (2026-11-11):**
+
+- **No hay `retention-sql-check` ni `retention-store.js` en keel-core.** Borrar y anonimizar un agregado tiene que pasar
+  por el puerto del adaptador, porque así el ORM se lleva las hijas y las tablas de elementos. Escrito como SQL neutral,
+  cada generador tendría que repetir su esquema de hijas en otro sitio. Lo único neutral es la selección de lo vencido
+  (`from <= corte`, por lotes), y eso se diseña en el incremento 1 junto a su primer consumidor y se mide en el
+  `db-check` de cada generador (RT-1 a RT-4).
+- **D11. Una marca `anonymized_at`, del generador como `deleted_at`.** Un agregado anonimizado sigue cumpliendo
+  `from <= corte`, y sin la marca el barrido lo volvería a tomar en cada pasada.
+- **`finder.scope` no se renombra.** El finder gana `live` (`implicit-predicates.js`), y el predicado de vida no crea
+  un finder: el listado entero y la carga del puerto ya dejan fuera lo borrado.
+- **Las unidades de 3.13** son las raíces persistidas con una operación expuesta que las borra (`deletedRoots`). Si el
+  nombre de la operación no dice la entidad (`deleteMyCard`) y hay una sola raíz persistida, la raíz es esa.
+- **`REV-PERSONAL-CLASSIFICATION` aplica solo si el diseño ya marca algún campo `personal`**, por el mismo motivo que la
+  clase 19.
+- **`personal` se marca en el campo, no en el tipo**: un mismo email puede ser de una persona o de un buzón de la
+  empresa.
+- **Los sujetos** (`test/helpers/data-lifecycle-designs.js`) son seis: `cards-logical` y `cards-logical-mongo`,
+  `codes-anonymize` y `codes-anonymize-mongo`, `codes-delete` y `vault-logical-scoped`.
 
 ## Núcleo neutral (keel-core/src/lib/gen)
 
@@ -177,7 +200,7 @@ Lo que se añade a piezas que ya existen:
   formas de null. Si no sirve, la alternativa es un campo `alive` que pone el generador. Se mide en `doc-check`.
 - **T2 · la unicidad entre vivas con `when` en MySQL.** La columna generada tiene que combinar el estado y la vida.
 - **T3 · `ON DELETE` de las hijas.** Al purgar la raíz, sus tablas de elementos y sus hijas se tienen que ir con
-  ella. Se mide en `db-check`/`retention-sql-check`.
+  ella. Se mide en `db-check`.
 - **T4 · el mensaje del driver.** `DataIntegrityViolationException` lleva el valor en su `getMessage()`. Hay que
   revisar los `log.warn` de `controllers.js:537` y sus equivalentes en los otros tres.
 - **T5 · la caché.** Borrar o restaurar invalida la caché de las lecturas de esa raíz (`cache-plan.js`).
@@ -209,11 +232,10 @@ incremento termina con su «Para retomar» y un commit.
 - Los schemas: `personal` en `common`; `deletion`, `restorableFor` y `retention` en `persistence`; `restores` en
   `use-cases`.
 - Las reglas con sus mutaciones, `STRUCTURAL_DEFAULTS`, la clase de huecos y el `REV-*`.
-- Los tres módulos neutrales con sus tests y `retention-store.js` con `retention-sql-check`.
+- Los módulos neutrales con sus tests (`retention-store.js` pasa al incremento 1).
 - Docs: `dsl/persistence.md`, `dsl/domain.md`, `dsl/use-cases.md`, el historial de `dsl-reference.md` y
   `validation-scenarios.md`.
-- Se mide con la suite de keel-core, con `design-matrix` (todo `falsado`, nada `co-disparado`) y con
-  `retention-sql-check`.
+- Se mide con la suite de keel-core y con `design-matrix` (todo `falsado`, nada `co-disparado`).
 
 **1. keel-spring.**
 
@@ -262,7 +284,6 @@ incremento termina con su «Para retomar» y un commit.
 - `design-matrix` sin ningún `sin-mutacion`.
 - La fila `data-lifecycle` de las cuatro matrices `verificado` y `falsified: true`.
 - Cada sabotaje cae solo en sus casos.
-- `retention-sql-check` en verde.
 - Las corridas de control en verde.
 
 Un generador que no llegue a la puerta rechaza la capacidad con su motivo.
@@ -271,7 +292,6 @@ Un generador que no llegue a la puerta rechaza la capacidad con su motivo.
 
 - `npm test`.
 - `npm run design-matrix --workspace packages/keel-core`.
-- `npm run retention-sql-check --workspace packages/keel-core`.
 - `npm run lifecycle-check --workspace packages/keel-spring -- --sabotage=<id>`.
 - `db-check`, `doc-check` y `telemetry-check` de keel-nest, keel-dotnet y keel-go con `--sabotage=lc-*|rt-*|pd-*`.
 - `npm run matrix` en los cuatro.
@@ -281,7 +301,7 @@ Un generador que no llegue a la puerta rechaza la capacidad con su motivo.
 
 | Incremento | Estado | Medido con |
 |---|---|---|
-| 0. keel-core | pendiente | |
+| 0. keel-core | hecho (2026-11-11) | suite de keel-core, `design-matrix`, la suite entera |
 | 1. keel-spring | pendiente | |
 | 2. keel-nest | pendiente | |
 | 3. keel-dotnet | pendiente | |
@@ -289,3 +309,31 @@ Un generador que no llegue a la puerta rechaza la capacidad con su motivo.
 | 5. Derivados y documentación | pendiente | |
 | 6. Fixtures | pendiente | |
 | 7. Corridas de control | pendiente | |
+
+## Para retomar
+
+El incremento 0 está hecho. Qué hay:
+
+- **DSL 2.28** en todos los sitios de la regla «Nueva versión del DSL».
+- **Schemas:** `personal` en `common`; `deletion`, `restorableFor` y `retention` en `persistence`; `restores` en
+  `use-cases`.
+- **Reglas:** las ocho `CHK-PERSIST-*` y las dos `CHK-SCEN-*`, en `checkDataLifecycle` y en el bloque de escenarios de
+  `crossrefs.js`, más `OBL-PERSONAL-RETENTION-UNDECIDED`. Todas con su mutación sobre la extensión `dataLifecycle` del
+  corpus.
+- **Lo estructural y la revisión:** la entrada 3.13 en `STRUCTURAL_DEFAULTS`, `structural-register.js` y
+  `structural-decisions.md`; la clase 19 de huecos y `REV-PERSONAL-CLASSIFICATION`.
+- **Núcleo neutral:** `gen/data-lifecycle.js` (desde las capas y desde el modelo, la aritmética, los casos y los
+  sabotajes), `gen/implicit-predicates.js` (`finder.live`) y `gen/personal-data.js` (el inventario).
+- **Modelo:** `field.personal`, `entity.aggregateRoot`, `entity.deletion`/`restorableFor`/`retention` y
+  `operation.restores`.
+- **Frontera y cobertura:** `dataLifecyclePendingErrors` en los cuatro `supported-features.js` y sus filas en los
+  `capability-coverage` y en el README de keel-go.
+- **Docs:** `dsl/persistence.md`, `domain.md` y `use-cases.md`, el historial de `dsl-reference.md` y
+  `validation-scenarios.md`.
+
+Siguiente, el incremento 1 (keel-spring):
+
+1. Diseñar `retention-store.js` (la selección de vencidos y las columnas `deleted_at`/`anonymized_at` como datos) con
+   su consumidor.
+2. Quitar la llamada a `dataLifecyclePendingErrors` de keel-spring y sus filas de `capability-coverage`.
+3. Emitir las piezas, una por una, con `lifecycle-check` como red.

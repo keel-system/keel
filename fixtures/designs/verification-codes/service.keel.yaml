@@ -1,4 +1,4 @@
-keel: "2.27"
+keel: "2.28"
 # La MITAD RELACIONAL del par `verification-codes` / `verification-codes-mongo`.
 #
 # La silueta del plazo de negocio (DSL 2.26, `lifecycle.deadlines`): un código de verificación

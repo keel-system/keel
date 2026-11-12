@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
+import { GAP_CLASSES } from '../src/lib/gap-classes.js';
 import { OBLIGATIONS, obligationIds, obligationFor } from '../src/lib/obligations.js';
 import { supportedDsl } from '../src/lib/assets.js';
 import { checkCrossRefs } from '../src/lib/crossrefs.js';
@@ -63,7 +64,7 @@ test('toda obligación declara los campos que la CLI usa para reportarla', () =>
     assert.ok(entry.title?.length > 10, `${id}: sin título`);
     assert.ok(entry.closes?.length > 10, `${id}: no dice cómo se cierra`);
     assert.ok(['decision', 'scenario', 'review'].includes(entry.kind), `${id}: kind desconocido`);
-    assert.ok(Number.isInteger(entry.gapClass) && entry.gapClass >= 1 && entry.gapClass <= 18, `${id}: gapClass`);
+    assert.ok(Number.isInteger(entry.gapClass) && GAP_CLASSES[entry.gapClass] !== undefined, `${id}: gapClass`);
   }
 });
 

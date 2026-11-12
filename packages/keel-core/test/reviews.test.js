@@ -11,6 +11,7 @@ import { REVIEWS, reviewFor, reviewIds, applicableReviews } from '../src/lib/rev
 import { resolveReviews } from '../src/lib/review-state.js';
 import { CHECKS } from '../src/lib/checks.js';
 import { checkCrossRefs } from '../src/lib/crossrefs.js';
+import { GAP_CLASSES } from '../src/lib/gap-classes.js';
 
 const entity = (fields = {}, extra = {}) => ({
   fields: { id: { type: 'uuid', id: true, generated: true }, ...fields },
@@ -26,7 +27,7 @@ test('toda revisión declara lo que /keel-validate necesita para recorrerla', ()
     assert.ok(entry.asks?.length > 20, `${id}: no dice qué hay que contestar`);
     assert.ok(['error', 'warning', 'strong'].includes(entry.severity), `${id}: severidad desconocida`);
     assert.equal(typeof entry.appliesTo, 'function', `${id}: sin predicado de aplicabilidad`);
-    assert.ok(Number.isInteger(entry.gapClass) && entry.gapClass >= 1 && entry.gapClass <= 18, `${id}: gapClass`);
+    assert.ok(Number.isInteger(entry.gapClass) && GAP_CLASSES[entry.gapClass] !== undefined, `${id}: gapClass`);
   }
 });
 

@@ -136,6 +136,11 @@
           "default": false,
           "description": "Excluido por defecto de todo output y payload de evento; solo se expone si un payload lo pide explícitamente vía fields."
         },
+        "personal": {
+          "type": "boolean",
+          "default": false,
+          "description": "Dato personal del titular (DSL 2.28): una clasificación legal, ortogonal a sensitive, que decide qué sale en un output. De ella se derivan que ningún log ni traza del servidor lleve el valor, lo que alcanza una retención con then: anonymize y el inventario de datos personales del proyecto generado."
+        },
         "default": {},
         "compare": {
           "type": "string",

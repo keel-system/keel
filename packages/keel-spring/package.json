@@ -39,7 +39,7 @@
     "access": "public"
   },
   "keel": {
-    "dsl": "2.27"
+    "dsl": "2.28"
   },
   "engines": {
     "node": ">=18"

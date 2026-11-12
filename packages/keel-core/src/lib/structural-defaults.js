@@ -18,6 +18,8 @@
 // dos piezas que describe: cada `section` tiene que existir en structural-decisions.md y cada
 // `default` tiene que ser el `default` del schema en `schemaPointer`.
 
+import { deletedRoots } from './gen/data-lifecycle.js';
+
 /**
  * - `section` — la entrada §3.x de structural-decisions.md que hace la pregunta.
  * - `path` — el campo, como lo nombra el diseñador.
@@ -95,6 +97,20 @@ export const STRUCTURAL_DEFAULTS = [
       Object.entries(layers.storage?.buckets ?? {}).map(([name, bucket]) => ({
         scope: `storage.buckets.${name}.visibility`,
         present: bucket?.visibility !== undefined
+      }))
+  },
+  {
+    section: '3.13',
+    path: 'persistence.entities.<Raíz>.deletion',
+    schema: 'persistence',
+    schemaPointer: '/properties/entities/additionalProperties/properties/deletion',
+    default: 'physical',
+    question: 'cuando se borra, ¿desaparece la fila, o se oculta y se conserva (y su clave queda libre para otro)?',
+    // Solo donde alguien borra: sin un DELETE expuesto no hay borrado que pueda ser una cosa u otra.
+    units: (layers) =>
+      deletedRoots(layers).map((root) => ({
+        scope: `persistence.entities.${root}.deletion`,
+        present: layers.persistence.entities[root]?.deletion !== undefined
       }))
   }
 ];

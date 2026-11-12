@@ -39,7 +39,8 @@ export const STRUCTURAL_SECTIONS = [
   { section: '3.9b', title: 'Rastro de auditoría' },
   { section: '3.10', title: 'Visibilidad de un bucket' },
   { section: '3.11', title: 'Compensación' },
-  { section: '3.12', title: 'Escritura condicional entre peticiones' }
+  { section: '3.12', title: 'Escritura condicional entre peticiones' },
+  { section: '3.13', title: 'Qué significa borrar' }
 ];
 
 const TITLES = new Map(STRUCTURAL_SECTIONS.map((entry) => [entry.section, entry.title]));

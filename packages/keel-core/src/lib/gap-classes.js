@@ -16,6 +16,7 @@
 // diseño cambiara. Las unidades son cadenas estables que se escriben tal cual en `gaps.yaml`.
 
 import { undecidedConditionalWrites } from './gen/conditional-writes.js';
+import { dataLifecycleRoots, deletedRoots } from './gen/data-lifecycle.js';
 
 const values = (collection) => Object.values(collection ?? {}).map((value) => value ?? {});
 const keys = (collection) => Object.keys(collection ?? {});
@@ -97,7 +98,9 @@ function structuralEntries(layers) {
     ['3.11', () => values(layers.dependencies?.dependencies).some((dep) => (dep.compensations ?? []).length > 0)],
     // La escritura condicional: declarada, o sin declarar con alguien editando una raíz con versión (la misma pregunta que
     // OBL-API-CONCURRENCY-UNDECIDED).
-    ['3.12', () => Boolean(layers.api?.concurrency) || undecidedConditionalWrites(layers).length > 0]
+    ['3.12', () => Boolean(layers.api?.concurrency) || undecidedConditionalWrites(layers).length > 0],
+    // El borrado: lógico o físico, donde alguna operación expuesta borra una raíz persistida.
+    ['3.13', () => deletedRoots(layers).length > 0]
   ];
   return entries.filter(([, condition]) => has(condition)).map(([section]) => section);
 }
@@ -185,6 +188,12 @@ export const GAP_CLASSES = {
     title: 'Cobros con pasarela',
     units: (layers) =>
       ['charge', 'capture', 'void', 'refund', 'savePaymentMethod'].filter((action) => layers.payments?.[action])
+  },
+  19: {
+    // Aplica cuando el diseño ya habla del ciclo de vida (un campo personal, un borrado, una retención): las preguntas de
+    // los que no lo hacen las abren OBL-PERSONAL-RETENTION-UNDECIDED y el default estructural de `deletion`.
+    title: 'Ciclo de vida del dato',
+    units: (layers) => dataLifecycleRoots(layers)
   }
 };
 

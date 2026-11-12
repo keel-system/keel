@@ -110,6 +110,80 @@
                 }
               ]
             }
+          },
+          "deletion": {
+            "type": "string",
+            "enum": ["physical", "logical"],
+            "default": "physical",
+            "description": "Qué significa borrar la raíz (DSL 2.28). 'physical': la fila desaparece. 'logical': la fila se conserva oculta; ninguna query, total de página ni lectura por id o por clave natural la ve, sus unicidades se evalúan solo entre filas vivas (la clave de un borrado se puede volver a usar) y la siguen viendo las referencias desde otra raíz (embed), porque es historia. La marca del borrado la pone el generador y no está en el contrato. Solo en la raíz persistida de un agregado."
+          },
+          "restorableFor": {
+            "description": "Ventana durante la que un borrado lógico se puede deshacer (DSL 2.28). La deshace la operación que declara restores: <Raíz>; fuera de la ventana responde con error, y si una fila viva ocupa ya su clave, con el 409 de esa unicidad. Solo con deletion: logical.",
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["days", "error"],
+                "additionalProperties": false,
+                "properties": {
+                  "days": { "type": "integer", "minimum": 1 },
+                  "error": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/errorCode", "description": "El error de restaurar pasada la ventana. Tiene que declararlo la operación que restaura." }
+                }
+              },
+              {
+                "type": "object",
+                "required": ["parameter", "unit", "error"],
+                "additionalProperties": false,
+                "properties": {
+                  "parameter": { "type": "string", "description": "Nombre de un service.parameters de tipo int: los días de la ventana." },
+                  "unit": { "enum": ["days"] },
+                  "error": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/errorCode", "description": "El error de restaurar pasada la ventana. Tiene que declararlo la operación que restaura." }
+                }
+              }
+            ]
+          },
+          "retention": {
+            "type": "object",
+            "required": ["from", "keep", "then"],
+            "additionalProperties": false,
+            "description": "Cuánto vive el agregado y qué pasa después (DSL 2.28). Lo aplica un barrido periódico del servidor; una fila cuyo from está vacío no vence nunca. Solo en la raíz persistida de un agregado, y alcanza también a sus entidades internas.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "pattern": "^[a-z][A-Za-z0-9]*$",
+                "description": "Campo timestamp de la raíz desde el que se cuenta, o 'deleted' para contar desde el borrado lógico (exige deletion: logical)."
+              },
+              "keep": {
+                "description": "Cuánto se conserva: días o años literales, o un service.parameters de tipo int con su unidad. Los años son de calendario.",
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": ["days"],
+                    "additionalProperties": false,
+                    "properties": { "days": { "type": "integer", "minimum": 1 } }
+                  },
+                  {
+                    "type": "object",
+                    "required": ["years"],
+                    "additionalProperties": false,
+                    "properties": { "years": { "type": "integer", "minimum": 1 } }
+                  },
+                  {
+                    "type": "object",
+                    "required": ["parameter", "unit"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "parameter": { "type": "string", "description": "Nombre de un service.parameters de tipo int." },
+                      "unit": { "enum": ["days", "years"] }
+                    }
+                  }
+                ]
+              },
+              "then": {
+                "type": "string",
+                "enum": ["delete", "anonymize"],
+                "description": "'delete': el agregado desaparece entero. 'anonymize': se conserva, con sus campos personal vaciados (los opcionales a null; los obligatorios de texto, a un sustituto irreversible derivado del id, que conserva la unicidad)."
+              }
+            }
           }
         }
       }

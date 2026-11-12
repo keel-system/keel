@@ -14,6 +14,7 @@ import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-par
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
 import { optionalAuthFrontierErrors } from '@keel-system/keel-core/gen/read-scope';
+import { dataLifecyclePendingErrors } from '@keel-system/keel-core/gen/data-lifecycle';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {};
@@ -69,6 +70,9 @@ export function checkSupportedFeatures(manifest, layers) {
   // construcción (T7, T8) lo rechaza planService con la frontera neutral, que necesita el modelo. level: optional también
   // (PermitAll y CallerIdentity.ResolveOptional()), salvo sobre una identidad que no es un token: la frontera neutral.
   errors.push(...optionalAuthFrontierErrors(layers, 'keel-dotnet'));
+  // El ciclo de vida del dato (DSL 2.28: personal, deletion: logical, restorableFor, retention) llega en el incremento 3
+  // de PLAN-DSL-228-CICLO-DE-VIDA.md: hasta entonces se rechaza entero, con el mismo mensaje en los cuatro.
+  errors.push(...dataLifecyclePendingErrors(layers, 'keel-dotnet', 3));
   // Los plazos de negocio (DSL 2.26) los genera el cronómetro (scaffold/timer.js, incremento 5 de PLAN-DSL-226-PLAZOS.md);
   // lo que el stack no sostiene (un motor sin sentencias medidas, un id que no es uuid) lo rechaza planService.
   errors.push(...outboundErrors(layers));

@@ -689,7 +689,50 @@ function withDeadline(d) {
   );
 }
 
+/**
+ * El ciclo de vida del dato (DSL 2.28): el email del solicitante es personal y un ticket cerrado se conserva seis años y
+ * después se anonimiza; una cola se borra lógicamente y `restoreQueue` la restaura durante 30 días. Cada pieza tiene su
+ * escenario, así que el diseño sigue en silencio.
+ */
+function withDataLifecycle(d) {
+  const ticket = entity(d, 'Ticket');
+  ticket.fields.requesterEmail.personal = true;
+  ticket.fields.closedAt = { type: 'timestamp', description: 'Cuándo se cerró el ticket: desde aquí se cuenta su retención.' };
+  d.layers.persistence.entities.Ticket.retention = { from: 'closedAt', keep: { years: 6 }, then: 'anonymize' };
+  d.layers.persistence.entities.Queue.deletion = 'logical';
+  d.layers.persistence.entities.Queue.restorableFor = { days: 30, error: 'QUEUE_NOT_RESTORABLE' };
+  ops(d).restoreQueue = {
+    description: 'Deshace el borrado de una cola durante los 30 días siguientes.',
+    kind: 'command',
+    restores: 'Queue',
+    input: { fields: { id: { type: 'uuid', required: true } } },
+    output: 'void',
+    errors: [
+      { code: 'QUEUE_NOT_FOUND', when: 'No existe una cola con ese id.', http: 404 },
+      { code: 'QUEUE_NOT_RESTORABLE', when: 'La cola se borró hace más de 30 días.', http: 409 }
+    ]
+  };
+  d.layers.api.endpoints.restoreQueue = { method: 'POST', path: '/queues/{id}/restore', successStatus: 204 };
+  addMatrixRow(d, '| restoreQueue | FL-QUE-002 | usuarios |');
+  insertScenarioBefore(
+    d,
+    '### FL-ESC-001',
+    `### FL-QUE-002: una cola borrada y restaurada
+
+**Given** una cola \`Queue\` borrada hace 10 días y otra borrada hace 40.
+**When** se lista las colas y se llama a \`restoreQueue\` con cada una.
+**Then** ninguna de las dos aparece en el listado; la primera vuelve a aparecer tras restaurarla (204) y la segunda responde 409 con \`QUEUE_NOT_RESTORABLE\`.
+
+### FL-TCK-006: la retención de un ticket cerrado
+
+**Given** un \`Ticket\` cerrado hace más de seis años y otro cerrado ayer.
+**When** pasa el barrido de la retención.
+**Then** el primero queda anonimizado (su requesterEmail ya no es el del solicitante) y el segundo sigue intacto.`
+  );
+}
+
 export const EXTENSIONS = {
+  dataLifecycle: withDataLifecycle,
   deadline: withDeadline,
   concurrency: withConcurrency,
   payments: withPayments,
@@ -1267,6 +1310,14 @@ export const MUTATIONS = [
     expect: ['CHK-MODEL-IMPLICIT-DEFAULT']
   },
   {
+    id: 'M-MODEL-IMPLICIT-DEFAULT-DELETION',
+    title: 'una raíz que una operación expuesta borra, sin deletion escrito (3.13)',
+    mutate: (d) => {
+      d.layers.api.endpoints.closeTicket.method = 'DELETE';
+    },
+    expect: ['CHK-MODEL-IMPLICIT-DEFAULT']
+  },
+  {
     id: 'M-PERSIST-AUDIT-NESTED',
     title: 'auditoría automática con modelo documental y una entidad anidada',
     mutate: (d) => {
@@ -1681,6 +1732,8 @@ export const MUTATIONS = [
       const endpoint = d.layers.api.endpoints.closeTicket;
       endpoint.method = 'DELETE';
       delete endpoint.successStatus;
+      // Un DELETE expuesto pregunta también qué significa borrar (3.13): escrito, para que solo dispare lo suyo.
+      d.layers.persistence.entities.Ticket.deletion = 'physical';
     },
     expect: ['CHK-API-DELETE-NO-STATUS']
   },
@@ -1777,6 +1830,110 @@ export const MUTATIONS = [
     expect: ['CHK-USECASES-IDEM-STOREDIN-NOT-NATURAL']
   },
   // ─── DSL 2.25: la escritura condicional (api.concurrency) ─────────────────────
+  // ── El ciclo de vida del dato (DSL 2.28) ──
+  {
+    id: 'M-PERSIST-DELETION-NOT-ROOT',
+    title: 'el borrado lógico se declara en una entidad interna',
+    extends: 'dataLifecycle',
+    mutate: (d) => {
+      d.layers.persistence.entities.TicketNote = { deletion: 'logical' };
+    },
+    expect: ['CHK-PERSIST-DELETION-NOT-ROOT']
+  },
+  {
+    id: 'M-PERSIST-RESTORE-UNPAIRED',
+    title: 'una ventana de restauración sin operación que restaure',
+    extends: 'dataLifecycle',
+    mutate: (d) => {
+      delete ops(d).restoreQueue.restores;
+    },
+    expect: ['CHK-PERSIST-RESTORE-UNPAIRED']
+  },
+  {
+    id: 'M-PERSIST-RESTORE-ERROR',
+    title: 'la operación que restaura no declara el error de la ventana vencida',
+    extends: 'dataLifecycle',
+    mutate: (d) => {
+      ops(d).restoreQueue.errors = ops(d).restoreQueue.errors.filter((declared) => declared.code !== 'QUEUE_NOT_RESTORABLE');
+    },
+    expect: ['CHK-PERSIST-RESTORE-ERROR']
+  },
+  {
+    id: 'M-PERSIST-LIFECYCLE-PARAM-UNKNOWN',
+    title: 'la retención dura lo que diga un parámetro que no existe',
+    extends: 'dataLifecycle',
+    mutate: (d) => {
+      d.layers.persistence.entities.Ticket.retention.keep = { parameter: 'ticketRetentionYears', unit: 'years' };
+    },
+    expect: ['CHK-PERSIST-LIFECYCLE-PARAM-UNKNOWN']
+  },
+  {
+    id: 'M-PERSIST-RETENTION-FROM',
+    title: 'la retención se cuenta desde un campo que no es un timestamp',
+    extends: 'dataLifecycle',
+    mutate: (d) => {
+      d.layers.persistence.entities.Ticket.retention.from = 'escalationLevel';
+    },
+    expect: ['CHK-PERSIST-RETENTION-FROM']
+  },
+  {
+    id: 'M-PERSIST-RETENTION-REFERENCED',
+    title: 'la retención borra una cola a la que los tickets apuntan',
+    extends: 'dataLifecycle',
+    mutate: (d) => {
+      entity(d, 'Ticket').relations.queue = { entity: 'Queue', cardinality: 'many-to-one' };
+      d.layers.persistence.entities.Queue.retention = { from: 'deleted', keep: { days: 90 }, then: 'delete' };
+      replaceIn(d, 'la segunda responde 409 con `QUEUE_NOT_RESTORABLE`.', 'la segunda responde 409 con `QUEUE_NOT_RESTORABLE`; a los 90 días se purga.');
+    },
+    expect: ['CHK-PERSIST-RETENTION-REFERENCED']
+  },
+  {
+    id: 'M-PERSIST-ANONYMIZE-NOTHING',
+    title: 'se anonimiza un agregado sin campos personales',
+    extends: 'dataLifecycle',
+    mutate: (d) => {
+      delete entity(d, 'Ticket').fields.requesterEmail.personal;
+    },
+    expect: ['CHK-PERSIST-ANONYMIZE-NOTHING']
+  },
+  {
+    id: 'M-PERSIST-ANONYMIZE-SUBSTITUTE',
+    title: 'un dato personal obligatorio que no es texto, y el sustituto lo es',
+    extends: 'dataLifecycle',
+    mutate: (d) => {
+      entity(d, 'Ticket').fields.escalationLevel.personal = true;
+    },
+    expect: ['CHK-PERSIST-ANONYMIZE-SUBSTITUTE']
+  },
+  {
+    id: 'M-OBL-PERSONAL-RETENTION-UNDECIDED',
+    title: 'un agregado con datos personales que no dice cuánto viven',
+    extends: 'dataLifecycle',
+    mutate: (d) => {
+      delete d.layers.persistence.entities.Ticket.retention;
+    },
+    expect: ['OBL-PERSONAL-RETENTION-UNDECIDED']
+  },
+  {
+    id: 'M-SCEN-DELETION-UNCOVERED',
+    title: 'el borrado lógico de la cola no tiene escenario de lo que se ve después',
+    extends: 'dataLifecycle',
+    mutate: (d) => {
+      replaceIn(d, '**Then** ninguna de las dos aparece en el listado; la primera vuelve a aparecer tras restaurarla (204)', '**Then** la primera se restaura (204)');
+    },
+    expect: ['CHK-SCEN-DELETION-UNCOVERED']
+  },
+  {
+    id: 'M-SCEN-RETENTION-UNCOVERED',
+    title: 'la retención del ticket no tiene escenario',
+    extends: 'dataLifecycle',
+    mutate: (d) => {
+      replaceIn(d, '### FL-TCK-006: la retención de un ticket cerrado', '### FL-TCK-006: un ticket cerrado hace años');
+      replaceIn(d, '**When** pasa el barrido de la retención.\n**Then** el primero queda anonimizado (su requesterEmail ya no es el del solicitante) y el segundo sigue intacto.',
+        '**When** se consultan los dos.\n**Then** responden 200.');
+    },
+    expect: ['CHK-SCEN-RETENTION-UNCOVERED']
+  },
   // ── Los plazos de negocio (DSL 2.26) ──
   {
     id: 'M-DOMAIN-DEADLINE-TO-UNDECLARED',

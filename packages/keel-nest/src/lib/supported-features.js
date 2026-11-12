@@ -15,6 +15,7 @@ import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-par
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
 import { optionalAuthFrontierErrors } from '@keel-system/keel-core/gen/read-scope';
+import { dataLifecyclePendingErrors } from '@keel-system/keel-core/gen/data-lifecycle';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. Hoy, ninguna: storage llegó en el 13g. */
 const PENDING_LAYERS = {};
@@ -87,6 +88,9 @@ export function checkSupportedFeatures(manifest, layers) {
   // construcción (T7, T8) lo rechaza planService con la frontera neutral, que necesita el modelo. level: optional también
   // (la regla concede y CallerIdentity.resolveOptional()), salvo sobre una identidad que no es un token: la frontera neutral.
   errors.push(...optionalAuthFrontierErrors(layers, 'keel-nest'));
+  // El ciclo de vida del dato (DSL 2.28: personal, deletion: logical, restorableFor, retention) llega en el incremento 2
+  // de PLAN-DSL-228-CICLO-DE-VIDA.md: hasta entonces se rechaza entero, con el mismo mensaje en los cuatro.
+  errors.push(...dataLifecyclePendingErrors(layers, 'keel-nest', 2));
   // Los plazos de negocio (DSL 2.26) los genera el cronómetro (scaffold/timer.js, incremento 4 de PLAN-DSL-226-PLAZOS.md).
   // Lo que depende del stack —solo hay sentencias medidas para PostgreSQL, MySQL y MongoDB, y keel_timer guarda un id
   // uuid— lo rechaza planService (timerStackErrors), que sí lo conoce.

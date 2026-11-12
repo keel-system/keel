@@ -57,9 +57,13 @@ test('toda sección que la clase 16 puede pedir está en el catálogo del regist
   const everything = {
     ...layers('outbox'),
     'use-cases': {
-      operations: { placeOrder: { kind: 'command' }, listOrders: { kind: 'query', output: { entity: 'Order', list: true } } }
+      operations: {
+        placeOrder: { kind: 'command' },
+        listOrders: { kind: 'query', output: { entity: 'Order', list: true } },
+        deleteOrder: { kind: 'command' }
+      }
     },
-    api: { endpoints: { listOrders: { audience: 'services' } }, concurrency: { conditionalWrites: 'required', operations: ['placeOrder'] } },
+    api: { endpoints: { listOrders: { audience: 'services' }, deleteOrder: { method: 'DELETE' } }, concurrency: { conditionalWrites: 'required', operations: ['placeOrder'] } },
     messaging: { publishing: { events: { OrderPlaced: {} } }, subscriptions: { PaymentFailed: {} } },
     'http-clients': { clients: { ledger: {} } },
     storage: { buckets: { photos: {} } },

@@ -30,6 +30,10 @@ const MOTIVOS = {
 };
 
 const EXCEPCIONES = new Map([
+  ['persistence.entities.*.deletion', { motivo: MOTIVOS.pendiente, porque: 'el ciclo de vida del dato (DSL 2.28) lo rechaza la frontera de keel-go (dataLifecyclePendingErrors) hasta el incremento 4 de PLAN-DSL-228-CICLO-DE-VIDA.md, y ninguna fixture lo declara hasta el 6; entonces esta fila se borra.' }],
+  ['persistence.entities.*.restorableFor', { motivo: MOTIVOS.pendiente, porque: 'el ciclo de vida del dato (DSL 2.28) lo rechaza la frontera de keel-go (dataLifecyclePendingErrors) hasta el incremento 4 de PLAN-DSL-228-CICLO-DE-VIDA.md, y ninguna fixture lo declara hasta el 6; entonces esta fila se borra.' }],
+  ['persistence.entities.*.retention', { motivo: MOTIVOS.pendiente, porque: 'el ciclo de vida del dato (DSL 2.28) lo rechaza la frontera de keel-go (dataLifecyclePendingErrors) hasta el incremento 4 de PLAN-DSL-228-CICLO-DE-VIDA.md, y ninguna fixture lo declara hasta el 6; entonces esta fila se borra.' }],
+  ['use-cases.operations.*.restores', { motivo: MOTIVOS.pendiente, porque: 'el ciclo de vida del dato (DSL 2.28) lo rechaza la frontera de keel-go (dataLifecyclePendingErrors) hasta el incremento 4 de PLAN-DSL-228-CICLO-DE-VIDA.md, y ninguna fixture lo declara hasta el 6; entonces esta fila se borra.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     { motivo: MOTIVOS.informativo, porque: 'solo entra en el comentario del mensaje de la suscripción (messaging.js): ningún lector depende de él.' }

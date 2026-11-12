@@ -12,6 +12,7 @@
 
 import { pascalCase } from './naming.js';
 import { foldedShadow } from './relational.js';
+import { implicitPredicates } from './implicit-predicates.js';
 
 /** Los operadores que comparan por orden; el resto de filtros es igualdad. */
 export const RANGE_OPERATORS = new Set(['gt', 'gte', 'lt', 'lte']);
@@ -94,7 +95,8 @@ export function queryFinder({ operation, entities, valueObjects, persistence }) 
   // Sin nada que filtrar, la búsqueda es el listado entero: el List(pageable) que el puerto ya tiene. Salvo que la lectura
   // esté acotada (DSL 2.27, `reads`): entonces el predicado del alcance es el criterio, y se suma (AND) a los demás y al
   // conteo de la página (D4).
-  const scope = operation.readScope ?? null;
+  // La vida de la fila (DSL 2.28) no crea un finder: el listado entero del puerto ya deja fuera lo borrado, como la carga.
+  const { scope, live } = implicitPredicates(operation, entity);
   if (criteria.length === 0 && fixed.length === 0 && !scope) return none;
   return {
     finder: {
@@ -106,6 +108,8 @@ export function queryFinder({ operation, entities, valueObjects, persistence }) 
       criteria,
       fixed,
       scope,
+      // Lo borrado no se ve (DSL 2.28): se suma (AND) a los criterios, al alcance y al conteo de la página.
+      live,
       sort: operation.sort ?? []
     },
     gaps: null

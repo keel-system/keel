@@ -103,6 +103,20 @@ export const REVIEWS = {
       '«queda marcada como retirada»), señala el campo o la transición que lo sostiene; si no existe, falta'
   },
 
+  'REV-PERSONAL-CLASSIFICATION': {
+    scope: 'domain',
+    gapClass: 19,
+    severity: 'strong',
+    // Solo donde el diseño ya clasifica: la pregunta es si se dejó algo, y reconocer un dato personal por el NOMBRE del
+    // campo sería adivinar. Un diseño que no marca ninguno lo pregunta la clase 19 del análisis de huecos al recorrerlo.
+    appliesTo: (layers) => hasAny(layers.domain?.entities, (entity) => hasAny(entity.fields, (field) => field?.personal === true)),
+    title: 'un dato personal sin marcar personal',
+    asks:
+      'por cada entidad, ¿hay campos que identifican a una persona o hablan de ella (nombre, email, teléfono, dirección, ' +
+      'documento, IP, una nota libre sobre alguien) sin personal: true? De la marca cuelgan que no acabe en un log y lo que ' +
+      'vacía una anonimización: el que falta se escapa de las dos'
+  },
+
   'REV-DOMAIN-PARTIAL-WRITER': {
     scope: 'domain',
     gapClass: 1,

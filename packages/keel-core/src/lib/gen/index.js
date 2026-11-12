@@ -52,6 +52,13 @@ export {
   OPTIONAL_AUTH_SABOTAGES, readScopePath, scopedLoadOf, scopedReadsOf, scopedRootsOf, readScopeGenerationErrors, readScopeCacheKey,
   READ_SCOPE_KEY_CASES, readMissMessage
 } from './read-scope.js';
+export {
+  DELETION_MODES, RETENTION_OUTCOMES, FROM_DELETED, DELETED_AT_FIELD, ANONYMOUS_PREFIX, anonymousSubstitute, anonymizedValue,
+  retentionSpan, retentionCutoffMs, isRetentionDue, isRestorable, retentionKind, lifecycleRoots, personalFields,
+  dataLifecyclePendingErrors, DATA_LIFECYCLE_CASES, DATA_LIFECYCLE_SABOTAGES
+} from './data-lifecycle.js';
+export { hidesDeleted, implicitPredicates, hasImplicitPredicate } from './implicit-predicates.js';
+export { PERSONAL_DATA_FILE, usesPersonalData, personalFieldNames, personalDataInventory } from './personal-data.js';
 export { domainGuardKind } from './domain-guard.js';
 export { cronPeriodSeconds, fastestSchedulePeriod } from './cron-period.js';
 export { orphanInternalOperations, dispatchingOperations, usesCommandDispatcher, dispatchNote } from './dispatch.js';

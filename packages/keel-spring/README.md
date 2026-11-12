@@ -66,7 +66,7 @@ Para completar y validar el proyecto hace falta un **JDK 25** y Docker o Podman.
 
 | Paquete | DSL Keel | Proyecto generado |
 |---------|----------|-------------------|
-| keel-spring 0.3.x | `keel: "2.27"` | Spring Boot 4.1.2 · Java 25 · Gradle 9.8.2 |
+| keel-spring 0.3.x | `keel: "2.28"` | Spring Boot 4.1.2 · Java 25 · Gradle 9.8.2 |
 | keel-spring 0.2.x | `keel: "2.23"` | Spring Boot 4.1.2 · Java 21 |
 
 Una sola versión, en espejo de lo que acepta `keel validate`: los schemas del DSL no gatean primitivos por versión, así que aceptar las anteriores haría que el campo `keel` de un manifiesto declarase una intención que nada comprueba. El razonamiento completo, en `docs/dsl-reference.md § Historial de versiones`.

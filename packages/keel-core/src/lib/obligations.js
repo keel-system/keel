@@ -185,6 +185,19 @@ export const OBLIGATIONS = {
     doc: 'dsl/api.md'
   },
 
+  'OBL-PERSONAL-RETENTION-UNDECIDED': {
+    gapClass: 19,
+    when: 'persistence: una raíz persistida cuyo agregado tiene campos `personal` y que no declara `retention`',
+    kind: 'decision',
+    // Exentable por raíz: una obligación legal de conservar (la fiscal) es un motivo legítimo. Lo que no lo es es no haberlo
+    // decidido, porque el default no es neutro: el dato personal se guarda para siempre y nada lo hace fallar (R4 de la
+    // evaluación 2.24).
+    waivable: true,
+    title: 'no está decidido cuánto viven los datos personales de un agregado ni qué pasa después',
+    closes: '`retention` (from, keep, then) en la raíz, o exención razonada por raíz',
+    doc: 'dsl/persistence.md'
+  },
+
   'OBL-PAYMENTS-FOLLOWUP-REJECTED': {
     gapClass: 18,
     when: 'payments: una acción de seguimiento (`capture`, `void`, `refund`) sin `onRejected`',

@@ -346,6 +346,18 @@ Un cobro es dinero de una persona real que sale por un sistema que no es el nues
 - **Los datos de tarjeta.** Ningún campo del diseño puede llevar número, caducidad o CVV: solo los tokens que produce el componente de la pasarela. Un campo `cardNumber` en un input mete al servicio entero en el alcance de PCI.
 - **Quién puede pedir un cobro.** Con varios llamantes (usuarios, otros servicios), ¿puede uno cobrar un medio de pago guardado por otro? La referencia guardada no es un secreto: si basta con conocerla para cobrar, no protege nada.
 
+### 19. Ciclo de vida del dato
+
+*Aplica si:* algún agregado tiene campos `personal`, o alguna raíz declara `deletion`, `restorableFor` o `retention`. Las unidades son esas raíces.
+
+Un dato tiene tres momentos que el resto de clases no mira: cuando se **borra**, cuánto **vive** y de **quién** es. Los tres son verdad del servicio aunque nadie lo construya, y casi siempre son además obligación legal (RGPD, LGPD, CCPA, Ley 1581). Y los tres fallan en silencio: un email personal en un log, un pedido que se guarda para siempre o una clave que no se puede volver a registrar no rompen ningún escenario.
+
+- **Qué es personal.** ¿Están marcados `personal` todos los campos que identifican a una persona o hablan de ella: nombre, email, teléfono, dirección, documento, IP? Marcar es barato y de ello cuelga todo lo demás: que no acabe en un log, qué vacía una anonimización. Lo juzga `REV-PERSONAL-CLASSIFICATION`, porque reconocerlo por el nombre del campo sería adivinar.
+- **Qué significa borrar.** ¿El `DELETE` de esta raíz la hace desaparecer, o la oculta y la conserva (`deletion: logical`)? Lo segundo es lo que pide un agregado que otros referencian (la factura conserva a su cliente) o uno que se puede deshacer. Con borrado lógico, la clave del borrado (el email) queda libre para un registro nuevo, y quien pide la fila borrada recibe 404.
+- **Si se puede deshacer.** ¿Durante cuánto tiempo (`restorableFor`), con qué operación (`restores`) y con qué error pasada la ventana? ¿Y si mientras tanto otro registro ocupó su clave? Recibe el 409 de esa unicidad: ¿es lo que el cliente espera?
+- **Cuánto vive.** ¿Desde qué instante se cuenta (`retention.from`: el cierre, la emisión, el borrado) y cuánto (`keep`)? ¿Hay una obligación de conservar (fiscal, sanitaria) que manda sobre la de borrar? Una raíz con datos personales sin `retention` abre `OBL-PERSONAL-RETENTION-UNDECIDED`: se acepta solo con su motivo.
+- **Y después.** ¿Se borra el agregado entero (`then: delete`) o se conserva sin sus datos personales (`then: anonymize`)? Una raíz que otro agregado referencia no se puede borrar sin dejar referencias colgando. Anonimizar deja a null los campos personales opcionales y escribe un sustituto irreversible en los obligatorios de texto: ¿la forma de cada uno lo admite?
+
 ### 16. Decisiones estructurales sin dueño
 
 *Aplica siempre.*

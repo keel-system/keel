@@ -36,6 +36,11 @@
             "items": { "$ref": "common.schema.json#/$defs/operationName" },
             "description": "Commands de este servicio que esta operación despacha como parte de su trabajo (un barrido que pone en cuarentena lo que revalida). Es el enlace estructural de una regla «despacha X»: con él, el generador da a esta operación el puerto de despacho y su nota, en vez de dejar la costura en prosa. Solo commands: una lectura no se despacha, se consulta. (2.21)"
           },
+          "restores": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Za-z0-9]*$",
+            "description": "Raíz con deletion: logical y restorableFor cuyo borrado deshace esta operación (DSL 2.28). Con él, el puerto del repositorio gana la restauración: dentro de la ventana la fila vuelve a estar viva; fuera, el error de restorableFor; con su clave ocupada por una fila viva, el 409 de esa unicidad. Solo en commands."
+          },
           "where": {
             "type": "object",
             "minProperties": 1,

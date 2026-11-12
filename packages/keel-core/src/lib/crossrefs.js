@@ -11,6 +11,7 @@ import { conditionalWritesOfLayers, undecidedConditionalWrites } from './gen/con
 import { domainGuardKind } from './gen/domain-guard.js';
 import { declaredDeadlines } from './gen/deadlines.js';
 import { readScopesOfLayers, optionalAuthRules } from './gen/read-scope.js';
+import { declaredLifecycles, restoringOperations, personalFieldsOfAggregate, incomingReferences, substituteProblem, aggregateIndex, FROM_DELETED } from './gen/data-lifecycle.js';
 
 const BASE_TYPES = new Set(['string', 'text', 'int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json', 'file']);
 
@@ -106,6 +107,120 @@ function checkDeadlines(layers, manifest, error, warnIn) {
         }
       }
     }
+  }
+}
+
+// ─── El ciclo de vida del dato (DSL 2.28: deletion, restorableFor, retention, restores, personal) ────────────────
+
+/**
+ * Cada declaración del ciclo de vida contra el resto del diseño. Lo mecanizable es la forma: que se declare en una raíz,
+ * que la restauración tenga su operación y su error, que la retención se cuente desde un timestamp, que borrar no deje
+ * referencias colgando y que anonimizar tenga algo que vaciar y pueda hacerlo. Y una pregunta sin default seguro: cuánto
+ * vive un agregado con datos personales.
+ */
+function checkDataLifecycle(layers, manifest, error, obligation) {
+  const domainEntities = layers.domain?.entities ?? {};
+  const parameters = manifest ? (manifest.parameters ?? {}) : null;
+  const checkParameter = (where, parameter) => {
+    if (!parameter || !parameters || parameters[parameter]?.type === 'int') return;
+    error('CHK-PERSIST-LIFECYCLE-PARAM-UNKNOWN',
+      parameters[parameter]
+        ? `${where}.parameter: '${parameter}' es ${parameters[parameter].type}, y una duración es un número entero de su unidad`
+        : `${where}.parameter: '${parameter}' no está en service.parameters`
+    );
+  };
+  const restorers = restoringOperations(layers);
+  const lifecycles = declaredLifecycles(layers);
+  for (const lifecycle of lifecycles) {
+    const where = `persistence: ${lifecycle.entity}`;
+    if (!lifecycle.isRoot || !lifecycle.persisted) {
+      const declared = ['deletion', 'restorableFor', 'retention'].filter((key) => layers.persistence.entities[lifecycle.entity]?.[key] !== undefined);
+      error('CHK-PERSIST-DELETION-NOT-ROOT',
+        `${where}: declara ${declared.join(', ')} y ${lifecycle.persisted ? 'no es la raíz de su agregado' : 'no se persiste'} — ` +
+          'una entidad interna nace, se borra y caduca con su raíz; decláralo en la raíz'
+      );
+      continue;
+    }
+    if (lifecycle.restorableFor) {
+      checkParameter(`${where}.restorableFor`, lifecycle.restorableFor.parameter);
+      const problems = [];
+      if (lifecycle.deletion !== 'logical') problems.push('el borrado no es lógico (deletion: logical), así que no queda nada que restaurar');
+      const ops = restorers.filter((restorer) => restorer.root === lifecycle.entity);
+      if (ops.length === 0) problems.push(`ninguna operación declara restores: ${lifecycle.entity}`);
+      if (problems.length > 0) error('CHK-PERSIST-RESTORE-UNPAIRED', `${where}.restorableFor: ${problems.join('; ')}`);
+      for (const { operation, op } of ops) {
+        if (!(op.errors ?? []).some((declared) => declared?.code === lifecycle.restorableFor.error)) {
+          error('CHK-PERSIST-RESTORE-ERROR',
+            `${where}.restorableFor.error: ${operation} restaura ${lifecycle.entity} y no declara '${lifecycle.restorableFor.error}' — ` +
+              'es lo que responde restaurar pasada la ventana, y sin declararlo no tiene status ni lo ve la matriz de escenarios'
+          );
+        }
+      }
+    }
+    const retention = lifecycle.retention;
+    if (retention) {
+      checkParameter(`${where}.retention.keep`, retention.keep?.parameter);
+      const from = retention.from;
+      const fromType = domainEntities[lifecycle.entity]?.fields?.[from]?.type;
+      const isTimestamp = fromType === 'timestamp' || layers.domain?.types?.[fromType]?.base === 'timestamp';
+      if (from === FROM_DELETED ? lifecycle.deletion !== 'logical' : !isTimestamp) {
+        error('CHK-PERSIST-RETENTION-FROM',
+          from === FROM_DELETED
+            ? `${where}.retention.from: 'deleted' cuenta desde el borrado lógico, y ${lifecycle.entity} no declara deletion: logical`
+            : domainEntities[lifecycle.entity]?.fields?.[from]
+              ? `${where}.retention.from: '${from}' no es un timestamp de ${lifecycle.entity} — la retención se cuenta desde un instante`
+              : `${where}.retention.from: ${lifecycle.entity} no tiene el campo '${from}'`
+        );
+      }
+      if (retention.then === 'delete') {
+        const incoming = incomingReferences(layers, lifecycle.entity);
+        if (incoming.length > 0) {
+          error('CHK-PERSIST-RETENTION-REFERENCED',
+            `${where}.retention.then: delete borra ${lifecycle.entity}, y la referencian ${incoming.map((ref) => `${ref.entity}.${ref.relation}`).join(', ')} — ` +
+              'la fila no se puede ir sin dejar esas referencias colgando. Usa then: anonymize, que conserva la fila'
+          );
+        }
+      }
+      if (retention.then === 'anonymize') {
+        const personal = personalFieldsOfAggregate(layers, lifecycle.entity);
+        if (personal.length === 0) {
+          error('CHK-PERSIST-ANONYMIZE-NOTHING',
+            `${where}.retention.then: anonymize, y ni ${lifecycle.entity} ni sus entidades internas tienen campos personal — ` +
+              'anonimizar no vaciaría nada. Marca los campos personales, o usa then: delete'
+          );
+        }
+        for (const { entity, field, spec } of personal) {
+          const problem = substituteProblem(layers, entity, field, spec);
+          if (problem) {
+            error('CHK-PERSIST-ANONYMIZE-SUBSTITUTE',
+              `${where}.retention.then: anonymize no puede vaciar ${entity}.${field}: es obligatorio y ${problem} — ` +
+                'hazlo opcional (se anonimiza a null) o relaja su forma'
+            );
+          }
+        }
+      }
+    }
+  }
+  for (const { operation, op, root } of restorers) {
+    const declared = lifecycles.find((lifecycle) => lifecycle.entity === root);
+    const problems = [];
+    if ((op.kind ?? 'command') !== 'command') problems.push('no es un command');
+    if (!declared?.restorableFor) problems.push(`${root} no declara restorableFor en persistence`);
+    if (problems.length > 0) error('CHK-PERSIST-RESTORE-UNPAIRED', `use-cases: ${operation}.restores: ${problems.join('; ')}`);
+  }
+  // La pregunta sin contestar: cuánto vive un agregado que guarda datos personales. Sin default seguro —conservarlos para
+  // siempre es justo lo que la ley veta, y borrarlos puede violar otra obligación (la fiscal)—, pero legítimo de aceptar
+  // por raíz con su motivo.
+  for (const [entityName, at] of aggregateIndex(layers)) {
+    const persisted = layers.persistence?.entities?.[entityName];
+    if (!at.isRoot || persisted === undefined || persisted?.persisted === false || persisted?.retention) continue;
+    const personal = personalFieldsOfAggregate(layers, entityName);
+    if (personal.length === 0) continue;
+    obligation('OBL-PERSONAL-RETENTION-UNDECIDED', `persistence.${entityName}.retention`,
+      `persistence: ${entityName} guarda datos personales (${personal.map((p) => `${p.entity}.${p.field}`).join(', ')}) y no declara retention — ` +
+        'nada dice cuánto viven ni qué pasa después, y el default es guardarlos para siempre. Declara retention (from, keep, then) o ' +
+        'acéptalo en decisions.yaml con su motivo (una obligación legal de conservarlos) — ver docs/dsl/persistence.md § El ciclo de vida del dato'
+    );
   }
 }
 
@@ -4173,6 +4288,33 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       );
     }
   }
+  // El ciclo de vida del dato (2.28): un borrado lógico y una retención fallan en silencio —la fila borrada que sigue
+  // apareciendo, la clave que no se puede volver a usar, el agregado que vive para siempre— y ningún escenario de una sola
+  // escritura los distingue. Aviso, como toda regla sobre el documento de escenarios.
+  if (scenarios !== null && persistence) {
+    const thenOf = (body) => body.split(/\*\*Then\*\*/).slice(1).join(' ') || body;
+    const DELETED = /(?<![0-9])404(?![0-9])|(\bno\b|\bningun[oa]?\b)[^.;]{0,40}\baparecen?\b|ya no (está|sale)|vuelve a (registrar|crear|usar|darse de alta)|se puede volver a/i;
+    const RETAINED = /retenci[oó]n|anonimiz|se purga|purgad[oa]|se borra(n)? (pasad|a los|tras)/i;
+    for (const lifecycle of declaredLifecycles(layers)) {
+      if (!lifecycle.isRoot || !lifecycle.persisted) continue;
+      const names = [lifecycle.entity, ...restoringOperations(layers).filter((r) => r.root === lifecycle.entity).map((r) => r.operation)];
+      const blocks = [...new Set(names.flatMap((name) => scenariosMentioning(name)))];
+      if (lifecycle.deletion === 'logical' && !blocks.map(scenarioBody).map(thenOf).some((body) => DELETED.test(body))) {
+        warn('CHK-SCEN-DELETION-UNCOVERED',
+          `validation-scenarios.md: no encuentro ningún escenario FL- que nombre '${lifecycle.entity}' y afirme lo que ve quien llega ` +
+            'después de un borrado lógico (un 404, que no aparece en el listado, o que su clave se puede volver a usar) — ' +
+            'es justo la garantía que un escenario que solo borra no distingue de un borrado físico'
+        );
+      }
+      if (lifecycle.retention && !blocks.map(scenarioBody).some((body) => RETAINED.test(body))) {
+        warn('CHK-SCEN-RETENTION-UNCOVERED',
+          `validation-scenarios.md: no encuentro ningún escenario FL- que nombre '${lifecycle.entity}' y describa su retención ` +
+            `(${lifecycle.retention.then === 'anonymize' ? 'qué queda anonimizado' : 'que se purga'} pasado el plazo, y que lo que no ha vencido sigue) — ` +
+            'el barrido que la aplica no lo dispara ninguna operación, y sin escenario nadie afirma lo que deja'
+        );
+      }
+    }
+  }
   // Auditoría: cada eje ('timestamps', 'authorship') se declara de UNA sola forma.
   // Con 'all' las columnas las pone la infraestructura y no se nombran en domain; con
   // 'declared' se nombran ahí porque el diseño quiere proyectarlas en algún output.
@@ -5067,6 +5209,9 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
 
   // Los plazos de negocio (DSL 2.26): su forma contra el lifecycle, los parámetros y la operación que caduca.
   checkDeadlines(layers, manifest, error, warnIn);
+
+  // El ciclo de vida del dato (DSL 2.28): borrado lógico, restauración, retención y datos personales.
+  checkDataLifecycle(layers, manifest, error, obligation);
 
   // En el modelo documental una entidad interna del agregado NO es una colección propia:
   // va anidada dentro del documento de su raíz, y la auditoría automática puebla el objeto

@@ -81,6 +81,7 @@ Atributos de campo:
 | `generated` | Lo asigna la infraestructura (ids, timestamps); nunca lo envía el cliente |
 | `computed` | Lo deriva una regla de dominio a partir de otros campos (la regla es el valor del atributo); nunca lo envía el cliente. Excluyente con `generated` |
 | `sensitive` | Nunca sale en outputs ni eventos por defecto; solo si un payload lo pide explícitamente vía `fields` |
+| `personal` | Dato personal del titular (DSL 2.28): una clasificación legal, ortogonal a `sensitive`. De ella se derivan que ningún log ni traza del servidor lleve el valor, lo que vacía una retención con `then: anonymize` y el inventario de datos personales del proyecto generado. Se marca en el campo, no en el tipo: un email puede ser de una persona o de un buzón de la empresa |
 | `default` | Valor si el cliente no lo provee. Sobre un campo `enum` debe ser uno de sus `values` — `keel validate` lo comprueba |
 | `list` | El campo es una **colección** de valores del tipo declarado (`{ type: Discount, list: true }`). Excluyente con `id`, `unique`, `generated` y `type: file` |
 | `compare` | Solo sobre texto: cómo se comparan dos valores — `exact` (por defecto), `ignore-case` o `ignore-case-accents`. En un campo `unique` decide qué es un duplicado (`ACME`, `acme` y `Acmé` lo son con `ignore-case-accents`). Es contrato observable: dilo aquí y no en la prosa de los escenarios, que el generador no lee |

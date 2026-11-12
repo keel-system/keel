@@ -505,6 +505,62 @@ export const CHECKS = {
     title: 'una operación que saca a la entidad del estado con plazo no declara el error de la acción tardía',
     closes: 'declarar en sus errors el code de lateAction.error, con su http'
   },
+  'CHK-PERSIST-DELETION-NOT-ROOT': {
+    layer: 'persistence',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'deletion, restorableFor o retention en una entidad que no es la raíz persistida de su agregado',
+    closes: 'declararlo en la raíz: una entidad interna nace, se borra y caduca con ella'
+  },
+  'CHK-PERSIST-RESTORE-UNPAIRED': {
+    layer: 'persistence',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una ventana de restauración sin su operación, o una operación que restaura sin ventana o sin borrado lógico',
+    closes: 'restorableFor con deletion: logical en la raíz y un command con restores: <Raíz>, siempre los dos'
+  },
+  'CHK-PERSIST-RESTORE-ERROR': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'la operación que restaura no declara el error de restaurar pasada la ventana',
+    closes: 'declarar en sus errors el code de restorableFor.error, con su http'
+  },
+  'CHK-PERSIST-LIFECYCLE-PARAM-UNKNOWN': {
+    layer: 'persistence',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'la duración de una retención o de una ventana de restauración cita un parámetro que no existe o no es int',
+    closes: 'declarar el parámetro en service.parameters con type: int, o escribir la duración literal'
+  },
+  'CHK-PERSIST-RETENTION-FROM': {
+    layer: 'persistence',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una retención se cuenta desde algo que no es un timestamp de la raíz, o desde el borrado sin borrado lógico',
+    closes: "nombrar en from un campo timestamp de la raíz, o 'deleted' con deletion: logical"
+  },
+  'CHK-PERSIST-RETENTION-REFERENCED': {
+    layer: 'persistence',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una retención borra una raíz que otro agregado referencia',
+    closes: 'then: anonymize, que conserva la fila y vacía sus datos personales'
+  },
+  'CHK-PERSIST-ANONYMIZE-NOTHING': {
+    layer: 'persistence',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una retención anonimiza un agregado sin campos personal',
+    closes: 'marcar personal los campos que lo son, o then: delete'
+  },
+  'CHK-PERSIST-ANONYMIZE-SUBSTITUTE': {
+    layer: 'persistence',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'anonimizar no puede vaciar un campo personal obligatorio (no es texto, o su forma no admite el sustituto)',
+    closes: 'hacer el campo opcional (se anonimiza a null) o relajar su pattern, enum o maxLength'
+  },
   'CHK-FIELD-COMPARE-NOT-TEXT': {
     layer: 'domain',
     severity: 'error',
@@ -1169,6 +1225,20 @@ export const CHECKS = {
     nature: 'incoherence',
     title: 'una lectura acotada no tiene escenario `FL-` de la fila ajena',
     closes: 'un escenario con dos llamantes que nombre la lectura: la fila del otro no aparece (ni cuenta en el total), o su readMiss por id'
+  },
+  'CHK-SCEN-DELETION-UNCOVERED': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'un borrado lógico no tiene escenario `FL-` de lo que se ve después',
+    closes: 'un escenario que nombre la raíz o su restauración y afirme el 404, que no aparece en el listado o que su clave se puede volver a usar'
+  },
+  'CHK-SCEN-RETENTION-UNCOVERED': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'una retención no tiene escenario `FL-`',
+    closes: 'un escenario que nombre la raíz y describa qué se purga o se anonimiza pasado el plazo y qué sigue'
   },
   'CHK-SCEN-UNOBSERVABLE-RETRY': {
     layer: 'validation-scenarios',

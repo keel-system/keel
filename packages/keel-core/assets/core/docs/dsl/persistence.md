@@ -97,6 +97,59 @@ consistency:
   - `none`: **último escritor gana**. Ninguna escritura falla por concurrencia y la última en confirmar prevalece. Es una decisión legítima —una edición de ficha de catálogo, una preferencia de usuario— pero deliberada: se acepta perder la escritura intermedia.
 - La elección tiene que ser **coherente con `validation-scenarios.md`**: un escenario que ejercita dos mutaciones concurrentes y espera dos respuestas de éxito exige `none`; uno que espera un conflicto exige `all` o `declared`. Declararlo en prosa dentro de `rules` no basta — ningún generador lee prosa, y el resultado es un servidor que contradice su propio escenario.
 
+## El ciclo de vida del dato (DSL 2.28)
+
+Tres hechos sobre un dato que el resto de la capa no dice: qué significa **borrarlo**, cuánto **vive** y qué pasa
+después. Son verdad del servicio aunque nadie lo construya, y casi siempre son además obligación legal. Se declaran en
+la **raíz persistida** de un agregado y alcanzan a sus entidades internas (`CHK-PERSIST-DELETION-NOT-ROOT`).
+
+```yaml
+entities:
+  ContactCard:
+    deletion: logical                                   # physical (default) | logical
+    restorableFor: { days: 30, error: CARD_NOT_RESTORABLE }
+    retention: { from: deleted, keep: { days: 30 }, then: delete }
+  Order:
+    retention:
+      from: closedAt                                    # timestamp de la raíz, o `deleted`
+      keep: { years: 6 }                                # days | years | { parameter, unit }
+      then: anonymize                                   # delete | anonymize
+```
+
+- **`deletion`**. Con `physical` (el default) la fila desaparece. Con `logical` se conserva oculta, y el generador emite
+  juntas tres consecuencias: ninguna query, ningún total de página ni ninguna lectura por id o por clave natural la ve
+  (quien la pide recibe el 404 del diseño, nunca un 410); sus unicidades se evalúan **solo entre filas vivas**, así que
+  la clave de un borrado (el email de quien se fue) se puede volver a usar; y las **referencias** desde otra raíz
+  (`embed`) la siguen viendo, porque es historia: la factura conserva a su cliente. La marca del borrado la pone el
+  generador y no está en el contrato. Es la entrada 3.13 del catálogo estructural: una raíz que alguna operación
+  expuesta borra lo escribe aunque sea `physical` (`CHK-MODEL-IMPLICIT-DEFAULT`).
+- **`restorableFor`** (solo con `logical`): la ventana durante la que el borrado se deshace, en días literales o con un
+  `service.parameters` de tipo `int`. La deshace un command con **`restores: <Raíz>`** en `use-cases`, siempre los dos
+  juntos (`CHK-PERSIST-RESTORE-UNPAIRED`). Pasada la ventana responde con `error`, que la operación declara
+  (`CHK-PERSIST-RESTORE-ERROR`); si mientras tanto una fila viva ocupó su clave, con el 409 de esa unicidad.
+- **`retention`**: cuánto vive el agregado y qué pasa después. `from` es un timestamp de la raíz o `deleted` (desde el
+  borrado lógico, que exige `deletion: logical`; `CHK-PERSIST-RETENTION-FROM`). `keep` son días o años (de calendario:
+  seis años fiscales no son 2190 días) o un parámetro con su unidad. Una fila cuyo `from` está vacío **no vence
+  nunca**: un pedido abierto no se purga. Lo aplica un barrido periódico del servidor; cuándo pasa y en qué lotes es del
+  generador.
+  - `then: delete` borra el agregado entero. No vale para una raíz que otro agregado referencia: la fila no se puede ir
+    sin dejar esas referencias colgando (`CHK-PERSIST-RETENTION-REFERENCED`).
+  - `then: anonymize` conserva el agregado y vacía sus campos **`personal`** (los de la raíz y los de sus entidades
+    internas): los opcionales quedan a `null` y los obligatorios de texto reciben un sustituto irreversible derivado
+    del id (`anon-<id>`), que conserva la unicidad. Un agregado sin campos personales no tiene nada que anonimizar
+    (`CHK-PERSIST-ANONYMIZE-NOTHING`), y un obligatorio que no es texto, o cuyo `pattern`, enum o `maxLength` no admite
+    el sustituto, no se puede vaciar (`CHK-PERSIST-ANONYMIZE-SUBSTITUTE`).
+- **Una raíz con datos personales sin `retention`** abre `OBL-PERSONAL-RETENTION-UNDECIDED`: el default es guardarlos
+  para siempre, que es justo lo que la ley veta. Se cierra declarando la retención o aceptándola en `decisions.yaml`
+  con su motivo (una obligación de conservar).
+- Los escenarios: lo que ve quien llega después de un borrado lógico (`CHK-SCEN-DELETION-UNCOVERED`) y lo que deja una
+  retención (`CHK-SCEN-RETENTION-UNCOVERED`). Ninguna operación dispara el barrido, así que sin escenario nadie afirma
+  lo que hace.
+
+**Qué no entra.** La columna `deleted_at`, el filtro del ORM o la purga por lotes son del generador. Tampoco el cifrado
+en reposo, la base legal del tratamiento ni el consentimiento (que se modela como dato con las capas que ya existen).
+La operación de supresión del interesado (RGPD art. 17) queda fuera hasta que un diseño la pida.
+
 ## Qué NO va aquí
 
 - La forma de las entidades (campos, tipos, invariantes) → capa `domain`.

@@ -489,6 +489,8 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
     generated: Boolean(field.generated),
     computed: field.computed ?? null,
     sensitive: Boolean(field.sensitive),
+    // Dato personal del titular (DSL 2.28): ningún log ni traza lo lleva, y una retención con anonymize lo vacía.
+    personal: Boolean(field.personal),
     // Nombre real en el cable cuando la fuente externa no usa el nombre del DSL.
     wireName: field.wireName && field.wireName !== fieldName ? field.wireName : null,
     description: field.description ?? null,
@@ -856,7 +858,13 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
       naturalKey: persistenceMeta.naturalKey ?? null,
       // DSL 2.16: el 409 que significa violar la clave, si el diseño lo nombra.
       naturalKeyError: persistenceMeta.naturalKeyError ?? null,
-      indexes: normalizeIndexes(persistenceMeta.indexes)
+      indexes: normalizeIndexes(persistenceMeta.indexes),
+      // La raíz del agregado al que pertenece (ella misma si es raíz o suelta): de quién hereda su ciclo de vida.
+      aggregateRoot: internalOf.get(name)?.root ?? name,
+      // El ciclo de vida del dato (DSL 2.28): qué significa borrar la raíz, su ventana de restauración y su retención.
+      deletion: persistenceMeta.deletion ?? 'physical',
+      restorableFor: persistenceMeta.restorableFor ? { ...persistenceMeta.restorableFor } : null,
+      retention: persistenceMeta.retention ? { ...persistenceMeta.retention, keep: { ...persistenceMeta.retention.keep } } : null
     });
   }
 
@@ -1157,6 +1165,8 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
       dispatches: [...(op.dispatches ?? [])],
       // Las igualdades fijas de una query (DSL 2.22): el finder las aplica siempre (query-filters.js).
       where: op.where ? { ...op.where } : null,
+      // La raíz cuyo borrado lógico deshace esta operación (DSL 2.28): su puerto gana la restauración.
+      restores: op.restores ?? null,
       // La entidad sobre la que actúa (operationTargetEntity): la raíz que compara una escritura condicional.
       targetEntity,
       route,

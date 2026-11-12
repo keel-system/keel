@@ -155,6 +155,8 @@ Hay un segundo efecto, y es el que importa en una **compensación**: una transic
 
 `idempotency` y `cache` son **decisiones estructurales**: fijan lo que el servicio garantiza (qué se puede repetir sin daño, qué puede llegar rancio), así que las decide el diseñador y no el agente. El agente recomienda con su porqué y pregunta; nunca las escribe en silencio. Ejes de decisión, consecuencias observables y trampas: `references/structural-decisions.md` de la skill `keel-design` §3.2 y §3.3.
 
+**`restores` — una operación que deshace un borrado (2.28).** Un command con `restores: <Raíz>` deshace el borrado lógico de esa raíz dentro de su ventana (`persistence.entities.<Raíz>.restorableFor`), y los dos van siempre juntos. Con él, el puerto del repositorio gana la restauración: dentro de la ventana la fila vuelve a estar viva; fuera, el `error` de `restorableFor`, que esta operación declara; con su clave ocupada por una fila viva, el 409 de esa unicidad. Ver `persistence.md` § El ciclo de vida del dato.
+
 ## Triggers: quién activa cada operación
 
 La capa que expone la operación la referencia por nombre:

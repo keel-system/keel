@@ -50,6 +50,10 @@ const MOTIVOS = {
  * muertas, para que la tabla no se convierta en la lista de lo que hubo alguna vez.
  */
 const EXCEPCIONES = new Map([
+  ['persistence.entities.*.deletion', { motivo: MOTIVOS.hueco, porque: 'el ciclo de vida del dato (DSL 2.28) lo rechaza la frontera de keel-spring (dataLifecyclePendingErrors) hasta el incremento 1 de PLAN-DSL-228-CICLO-DE-VIDA.md, y ninguna fixture lo declara hasta el 6; entonces esta fila se borra.' }],
+  ['persistence.entities.*.restorableFor', { motivo: MOTIVOS.hueco, porque: 'el ciclo de vida del dato (DSL 2.28) lo rechaza la frontera de keel-spring (dataLifecyclePendingErrors) hasta el incremento 1 de PLAN-DSL-228-CICLO-DE-VIDA.md, y ninguna fixture lo declara hasta el 6; entonces esta fila se borra.' }],
+  ['persistence.entities.*.retention', { motivo: MOTIVOS.hueco, porque: 'el ciclo de vida del dato (DSL 2.28) lo rechaza la frontera de keel-spring (dataLifecyclePendingErrors) hasta el incremento 1 de PLAN-DSL-228-CICLO-DE-VIDA.md, y ninguna fixture lo declara hasta el 6; entonces esta fila se borra.' }],
+  ['use-cases.operations.*.restores', { motivo: MOTIVOS.hueco, porque: 'el ciclo de vida del dato (DSL 2.28) lo rechaza la frontera de keel-spring (dataLifecyclePendingErrors) hasta el incremento 1 de PLAN-DSL-228-CICLO-DE-VIDA.md, y ninguna fixture lo declara hasta el 6; entonces esta fila se borra.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     {

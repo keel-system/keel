@@ -71,6 +71,7 @@ aceptable que ese pedido nunca llegue a facturación?» sí lo es.
 | 3.11 | Compensación de un trabajo encargado | `dependencies.<dep>.compensations` + `use-cases.<op>.transitions` | 3.7 |
 | 3.10 | Visibilidad de un bucket | `storage.buckets.<b>.visibility` | 3.9 |
 | 3.12 | Escritura condicional entre peticiones | `api.concurrency` | 3.4 |
+| 3.13 | Qué significa borrar | `persistence.entities.<Raíz>.deletion` (+ `restorableFor`, `retention`) | 3.8 |
 
 ---
 
@@ -399,6 +400,23 @@ La raíz necesita versión: `optimisticLocking: all`, o `declared` con `lockVers
 una raíz con versión en un diseño sin `concurrency` abre `OBL-API-CONCURRENCY-UNDECIDED`, que se cierra
 declarando la política o aceptándola por operación en `decisions.yaml`. El escenario del `412` (dos lecturas y dos
 escrituras separadas) lo pide `CHK-SCEN-PRECONDITION-UNCOVERED`.
+
+### 3.13 Qué significa borrar — `deletion: physical | logical`
+
+Un `DELETE` puede hacer desaparecer la fila o solo ocultarla. Desde fuera los dos responden igual (204, y después 404),
+así que la diferencia no la ve ningún escenario que solo borra. Pero decide si la factura conserva a su cliente, si el
+borrado se puede deshacer y si la clave del borrado (el email) queda libre para un registro nuevo.
+
+| Eje | Pregunta al diseñador | Respuesta → decisión |
+|---|---|---|
+| **Referencias** | ¿Otro agregado apunta a esta raíz y tiene que seguir viéndola después del borrado (un pedido a su cliente)? | Sí → `logical`: lo borrado no aparece en ninguna query, pero las referencias lo siguen viendo. |
+| **Deshacer** | ¿Se puede arrepentir quien borra? ¿Durante cuánto? | Sí → `logical` con `restorableFor` y una operación con `restores`. |
+| **La clave** | ¿Quien se fue puede volver a registrarse con la misma clave? | Con `logical`, sí: las unicidades se evalúan solo entre filas vivas. Con `physical`, también, porque la fila ya no existe. |
+| **Cuánto se conserva** | Lo borrado lógicamente, ¿se guarda para siempre o se purga pasado un tiempo? | `retention: { from: deleted, keep, then }`; sin ella se conserva oculto indefinidamente. |
+
+`physical` es el default, y por eso se escribe aunque sea el elegido: una raíz que alguna operación expuesta borra sin
+`deletion` escrito abre `CHK-MODEL-IMPLICIT-DEFAULT`. El escenario de lo que se ve después de un borrado lógico lo pide
+`CHK-SCEN-DELETION-UNCOVERED`.
 
 ---
 
