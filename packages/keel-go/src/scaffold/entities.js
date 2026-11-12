@@ -188,7 +188,7 @@ function constructorTodo(model, entity, receiver) {
     lines.push(`Valores iniciales del diseño: ${initial.map((field) => `${localName(field.name)} = ${field.initializer}`).join(', ')}.`);
   }
   if (initial.some((field) => field.initializer.includes('NextLongID()'))) {
-    lines.push('NextLongID() es de la persistencia: un id long lo crea la aplicación al nacer la raíz (incremento 6).');
+    lines.push('NextLongID() (long_ids.go, generado) crea el id long al nacer la raíz, como uuid.NewV7 para un uuid.');
   }
   const guarded = entity.fields.filter((field) => field.inheritedPattern && field.typeName && model.formatTypes?.some((t) => t.name === field.typeName));
   if (guarded.length > 0) {

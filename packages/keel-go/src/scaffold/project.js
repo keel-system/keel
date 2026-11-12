@@ -11,7 +11,7 @@
 import { GO_MIN_VERSION, GO_TOOLCHAIN } from '../lib/assets.js';
 import { usesDocument, usesJwt, usesRelational } from '@keel-system/keel-core/gen/features';
 import { usesGoMail, usesTemplating } from './mail.js';
-import { CACHE_REQUIRES, MAIL_REQUIRES, STORAGE_REQUIRES, TEMPLATING_PINS, TEMPLATING_REQUIRES } from '../lib/go-stack.js';
+import { CACHE_REQUIRES, DOCUMENT_PINS, MAIL_REQUIRES, STORAGE_REQUIRES, TEMPLATING_PINS, TEMPLATING_REQUIRES } from '../lib/go-stack.js';
 import { usesStorageAdapter } from './storage.js';
 import { usesCache } from './cache.js';
 import { BROKER_REQUIRES, DOCUMENT_REQUIRES, JWT_REQUIRES, MODULES, RELATIONAL_REQUIRES, SCHEDULING_REQUIRES, SKELETON_REQUIRES, TELEMETRY_REQUIRES, TEXT_FOLD_REQUIRES, TOOLS } from '../lib/go-stack.js';
@@ -47,7 +47,7 @@ export function requiresFor(model = null) {
 
 /** Los transitivos fijados que el proyecto arrastra (kind 'pin' en go-stack.js): van como `// indirect`. */
 export function pinsFor(model = null) {
-  return [...(model && usesTemplating(model) ? TEMPLATING_PINS : [])].sort();
+  return [...(model && usesTemplating(model) ? TEMPLATING_PINS : []), ...(model && usesDocument(model) ? DOCUMENT_PINS : [])].sort();
 }
 
 /** Las herramientas (`go tool <nombre>`): todas, siempre. */

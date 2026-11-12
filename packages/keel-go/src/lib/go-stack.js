@@ -146,6 +146,10 @@ export const MODULES = {
   // lo alcanza, pero sin fijarlo govulncheck avisa en todo proyecto con plantillas de correo (corrida 12e). Va como
   // `// indirect`, que es lo que es: tidy lo conserva porque MVS elige la mayor de las dos.
   'github.com/sirupsen/logrus': { version: 'v1.8.3', license: 'MIT', kind: 'pin', use: 'logrus sin GO-2025-4188 (lo trae raymond)' },
+  // Otro transitivo fijado: el driver de MongoDB v2.9.2 pide klauspost/compress v1.19.2, con GO-2026-6865 alcanzable
+  // por su snappy, y v1.20.2 lo corrige (corrida asset-vault 2.27 con Cognito). franz-go ya pide v1.20.3, así que con
+  // Kafka no hace falta. La v1.20.2 es de 2026-10-12.
+  'github.com/klauspost/compress': { version: 'v1.20.2', license: 'BSD-3-Clause', kind: 'pin', use: 'compress sin GO-2026-6865 (lo trae el driver de MongoDB)' },
 
   // Herramientas, por la directiva `tool` de go.mod (`go tool <nombre>`): el proyecto no exige nada instalado
   // aparte de Go.
@@ -203,6 +207,7 @@ export const PINS = Object.freeze(
 
 /** El driver de la persistencia documental (incremento 12). */
 export const DOCUMENT_REQUIRES = ['go.mongodb.org/mongo-driver/v2'];
+export const DOCUMENT_PINS = ['github.com/klauspost/compress'];
 
 /** La validación de tokens de la capa security (incremento 8). */
 export const JWT_REQUIRES = ['github.com/golang-jwt/jwt/v5'];

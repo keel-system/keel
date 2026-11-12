@@ -24,10 +24,12 @@ export const SUPPORTED_DSL = ['2.27'];
 //     admite un conversor por tipo en cada llamada: con el v1, las tres cosas habría que escribirlas a mano
 //     en cada DTO;
 //   · `toolchain` fija la estable con la que se mide. Un Go más antiguo que ella la descarga solo
-//     (GOTOOLCHAIN=auto), así que todos compilan con la misma.
+//     (GOTOOLCHAIN=auto), así que todos compilan con la misma. Es go1.27.4 desde el 2026-11-11 sin las dos
+//     semanas de antigüedad (es del 2026-11-02): go1.27.3 trae GO-2026-6859 en net/http, alcanzable desde
+//     el servidor, y govulncheck lo marcaba en todo proyecto (corrida asset-vault 2.27 con Cognito).
 // Las versiones de cada módulo, con su licencia, viven en `go-stack.js`.
 export const GO_MIN_VERSION = '1.27.0';
-export const GO_TOOLCHAIN = 'go1.27.3';
+export const GO_TOOLCHAIN = 'go1.27.4';
 
 export function packageVersion() {
   return JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;

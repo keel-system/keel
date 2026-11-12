@@ -84,6 +84,7 @@ import * as integrationTests from './integration-tests.js';
 import * as statementCount from './statement-count.js';
 import * as readme from './readme.js';
 import * as generatorDocs from './generator-docs.js';
+import * as longIds from './long-ids.js';
 
 // Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara. El primero es el contrato formal de
 // la API, derivado del modelo neutral (el mismo en los cuatro generadores), salvo que el workspace traiga el de
@@ -101,6 +102,7 @@ const GENERATORS = [
   errors,
   enums,
   valueTypes,
+  longIds,
   entities,
   events,
   domainGuardsCheck,
