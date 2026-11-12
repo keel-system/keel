@@ -32,6 +32,8 @@ import { adapterClass, portClass, repositoriesNamespace, isPaginated, naturalKey
 import { sortablePaths } from '@keel-system/keel-core/gen/document';
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import { DOCUMENT_SCOPE_LINE, readScopeDocumentMethods, scopedLoadsOf } from './read-scope.js';
+import * as lifecycle from './data-lifecycle.js';
+import { isLogicallyDeleted } from '@keel-system/keel-core/gen/relational';
 export { sortablePaths };
 
 // ─── Valores ─────────────────────────────────────────────────────────────────────────────────────
@@ -215,7 +217,7 @@ ${state.join('\n')}
  * documento, con cada valor convertido como se guarda. Los parámetros son los del PUERTO (repositories.js): mismo
  * nombre, mismo tipo.
  */
-function keyFilter(model, entity, finder) {
+export function keyFilter(model, entity, finder) {
   const members = persistedMembers(model, entity);
   const conditions = [];
   for (const param of finder.params) {
@@ -391,9 +393,12 @@ export function renderDocumentAdapter(model, entity) {
   const idName = csLocal(idField?.name ?? 'id');
   const idFilter = `new BsonDocument(${csString(DOCUMENT_ID)}, ${idField ? writeScalar(idField, idName) : `BsonValues.Of(${idName})`})`;
   const methods = [];
+  // Las lecturas VIVAS (DSL 2.28, D2): con borrado lógico, toda carga y todo listado del puerto deja fuera lo borrado
+  // (`deletedAt: null` casa con el campo nulo y con el ausente). FindAllById no: es la lectura por referencia (D3).
+  const live = (filter) => (isLogicallyDeleted(entity) ? `Live(${filter})` : filter);
   methods.push(`    public async Task<${entity.name}?> FindById(${idType} ${idName}, CancellationToken cancellationToken = default)
     {
-        var found = await Find(${idFilter}).FirstOrDefaultAsync(cancellationToken);
+        var found = await Find(${live(idFilter)}).FirstOrDefaultAsync(cancellationToken);
         return found is null ? null : ToDomain${entity.name}(found);
     }`);
   // La carga que compara la versión (api.concurrency, D4), la misma que la del adaptador relacional.
@@ -426,7 +431,7 @@ export function renderDocumentAdapter(model, entity) {
     const value = ownerId ? writeScalar(ownerId, param) : `BsonValues.Of(${param})`;
     methods.push(`    public async Task<IReadOnlyList<${entity.name}>> ${finder}(${ownerType} ${param}, CancellationToken cancellationToken = default)
     {
-        var found = await Find(new BsonDocument(${csString(field)}, ${value})).ToListAsync(cancellationToken);
+        var found = await Find(${live(`new BsonDocument(${csString(field)}, ${value})`)}).ToListAsync(cancellationToken);
         return [.. found.Select(ToDomain${entity.name})];
     }`);
   }
@@ -436,7 +441,7 @@ export function renderDocumentAdapter(model, entity) {
     const signature = finder.params.map((p) => `${p.type} ${csLocal(p.name)}`).join(', ');
     methods.push(`    public async Task<${entity.name}?> ${finder.name}(${signature}, CancellationToken cancellationToken = default)
     {
-        var found = await Find(${keyFilter(model, entity, finder)}).FirstOrDefaultAsync(cancellationToken);
+        var found = await Find(${live(keyFilter(model, entity, finder))}).FirstOrDefaultAsync(cancellationToken);
         return found is null ? null : ToDomain${entity.name}(found);
     }`);
   }
@@ -452,7 +457,7 @@ export function renderDocumentAdapter(model, entity) {
             return [];
         }
         var filter = new BsonDocument(${csString(keyOf(model, entity, batch.field.name))}, new BsonDocument("$in", new BsonArray(keys.Select(key => ${writeScalar(batch.field, 'key')}))));
-        var found = await Find(filter).ToListAsync(cancellationToken);
+        var found = await Find(${live('filter')}).ToListAsync(cancellationToken);
         return [.. found.Select(ToDomain${entity.name})];
     }`);
   }
@@ -462,7 +467,7 @@ export function renderDocumentAdapter(model, entity) {
     methods.push(`    public async Task<${entity.name}?> ${credential.name}(string ${local}, CancellationToken cancellationToken = default)
     {
         // La lista es un array del propio documento: MongoDB casa un array con uno de sus elementos.
-        var found = await Find(new BsonDocument(${csString(keyOf(model, entity, credential.field.name))}, ${writeScalar(credential.field, local)})).FirstOrDefaultAsync(cancellationToken);
+        var found = await Find(${live(`new BsonDocument(${csString(keyOf(model, entity, credential.field.name))}, ${writeScalar(credential.field, local)})`)}).FirstOrDefaultAsync(cancellationToken);
         return found is null ? null : ToDomain${entity.name}(found);
     }`);
   }
@@ -472,7 +477,7 @@ export function renderDocumentAdapter(model, entity) {
     methods.push(`    public async Task<Page<${entity.name}>> List(Pageable pageable, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(pageable);
-        var all = FilterDefinition<BsonDocument>.Empty;
+        var all = ${isLogicallyDeleted(entity) ? 'NotDeleted' : 'FilterDefinition<BsonDocument>.Empty'};
         // Una tras otra y no en paralelo: dentro de una transacción la sesión no admite operaciones concurrentes.
         var total = transactions.Session is { } session
             ? await Collection.CountDocumentsAsync(session, all, cancellationToken: cancellationToken)
@@ -499,7 +504,19 @@ export function renderDocumentAdapter(model, entity) {
   methods.push(...documentGuardMethods(model, entity, guardClaimsFor(model, entity.name)));
   if (sweeps.length + reconciliations.length > 0) methods.push(documentOwnTransactionHelper());
   methods.push(saveMethod(model, entity));
-  methods.push(`    public async Task DeleteById(${idType} ${idName}, CancellationToken cancellationToken = default)
+  // Con borrado lógico (DSL 2.28), DeleteById MARCA, y la restauración y la carga de la borrada van con él.
+  const natural = naturalKeyFinder(model, entity);
+  const marking = lifecycle.documentAdapterMethods(model, entity, {
+    idType,
+    idName,
+    idFilter,
+    keyFilter: natural ? keyFilter(model, entity, natural) : null,
+    keyFinder: natural ? { ...natural, params: natural.params.map((param) => ({ ...param, local: csLocal(param.name) })) } : null
+  });
+  if (lifecycle.throwsWindowError(model, entity)) usings.push(namespaceOf(model, 'errors'));
+  methods.push(
+    ...(marking ?? [
+      `    public async Task DeleteById(${idType} ${idName}, CancellationToken cancellationToken = default)
     {
         // El agregado es el documento: borrarlo borra también sus hijas, que van dentro.
         await transactions.InTransaction(
@@ -510,7 +527,9 @@ export function renderDocumentAdapter(model, entity) {
             },
             readOnly: false,
             cancellationToken);
-    }`);
+    }`
+    ])
+  );
 
   // Lo que recibe el constructor: la transacción, el puente si la raíz emite eventos, y lo de sus reclamos.
   const ctor = ['PersistenceTransactions transactions'];
@@ -518,7 +537,9 @@ export function renderDocumentAdapter(model, entity) {
     ctor.push(`${bridgeClass(model)} events`);
     usings.push(messagingNamespace(model));
   }
-  const others = [...claimDependencies(model, entity), ...reconciliationDependencies(model, entity)];
+  const claimed = [...claimDependencies(model, entity), ...reconciliationDependencies(model, entity)];
+  // La ventana de una restauración que lee un parámetro del servicio (DSL 2.28), si no lo recibe ya.
+  const others = [...claimed, ...lifecycle.lifecycleDependencies(model, entity).filter((dep) => !claimed.some((other) => other.name === dep.name))];
   // Los plazos de negocio (DSL 2.26): el almacén del cronómetro y los plazos vigentes, para armar al guardar.
   for (const dep of [...others, ...replicaDependencies(entity, others), ...timerDependencies(model, entity)]) {
     ctor.push(`${dep.type} ${dep.name}`);
@@ -538,7 +559,7 @@ public sealed class ${adapterClass(entity)}(${ctor.join(', ')}) : ${portClass(en
 
     /// <summary>Una búsqueda en la sesión de la transacción abierta, si la hay.</summary>
     private IFindFluent<BsonDocument, BsonDocument> Find(FilterDefinition<BsonDocument> filter) =>
-        transactions.Session is { } session ? Collection.Find(session, filter) : Collection.Find(filter);
+        transactions.Session is { } session ? Collection.Find(session, filter) : Collection.Find(filter);${lifecycle.documentLiveMembers(entity)}
 
 ${methods.join('\n\n')}
 
@@ -601,8 +622,9 @@ function documentFinderMethods(model, entity) {
       }
     }
     lines.push('        var query = conditions.Count == 0 ? FilterDefinition<BsonDocument>.Empty : Builders<BsonDocument>.Filter.And(conditions);');
-    // El alcance se SUMA a los criterios (D4), y la misma consulta da el total.
+    // El alcance (D4) y lo borrado (DSL 2.28) se SUMAN a los criterios, la vida la última, y la misma consulta da el total.
     if (finder.scope) lines.push(DOCUMENT_SCOPE_LINE);
+    if (finder.live) lines.push(lifecycle.DOCUMENT_LIVE_LINE);
     const guards = [hasFilter(finder) ? '        ArgumentNullException.ThrowIfNull(filter);' : null, finder.result === 'page' ? '        ArgumentNullException.ThrowIfNull(pageable);' : null].filter(Boolean);
     const tail =
       finder.result === 'page'

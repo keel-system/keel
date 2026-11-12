@@ -23,6 +23,7 @@ import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { envFor } from '@keel-system/keel-core/gen/runtime-env';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { SYSTEM_ACTOR } from '@keel-system/keel-core/gen/relational';
+import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
 import { csFile, csString, located, namespaceOf, solution } from './render.js';
 import { usesCorrelation } from './rest-support.js';
 import { securityNamespace, usesHttpSecurity } from './security.js';
@@ -828,6 +829,14 @@ ${
                 .UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery)
                 .MigrationsHistoryTable(${csString(MIGRATIONS_TABLE)})`
         )};${
+                  usesPersonalData(model)
+                    ? `
+        // Con datos personales (DSL 2.28, D10, PD-2), EF no escribe en el log el fallo de una sentencia: lo hace con la
+        // excepción del motor, y la de una unicidad violada lleva el valor que chocó (MySQL: Duplicate entry 'ana@x.com').
+        // El fallo sigue llegando entero a quien guarda, que lo traduce por el nombre de su constraint.
+        options.ConfigureWarnings(warnings => warnings.Ignore(CoreEventId.SaveChangesFailed, CoreEventId.QueryIterationFailed, RelationalEventId.CommandError));`
+                    : ''
+                }${
                   usesStatementCount(model)
                     ? `
         // El coste de las peticiones para los Then que lo afirman: solo cuando lo enciende el arnés de flujos.

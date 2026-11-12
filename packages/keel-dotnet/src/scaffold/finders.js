@@ -8,6 +8,7 @@ import { memberOf } from './enums.js';
 import { csFile, csLocal, csMember, csString, fieldUsings, located, namespaceOf, xmlDoc } from './render.js';
 import { screamingSnake } from '@keel-system/keel-core/gen/naming';
 import { RELATIONAL_SCOPE_LINE, READ_SCOPE_PROPERTY } from './read-scope.js';
+import { RELATIONAL_LIVE_LINE } from './data-lifecycle.js';
 
 /** Los finders de la raíz, en el orden de las operaciones. */
 export function entityFinders(model, entity) {
@@ -156,8 +157,9 @@ export function relationalFinderMethods(model, entity) {
             `        var rows = await Ordered(query, ${defaultSortConstant(finder)}).ToListAsync(cancellationToken);`,
             '        return [.. rows.Select(ToDomain)];'
           ];
-    // El alcance se SUMA a los criterios (D4): la misma consulta da las filas y el total.
-    const scoped = finder.scope ? [RELATIONAL_SCOPE_LINE] : [];
+    // El alcance (D4) y lo borrado (DSL 2.28, D2) se SUMAN a los criterios, la vida la última: así sustituir en vez de
+    // sumar (lc-implicit-replace) se lleva todo lo de antes y se ve. La misma consulta da las filas y el total.
+    const scoped = [...(finder.scope ? [RELATIONAL_SCOPE_LINE] : []), ...(finder.live ? [RELATIONAL_LIVE_LINE] : [])];
     return `    public async Task<${resultType(finder, entity)}> ${methodName(finder)}(${finderParameters(finder)})
     {
 ${[...guards, start, ...relationalFilterLines(model, entity, finder), ...scoped, ...tail].join('\n')}

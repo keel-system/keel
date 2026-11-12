@@ -48,6 +48,7 @@ import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold
 import { messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents } from '../../src/scaffold/messaging.js';
 import { purgeNamespace, tablePurges } from '../../src/scaffold/purge.js';
 import { DRAIN_SAMPLES, drainProbes, drainSubject, purgeTimerFixtureRegistration, purgeTimerProbeBlock, purgeTimerProbeUsings, timerFixtureRegistration, timerProbeBlock, timerProbeUsings } from './timer-probes.js';
+import { lifecycleFixtureRegistration, lifecycleProbeBlock, lifecycleProbeUsings } from './lifecycle-probes.js';
 import { claimOrderField, claimsForEntity, rescueProbes, screamingSnake, snakeCase, sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
@@ -633,6 +634,10 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
   const purges = tablePurges(model);
   if (purges.length > 0) blocks.push(purgeBlock(model, purges));
 
+  // El ciclo de vida del dato (DSL 2.28): LC, RT y PD-2 en ESTA clase. Antes de los Ensure: sus muestras los piden.
+  const lifecycle = lifecycleProbeBlock(model, ctx, { document: false });
+  if (lifecycle) blocks.push(lifecycle.methods);
+
   // Las raíces a las que apunta una referencia obligatoria: se guarda UNA de cada, y su id vale para todas las sondas.
   const ensures = [];
   const ensured = new Set();
@@ -672,6 +677,7 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
   const usings = [
     ...timerProbeUsings(model),
     ...purgeTimerProbeUsings(model),
+    ...lifecycleProbeUsings(model, { document: false }),
     'System.Text.Json',
     'System.Text.Json.Nodes',
     'Microsoft.EntityFrameworkCore',
@@ -703,7 +709,7 @@ public sealed class PersistenceFixture : IAsyncLifetime
         const string Database = ${csString(databaseOf(model))};
 ${usesMySql(model) ? MYSQL_SUBJECT_DATABASE : POSTGRESQL_SUBJECT_DATABASE}
         var services = new ServiceCollection();
-        services.AddLogging();${timerFixtureRegistration(model)}${purgeTimerFixtureRegistration(model)}${usesSweepClaims(model) ? `
+        services.AddLogging();${timerFixtureRegistration(model)}${purgeTimerFixtureRegistration(model)}${lifecycleFixtureRegistration(model, { document: false })}${usesSweepClaims(model) ? `
         // Los barridos con lotes de DOS: con tres filas, dos pasadas. AddPersistence no pisa estos (TryAdd).
         services.AddSingleton(${probeSweepSettings(model)});` : ''}${usesReconciliationSettings(model) ? `
         // Los barridos de reconciliación con lotes de DOS (con tres candidatos, dos pasadas); AddPersistence no los pisa.
@@ -775,7 +781,7 @@ ${ensures.join('\n\n')}
     };
 }`;
   if (ctx.unsampled.length > 0) console.warn(`  (db-check) sin muestra para ${[...new Set(ctx.unsampled)].join(', ')}`);
-  return csFileLike(namespace, usings, [body, timer?.classes, purgeTimer?.classes].filter(Boolean).join('\n\n'));
+  return csFileLike(namespace, usings, [body, timer?.classes, purgeTimer?.classes, lifecycle?.classes].filter(Boolean).join('\n\n'));
 }
 
 /** Los campos de la clave natural que declaran `compare` (su unicidad va sobre la sombra plegada), si son texto. */

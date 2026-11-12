@@ -18,6 +18,8 @@
 
 import { sourceGate } from '@keel-system/keel-core/gen/source-gate';
 import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
+import { personalFieldNames } from '@keel-system/keel-core/gen/personal-data';
+import { csMember } from './render.js';
 
 /** Dónde busca el gate y cómo son los comentarios de C#: la plataforma del motor neutral. */
 export const CS_SOURCE = { root: 'src', extension: 'cs', excludeDirs: ['bin', 'obj'], lineComment: '//', blockComment: ['/*', '*/'] };
@@ -67,6 +69,22 @@ export const LOGGING_RULES = [
   }
 ];
 
+/**
+ * La regla de los datos PERSONALES (DSL 2.28, D10, PD-1): un campo que el diseño marca `personal` dentro de una llamada de
+ * log (`command.Email`, `card.DisplayName`). Por nombre, como el resto del gate: un homónimo de otra entidad que no es
+ * personal también casa, y es preferible al revés. Null si el diseño no marca ninguno. La misma regla que keel-spring y
+ * keel-nest, sobre la propiedad de C#.
+ */
+export function personalRule(model) {
+  const names = personalFieldNames(model).map(csMember);
+  if (names.length === 0) return null;
+  return {
+    id: 'personal',
+    pattern: String.raw`${LOG_CALL}[^;]*[.](${names.join('|')})([^A-Za-z0-9_]|$)`,
+    why: `loguea un campo que el diseño marca personal (DSL 2.28: ${names.join(', ')}): su valor no puede acabar en el backend de logs; loguea el id del agregado`
+  };
+}
+
 export function generate(model) {
   if (!(model.services ?? []).some((service) => (service.operations ?? []).length > 0)) return [];
   return [{ path: 'infra/check-logging.sh', content: script(model), executable: true }];
@@ -97,7 +115,7 @@ fi
 ${sourceGate({
   title: 'HIGIENE DE LOGS Y CONTEXTO',
   label: 'logging',
-  rules: LOGGING_RULES.map(({ id, pattern, paths, exclude, why }) => ({ id, pattern, paths, exclude, why })),
+  rules: [...LOGGING_RULES.map(({ id, pattern, paths, exclude, why }) => ({ id, pattern, paths, exclude, why })), ...[personalRule(model)].filter(Boolean)],
   footer: usesTelemetry(model)
     ? 'Ver docs/keel/conventions/observability.md § Reglas para quien escribe código.'
     : 'Loguea con ILogger<T> (mejor con [LoggerMessage]): el logger del servicio pone el formato, el nivel y la correlación.',

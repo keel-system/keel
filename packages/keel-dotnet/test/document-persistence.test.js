@@ -72,7 +72,10 @@ for (const name of SUBJECTS) {
         assert.ok(line, `${collection}: ${spec.name}`);
         assert.ok(line.includes(`new BsonDocument { ${keys} }`), `${spec.name}: claves ${keys}`);
         assert.equal(line.includes('Unique = true'), Boolean(spec.unique), `${spec.name}: unique`);
-        if (spec.partialFilter) assert.ok(line.includes(`PartialFilterExpression = new BsonDocument("${spec.partialFilter.path}", ${JSON.stringify(spec.partialFilter.equals)})`), `${spec.name}: filtro`);
+        // La condición del diseño y, con borrado lógico (DSL 2.28), la vida: una entrada, o las dos en un inicializador.
+        const entries = [...(spec.partialFilter ? [[spec.partialFilter.path, JSON.stringify(spec.partialFilter.equals)]] : []), ...(spec.live ? [[spec.live.path, 'BsonNull.Value']] : [])];
+        if (entries.length === 1) assert.ok(line.includes(`PartialFilterExpression = new BsonDocument("${entries[0][0]}", ${entries[0][1]})`), `${spec.name}: filtro`);
+        else if (entries.length === 2) assert.ok(line.includes(`PartialFilterExpression = new BsonDocument { ${entries.map(([key, value]) => `{ "${key}", ${value} }`).join(', ')} }`), `${spec.name}: filtro`);
         else assert.ok(!line.includes('PartialFilterExpression'), `${spec.name}: sin filtro`);
       }
     }

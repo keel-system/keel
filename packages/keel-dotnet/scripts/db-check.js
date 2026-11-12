@@ -67,6 +67,10 @@
 // Y los del cronómetro y los plazos (DSL 2.26), sobre verification-codes (sin --only, solo ese sujeto): verde = el
 // sabotaje cae en EXACTAMENTE sus casos DL (scripts/lib/timer-probes.js):
 //   dl-boundary  dl-no-guard  dl-no-revalidate  dl-no-lease  dl-outside-tx
+// Y los del ciclo de vida del dato (DSL 2.28), sobre los sujetos de keel-core/test/helpers/data-lifecycle-designs.js (sin
+// --only, esos): verde = cada uno cae en EXACTAMENTE sus casos LC, RT y PD (scripts/lib/lifecycle-probes.js):
+//   lc-no-filter  lc-count  lc-get-leak  lc-unique-all-rows  lc-restore-window  lc-embed-hidden  lc-implicit-replace
+//   rt-early  rt-anonymize-miss  rt-every-replica  pd-log-value (este, solo en MySQL: en PostgreSQL no hay valor que caiga)
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -85,6 +89,7 @@ import { timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
 import { PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSabotage, purgeTimerSabotageVerdict, timerProbePatch, timerSabotageVerdict, timerSubject } from './lib/timer-probes.js';
 import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
 import { READ_SCOPE_SABOTAGE_SPECS, READ_SCOPE_SUBJECTS, isReadScopeSabotage, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
+import { LIFECYCLE_SABOTAGE_SPECS, LIFECYCLE_SUBJECTS, isLifecycleSabotage, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
 import { resolveRuntime, startDatabase, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const args = process.argv.slice(2);
@@ -186,7 +191,9 @@ const SABOTAGES = {
   // El relay por réplica (DSL 2.26, inc. 9): sobre notification-mailer, caen RW1 o RW3.
   ...Object.fromEntries(Object.entries(RELAY_WAKE_SABOTAGES).map(([id, spec]) => [id, spec.relational])),
   // La lectura acotada (DSL 2.27): sobre vault-scoped y shop-scoped, cada uno cae en exactamente sus casos RS.
-  ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
+  ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational])),
+  // El ciclo de vida del dato (DSL 2.28): sobre los sujetos de data-lifecycle-designs.js, cada uno cae en exactamente sus casos.
+  ...Object.fromEntries(Object.entries(LIFECYCLE_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
 };
 
 /** El sabotaje para un motor: [sufijo, texto, sustituto], o null si no aplica a ese motor. */
@@ -237,7 +244,9 @@ const DERIVED = {
   // La escritura condicional (api.concurrency): LoadExpecting y la versión que devuelve Save (CW-1 a CW-5).
   ...uncoveredBranch('catalog-conditional'),
   // La lectura acotada (DSL 2.27): RS-1 a RS-8, con el salto como subconsulta (vault-scoped) y la propiedad sobre la fila.
-  ...Object.assign({}, ...READ_SCOPE_SUBJECTS.relational.map((name) => uncoveredBranch(name)))
+  ...Object.assign({}, ...READ_SCOPE_SUBJECTS.relational.map((name) => uncoveredBranch(name))),
+  // El ciclo de vida del dato (DSL 2.28): LC-1 a LC-10, RT-1 a RT-4 y PD-2 (scripts/lib/lifecycle-probes.js).
+  ...Object.assign({}, ...LIFECYCLE_SUBJECTS.relational.map((name) => uncoveredBranch(name)))
 };
 
 function uncoveredBranch(name) {
@@ -246,8 +255,10 @@ function uncoveredBranch(name) {
 }
 // Un sabotaje del cronómetro solo tiene sujeto en el par de los plazos: sin --only, solo ese.
 const SUBJECTS = only
-  ? [only]
-  : isReadScopeSabotage(sabotage)
+  ? only.split(',')
+  : isLifecycleSabotage(sabotage)
+    ? LIFECYCLE_SUBJECTS.relational
+    : isReadScopeSabotage(sabotage)
     ? READ_SCOPE_SUBJECTS.relational
     : isTimerSabotage(sabotage)
     ? ['verification-codes']
@@ -302,7 +313,7 @@ async function checkEngine(engine) {
     const projects = [];
     // El sabotaje se aplica EN MEMORIA y antes de generar las sondas, que leen del arnés emitido las sentencias del rescate:
     // aplicado después, sobre el disco, un sabotaje del arnés no llegaba a lo que db-check ejecuta.
-    const [suffix, from, to] = sabotage ? sabotageFor(sabotage, engine) : [];
+    const [suffix, from, to, guard] = sabotage ? sabotageFor(sabotage, engine) : [];
     let applied = 0;
     for (const name of SUBJECTS) {
       const derived = DERIVED[name];
@@ -314,7 +325,7 @@ async function checkEngine(engine) {
         ? planned.map((file) => {
             // Lo de `src/` por sufijo; el arnés, solo si el sabotaje lo nombra (sus sufijos llevan `IntegrationTests/`).
             const inScope = file.path.includes(suffix) && (file.path.startsWith('src/') || suffix.includes('IntegrationTests/'));
-            if (!inScope || typeof file.content !== 'string') return file;
+            if (!inScope || typeof file.content !== 'string' || (guard && !guard.test(file.content))) return file;
             const content = typeof from === 'string' ? file.content.replaceAll(from, to) : file.content.replace(from, to);
             if (content === file.content) return file;
             applied += 1;
@@ -354,6 +365,11 @@ async function checkEngine(engine) {
       // Con el espacio delante: `Catalog.DbProbes.` es subcadena de `ProductCatalog.DbProbes.`.
       const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
       const ran = tested.output.includes(`${subject.probes.name}.dll`);
+      if (isLifecycleSabotage(sabotage)) {
+        const verdict = lifecycleSabotageVerdict(mine, sabotage, subject.model, { engine });
+        step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+        continue;
+      }
       if (isReadScopeSabotage(sabotage)) {
         const verdict = readScopeSabotageVerdict(mine, sabotage, subject.model);
         step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
@@ -475,7 +491,9 @@ function postgresqlSchemaCheck(database, { model, files }) {
   // mapeo, un predicado mal emitido se daba la razón a sí mismo.
   for (const spec of partialIndexSpecs(model, 'postgresql')) {
     const def = indexes.get(spec.name) ?? '';
-    if (!/ WHERE /.test(def) || !def.includes(`'${spec.stored}'`)) problems.push(`${spec.name}: sin el predicado ${spec.predicate} (${def || 'no existe'})`);
+    // Con borrado lógico (DSL 2.28, D4) el predicado lleva además la vida; sin `when`, solo la vida.
+    const wants = [...(spec.when ? [`'${spec.stored}'`] : []), ...(spec.live ? ['deleted_at IS NULL'] : [])];
+    if (!/ WHERE /.test(def) || !wants.every((piece) => def.includes(piece))) problems.push(`${spec.name}: sin el predicado ${spec.predicate} (${def || 'no existe'})`);
   }
   problems.push(...nameProblems(model, live, names));
   return [problems.length === 0, problems.slice(0, 8).join('; ')];
@@ -532,7 +550,8 @@ function mysqlSchemaCheck(database, { model, files }) {
     const flag = discriminatorColumn(spec);
     const generated = live.get(`${spec.tableName}.${flag}`);
     if (!generated) problems.push(`${spec.name}: falta su columna generada ${flag}`);
-    else if (!generated.generation.includes(spec.stored)) problems.push(`${spec.name}: ${flag} no compara con '${spec.stored}' (${generated.generation})`);
+    else if (spec.when && !generated.generation.includes(spec.stored)) problems.push(`${spec.name}: ${flag} no compara con '${spec.stored}' (${generated.generation})`);
+    else if (spec.live && !/deleted_at.? is null/i.test(generated.generation)) problems.push(`${spec.name}: ${flag} no mira la vida de la fila (${generated.generation})`);
     const index = indexColumns.get(spec.name);
     if (!index?.unique || index.columns.at(-1) !== flag) problems.push(`${spec.name}: no es único con ${flag} al final (${index ? index.columns.join(', ') : 'no existe'})`);
   }

@@ -38,6 +38,8 @@ import { sweepPassNamespace } from './timer.js';
 import { adapterClaimMethods, adapterGuardMethods, claimDependencies, claimUsings, guardDependencies, portClaimMethods, portGuardMethods } from './claim.js';
 import { adapterReconciliationMethods, portReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
 import { renderDocumentAdapter } from './document-repositories.js';
+import * as lifecycle from './data-lifecycle.js';
+import { isLogicallyDeleted } from '@keel-system/keel-core/gen/relational';
 import {
   usesPersistence,
   usesDocument,
@@ -226,6 +228,28 @@ export function uniqueFieldFinders(model, entity) {
 
 const signature = (finder) => finder.params.map((p) => `${p.type} ${csLocal(p.name)}`).join(', ');
 
+/** El finder con el nombre local de cada parámetro, la forma que lee data-lifecycle.js. */
+function finderWithLocals(finder) {
+  return finder ? { ...finder, params: finder.params.map((param) => ({ ...param, local: csLocal(param.name) })) } : null;
+}
+
+/**
+ * Las condiciones de la carga por unas claves sobre la fila, con el valor plegado calculado FUERA de la expresión: EF
+ * traduce la comparación, no la llamada. `{ locals, conditions }`.
+ */
+function keyQuery(finder) {
+  const locals = [];
+  const conditions = finder.params.flatMap((param) =>
+    param.where.map(([property, expression], index) => {
+      if (!param.fold) return `r.${property} == ${expression}`;
+      const local = `${csLocal(param.name).replace(/^@/, '')}Folded${index > 0 ? index : ''}`;
+      locals.push(`        var ${local} = ${expression};`);
+      return `r.${property} == ${local}`;
+    })
+  );
+  return { locals, conditions };
+}
+
 // ─── La credencial que resuelve al agregado (resolvedBy) ─────────────────────────────────────────
 
 /**
@@ -351,8 +375,10 @@ function renderPort(model, entity) {
       ],
       '    '
     )}    Task<${entity.name}> Save(${entity.name} entity, CancellationToken cancellationToken = default);`,
-    `    Task DeleteById(${idType} ${idName}, CancellationToken cancellationToken = default);`
+    lifecycle.deletePortMethod(model, entity, idType, idName)
   );
+  // La restauración de un borrado lógico (DSL 2.28, D6): la borrada por su clave y la restauración por id.
+  methods.push(...lifecycle.restorePortMethods(model, entity, idType, idName, finderWithLocals(finder)));
   const body = `${xmlDoc(['Puerto de persistencia del agregado ' + entity.name + '. El dominio solo ve esto; el adaptador vive en', 'Infrastructure/Persistence/Repositories.'])}public interface ${portClass(entity)}
 {
 ${methods.join('\n\n')}
@@ -412,10 +438,15 @@ function renderAdapter(model, entity) {
   const idProp = csMember(entity.idField?.name ?? 'id');
   const row = rowClass(entity.name);
   const methods = [];
+  // Las lecturas VIVAS (DSL 2.28, D2): con borrado lógico, toda carga y todo listado del puerto deja fuera lo borrado.
+  // FindAllById no: es la lectura por referencia, y una raíz borrada sigue siendo historia de quien la referencia (D3).
+  const live = isLogicallyDeleted(entity);
+  const alive = live ? ` && ${lifecycle.ROW_ALIVE}` : '';
+  const liveWhere = live ? `.Where(r => ${lifecycle.ROW_ALIVE})` : '';
 
   methods.push(`    public async Task<${entity.name}?> FindById(${idType} ${idName}, CancellationToken cancellationToken = default)
     {
-        var found = await Graph().AsNoTracking().SingleOrDefaultAsync(r => r.${idProp} == ${idName}, cancellationToken);
+        var found = await Graph().AsNoTracking().SingleOrDefaultAsync(r => r.${idProp} == ${idName}${alive}, cancellationToken);
         return found is null ? null : ToDomain(found);
     }`);
   if (loadsExpecting(model, entity)) {
@@ -443,26 +474,17 @@ function renderAdapter(model, entity) {
     const finder = `${inverse.finder[0].toUpperCase()}${inverse.finder.slice(1)}`;
     methods.push(`    public async Task<IReadOnlyList<${entity.name}>> ${finder}(${ownerType} ${param}, CancellationToken cancellationToken = default)
     {
-        var found = await Graph().AsNoTracking().Where(r => r.${csMember(`${inverse.relation}Id`)} == ${param}).ToListAsync(cancellationToken);
+        var found = await Graph().AsNoTracking().Where(r => r.${csMember(`${inverse.relation}Id`)} == ${param}${alive}).ToListAsync(cancellationToken);
         return [.. found.Select(ToDomain)];
     }`);
   }
 
   for (const finder of [naturalKeyFinder(model, entity), ...occupantFinders(model, entity), ...uniqueFieldFinders(model, entity)].filter(Boolean)) {
     for (const param of finder.params) usings.push(...param.usings);
-    // El valor plegado se calcula fuera de la expresión: EF traduce la comparación, no la llamada.
-    const locals = [];
-    const conditions = finder.params.flatMap((param) =>
-      param.where.map(([property, expression], index) => {
-        if (!param.fold) return `r.${property} == ${expression}`;
-        const local = `${csLocal(param.name).replace(/^@/, '')}Folded${index > 0 ? index : ''}`;
-        locals.push(`        var ${local} = ${expression};`);
-        return `r.${property} == ${local}`;
-      })
-    );
+    const { locals, conditions } = keyQuery(finder);
     methods.push(`    public async Task<${entity.name}?> ${finder.name}(${signature(finder)}, CancellationToken cancellationToken = default)
     {
-${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Graph().AsNoTracking().SingleOrDefaultAsync(r => ${conditions.join(' && ')}, cancellationToken);
+${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Graph().AsNoTracking().SingleOrDefaultAsync(r => ${conditions.join(' && ')}${alive}, cancellationToken);
         return found is null ? null : ToDomain(found);
     }`);
   }
@@ -478,7 +500,7 @@ ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Gr
         {
             return [];
         }
-        var found = await Graph().AsNoTracking().Where(r => keys.Contains(r.${property})).ToListAsync(cancellationToken);
+        var found = await Graph().AsNoTracking().Where(r => keys.Contains(r.${property})${alive}).ToListAsync(cancellationToken);
         return [.. found.Select(ToDomain)];
     }`);
   }
@@ -500,9 +522,9 @@ ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Gr
     methods.push(`    public async Task<Page<${entity.name}>> List(Pageable pageable, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(pageable);
-        var total = await db.Set<${row}>().LongCountAsync(cancellationToken);
+        var total = await db.Set<${row}>()${liveWhere}.LongCountAsync(cancellationToken);
         var offset = (int)Math.Min((long)pageable.Page * pageable.Size, int.MaxValue);
-        var rows = await Ordered(Graph().AsNoTracking(), pageable.Sort).Skip(offset).Take(pageable.Size).ToListAsync(cancellationToken);
+        var rows = await Ordered(Graph().AsNoTracking()${liveWhere}, pageable.Sort).Skip(offset).Take(pageable.Size).ToListAsync(cancellationToken);
         return Page<${entity.name}>.Of([.. rows.Select(ToDomain)], pageable, total);
     }`);
   }
@@ -523,7 +545,13 @@ ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Gr
   usings.push(...claimUsings(model, entity));
   for (const dep of adapterExtras(model, entity)) usings.push(...dep.usings);
   methods.push(saveMethod(model, entity, helpers));
-  methods.push(`    public async Task DeleteById(${idType} ${idName}, CancellationToken cancellationToken = default)
+  // Con borrado lógico (DSL 2.28), DeleteById MARCA, y la restauración y la carga de la borrada van con él.
+  const natural = naturalKeyFinder(model, entity);
+  const marking = lifecycle.relationalAdapterMethods(model, entity, { idType, idName, keyFinder: finderWithLocals(natural), keyQuery: natural ? keyQuery(natural) : null });
+  if (lifecycle.throwsWindowError(model, entity)) usings.push(namespaceOf(model, 'errors'));
+  methods.push(
+    ...(marking ?? [
+      `    public async Task DeleteById(${idType} ${idName}, CancellationToken cancellationToken = default)
     {
         await transactions.InTransaction(
             async () =>
@@ -539,7 +567,9 @@ ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Gr
             },
             readOnly: false,
             cancellationToken);
-    }`);
+    }`
+    ])
+  );
 
   const includes = includePaths(model, entity).map((pathName) => `.Include(${csString(pathName)})`).join('');
   const sortable = isPaginated(model, entity) || needsOrdering(model, entity) ? sortableBlock(model, entity) : '';
@@ -619,7 +649,9 @@ ${entries.join('\n')}
 function adapterExtras(model, entity) {
   const others = [...claimDependencies(model, entity), ...reconciliationDependencies(model, entity), ...guardDependencies(model, entity)];
   // Los plazos de negocio (DSL 2.26): el almacén del cronómetro y los plazos vigentes, para armar al guardar.
-  return [...others, ...replicaDependencies(entity, others), ...timerDependencies(model, entity)];
+  // La ventana de una restauración que lee un parámetro del servicio (DSL 2.28), si no lo recibe ya.
+  const windows = lifecycle.lifecycleDependencies(model, entity).filter((dep) => !others.some((other) => other.name === dep.name));
+  return [...others, ...windows, ...replicaDependencies(entity, others), ...timerDependencies(model, entity)];
 }
 
 function saveMethod(model, entity, helpers) {

@@ -29,6 +29,7 @@ import { usesPersistence } from './persistence.js';
 import { parametersClass, parametersNamespace } from './service-parameters.js';
 import { valueAlias } from './relational-engine.js';
 import { guardClaimsFor } from '@keel-system/keel-core/gen/scheduling';
+import { DELETED_AT, isLogicallyDeleted } from '@keel-system/keel-core/gen/relational';
 export { guardClaimsFor };
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
@@ -204,6 +205,8 @@ export function adapterClaimMethods(model, entity) {
     }
     // El instante con el que se estampa o se arrienda: uno por tanda.
     if (claim.stamps || claim.stalled) setup.push('        var claimedAt = DateTimeOffset.UtcNow;');
+    // Lo borrado lógicamente (DSL 2.28) no es candidato de ningún barrido.
+    if (isLogicallyDeleted(entity)) extra.push(`${DELETED_AT.column} IS NULL`);
     const where = [`${stateColumn} IN (${states})`, ...extra].join(' AND ');
     const set = claim.stalled
       ? `${snakeCase(claim.stalled.stampField)} = {claimedAt}`

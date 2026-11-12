@@ -25,6 +25,7 @@ import { sweepPassSignal } from './timer.js';
 import { documentShape, storeDocumentKey, storeDocumentFields } from '@keel-system/keel-core/gen/document';
 import { snakeCase } from '@keel-system/keel-core/gen/naming';
 import { csMember, csString } from './render.js';
+import { DELETED_AT, isLogicallyDeleted } from '@keel-system/keel-core/gen/relational';
 
 /** El valor GUARDADO de un estado del ciclo de vida: la constante del enum, no el literal del diseño. */
 function csEnumConstant(model, entity, state) {
@@ -424,6 +425,8 @@ export function documentSweepClaimMethods(model, entity) {
     const order = keyOf(model, entity, claimOrderField(entity, claim));
     const setup = [`        var batch = sweeps.BatchSize[${csString(claim.sweepKey)}];`];
     const filter = [`{ ${csString(field)}, new BsonDocument("$in", new BsonArray { ${states} }) }`];
+    // Lo borrado lógicamente (DSL 2.28) no es candidato de ningún barrido.
+    if (isLogicallyDeleted(entity)) filter.push(`{ ${csString(DELETED_AT.field)}, BsonNull.Value }`);
     if (claim.stalled) {
       const seconds = claim.stalled.parameter
         ? `parameters.${csMember(claim.stalled.parameter.name)} * ${claim.stalled.parameter.unitSeconds}`
@@ -496,7 +499,8 @@ export function documentReconciliationMethods(model, entity) {
             .Find(new BsonDocument
             {
                 { ${csString(field)}, new BsonDocument("$in", new BsonArray { ${states} }) },
-                { ${csString(awaiting)}, new BsonDocument("$lt", BsonValues.Of(unansweredBefore)) },
+                { ${csString(awaiting)}, new BsonDocument("$lt", BsonValues.Of(unansweredBefore)) },${isLogicallyDeleted(entity) ? `
+                { ${csString(DELETED_AT.field)}, BsonNull.Value },` : ''}
                 { "_id", new BsonDocument("$nin", new BsonArray(held)) }
             })
             .Sort(new BsonDocument(${csString(awaiting)}, 1))

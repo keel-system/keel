@@ -103,6 +103,8 @@ export const PLACES = {
   repositoryAdapters: ['infrastructure', 'Persistence/Repositories'],
   // La purga por lotes de las tablas del generador (incremento 10b).
   purge: ['infrastructure', 'Persistence/Purge'],
+  // La retención de los agregados (DSL 2.28): qué ha vencido y qué se hace con ello; la dispara el cronómetro.
+  retention: ['infrastructure', 'Persistence/Retention'],
   // Lo que corre por reloj: el registro de tareas y un scheduler por grupo de operaciones con `schedule` (incremento 10b).
   scheduling: ['infrastructure', 'Scheduling'],
   // Los plazos de negocio (DSL 2.26): la duración vigente de cada plazo es dominio (la usa el rechazo tardío); el

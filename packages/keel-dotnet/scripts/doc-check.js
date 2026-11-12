@@ -67,6 +67,7 @@ import { timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
 import { PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSabotage, purgeTimerSabotageVerdict, timerProbePatch, timerSabotageVerdict, timerSubject } from './lib/timer-probes.js';
 import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
 import { READ_SCOPE_SABOTAGE_SPECS, READ_SCOPE_SUBJECTS, isReadScopeSabotage, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
+import { LIFECYCLE_SABOTAGE_SPECS, LIFECYCLE_SUBJECTS, isLifecycleSabotage, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
 import { resolveRuntime, startMongo, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const args = process.argv.slice(2);
@@ -107,19 +108,25 @@ const SUBJECTS = [
     }
   },
   // `optimisticLocking: declared` sobre documentos: la versión que declara el dominio (el MISMO parche que compila cs-check).
-  ...UNCOVERED_BRANCHES.filter((branch) => ['mailer-mongo-lock', 'jobs-mongo-finder', 'mailer-mongo-author', 'catalog-conditional-mongo', ...READ_SCOPE_SUBJECTS.document].includes(branch.name)).map((branch) => ({
+  ...UNCOVERED_BRANCHES.filter((branch) => ['mailer-mongo-lock', 'jobs-mongo-finder', 'mailer-mongo-author', 'catalog-conditional-mongo', ...READ_SCOPE_SUBJECTS.document, ...LIFECYCLE_SUBJECTS.document].includes(branch.name)).map((branch) => ({
     name: branch.name,
     from: branch.from,
     mutate: (manifest, layers) => branch.mutate(manifest, layers, branch.name),
     // conduit no era sujeto de doc-check: sus sondas GENERALES no saben de una clave natural de dos referencias (todas las
     // muestras de Follow y Favorite apuntan a la misma raíz asegurada y chocan) ni del conflicto transitorio de Profile.
     // Es un hueco de las sondas, no de la lectura acotada: aquí solo se juzgan las RS (PLAN-DSL-227, inc. 3).
-    readScopeOnly: branch.name === 'conduit-scoped'
+    readScopeOnly: branch.name === 'conduit-scoped',
+    // cards-logical-mongo (profile-directory sobre documentos, DSL 2.28) tropieza con lo mismo que conduit en Profile: una raíz
+    // con clave natural y sin bloqueo optimista, en la que la sonda GENERAL del conflicto transitorio no ve el 409. Su Save no
+    // lo toca el ciclo de vida: aquí se juzgan solo los casos LC, RT y PD (PLAN-DSL-228, inc. 3).
+    lifecycleOnly: branch.name === 'cards-logical-mongo'
   }))
 ].filter((subject) =>
   only
-    ? subject.name === only
-    : isReadScopeSabotage(sabotage)
+    ? only.split(',').includes(subject.name)
+    : isLifecycleSabotage(sabotage)
+      ? LIFECYCLE_SUBJECTS.document.includes(subject.name)
+      : isReadScopeSabotage(sabotage)
       ? READ_SCOPE_SUBJECTS.document.includes(subject.name)
       : isDrainSabotage(sabotage)
       ? subject.name === 'job-dispatch-mongo'
@@ -206,7 +213,10 @@ const SABOTAGES = {
   // El relay por réplica (DSL 2.26, inc. 9): sobre notification-mailer-mongo, caen RW1 o RW3.
   ...Object.fromEntries(Object.entries(RELAY_WAKE_SABOTAGES).map(([id, spec]) => [id, spec.document])),
   // La lectura acotada (DSL 2.27): sobre vault-scoped-mongo y conduit-scoped, cada uno cae en exactamente sus casos RS.
-  ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document]))
+  ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document])),
+  // El ciclo de vida del dato (DSL 2.28): sobre cards-logical-mongo y codes-anonymize-mongo, cada uno en exactamente sus
+  // casos. pd-log-value no tiene qué romper en documental (ver scripts/lib/lifecycle-probes.js).
+  ...Object.fromEntries(Object.entries(LIFECYCLE_SABOTAGE_SPECS).filter(([, spec]) => spec.document).map(([id, spec]) => [id, spec.document]))
 };
 // El sabotaje del uuid tiene que cambiar las DOS direcciones (si no, la ida y vuelta lo cazaría sola): también al escribir.
 // Y el del clasificador, sus DOS vías: la etiqueta y el código 112 dicen lo mismo, así que quitar una sola es una mutación
@@ -270,11 +280,12 @@ try {
   }
   if (sabotage) {
     let applied = 0;
-    for (const [suffix, from, to] of [SABOTAGES[sabotage], SECOND[sabotage]].filter(Boolean)) {
+    for (const [suffix, from, to, guard] of [SABOTAGES[sabotage], SECOND[sabotage]].filter(Boolean)) {
       for (const { name } of subjects) {
         for (const file of walk(path.join(root, name, 'src'))) {
           if (!file.replaceAll('\\', '/').includes(suffix)) continue;
           const content = fs.readFileSync(file, 'utf8');
+          if (guard && !guard.test(content)) continue;
           // Una cadena se sustituye entera; una expresión regular (con su `g`), donde case.
           const changed = typeof from === 'string' ? content.replaceAll(from, to) : content.replace(from, to);
           if (changed !== content) {
@@ -306,6 +317,11 @@ try {
   for (const subject of subjects) {
     const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
     const ran = tested.output.includes(`${subject.probes.name}.dll`);
+    if (isLifecycleSabotage(sabotage)) {
+      const verdict = lifecycleSabotageVerdict(mine, sabotage, subject.model, { engine: 'mongodb' });
+      step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
     if (isReadScopeSabotage(sabotage)) {
       const verdict = readScopeSabotageVerdict(mine, sabotage, subject.model);
       step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
@@ -329,6 +345,11 @@ try {
     if (isTimerSabotage(sabotage) && timerSubject(subject.model)) {
       const verdict = timerSabotageVerdict(mine, sabotage, 'document');
       step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
+    if (subject.lifecycleOnly) {
+      const lifecycle = mine.filter((line) => /_(LC|RT|PD)\d+_/.test(line));
+      step(`${subject.name}: el ciclo de vida del dato (LC-*, RT-*) contra MongoDB`, ran && lifecycle.length === 0, ran ? lifecycle.join('; ') : 'las sondas no se ejecutaron');
       continue;
     }
     if (subject.readScopeOnly) {
@@ -395,7 +416,8 @@ function indexCheck({ model }) {
       const want = spec.paths.map((p) => [p, 1]);
       if (JSON.stringify(keys) !== JSON.stringify(want)) problems.push(`${spec.name}: claves ${JSON.stringify(keys)}, no ${JSON.stringify(want)}`);
       if ((index.unique === true) !== Boolean(spec.unique)) problems.push(`${spec.name}: unique ${index.unique === true}, no ${Boolean(spec.unique)}`);
-      const filter = spec.partialFilter ? { [spec.partialFilter.path]: spec.partialFilter.equals } : null;
+      // La condición del diseño y, con borrado lógico (DSL 2.28, D4), la vida: `deletedAt: null`.
+      const filter = spec.partialFilter || spec.live ? { ...(spec.partialFilter ? { [spec.partialFilter.path]: spec.partialFilter.equals } : {}), ...(spec.live ? { [spec.live.path]: null } : {}) } : null;
       if (JSON.stringify(index.partialFilterExpression ?? null) !== JSON.stringify(filter)) {
         problems.push(`${spec.name}: filtro ${JSON.stringify(index.partialFilterExpression ?? null)}, no ${JSON.stringify(filter)}`);
       }

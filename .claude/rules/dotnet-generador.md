@@ -220,6 +220,23 @@ siembra estática por raíz; las de los finders (2.22) llaman al finder acotado 
 «un valor del enum que ninguna fila tiene» salía rojo en MySQL con la suite entera y verde aislado (el filtro casaba con
 las filas de A: su estado no es estable entre sondas): RS-7 afirma ahora que, para CADA valor, todo lo que sale lo lleva.
 
+## Ciclo de vida del dato (DSL 2.28, inc. 3 de PLAN-DSL-228-CICLO-DE-VIDA.md)
+
+`src/scaffold/data-lifecycle.js`, con el reparto de keel-spring y keel-nest y lo neutral de `keel-core/gen/data-lifecycle.js`:
+`DeletedAt`/`AnonymizedAt` en la fila (o `deletedAt`/`anonymizedAt` en el documento), las lecturas VIVAS (`&& r.DeletedAt ==
+null` en cada carga, `.Where(r => r.DeletedAt == null)` en el listado y su total, la línea del finder DETRÁS del alcance;
+en documental `Live(...)` y `NotDeleted`), `DeleteById` que marca, `FindDeletedBy<Clave>` y `Restore` con su ventana, la
+unicidad entre vivas como el índice parcial de `partialIndexSpecs` (con el MISMO nombre; en MySQL la columna generada) y la
+retención: `<Raíz>Retention` en `Infrastructure/Persistence/Retention` (un ámbito y una transacción por agregado) y
+`<Raíz>RetentionTimer : IRecurringTimerHandler`, con `RetentionSettings` desde `retention.yaml` (lo registra Program.cs).
+Marcar, restaurar y anonimizar suben la versión. PD-1 es la regla `personal` de `logging-check.js`; PD-2, el
+`ConfigureWarnings(... Ignore(SaveChangesFailed, QueryIterationFailed, CommandError))` del DbContext (EF escribe en el log
+el fallo de una sentencia CON la excepción del motor) y el `LogIntegrity` sin excepción del manejador de la API. Lo miden
+`test/data-lifecycle-parity.test.js` (paridad con keel-spring y PD-1 con bash) y `db-check`/`doc-check` con
+`scripts/lib/lifecycle-probes.js`: un `[Fact]` por caso dentro de la clase de sondas, que comparte base con las demás, así
+que no vacía tablas y el total de una página se mide como diferencia. Los sabotajes llevan un cuarto elemento opcional, la
+expresión que el archivo tiene que contener (un `DeletedAt` sobre una raíz sin borrado lógico no compilaría).
+
 ## Redes y trampas medidas
 
 Sin SDK, `test/cs-syntax.test.js` (tree-sitter-c-sharp en WebAssembly, `test/helpers/cs-tree.js`) parsea el C# de todas

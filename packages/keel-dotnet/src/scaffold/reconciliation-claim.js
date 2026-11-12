@@ -29,6 +29,7 @@ import { documentReconciliationStoreBody } from './document-stores.js';
 import { rowFile } from './messaging-stores.js';
 import { usesMySql, valueAlias } from './relational-engine.js';
 import { sweepPassSignal } from './timer.js';
+import { DELETED_AT, isLogicallyDeleted } from '@keel-system/keel-core/gen/relational';
 
 export const RECONCILIATION_ROW = 'ReconciliationClaimRow';
 const STORE = 'ReconciliationClaimStore';
@@ -290,7 +291,7 @@ export function adapterReconciliationMethods(model, entity, { ownTransactionHelp
                 // candidatos: sin excluirlos, la cabeza de la cola —reclamada y aún sin resolver— ocuparía el lote de cada
                 // pasada hasta caducar, y los que esperan detrás no se reconciliarían nunca antes.
                 var candidates = await db.Database
-                    .SqlQuery<${idType}>($"SELECT e.${idColumn} ${valueAlias(model)} FROM ${table} e WHERE e.${stateColumn} IN (${states}) AND e.${awaiting} < {unansweredBefore} AND NOT EXISTS (SELECT 1 FROM ${RECONCILIATION_CLAIM.table} c WHERE c.activation = ${"'"}${claim.activation}${"'"} AND c.entity_id = e.${idColumn} AND c.claimed_at > {claimExpiredBefore}) ORDER BY e.${awaiting} LIMIT {window.BatchSize} FOR UPDATE OF e SKIP LOCKED")
+                    .SqlQuery<${idType}>($"SELECT e.${idColumn} ${valueAlias(model)} FROM ${table} e WHERE e.${stateColumn} IN (${states}) AND e.${awaiting} < {unansweredBefore}${isLogicallyDeleted(entity) ? ` AND e.${DELETED_AT.column} IS NULL` : ''} AND NOT EXISTS (SELECT 1 FROM ${RECONCILIATION_CLAIM.table} c WHERE c.activation = ${"'"}${claim.activation}${"'"} AND c.entity_id = e.${idColumn} AND c.claimed_at > {claimExpiredBefore}) ORDER BY e.${awaiting} LIMIT {window.BatchSize} FOR UPDATE OF e SKIP LOCKED")
                     .ToListAsync(cancellationToken);
                 var claimed = new List<${entity.name}>();
                 foreach (var id in candidates)

@@ -148,3 +148,22 @@ test('catalog-conditional y catalog-conditional-mongo: la escritura condicional 
     assert.match(gate, /check 'retireProduct' 'Product'/);
   }
 });
+
+// El ciclo de vida del dato (DSL 2.28): *.deletion, *.restorableFor, *.retention y *.restores,
+// que ninguna fixture declara hasta el incremento 6 de PLAN-DSL-228-CICLO-DE-VIDA.md. Los sujetos son los de keel-core (los
+// mismos que miden keel-spring y keel-nest).
+test('el ciclo de vida del dato entero (persistence *.deletion, *.restorableFor, *.retention y use-cases *.restores)', async () => {
+  const { checkSupportedFeatures } = await import('../src/lib/supported-features.js');
+  for (const name of ['cards-logical', 'cards-logical-mongo', 'codes-anonymize', 'codes-anonymize-mongo', 'codes-delete', 'vault-logical-scoped']) {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, branch(name).from));
+    branch(name).mutate(manifest, layers, name);
+    assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, [], `${name}: la frontera todavía lo rechaza`);
+    const files = await emitted(name);
+    const find = (pattern) => files.find((file) => pattern.test(file.path))?.content ?? '';
+    if (/^cards/.test(name)) {
+      assert.match(find(/IContactCardRepository\.cs$/), /Task<ContactCard\?> Restore\(Guid id, CancellationToken cancellationToken = default\);/, name);
+      assert.match(find(/RestoreMyCardCommandHandler\.cs$/), /Restauración \(restores: ContactCard/, name);
+    }
+    assert.ok(files.some((file) => /RetentionTimer\.cs$/.test(file.path)), `${name}: sin el recurrente de la retención`);
+  }
+});

@@ -26,6 +26,7 @@ import { valueReaders } from './endpoints.js';
 import { usesMultipart } from './storage.js';
 import { readsCompositeResponses } from './http-clients.js';
 import { usesApi } from '@keel-system/keel-core/gen/features';
+import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
 export { usesApi };
 
 export function restNamespace(model) {
@@ -98,7 +99,7 @@ export function generate(model) {
         namespaceOf(model, 'errors'),
         ...(usesPersistence(model) ? [namespaceOf(model, 'persistence')] : [])
       ],
-      apiErrorMiddlewareBody(usesPersistence(model), usesMultipart(model))
+      apiErrorMiddlewareBody(usesPersistence(model), usesMultipart(model), usesPersonalData(model))
     ),
     ...(usesPageable(model)
       ? [rest('PageableReading', ['System.Globalization', 'System.Text.RegularExpressions', 'Microsoft.AspNetCore.Http', 'Microsoft.Extensions.Primitives', namespaceOf(model, 'repositories')], pageableReadingBody())]
@@ -839,7 +840,9 @@ public static partial class HttpReply
 }`;
 }
 
-function apiErrorMiddlewareBody(persistence = false, multipart = false) {
+function apiErrorMiddlewareBody(persistence = false, multipart = false, personal = false) {
+  const branch = personal ? PERSISTENCE_BRANCH.replace(...PERSONAL_INTEGRITY.call) : PERSISTENCE_BRANCH;
+  const logs = personal ? PERSISTENCE_LOGS.replace(...PERSONAL_INTEGRITY.message).replace(...PERSONAL_INTEGRITY.log) : PERSISTENCE_LOGS;
   const validation = FRAMEWORK_ERRORS.validation.code;
   const domainBranches = domainErrorResponses().map(
     ({ name, http, error, fallback }) => `            ${name} => Domain(${http}, ${csString(error)}, exception, ${csString(fallback)}),`
@@ -910,7 +913,7 @@ public sealed partial class ApiErrorMiddleware(RequestDelegate next, ILogger<Api
             case MalformedRequestException:
             case BadHttpRequestException { StatusCode: StatusCodes.Status400BadRequest }:
                 return ${response('malformed', 'ValidationCode')};
-${multipart ? MULTIPART_BRANCH : ''}${persistence ? PERSISTENCE_BRANCH : ''}            // ── Errores de dominio (jerarquía DomainException)
+${multipart ? MULTIPART_BRANCH : ''}${persistence ? branch : ''}            // ── Errores de dominio (jerarquía DomainException)
             case DomainException domain:
                 return FromDomain(domain);
             // ── Catch-all
@@ -943,7 +946,7 @@ ${domainBranches.join('\n')}
     }
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Excepción no controlada")]
-    private partial void LogUnhandled(Exception exception);${persistence ? PERSISTENCE_LOGS : ''}
+    private partial void LogUnhandled(Exception exception);${persistence ? logs : ''}
 }`;
 }
 
@@ -975,6 +978,14 @@ const RETRY_AFTER = `
         {
             context.Response.Headers.RetryAfter = "1";
         }`;
+
+// Con datos personales (DSL 2.28, D10, PD-2) la violación sin constraint conocida no lleva su excepción al log: el mensaje
+// del motor viaja en ella, y el de una unicidad lleva el valor que chocó. Queda la clase.
+const PERSONAL_INTEGRITY = {
+  call: ['                LogIntegrity(integrity);', '                // Sin la excepción: lleva el mensaje del motor, y con datos personales (DSL 2.28) el valor que chocó.\n                LogIntegrity(integrity.InnerException?.GetType().Name ?? nameof(IntegrityViolationException));'],
+  log: ['    private partial void LogIntegrity(Exception exception);', '    private partial void LogIntegrity(string cause);'],
+  message: ['Message = "Violación de integridad no asociada a ninguna constraint conocida")]', 'Message = "Violación de integridad no asociada a ninguna constraint conocida ({Cause})")]']
+};
 
 const PERSISTENCE_LOGS = `
 

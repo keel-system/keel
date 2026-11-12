@@ -58,6 +58,7 @@ import { OBSERVATIONS } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { telemetryNamespace, usesTelemetry } from './telemetry.js';
 
 export { usesDeadlines, usesTimer, TIMER_DATABASES };
+import { retentionKindLines, retentionNamespace, retentionRegistrations, retentionRoots } from './data-lifecycle.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -337,11 +338,13 @@ export function persistenceTimerRegistration(model) {
 export function programTimer(model) {
   if (!usesTimer(model)) return { usings: [], registration: '' };
   return {
-    usings: [timerNamespace(model)],
+    usings: [timerNamespace(model), ...(retentionRoots(model).length > 0 ? [retentionNamespace(model)] : [])],
     registration: `
 // El cronómetro del servicio (DSL 2.26): un sondeador por réplica sobre keel_timer, con la mecánica del perfil (timer.yaml)
 // y su interruptor, scheduling.enabled (TimerRegistration, generado).
-builder.Services.AddTimer(TimerSettings.From(configuration));`
+builder.Services.AddTimer(TimerSettings.From(configuration));${retentionRoots(model).length > 0 ? `
+// Los barridos de retención (DSL 2.28): el cron y el lote de cada uno (retention.yaml), recurrentes del cronómetro.
+builder.Services.AddSingleton(RetentionSettings.From(configuration));` : ''}`
   };
 }
 
@@ -451,7 +454,9 @@ function timerKindsBody(model) {
     ...timerSchedules(model).map(
       (schedule) => `    /// <summary>El <c>schedule</c> de ${schedule.operation}: un recurrente en modo clúster, con drenaje.</summary>
     public const string ${scheduleKindConstant(schedule.operation)} = ${csString(schedule.kind)};`
-    )
+    ),
+    // Las retenciones (DSL 2.28, D8): un recurrente en modo clúster por raíz.
+    ...retentionKindLines(model)
   ];
   return `/// <summary>
 /// El nombre de cada temporizador en <c>${KEEL_TIMER.table}</c> (columna <c>kind</c>). Es contrato con los otros generadores
@@ -1809,6 +1814,7 @@ public sealed class ${className}(${ctor.join(', ')}) : ITimerHandler
 
 function registrationUsings(model) {
   const usings = ['Microsoft.Extensions.DependencyInjection', 'Microsoft.Extensions.DependencyInjection.Extensions'];
+  if (retentionRoots(model).length > 0) usings.push(retentionNamespace(model));
   if (usesDeadlines(model)) usings.push(deadlinesNamespace(model));
   if (modelDeadlines(model).some(({ duration }) => duration.parameter)) usings.push(namespaceOf(model, 'parameters'));
   return usings;
@@ -1845,7 +1851,9 @@ function registrationBody(model) {
     ...modelDeadlines(model).map(({ entity, deadline }) => `        services.AddScoped<ITimerHandler, ${deadlineHandlerClass(entity.name, deadline.stateName)}>();`),
     '        services.AddScoped<IRecurringTimerHandler, KeelTimerPurge>();',
     ...timerPurges(model).map((purge) => `        services.AddScoped<IRecurringTimerHandler, ${purgeTimerClass(purge.table)}>();`),
-    ...timerSchedules(model).map((schedule) => `        services.AddScoped<IRecurringTimerHandler, ${scheduleTimerClass(schedule.operation)}>();`)
+    ...timerSchedules(model).map((schedule) => `        services.AddScoped<IRecurringTimerHandler, ${scheduleTimerClass(schedule.operation)}>();`),
+    // Las retenciones (DSL 2.28): el componente que barre y su recurrente; RetentionSettings lo registra Program.cs.
+    ...retentionRegistrations(model)
   ];
   return `/// <summary>
 /// El cronómetro del servicio en el contenedor (DSL 2.26). El ÚNICO sitio que lo registra: lo que necesita el armado (desde

@@ -776,7 +776,28 @@ export const MECHANISMS = {
     }
   },
   'data-lifecycle': {
-    pending: 'el ciclo de vida del dato (DSL 2.28) llega en el incremento 3 de PLAN-DSL-228-CICLO-DE-VIDA.md: hasta entonces supported-features.js lo rechaza entero (dataLifecyclePendingErrors)'
+    parity: {
+      skip: 'ninguna fixture declara el ciclo de vida del dato hasta el incremento 6 de PLAN-DSL-228-CICLO-DE-VIDA.md: los sujetos son los diseños derivados de keel-core/test/helpers/data-lifecycle-designs.js (cards-logical y cards-logical-mongo, el mismo diseño salvo el modelo; codes-anonymize y codes-anonymize-mongo; codes-delete y vault-logical-scoped), los MISMOS que miden keel-spring y keel-nest; test/data-lifecycle-parity.test.js fija la forma y la compara con keel-spring (los mismos casos, índices, kind y claves del barrido)',
+      test: 'test/data-lifecycle-parity.test.js'
+    },
+    emitter: 'src/scaffold/data-lifecycle.js (marcas, lecturas vivas, DeleteById que marca, Restore, retención y su recurrente) · repositories.js y document-repositories.js · finders.js · persistence.js y document-persistence.js (la unicidad entre vivas) · claim.js, reconciliation-claim.js y document-stores.js · timer.js · services.js · logging-check.js, persistence-runtime.js y rest-support.js (PD-1 y PD-2)',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'cards-logical, codes-anonymize, codes-delete y vault-logical-scoped contra el adaptador de EF Core (scripts/lib/lifecycle-probes.js, un [Fact] por caso): LC-1 a LC-10, RT-1 a RT-4 y PD-2; PD-1 es el gate ejecutado con bash en test/data-lifecycle-parity.test.js. La unicidad entre vivas es el índice parcial en PostgreSQL y la columna generada en MySQL (T2), con el mismo nombre que la de toda la tabla, y la comprobación del catálogo la mira contra keel-core. Medido aquí y no supuesto: EF escribe en el log el fallo de cada sentencia (SaveChangesFailed y CommandError) con la excepción del motor, también cuando la constraint es conocida y su traducción sale bien; en MySQL esa excepción lleva el valor (Duplicate entry), en PostgreSQL no (va en el detalle, que Npgsql no incluye), así que pd-log-value solo cae en MySQL. Falsado en los dos motores, cada sabotaje en exactamente sus casos: lc-no-filter en LC-1 y LC-2, lc-count en LC-2, lc-get-leak en LC-3 y LC-4, lc-unique-all-rows en LC-5 (y en la comprobación del catálogo), lc-restore-window en LC-7, lc-embed-hidden en LC-9, lc-implicit-replace en LC-10, rt-early en RT-1, rt-anonymize-miss en RT-2, rt-every-replica en RT-3 y pd-log-value en PD-2'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'cards-logical-mongo y codes-anonymize-mongo contra MongoDB.Driver en un replica set real, con las MISMAS sondas que la rama relacional; el índice parcial lleva deletedAt: null (T1) y la comprobación de los índices vivos lo mira contra keel-core. Falsado: lc-get-leak en LC-3 y LC-4, lc-unique-all-rows en LC-5 (y en los índices vivos), lc-restore-window en LC-7, rt-early en RT-1, rt-anonymize-miss en RT-2 y rt-every-replica en RT-3. LC-1, LC-2, LC-9 y LC-10 no tienen sujeto documental (ningún diseño derivado lista, embebe ni acota con borrado lógico sobre documentos): su código es el mismo filtro Live/NotDeleted que miden LC-3 y LC-4, pero sin ejecutar, y sus cuatro sabotajes no tienen qué romper. PD-2 no se mide aquí: el driver no escribe en el log, así que no hay excepción del motor que se cuele (la rama de la API la fija test/data-lifecycle-parity.test.js). En cards-logical-mongo doc-check juzga solo los casos LC y RT: la sonda general del conflicto transitorio no ve el 409 en una raíz con clave natural y sin bloqueo optimista, el mismo hueco que conduit-scoped en Profile'
+      }
+    }
   }
 };
 

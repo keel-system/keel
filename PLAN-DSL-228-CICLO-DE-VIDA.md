@@ -1,6 +1,6 @@
 # DSL 2.28: el ciclo de vida del dato (R4)
 
-**Estado: en curso.** Incremento 0 (keel-core) hecho el 2026-11-11, incremento 1 (keel-spring) y 2 (keel-nest) el 2026-11-12. Siguiente: incremento 3 (keel-dotnet).
+**Estado: en curso.** Incremento 0 (keel-core) hecho el 2026-11-11, incrementos 1 (keel-spring), 2 (keel-nest) y 3 (keel-dotnet) el 2026-11-12. Siguiente: incremento 4 (keel-go).
 
 Origen: R4 de `docs/evaluacion-dsl-2.24.md`. Este plan la lleva al DSL y a los cuatro generadores con la regla de
 siempre: **el mismo diseño genera servidores equivalentes**. Cada pieza nueva tiene una red que la ejecuta y un sabotaje
@@ -183,6 +183,23 @@ Lo que se añade a piezas que ya existen:
   lógico sobre documentos, así que `lc-no-filter`, `lc-count`, `lc-embed-hidden` y `lc-implicit-replace` solo se
   falsan en la rama relacional. Escrito en la matriz.
 
+**Decidido y medido al escribir el incremento 3 (keel-dotnet, 2026-11-12):**
+
+- **Las lecturas vivas en EF Core van escritas en cada consulta, no como filtro global** (`HasQueryFilter`): `FindAllById`
+  tiene que ver lo borrado (D3), y con un filtro global los sabotajes `lc-no-filter` y `lc-get-leak` no podrían caer cada uno
+  en sus casos. Cada carga suma `&& r.DeletedAt == null`; el listado y su total, `.Where(r => r.DeletedAt == null)`; el
+  finder, su línea detrás del alcance. En documental, `Live(filtro)` y `NotDeleted`.
+- **La retención abre un ámbito por agregado** (`IServiceScopeFactory`), con su `DbContext` y su `PersistenceTransactions`,
+  como `TablePurges`. `AddYears` ya lleva el 29 de febrero al 28, así que el corte en años no necesita la función de
+  keel-nest.
+- **PD-2 en .NET es EF, no el manejador de la API.** EF escribe en el log el fallo de cada sentencia (`SaveChangesFailed` y
+  `CommandError`) con la excepción del motor, también cuando la constraint es conocida y la traducción sale bien. Con datos
+  personales, el `DbContext` los ignora (`ConfigureWarnings`), y el `LogIntegrity` de la API deja de recibir la excepción.
+  La sonda captura lo que escribe la persistencia con un `ILoggerProvider` propio. En documental el driver no escribe en el
+  log, así que no hay nada que medir: PD-2 queda fuera de los casos de doc-check, y la paridad con keel-spring lo descuenta.
+- **Las sondas comparten base con las demás de db-check y doc-check**: no vacían tablas como keel-nest. El total de una
+  página se mide como diferencia, y LC-10 siembra dueños con valores propios del motor.
+
 ## Núcleo neutral (keel-core/src/lib/gen)
 
 - **`personal-data.js`**:
@@ -356,7 +373,7 @@ Un generador que no llegue a la puerta rechaza la capacidad con su motivo.
 | 0. keel-core | hecho (2026-11-11) | suite de keel-core, `design-matrix`, la suite entera |
 | 1. keel-spring | hecho (2026-11-12) | `lifecycle-check` en PostgreSQL, MySQL y MongoDB con once sabotajes, `test/data-lifecycle.test.js` (PD-1 con bash), las suites de los cinco paquetes |
 | 2. keel-nest | hecho (2026-11-12) | `db-check` (PostgreSQL y MySQL, 4 sujetos) y `doc-check` (2 sujetos) con los once sabotajes, cada uno en exactamente sus casos; `test/data-lifecycle-parity.test.js` (PD-1 con bash, paridad con keel-spring); `ts-check`; la suite de keel-nest |
-| 3. keel-dotnet | pendiente | |
+| 3. keel-dotnet | hecho (2026-11-12) | `db-check` (PostgreSQL y MySQL, 4 sujetos) y `doc-check` (2 sujetos) con los sabotajes que tienen qué romper, cada uno en exactamente sus casos; `test/data-lifecycle-parity.test.js` (PD-1 con bash, paridad con keel-spring); `cs-check --fixtures` de las seis variantes; la suite de keel-dotnet |
 | 4. keel-go | pendiente | |
 | 5. Derivados y documentación | pendiente | |
 | 6. Fixtures | pendiente | |
@@ -364,29 +381,35 @@ Un generador que no llegue a la puerta rechaza la capacidad con su motivo.
 
 ## Para retomar
 
-Los incrementos 0, 1 y 2 están hechos. Qué añadió el 2 (keel-nest), además de lo de § «Decidido y medido al escribir el
-incremento 2»:
+Los incrementos 0 a 3 están hechos. Qué añadió el 3 (keel-dotnet), además de lo de § «Decidido y medido al escribir el
+incremento 3»:
 
-- **`src/scaffold/data-lifecycle.js`**: las marcas, `liveWhere`/`liveFilter` y las líneas de los finders, `deleteById`
-  que marca, `findDeletedBy<Clave>` y `restore` en los dos adaptadores, `<Raíz>Retention` (TypeORM y driver),
-  `<Raíz>RetentionTimer`, `RetentionSettings` y `retention.yaml`, y `lifecycleStackErrors` (lo que no sabe anonimizar).
-- **Enganchado en** `repositories.js`, `document-repositories.js`, `finders.js`, `persistence-entities.js` (las
-  unicidades de una raíz con borrado lógico van como índices parciales, y `UUID_BINARY` idempotente),
-  `document-persistence.js`, `claim.js`, `reconciliation-claim.js`, `document-stores.js`, `timer.js`, `services.js`,
-  `logging-check.js` (PD-1), `persistence-runtime.js` y `rest-support.js` (PD-2); `supported-features.js` ya no lo
-  rechaza.
+- **`src/scaffold/data-lifecycle.js`**: las marcas de la fila, `ROW_ALIVE` y las líneas de los finders, `Live`/`NotDeleted`
+  del adaptador documental, `DeleteById` que marca, `FindDeletedBy<Clave>` y `Restore` en los dos adaptadores,
+  `<Raíz>Retention` (EF y driver, un ámbito por agregado), `<Raíz>RetentionTimer`, `RetentionSettings` y `retention.yaml`,
+  y `lifecycleStackErrors` (lo que no sabe anonimizar). El sitio `retention` está en el mapa de `render.js`.
+- **Enganchado en** `repositories.js` (`keyQuery`, la carga por clave que comparten los finders y `FindDeletedBy<Clave>`),
+  `document-repositories.js`, `finders.js`, `persistence.js` (las unicidades de una raíz con borrado lógico van como índices
+  parciales), `document-persistence.js`, `claim.js`, `reconciliation-claim.js`, `document-stores.js`, `timer.js`
+  (`TimerKinds`, `AddTimer` y Program.cs), `services.js`, `logging-check.js` (PD-1), `persistence-runtime.js` y
+  `rest-support.js` (PD-2); `supported-features.js` ya no lo rechaza.
 - **La red**: `scripts/lib/lifecycle-probes.js` en `db-check` (cards-logical, codes-anonymize, codes-delete y
-  vault-logical-scoped) y `doc-check` (cards-logical-mongo y codes-anonymize-mongo); `--subject` admite una lista. Los
-  sujetos son siluetas derivadas (`DERIVED_SILHOUETTES`) y `uncovered-branches.test.js` los genera.
-- **La matriz**: fila `data-lifecycle` de keel-nest `verificado` y `falsified` en los dos modelos.
+  vault-logical-scoped) y `doc-check` (cards-logical-mongo y codes-anonymize-mongo); `--only` admite una lista. Los sujetos
+  son parches de `UNCOVERED_BRANCHES`, así que `cs-syntax`, `uncovered-branches.test.js` y `cs-check` los recorren.
+  `db-check` mira además el predicado de vida de cada índice en el catálogo, contra keel-core.
+- **La matriz**: fila `data-lifecycle` de keel-dotnet `verificado` y `falsified` en los dos modelos.
+- **Un hueco anotado, no arreglado**: en cards-logical-mongo, la sonda general del conflicto transitorio no ve el 409 (raíz
+  con clave natural y sin bloqueo optimista, como Profile en conduit-scoped). El ciclo de vida no toca ese `Save`, y
+  doc-check juzga en ese sujeto solo los casos LC y RT.
 
-Siguiente, el incremento 3 (keel-dotnet), con el mismo guion:
+Siguiente, el incremento 4 (keel-go), con el mismo guion:
 
-1. Quitar `dataLifecyclePendingErrors` de su `supported-features.js` y la fila `pending` de su matriz.
-2. Emitir con EF Core y su rama documental, consumiendo lo neutral (`partialIndexSpecs` y `documentIndexSpecs` con
-   `live`, `generatorRetentions`, `retentionParameters`, `cacheInvalidations`, las notas). Ojo con lo medido en keel-nest:
-   la versión sube al marcar, restaurar y anonimizar; y en MySQL comprobar que el id que devuelve `save` es el que se
-   guardó cuando la tabla tiene columna generada.
+1. Quitar `dataLifecyclePendingErrors` de su `supported-features.js` (y su fila de `README.md` § La frontera) y la fila
+   `pending` de su matriz.
+2. Emitir con su SQL propio sobre database/sql y su rama documental, consumiendo lo neutral (`partialIndexSpecs` y
+   `documentIndexSpecs` con `live`, `generatorRetentions`, `retentionParameters`, `cacheInvalidations`, las notas). Ojo con
+   lo medido en keel-nest y keel-dotnet: la versión sube al marcar, restaurar y anonimizar; y el log del driver o de la
+   capa de persistencia puede llevar el valor de una unicidad violada (en MySQL sí, en PostgreSQL no).
 3. Las sondas en `scripts/lib/lifecycle-probes.js` de su `db-check`/`doc-check` con los mismos casos y sabotajes (el
-   veredicto de keel-nest, `lifecycleSabotageVerdict`, sirve de modelo: `pd-log-value` no cae en PostgreSQL), y
-   `test/data-lifecycle-parity.test.js` contra keel-spring.
+   veredicto de keel-dotnet, `lifecycleSabotageVerdict`, sirve de modelo: `pd-log-value` no cae en PostgreSQL ni en
+   documental), y `test/data-lifecycle-parity.test.js` contra keel-spring.

@@ -29,6 +29,7 @@ import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { envFor } from '@keel-system/keel-core/gen/runtime-env';
 import { enumMember } from '../lib/cs-projection.js';
 import { csFile, csString, located, namespaceOf, typeUsings } from './render.js';
+import { partialFilterLiteral } from './data-lifecycle.js';
 import { configNamespace } from './config.js';
 import { usesDocument, persistedEntities, usesTextFold, textFoldFile } from './persistence.js';
 import { auditActorFiles, usesAuthorship } from './persistence-runtime.js';
@@ -490,7 +491,9 @@ function documentIndexesBody(model) {
       const keys = spec.paths.map((path) => `{ ${csString(path)}, 1 }`).join(', ');
       const options = [`Name = ${csString(spec.name)}`];
       if (spec.unique) options.push('Unique = true');
-      if (spec.partialFilter) options.push(`PartialFilterExpression = new BsonDocument(${csString(spec.partialFilter.path)}, ${filterLiteral(spec.partialFilter.equals)})`);
+      // La condición del diseño y, con borrado lógico (DSL 2.28, D4), la vida: `deletedAt: null` (T1, medido en keel-spring).
+      const partial = partialFilterLiteral(spec, filterLiteral);
+      if (partial) options.push(`PartialFilterExpression = ${partial}`);
       return `                new(new BsonDocument { ${keys} }, new CreateIndexOptions<BsonDocument> { ${options.join(', ')} })`;
     });
     return `            [${csString(collection)}] =\n            [\n${indexes.join(',\n')}\n            ]`;

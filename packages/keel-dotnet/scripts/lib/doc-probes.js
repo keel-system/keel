@@ -35,6 +35,7 @@ import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold
 import { bridgeClass, messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents } from '../../src/scaffold/messaging.js';
 import { purgeNamespace, tablePurges } from '../../src/scaffold/purge.js';
 import { purgeTimerFixtureRegistration, purgeTimerProbeBlock, purgeTimerProbeUsings, timerFixtureRegistration, timerProbeBlock, timerProbeUsings } from './timer-probes.js';
+import { lifecycleFixtureRegistration, lifecycleProbeBlock, lifecycleProbeUsings } from './lifecycle-probes.js';
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
 import { parametersNamespace, parametersTestInstance, usesServiceParameters } from '../../src/scaffold/service-parameters.js';
@@ -509,6 +510,10 @@ function probesCs(model, namespace) {
   const purges = tablePurges(model);
   if (purges.length > 0) blocks.push(documentPurgeBlock(purges));
 
+  // El ciclo de vida del dato (DSL 2.28): LC, RT y PD-2 en ESTA clase. Antes de los Ensure: sus muestras los piden.
+  const lifecycle = lifecycleProbeBlock(model, ctx, { document: true });
+  if (lifecycle) blocks.push(lifecycle.methods);
+
   // Las raíces a las que apunta una referencia: se guarda UNA de cada, y su id vale para todas las sondas.
   const ensures = [];
   const ensured = new Set();
@@ -548,6 +553,7 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
   const usings = [
     ...timerProbeUsings(model),
     ...purgeTimerProbeUsings(model),
+    ...lifecycleProbeUsings(model, { document: true }),
     'System.Text.Json',
     'System.Text.Json.Nodes',
     'Microsoft.Extensions.DependencyInjection',
@@ -585,7 +591,7 @@ public sealed class DocumentFixture : IAsyncLifetime
         }
         var services = new ServiceCollection();
         services.AddLogging();
-${fixtureRegistrations(model)}${timerFixtureRegistration(model)}${purgeTimerFixtureRegistration(model)}
+${fixtureRegistrations(model)}${timerFixtureRegistration(model)}${purgeTimerFixtureRegistration(model)}${lifecycleFixtureRegistration(model, { document: true })}
         services.AddPersistence(new DatabaseSettings(true, MongoUrl.Create(target), Database, "doc-check"));${usesBridge(model) ? `
         // Los adaptadores de las raíces que emiten eventos los entregan al puente.
         services.AddDomainEvents(MessagingSettings.Defaults);` : ''}${usesDotnetOutbox(model) ? `
@@ -729,6 +735,6 @@ ${ensures.join('\n\n')}
     };
 }`;
   if (ctx.unsampled.length > 0) console.warn(`  (doc-check) sin muestra para ${[...new Set(ctx.unsampled)].join(', ')}`);
-  const full = [body, timer?.classes, purgeTimer?.classes].filter(Boolean).join('\n\n');
+  const full = [body, timer?.classes, purgeTimer?.classes, lifecycle?.classes].filter(Boolean).join('\n\n');
   return `namespace ${namespace};\n\n${[...new Set(usings)].sort().map((u) => `using ${u};`).join('\n')}\n\n${full}\n`;
 }

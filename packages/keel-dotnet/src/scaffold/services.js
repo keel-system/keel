@@ -42,7 +42,8 @@ import { refTargetsOf, listedIdsNote } from '@keel-system/keel-core/gen/ref-targ
 import { inverseCollectionsNote } from '@keel-system/keel-core/gen/inverse-collections';
 import { resolverClass } from './ref-resolvers.js';
 import { usesPersistence } from './persistence.js';
-import { naturalKeyBatchFinder } from './repositories.js';
+import { naturalKeyBatchFinder, naturalKeyFinder } from './repositories.js';
+import { deletedRootOf, logicalDeletionNote, restoreNote } from '@keel-system/keel-core/gen/data-lifecycle';
 import { uploadNotes } from '@keel-system/keel-core/gen/buckets';
 import { effectiveErrorCode, operationError } from '@keel-system/keel-core/gen/declared-errors';
 import { FILE_STORAGE_PORT, UPLOAD_NOTE_NAMES_CS, storageNamespace } from './storage.js';
@@ -314,8 +315,9 @@ function renderHandler(model, operation) {
     dependencies.push(mapper);
   }
   // El puerto del repositorio del agregado de la operación (el de su raíz si opera sobre una hija): sin él, el
-  // handler no tendría con qué leer ni guardar, y el camino de menor resistencia sería inventárselo.
-  const repository = repositoryOf(model, operation);
+  // handler no tendría con qué leer ni guardar, y el camino de menor resistencia sería inventárselo. La raíz que restaura o
+  // borra una operación del ciclo de vida (DSL 2.28) cuenta como la suya aunque su payload no la nombre (`restoreMyCard`).
+  const repository = repositoryOf(model, operation) ?? lifecycleRootOf(model, operation);
   if (repository) {
     usings.push(repositoriesNamespace(model));
     dependencies.push(portClass(repository));
@@ -445,6 +447,18 @@ function handlerNotes(model, operation) {
   // La escritura condicional (api.concurrency): cargar con LoadExpecting y devolver la versión persistida.
   const conditional = conditionalHandlerNote(model, operation, operation.messageKind === 'query' ? 'query' : 'command');
   if (conditional) notes.push(conditional);
+  // El ciclo de vida del dato (DSL 2.28): el borrado que marca y la restauración. Notas neutrales, las mismas en los cuatro.
+  const deletedRoot = deletedRootOf(model, operation);
+  const deletion = logicalDeletionNote(model, operation, { deleteCall: `await ${repositoryLocal(deletedRoot?.name ?? 'Raiz')}.DeleteById(..., cancellationToken)` });
+  if (deletion) notes.push(deletion);
+  if (operation.restores) {
+    const port = repositoryLocal(operation.restores);
+    const restored = model.entities.find((candidate) => candidate.name === operation.restores);
+    const keyFinder = restored ? naturalKeyFinder(model, restored) : null;
+    const byKey = keyFinder ? `await ${port}.${keyFinder.name.replace(/^FindBy/, 'FindDeletedBy')}(..., cancellationToken)` : '<el id de la borrada>';
+    const restore = restoreNote(model, operation, { findCall: byKey, restoreCall: `await ${port}.Restore(<su id>, cancellationToken)` });
+    if (restore) notes.push(restore);
+  }
   // La búsqueda con finder (DSL 2.22) ya aplica sus filtros, plegado incluido: su nota sustituye a las de los filtros de texto.
   const finder = finderNote(operation, { call: operation.finder ? finderCall(model, operation.finder) : '' });
   if (finder) notes.push(finder);
@@ -867,4 +881,15 @@ public readonly record struct Optional<T>
     public static Optional<T> Absent => default;
 }`;
   return { path, content: csFile({ namespace, body }) };
+}
+
+/** El nombre local del puerto de una raíz en el handler (`contactCardRepository`). */
+function repositoryLocal(entityName) {
+  return `${entityName[0].toLowerCase()}${entityName.slice(1)}Repository`;
+}
+
+/** La raíz que restaura o borra una operación del ciclo de vida (DSL 2.28), cuando su grupo no la nombra. */
+function lifecycleRootOf(model, operation) {
+  const name = operation.restores ?? deletedRootOf(model, operation)?.name;
+  return name ? (model.entities ?? []).find((entity) => entity.name === name && entity.persisted && entity.isAggregateRoot) ?? null : null;
 }

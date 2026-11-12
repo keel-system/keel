@@ -41,8 +41,10 @@ import {
   keyShadow,
   LOCK_VERSION,
   AUDIT_COLUMNS,
-  DECIMAL_PRECISION
+  DECIMAL_PRECISION,
+  isLogicallyDeleted
 } from '@keel-system/keel-core/gen';
+import { lifecycleMarks, markComment } from './data-lifecycle.js';
 import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
 import { enumMember } from '../lib/cs-projection.js';
 import { IDEMPOTENCY_ROW, usesRequestIdempotency } from './request-idempotency.js';
@@ -298,6 +300,12 @@ function renderRowFile(model, entity) {
     config.push(columnChain(csMember(LOCK_VERSION.field), { name: LOCK_VERSION.column, base: 'long', nullable: true }, { concurrency: true }));
   }
 
+  // Las marcas del ciclo de vida del dato (DSL 2.28): deleted_at y anonymized_at, del generador y fuera del dominio.
+  for (const mark of lifecycleMarks(model, entity)) {
+    properties.push(rowProperty(csMember(mark.field), 'DateTimeOffset?', markComment(mark)));
+    config.push(columnChain(csMember(mark.field), { name: mark.column, base: 'timestamp', nullable: true }));
+  }
+
   // La auditoría que la política `all` pone sin que el dominio la nombre.
   for (const column of auditColumns(entity)) {
     const timestamp = column.field.endsWith('At');
@@ -353,19 +361,22 @@ function tableIndexes(model, entity, members, props) {
   };
   // La sombra de un FILTRO (`filterOnly`) no lleva la unicidad del campo: ese se compara exacto.
   const shadowOf = (name) => keyShadow(members.find((m) => m.kind === 'scalar' && m.name === name)?.field);
+  // Con borrado lógico (DSL 2.28, D4) ninguna unicidad sin condición es un índice único de toda la tabla: se evalúa solo
+  // entre filas vivas, y eso es un índice parcial (abajo, con partialIndexSpecs), con el MISMO nombre.
+  const live = isLogicallyDeleted(entity);
 
-  if (entity.naturalKey?.length > 0) {
+  if (!live && entity.naturalKey?.length > 0) {
     const columns = entity.naturalKey.flatMap((name) => (shadowOf(name) ? [shadowOf(name).column] : columnsFor(model, entity, members, name)));
     lines.push(`        row.HasIndex(${selector(columns)}, ${csString(`uk_${entity.tableName}_natural`)}).IsUnique().HasDatabaseName(${csString(`uk_${entity.tableName}_natural`)});`);
   }
-  for (const field of uniqueFields(entity)) {
+  for (const field of live ? [] : uniqueFields(entity)) {
     const column = shadowOf(field.name)?.column ?? field.columns?.name;
     const name = `uk_${entity.tableName}_${field.columns?.name}`;
     lines.push(`        row.HasIndex(${selector([column])}, ${csString(name)}).IsUnique().HasDatabaseName(${csString(name)});`);
   }
   const { handled } = collectionIndexesOf(entity, members);
   for (const index of entity.indexes ?? []) {
-    if (index.when || handled.has(index)) continue;
+    if (index.when || handled.has(index) || (live && index.unique)) continue;
     const probe = [];
     const columns = index.fields.flatMap((name) => columnsFor(model, entity, members, name, probe));
     // Un índice sobre lo que no es columna de esta tabla rompería el esquema: lo avisa keel-spring al anotar.
@@ -373,7 +384,8 @@ function tableIndexes(model, entity, members, props) {
     lines.push(`        row.HasIndex(${selector(columns)}, ${csString(indexName(entity, index))})${index.unique ? '.IsUnique()' : ''}.HasDatabaseName(${csString(indexName(entity, index))});`);
   }
   for (const spec of partialIndexSpecs(model, relationalEngine(model)).filter((candidate) => candidate.entity === entity.name)) {
-    const columns = spec.fields.flatMap((name) => columnsFor(model, entity, members, name));
+    // La de un borrado lógico sin `when` trae sus columnas ya resueltas (la sombra plegada incluida): las de keel-core.
+    const columns = spec.when ? spec.fields.flatMap((name) => columnsFor(model, entity, members, name)) : spec.columnList.map((column) => column.replace(/^["`]|["`]$/g, ''));
     if (usesMySql(model)) {
       // MySQL no tiene índices parciales: una columna GENERADA que vale 1 dentro de la condición y NULL fuera, al final
       // del índice único (un índice único no restringe las filas con NULL). Declarada, no una parte funcional anónima del
