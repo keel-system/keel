@@ -20,7 +20,8 @@ import { finderNote } from '@keel-system/keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
 import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { isPartialUpdate, repositoryRoots } from '@keel-system/keel-core/gen/features';
-import { repositoryParam } from './repositories.js';
+import { naturalKeyFinder, repositoryParam } from './repositories.js';
+import { deletedRootOf, logicalDeletionNote, restoreNote } from '@keel-system/keel-core/gen/data-lifecycle';
 import { handlerDependencies, usesDependencies } from './use-cases.js';
 import { goExported } from '../lib/go-projection.js';
 import { alignRows, commentLines, goString } from '../lib/go-source.js';
@@ -436,6 +437,18 @@ function handlerNotes(model, operation) {
   const root = operation.targetEntity ?? operation.responseDto?.entity ?? 'Raiz';
   const conditional = conditionalHandlerNote(model, operation, operation.messageKind === 'query' ? 'query' : 'cmd', repositoryParam({ name: root }));
   if (conditional) notes.push(conditional);
+  // El ciclo de vida del dato (DSL 2.28): el borrado que marca y la restauración. Notas neutrales, las mismas en los cuatro.
+  const deletedRoot = deletedRootOf(model, operation);
+  const deletion = logicalDeletionNote(model, operation, { deleteCall: `h.${repositoryParam(deletedRoot ?? { name: 'Raiz' })}.DeleteByID(ctx, …)` });
+  if (deletion) notes.push(deletion);
+  if (operation.restores) {
+    const restored = model.entities.find((candidate) => candidate.name === operation.restores);
+    const port = `h.${repositoryParam(restored ?? { name: operation.restores })}`;
+    const keyFinder = restored ? naturalKeyFinder(model, restored) : null;
+    const byKey = keyFinder ? `${port}.${keyFinder.name.replace(/^FindBy/, 'FindDeletedBy')}(ctx, …)` : '<el id de la borrada>';
+    const restore = restoreNote(model, operation, { findCall: byKey, restoreCall: `${port}.Restore(ctx, <su id>)` });
+    if (restore) notes.push(restore);
+  }
   // La búsqueda con finder (DSL 2.22) ya aplica sus filtros, plegado incluido: su nota sustituye a las de los filtros de texto.
   const finder = operation.finder;
   const entity = finder && model.entities.find((candidate) => candidate.name === finder.entity);

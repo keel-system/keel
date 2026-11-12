@@ -65,6 +65,7 @@ import { contractOf, messageComponents, messageType, operations, useCaseField } 
 import { usesCorrelation } from './correlation.js';
 import { scheduledServices, schedulingYaml, tasksFunc, usesScheduling } from './scheduling.js';
 import { tablePurges } from './purge.js';
+import { retentionKindRows, retentionWiring } from './data-lifecycle.js';
 import { agingSweeps } from '@keel-system/keel-core/gen/aging-targets';
 import { DRAIN_CASES, claimDrains, clusterRecurrings, scheduledByTimer, timerPurges, timerSchedules, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { pascalCase } from '@keel-system/keel-core/gen';
@@ -488,6 +489,8 @@ function kindsBody(model) {
     rows.push({ text: `\t// ${scheduleKindConstant(schedule.operation)} es el schedule de ${schedule.operation}: un recurrente en modo clúster que drena.` });
     rows.push({ indent: '\t', cells: [scheduleKindConstant(schedule.operation), `= ${goString(schedule.kind)}`] });
   }
+  // Las retenciones (DSL 2.28, D8): un recurrente en modo clúster por raíz.
+  rows.push(...retentionKindRows(model));
   rows.push({ text: '\t// NilEntityID es el entity_id de un recurrente: no tiene entidad, y la unicidad (kind, entity_id) necesita un valor.' });
   rows.push({ indent: '\t', cells: ['NilEntityID', `= ${goString(NIL_ENTITY_ID)}`] });
   return `
@@ -2289,7 +2292,9 @@ export function timerWiring(model, store, repositoryCall) {
 `
     };
   });
-  const recurrings = ['timerPurge', ...purges.map((purge) => purge.variable)];
+  // Las retenciones del diseño (DSL 2.28, D8): un recurrente por raíz, con su lote y su cron de retention.yaml.
+  const retention = retentionWiring(model, store);
+  const recurrings = ['timerPurge', ...purges.map((purge) => purge.variable), ...retention.variables];
   // Los schedule de las operaciones (inc. 8): las tareas de su grupo, que ya no van al reloj de cada réplica sino al
   // cronómetro, en modo clúster y con drenaje.
   const groups = usesTimerSchedules(model) ? scheduledServices(model).map(({ service }) => `scheduler.${tasksFunc(service)}(useCases)`) : [];
@@ -2320,7 +2325,7 @@ export function timerWiring(model, store, repositoryCall) {
 	if err != nil {
 		return fmt.Errorf("la purga del cronómetro: %w", err)
 	}
-${purges.map((purge) => purge.code).join('')}${schedules}	poller, err := timer.NewPoller(timerStore, ${handlers.length > 0 ? `[]timer.Handler{\n${handlers.join('\n')}\n\t}` : 'nil'}, ${recurringList}, timerSettings, logger)
+${purges.map((purge) => purge.code).join('')}${retention.code}${schedules}	poller, err := timer.NewPoller(timerStore, ${handlers.length > 0 ? `[]timer.Handler{\n${handlers.join('\n')}\n\t}` : 'nil'}, ${recurringList}, timerSettings, logger)
 	if err != nil {
 		return err
 	}

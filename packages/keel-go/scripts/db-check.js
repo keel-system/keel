@@ -43,6 +43,7 @@ import { DB_SABOTAGES, applyDbSabotage } from '../test/helpers/db-sabotages.js';
 import { DRAIN_SABOTAGES, PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, drainBreaksCovered, isDrainSabotage, isPurgeTimerSabotage, isTimerSabotage, purgeTimerBreaksCovered, purgeTimerProbeFile, timerBreaksCovered, timerProbeFile, timerProbePatch, timerSabotageBreaks } from './lib/timer-probes.js';
 import { RELAY_WAKE_SABOTAGES } from './lib/relay-wake-probes.js';
 import { READ_SCOPE_SABOTAGE_SPECS, READ_SCOPE_SUBJECTS, isReadScopeSabotage, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
+import { LIFECYCLE_ALSO, LIFECYCLE_SABOTAGE_SPECS, LIFECYCLE_SUBJECTS, isLifecycleSabotage, lifecycleProbeFile, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
 import { resolveRuntime, startDatabase, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 import { ENGINE_LABELS, STORE_PACKAGES } from '../src/lib/relational-engine.js';
 import { SUPPORTED_DATABASES } from '../src/lib/supported-features.js';
@@ -68,7 +69,9 @@ const SABOTAGES = {
   ...PURGE_TIMER_SABOTAGES,
   ...DRAIN_SABOTAGES,
   ...RELAY_WAKE_SABOTAGES,
-  ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
+  ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational])),
+  // Los del ciclo de vida del dato (DSL 2.28) caen en EXACTAMENTE sus casos LC, RT y PD (scripts/lib/lifecycle-probes.js).
+  ...Object.fromEntries(Object.entries(LIFECYCLE_SABOTAGE_SPECS).filter(([, spec]) => spec.relational).map(([id, spec]) => [id, spec.relational]))
 };
 
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -130,8 +133,13 @@ try {
     // keel-nest (keel-core/test/helpers/conditional-write-designs.js).
     ...UNCOVERED_BRANCHES.filter((design) => ['catalog-conditional', 'shop-conditional'].includes(design.name) && (!only || design.name === only)).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) })),
     // La lectura acotada (DSL 2.27, RS-1 a RS-8): los MISMOS diseños que miden los otros tres (keel-core/test/helpers/read-scope-designs.js).
-    ...UNCOVERED_BRANCHES.filter((design) => READ_SCOPE_SUBJECTS.relational.includes(design.name) && (!only || design.name === only)).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) }))
-  ].filter((subject) => only || !isReadScopeSabotage(sabotage) || READ_SCOPE_SUBJECTS.relational.includes(subject.name));
+    ...UNCOVERED_BRANCHES.filter((design) => READ_SCOPE_SUBJECTS.relational.includes(design.name) && (!only || design.name === only)).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) })),
+    // El ciclo de vida del dato (DSL 2.28, LC-*, RT-* y PD-2): los MISMOS diseños que miden los otros tres
+    // (keel-core/test/helpers/data-lifecycle-designs.js). `--only` admite una lista separada por comas.
+    ...UNCOVERED_BRANCHES.filter((design) => LIFECYCLE_SUBJECTS.relational.includes(design.name) && (!only || only.split(',').includes(design.name))).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) }))
+  ]
+    .filter((subject) => only || !isReadScopeSabotage(sabotage) || READ_SCOPE_SUBJECTS.relational.includes(subject.name))
+    .filter((subject) => only || !isLifecycleSabotage(sabotage) || LIFECYCLE_SUBJECTS.relational.includes(subject.name));
 
   // ─── El esquema ─────────────────────────────────────────────────────────────────────────────────
   if (!sabotage) {
@@ -175,10 +183,12 @@ try {
     }
     const probe = probeFile(plan.model, files);
     const timerProbe = timerProbeFile(plan.model);
+    // El ciclo de vida del dato (DSL 2.28): su archivo aparte, que comparte la base y el paquete con las demás sondas.
+    const lifecycleProbe = lifecycleProbeFile(plan.model);
     // Las purgas en modo clúster (DSL 2.26, inc. 7): dos réplicas sobre la misma base.
     const purgeTimerProbe = purgeTimerProbeFile(plan.model);
     const dir = path.join(root, name);
-    for (const file of [...files, probe, ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : [])]) {
+    for (const file of [...files, probe, ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : []), ...(lifecycleProbe ? [lifecycleProbe] : [])]) {
       const target = path.join(dir, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, file.content);
@@ -218,6 +228,18 @@ try {
       const detail = ok ? (skipped.length > 0 ? `se saltan ${skipped.join(', ')}` : '') : failed.join(', ') || tested.output.slice(-3000);
       step(`${name}: los adaptadores guardan, leen y traducen contra ${label} (${passed.length} sondas)`, ok, detail);
       if (!ok && failed.length > 0) console.error(failureLines(tested.output));
+      return;
+    }
+    if (isLifecycleSabotage(sabotage)) {
+      const verdict = lifecycleSabotageVerdict(failed, sabotage, model, { engine });
+      // Y ninguna otra sonda: el sabotaje rompe el ciclo de vida, no el resto del adaptador.
+      const stray = failed.filter((test) => !/_(LC|RT|PD)\d+_/.test(test) && !LIFECYCLE_ALSO[sabotage]?.test(test));
+      step(
+        `falsado: ${sabotage} en ${name} cae en exactamente sus casos`,
+        ran > 0 && verdict.exact && stray.length === 0,
+        `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]${stray.length > 0 ? `; además ${stray.join(', ')}` : ''}`
+      );
+      if (verdict.exact && verdict.want.length > 0) results.at(-1).caught = true;
       return;
     }
     if (isReadScopeSabotage(sabotage)) {

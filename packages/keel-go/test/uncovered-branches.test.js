@@ -125,3 +125,17 @@ for (const { name, from, mutate } of UNCOVERED_BRANCHES) {
     assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, []);
   });
 }
+
+// El ciclo de vida del dato (DSL 2.28): *.deletion, *.restorableFor, *.retention y *.restores, que ninguna fixture declara
+// hasta el incremento 6 de PLAN-DSL-228-CICLO-DE-VIDA.md. Los sujetos son los de keel-core (los mismos que miden los otros
+// tres); lo demás de lo emitido lo fija test/data-lifecycle-parity.test.js, y db-check y doc-check lo ejecutan.
+for (const name of ['cards-logical', 'cards-logical-mongo', 'codes-anonymize', 'codes-anonymize-mongo', 'codes-delete', 'vault-logical-scoped']) {
+  test(`${name}: el ciclo de vida del dato entero (persistence *.deletion, *.restorableFor, *.retention y use-cases *.restores)`, () => {
+    const files = emitted(name);
+    if (/^cards/.test(name)) {
+      assert.match(content(files, 'internal/domain/contact_card_repository.go'), /Restore\(ctx context\.Context, id uuid\.UUID\) \(\*ContactCard, bool, error\)/, name);
+      assert.match(allGo(files), /Restauración \(restores: ContactCard/, name);
+    }
+    assert.ok(files.some((file) => /_retention\.go$/.test(file.path) && file.content.includes('func (r *') && file.content.includes(') Recurring(spec string) (timer.Recurring, error)')), `${name}: sin la retención`);
+  });
+}

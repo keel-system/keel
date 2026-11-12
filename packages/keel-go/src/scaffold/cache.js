@@ -34,6 +34,7 @@ import { applicationPath, layout, packageFile } from './render.js';
 import { usesAfterCommit } from './after-commit.js';
 import { messageComponents, messageType, operations, resultType } from './services.js';
 import { usesConditionalWrites } from './conditional-writes.js';
+import { retentionClearsCaches } from './data-lifecycle.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -1142,6 +1143,11 @@ const CACHE_OBSERVED = `	operationCache := application.NewOperationCache(cacheSt
 	}
 `;
 
+// La caché en una variable sin telemetría: la retención la vacía tras barrer (DSL 2.28, T5), y tiene que ser la MISMA que
+// la de los casos de uso, o su generación no sube y una lectura en vuelo volvería a guardar lo borrado.
+const CACHE_SHARED = `	operationCache := application.NewOperationCache(cacheStore, logger)
+`;
+
 export function cacheServerWiring(model) {
   if (!usesCache(model)) return '';
   const { cache } = layout(model);
@@ -1160,11 +1166,12 @@ export function cacheServerWiring(model) {
 		}()
 		cacheStore = store
 	}
-${usesTelemetry(model) ? CACHE_OBSERVED : ''}`;
+${usesTelemetry(model) ? CACHE_OBSERVED : retentionClearsCaches(model) ? CACHE_SHARED : ''}`;
 }
 
 /** La fila de Dependencies que pone el arranque. */
 export function cacheServerRows(model) {
   if (!usesCache(model)) return [];
-  return [{ indent: '\t\t', cells: [`${OPERATION_CACHE.field}:`, usesTelemetry(model) ? 'operationCache,' : 'application.NewOperationCache(cacheStore, logger),'] }];
+  const shared = usesTelemetry(model) || retentionClearsCaches(model);
+  return [{ indent: '\t\t', cells: [`${OPERATION_CACHE.field}:`, shared ? 'operationCache,' : 'application.NewOperationCache(cacheStore, logger),'] }];
 }

@@ -1,6 +1,6 @@
 # DSL 2.28: el ciclo de vida del dato (R4)
 
-**Estado: en curso.** Incremento 0 (keel-core) hecho el 2026-11-11, incrementos 1 (keel-spring), 2 (keel-nest) y 3 (keel-dotnet) el 2026-11-12. Siguiente: incremento 4 (keel-go).
+**Estado: en curso.** Incremento 0 (keel-core) hecho el 2026-11-11, incrementos 1 (keel-spring), 2 (keel-nest), 3 (keel-dotnet) y 4 (keel-go) el 2026-11-12. Siguiente: incremento 5 (derivados y documentación).
 
 Origen: R4 de `docs/evaluacion-dsl-2.24.md`. Este plan la lleva al DSL y a los cuatro generadores con la regla de
 siempre: **el mismo diseño genera servidores equivalentes**. Cada pieza nueva tiene una red que la ejecuta y un sabotaje
@@ -200,6 +200,36 @@ Lo que se añade a piezas que ya existen:
 - **Las sondas comparten base con las demás de db-check y doc-check**: no vacían tablas como keel-nest. El total de una
   página se mide como diferencia, y LC-10 siembra dueños con valores propios del motor.
 
+**Decidido y medido al escribir el incremento 4 (keel-go, 2026-11-12):**
+
+- **El predicado de vida en SQL propio** es un sufijo ` AND deleted_at IS NULL` en el `WHERE` de cada `r.load` de una carga
+  (por id, por clave, inversa, credencial, lote por clave natural), en el `List` y en su total, y `f.alive()` en el finder,
+  DETRÁS de `r.scoped`. `FindAllByID` no lo lleva (D3). En documental, `{Key: "deletedAt", Value: nil}` en el filtro de cada
+  carga, `all` en el `List` y una condición más en el finder, detrás del alcance.
+- **`Restore` y `FindDeletedBy<Clave>` devuelven `(*E, bool, error)`**, como todo finder de Go: «no hay borrada» es una
+  respuesta, no un error. La ventana se compara en el servidor con `time.Now()`, como los otros tres.
+- **La retención vive en el paquete del almacén** (`<raíz>_retention.go`): `due` por lotes y `apply` en su transacción, con el
+  SQL (o el `UpdateOne`) que escribe build; sin ORM no hay un borrado del puerto que reutilizar, y las hijas caen por el
+  `ON DELETE CASCADE` del baseline (T3). Sobre documentos, las hijas se anonimizan con `$[]`, solo donde el array existe
+  (MongoDB rechaza `$[]` sobre un campo ausente).
+- **RT-3 mide el kind EMITIDO**: la retención da su `Recurring(spec)`, que usan el arranque y la sonda de dos réplicas, y
+  `rt-every-replica` rompe ese método. Construir el recurrente en la sonda con la constante reconstruiría lo que mide.
+- **T5 sin telemetría**: la retención vacía la caché con la MISMA `operationCache` que los casos de uso, así que el arranque
+  la pone en una variable también sin telemetría (una segunda instancia no subiría la generación de la primera).
+- **PD-2 se cumple por construcción en Go.** `translate` nunca devuelve el mensaje del motor de una violación de integridad
+  (constraint conocida: su error del contrato; desconocida: el 409 sin code), el caso de uso registra solo el `code` y el
+  borde solo el catch-all 500. La sonda afirma que ni el error del adaptador ni el logger de la persistencia llevan el valor;
+  `pd-log-value` envuelve el error del motor en el de la constraint conocida y cae solo en MySQL (`Duplicate entry '…'`).
+- **Medido, y no supuesto**: los sabotajes tienen que conservar la forma también en Go, donde un import o una variable sin
+  uso no compila. `rt-anonymize-miss` deja cada campo con su valor (`COALESCE(col, $n)`, la sentencia sigue con sus
+  parámetros) y, sobre documentos, descarta el sustituto con `_ = substitute`; `pd-log-value` usa `errors.Join` (sin `fmt`) y
+  solo en la rama de `translate`, no en la búsqueda de `constraintIn`.
+- **Dos caídas que no son de más**: `lc-implicit-replace` tumba también RS-1, RS-2, RS-6 y RS-8 de vault-logical-scoped
+  (miden el mismo alcance del mismo finder), y `lc-unique-all-rows` sobre documentos, la sonda general de los índices vivos
+  (que ahora compara también el filtro de vida). Las declara `LIFECYCLE_ALSO`.
+- **Nada cambia para quien no declara el ciclo de vida**: lo emitido para todas las fixtures con los tres motores es el mismo
+  byte a byte antes y después (13 070 archivos).
+
 ## Núcleo neutral (keel-core/src/lib/gen)
 
 - **`personal-data.js`**:
@@ -374,42 +404,30 @@ Un generador que no llegue a la puerta rechaza la capacidad con su motivo.
 | 1. keel-spring | hecho (2026-11-12) | `lifecycle-check` en PostgreSQL, MySQL y MongoDB con once sabotajes, `test/data-lifecycle.test.js` (PD-1 con bash), las suites de los cinco paquetes |
 | 2. keel-nest | hecho (2026-11-12) | `db-check` (PostgreSQL y MySQL, 4 sujetos) y `doc-check` (2 sujetos) con los once sabotajes, cada uno en exactamente sus casos; `test/data-lifecycle-parity.test.js` (PD-1 con bash, paridad con keel-spring); `ts-check`; la suite de keel-nest |
 | 3. keel-dotnet | hecho (2026-11-12) | `db-check` (PostgreSQL y MySQL, 4 sujetos) y `doc-check` (2 sujetos) con los sabotajes que tienen qué romper, cada uno en exactamente sus casos; `test/data-lifecycle-parity.test.js` (PD-1 con bash, paridad con keel-spring); `cs-check --fixtures` de las seis variantes; la suite de keel-dotnet |
-| 4. keel-go | pendiente | |
+| 4. keel-go | hecho (2026-11-12) | `db-check` (PostgreSQL y MySQL, 4 sujetos) y `doc-check` (2 sujetos) con los sabotajes que tienen qué romper, cada uno en exactamente sus casos; `test/data-lifecycle-parity.test.js` (PD-1 con bash, paridad con keel-spring); `go-check --fixtures`; lo emitido para las fixtures, idéntico byte a byte; la suite de keel-go |
 | 5. Derivados y documentación | pendiente | |
 | 6. Fixtures | pendiente | |
 | 7. Corridas de control | pendiente | |
 
 ## Para retomar
 
-Los incrementos 0 a 3 están hechos. Qué añadió el 3 (keel-dotnet), además de lo de § «Decidido y medido al escribir el
-incremento 3»:
+Los incrementos 0 a 4 están hechos: los cuatro generadores emiten el ciclo de vida del dato, y la fila `data-lifecycle` de
+sus cuatro matrices está `verificado` y `falsified: true`. Qué añadió el 4 (keel-go), además de lo de § «Decidido y medido al
+escribir el incremento 4»:
 
-- **`src/scaffold/data-lifecycle.js`**: las marcas de la fila, `ROW_ALIVE` y las líneas de los finders, `Live`/`NotDeleted`
-  del adaptador documental, `DeleteById` que marca, `FindDeletedBy<Clave>` y `Restore` en los dos adaptadores,
-  `<Raíz>Retention` (EF y driver, un ámbito por agregado), `<Raíz>RetentionTimer`, `RetentionSettings` y `retention.yaml`,
-  y `lifecycleStackErrors` (lo que no sabe anonimizar). El sitio `retention` está en el mapa de `render.js`.
-- **Enganchado en** `repositories.js` (`keyQuery`, la carga por clave que comparten los finders y `FindDeletedBy<Clave>`),
-  `document-repositories.js`, `finders.js`, `persistence.js` (las unicidades de una raíz con borrado lógico van como índices
-  parciales), `document-persistence.js`, `claim.js`, `reconciliation-claim.js`, `document-stores.js`, `timer.js`
-  (`TimerKinds`, `AddTimer` y Program.cs), `services.js`, `logging-check.js` (PD-1), `persistence-runtime.js` y
-  `rest-support.js` (PD-2); `supported-features.js` ya no lo rechaza.
-- **La red**: `scripts/lib/lifecycle-probes.js` en `db-check` (cards-logical, codes-anonymize, codes-delete y
-  vault-logical-scoped) y `doc-check` (cards-logical-mongo y codes-anonymize-mongo); `--only` admite una lista. Los sujetos
-  son parches de `UNCOVERED_BRANCHES`, así que `cs-syntax`, `uncovered-branches.test.js` y `cs-check` los recorren.
-  `db-check` mira además el predicado de vida de cada índice en el catálogo, contra keel-core.
-- **La matriz**: fila `data-lifecycle` de keel-dotnet `verificado` y `falsified` en los dos modelos.
-- **Un hueco anotado, no arreglado**: en cards-logical-mongo, la sonda general del conflicto transitorio no ve el 409 (raíz
-  con clave natural y sin bloqueo optimista, como Profile en conduit-scoped). El ciclo de vida no toca ese `Save`, y
-  doc-check juzga en ese sujeto solo los casos LC y RT.
+- **`src/scaffold/data-lifecycle.js`**: las marcas, el predicado de vida (`liveSuffix`, `f.alive()`, `DOCUMENT_ALIVE`),
+  `DeleteByID` que marca, `FindDeletedBy<Clave>` y `Restore` en los dos adaptadores, `<Raíz>Retention` (relacional y
+  documental) con su `Recurring`, `RetentionSettings` y `retention.yaml`, los kinds y el cableado del cronómetro
+  (`retentionKindRows`, `retentionWiring`) y `lifecycleStackErrors`.
+- **Enganchado en** `repositories.js`, `document-repositories.js`, `finders.js`, `persistence.js` (marcas y unicidades entre
+  vivas), `document-persistence.js` (`partialFilterEntries`), `claim.js`, `reconciliation-claim.js`, `timer.js`, `cache.js` (la
+  caché en una variable cuando la retención la vacía), `services.js` (notas) y `logging-check.js` (PD-1);
+  `supported-features.js` ya no lo rechaza.
+- **La red**: `scripts/lib/lifecycle-probes.js` en `db-check` y `doc-check` (`lifecycle_probe_test.go`), con `--only` en
+  lista; los sujetos son parches de `UNCOVERED_BRANCHES`, así que `go-syntax`, `go-idioms`, `uncovered-branches.test.js` y
+  `go-check` los recorren. La sonda de los índices vivos de `doc-check` compara también el filtro de vida.
 
-Siguiente, el incremento 4 (keel-go), con el mismo guion:
-
-1. Quitar `dataLifecyclePendingErrors` de su `supported-features.js` (y su fila de `README.md` § La frontera) y la fila
-   `pending` de su matriz.
-2. Emitir con su SQL propio sobre database/sql y su rama documental, consumiendo lo neutral (`partialIndexSpecs` y
-   `documentIndexSpecs` con `live`, `generatorRetentions`, `retentionParameters`, `cacheInvalidations`, las notas). Ojo con
-   lo medido en keel-nest y keel-dotnet: la versión sube al marcar, restaurar y anonimizar; y el log del driver o de la
-   capa de persistencia puede llevar el valor de una unicidad violada (en MySQL sí, en PostgreSQL no).
-3. Las sondas en `scripts/lib/lifecycle-probes.js` de su `db-check`/`doc-check` con los mismos casos y sabotajes (el
-   veredicto de keel-dotnet, `lifecycleSabotageVerdict`, sirve de modelo: `pd-log-value` no cae en PostgreSQL ni en
-   documental), y `test/data-lifecycle-parity.test.js` contra keel-spring.
+Siguiente, el incremento 5 (derivados y documentación), con su guion de § Incrementos: `openapi.js` con `x-personal` y sus
+tres oráculos, `docs/keel/personal-data.md` en los cuatro, las skills (`/keel-docs`, `/keel-design`, `/keel-recover`), los
+agentes de código y de calidad de los cuatro, `capability-coverage` y la fila en `CLAUDE.md` § Dónde se añade cada cosa. PD-3
+(trazas y logs con el colector OTLP falso) quedó para ese incremento en los cuatro generadores.

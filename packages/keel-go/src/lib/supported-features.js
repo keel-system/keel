@@ -16,7 +16,6 @@ import { persistedMembers } from '@keel-system/keel-core/gen';
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
 import { optionalAuthFrontierErrors } from '@keel-system/keel-core/gen/read-scope';
-import { dataLifecyclePendingErrors } from '@keel-system/keel-core/gen/data-lifecycle';
 import { declaredDeadlines, modelDeadlines } from '@keel-system/keel-core/gen/deadlines';
 import { repositoryRoots } from '@keel-system/keel-core/gen/features';
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
@@ -79,9 +78,9 @@ export function checkSupportedFeatures(manifest, layers) {
   // construcción (T7, T8) lo rechaza planService con la frontera neutral, que necesita el modelo. level: optional también
   // (permitAll y optionalCallerIdentity), salvo sobre una identidad que no es un token: la frontera neutral.
   errors.push(...optionalAuthFrontierErrors(layers, 'keel-go'));
-  // El ciclo de vida del dato (DSL 2.28: personal, deletion: logical, restorableFor, retention) llega en el incremento 4
-  // de PLAN-DSL-228-CICLO-DE-VIDA.md: hasta entonces se rechaza entero, con el mismo mensaje en los cuatro.
-  errors.push(...dataLifecyclePendingErrors(layers, 'keel-go', 4));
+  // El ciclo de vida del dato (DSL 2.28: personal, deletion: logical, restorableFor, retention) se genera entero
+  // (scaffold/data-lifecycle.js, incremento 4 de PLAN-DSL-228-CICLO-DE-VIDA.md); lo que no sabe anonimizar lo rechaza
+  // planService (lifecycleStackErrors), que necesita el modelo.
   // Los plazos de negocio (DSL 2.26) los genera el cronómetro (scaffold/timer.js). Lo que depende del motor elegido —solo
   // hay sentencias medidas para PostgreSQL, MySQL y MongoDB— y del status del rechazo tardío lo rechaza planService, que
   // sí conoce el stack; aquí, las formas que el handler generado del plazo no sabe despachar.

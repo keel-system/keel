@@ -23,6 +23,7 @@
 // La lectura de candidatos excluye los de marca VIVA: sin eso, la cabeza de la cola —reclamada y aún sin resolver—
 // ocuparía el lote de cada pasada hasta caducar (el defecto que destapó keel-dotnet en su 11c, cerrado en los tres).
 
+import { DELETED_AT, isLogicallyDeleted } from '@keel-system/keel-core/gen/relational';
 import { RECONCILIATION_CLAIM, RECONCILIATION_PURGE, reconciledActivations, reconciliationClaims, reconciliationParameters, reconciliationYaml } from '@keel-system/keel-core/gen/reconciliation-stores';
 import { screamingSnake, snakeCase } from '@keel-system/keel-core/gen';
 import { storeDocumentKey } from '@keel-system/keel-core/gen/document';
@@ -380,7 +381,7 @@ func (r *${type}) ${method}(ctx context.Context) ([]*domain.${entity.name}, erro
 	filter := bson.D{
 		{Key: ${goString(snakeCase(entity.lifecycle.field))}, Value: bson.D{{Key: "\$in", Value: bson.A{${states}}}}},
 		{Key: ${awaiting}, Value: bson.D{{Key: "\$lt", Value: instantValue(unansweredBefore)}}},
-		{Key: "_id", Value: bson.D{{Key: "\$nin", Value: held}}},
+		{Key: "_id", Value: bson.D{{Key: "\$nin", Value: held}}},${isLogicallyDeleted(entity) ? `\n\t\t{Key: ${goString(DELETED_AT.field)}, Value: nil},` : ''}
 	}
 	candidates, err := r.find(ctx, filter, options.Find().SetSort(bson.D{{Key: ${awaiting}, Value: 1}, {Key: "_id", Value: 1}}).SetLimit(int64(window.BatchSize)))
 	if err != nil {
@@ -453,6 +454,8 @@ export function reconciliationCandidates(model, entity, claim) {
   return {
     sql:
       `SELECT e.${idColumn} FROM ${q(entity.tableName)} e WHERE e.${q(snakeCase(entity.lifecycle.field))} IN (${states}) AND e.${awaiting} < ${p(1)} ` +
+      // Lo borrado lógicamente (DSL 2.28) no se reconcilia.
+      (isLogicallyDeleted(entity) ? `AND e.${q(DELETED_AT.column)} IS NULL ` : '') +
       `AND NOT EXISTS (SELECT 1 FROM ${RECONCILIATION_CLAIM.table} c WHERE c.activation = '${claim.activation}' AND c.entity_id = e.${idColumn} AND c.claimed_at > ${p(2)}) ` +
       `ORDER BY e.${awaiting} LIMIT ${p(3)} FOR UPDATE OF e SKIP LOCKED`,
     args: ['unansweredBefore', 'claimExpiredBefore', 'window.BatchSize'],

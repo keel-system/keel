@@ -29,10 +29,12 @@ import { entityFinders, finderMethod, finderParams, finderResult, fixedArg } fro
 import { docComment, goFileName, isOptional, layout, localName, packageFile } from './render.js';
 import { declaredAuthorship, usesDeclaredAuthorship } from './audit-actor.js';
 import { emitsEvents, usesGoOutbox } from './messaging.js';
+import { DOCUMENT_ALIVE, DOCUMENT_LIVE_LINE, documentAdapterMethods, lifecycleDependencies } from './data-lifecycle.js';
+import { isLogicallyDeleted } from '@keel-system/keel-core/gen';
 import { claimDependencies, claimMethod, storedState } from './claim.js';
 import { deadlineDependencies, documentArming, sweepPassSignal } from './timer.js';
 import { documentReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
-import { credentialFinders, keyFinders, naturalKeyBatchFinder, portName, rankedEnums } from './repositories.js';
+import { credentialFinders, keyFinders, naturalKeyBatchFinder, naturalKeyFinder, portName, rankedEnums } from './repositories.js';
 import { BSON, MONGO_DRIVER, MONGO_OPTIONS } from './document-persistence.js';
 import { parameterAccessor } from './service-parameters.js';
 import { loadExpectingAdapter, loadsExpecting } from './conditional-writes.js';
@@ -384,6 +386,8 @@ function adapterBody(model, entity, uses) {
     ...reconciliationDependencies(model, entity),
     ...deadlineDependencies(model, entity)
   ];
+  // La ventana de una restauración que lee un parámetro del servicio (DSL 2.28), si el rescate no lo pide ya.
+  if (!deps.some((dep) => dep.field === 'parameters')) deps.push(...lifecycleDependencies(model, entity));
   const built = [
     events ? ' y el puente de la mensajería' : '',
     deps.some((dep) => dep.field === 'sweeps') ? ', con los barridos del perfil' : '',
@@ -391,6 +395,10 @@ function adapterBody(model, entity, uses) {
     deps.some((dep) => dep.field === 'reconciliation') ? ', con los barridos de reconciliación del perfil' : '',
     deps.some((dep) => dep.field === 'deadlines') ? ', con los plazos vigentes con los que arma sus temporizadores' : ''
   ].join('');
+  // Las lecturas VIVAS (DSL 2.28, D2): con borrado lógico, toda carga y todo listado del puerto deja fuera lo borrado.
+  // FindAllByID no: es la lectura por referencia, y una raíz borrada sigue siendo historia de quien la referencia (D3).
+  const live = isLogicallyDeleted(entity);
+  const alive = live ? `, ${DOCUMENT_ALIVE.replace(/^bson\.E/, '')}` : '';
   parts.push(`// ${constant} es la colección de los documentos de ${name}.
 const ${constant} = ${goString(collection)}
 
@@ -415,7 +423,7 @@ ${prelude}	found, err := r.find(ctx, ${filter}, options.Find().SetLimit(1))
 	}
 	return found[0], true, nil
 }`);
-  one('FindByID', `FindByID(ctx context.Context, ${id.name} ${id.type})`, `bson.D{{Key: "_id", Value: ${idWrite}}}`);
+  one('FindByID', `FindByID(ctx context.Context, ${id.name} ${id.type})`, `bson.D{{Key: "_id", Value: ${idWrite}}${alive}}`);
   // La carga que compara la versión (api.concurrency, D4), la misma que la del adaptador relacional.
   if (loadsExpecting(model, entity)) parts.push(loadExpectingAdapter(entity, type, portName(entity), id));
   if (idBatchReason(model, entity)) {
@@ -433,11 +441,11 @@ func (r *${type}) FindAllByID(ctx context.Context, ids []${id.type}) ([]*domain.
     const ownerId = owner?.idField ?? { goType: 'uuid.UUID', name: 'id' };
     parts.push(`// ${goExported(inverse.finder)} implementa domain.${portName(entity)}.
 func (r *${type}) ${goExported(inverse.finder)}(ctx context.Context, ${param} ${ownerId.goType}) ([]*domain.${name}, error) {
-	return r.find(ctx, bson.D{{Key: ${goString(`${snakeCase(inverse.relation)}_id`)}, Value: ${writer(ownerId, param, uses)}}})
+	return r.find(ctx, bson.D{{Key: ${goString(`${snakeCase(inverse.relation)}_id`)}, Value: ${writer(ownerId, param, uses)}}${alive}})
 }`);
   }
   for (const finder of keyFinders(model, entity)) {
-    const pairs = keyFilter(model, entity, finder, uses);
+    const pairs = [...keyFilter(model, entity, finder, uses), ...(live ? [['deletedAt', 'nil']] : [])];
     const encodes = pairs.some(([, value]) => value.includes('e.'));
     const prelude = encodes ? '\te := &encoder{}\n\tfilter := ' + filterLiteral(pairs) + '\n\tif e.err != nil {\n\t\treturn nil, false, e.err\n\t}\n' : '';
     one(finder.name, `${finder.name}(ctx context.Context, ${finder.params.map((p) => `${localName(p.name)} ${p.type}`).join(', ')})`, encodes ? 'filter' : filterLiteral(pairs), prelude);
@@ -448,7 +456,7 @@ func (r *${type}) ${goExported(inverse.finder)}(ctx context.Context, ${param} ${
     one(
       credential.name,
       `${credential.name}(ctx context.Context, ${credential.param} ${element})`,
-      `bson.D{{Key: ${goString(snakeCase(credential.field.name))}, Value: ${writer(credential.field, credential.param, uses, true)}}}`
+      `bson.D{{Key: ${goString(snakeCase(credential.field.name))}, Value: ${writer(credential.field, credential.param, uses, true)}}${alive}}`
     );
   }
   const batch = naturalKeyBatchFinder(model, entity);
@@ -459,12 +467,12 @@ func (r *${type}) ${batch.name}(ctx context.Context, ${batch.plural} []${batch.p
 	if len(${batch.plural}) == 0 {
 		return nil, nil
 	}
-	return r.find(ctx, bson.D{{Key: ${goString(snakeCase(field.name))}, Value: bson.D{{Key: "$in", Value: each(${batch.plural}, ${writerFunc(field, uses)})}}}})
+	return r.find(ctx, bson.D{{Key: ${goString(snakeCase(field.name))}, Value: bson.D{{Key: "$in", Value: each(${batch.plural}, ${writerFunc(field, uses)})}}}${alive}})
 }`);
   }
   // Un listado acotado (DSL 2.27) no da el List sin scope: la única puerta paginada es su finder.
   if (listsUnscoped(model, entity) || entityFinders(model, entity).length > 0) parts.push(sortableMap(model, entity));
-  if (listsUnscoped(model, entity)) parts.push(listMethod(entity, type, constant));
+  if (listsUnscoped(model, entity)) parts.push(listMethod(entity, type, constant, live));
   parts.push(...documentFinderMethods(model, entity, type, constant, uses));
   // La lectura acotada (DSL 2.27): las cargas y el predicado que los finders acotados suman a sus condiciones.
   if (scopedLoadsOf(model, entity).length > 0) uses.add('matching');
@@ -475,7 +483,25 @@ func (r *${type}) ${batch.name}(ctx context.Context, ${batch.plural} []${batch.p
 
   // ─── Escrituras
   parts.push(saveMethod(model, entity, type, constant, id, idWrite, uses));
-  parts.push(`// DeleteByID implementa domain.${portName(entity)}. Las entidades internas van dentro del documento: caen con él.
+  // Con borrado lógico (DSL 2.28), DeleteByID MARCA, y la restauración y la carga de la borrada van con él.
+  const natural = naturalKeyFinder(model, entity);
+  const naturalPairs = natural ? keyFilter(model, entity, natural, uses) : [];
+  const naturalEncodes = naturalPairs.some(([, value]) => value.includes('e.'));
+  const marking = documentAdapterMethods(model, entity, {
+    type,
+    port: portName(entity),
+    constant,
+    id,
+    idWrite,
+    keyFinder: natural,
+    keyFilter: naturalEncodes
+      ? { prelude: `\te := &encoder{}\n\tbase := ${filterLiteral(naturalPairs)}\n\tif e.err != nil {\n\t\treturn nil, false, e.err\n\t}\n`, filter: 'base' }
+      : { prelude: '', filter: filterLiteral(naturalPairs) },
+    version: documentModel(model, entity).version
+  });
+  parts.push(
+    ...(marking ?? [
+      `// DeleteByID implementa domain.${portName(entity)}. Las entidades internas van dentro del documento: caen con él.
 func (r *${type}) DeleteByID(ctx context.Context, ${id.name} ${id.type}) error {
 	return r.tx.write(ctx, func(ctx context.Context) error {
 		documents, err := r.tx.collection(${constant})
@@ -485,7 +511,9 @@ func (r *${type}) DeleteByID(ctx context.Context, ${id.name} ${id.type}) error {
 		_, err = documents.DeleteOne(ctx, bson.D{{Key: "_id", Value: ${idWrite}}})
 		return err
 	})
-}`);
+}`
+    ])
+  );
 
   // ─── La lectura del agregado
   parts.push(`// find lee los documentos que casan con filter y rehidrata cada agregado.
@@ -704,12 +732,13 @@ function documentFinderMethods(model, entity, type, constant, uses) {
     return `// ${finderMethod(finder)} implementa domain.${portName(entity)}.
 ${signature} {
 ${prelude}${lines.join('\n')}${encoded}
-${finder.scope ? `${documentScopeLines(zero).join('\n')}\n` : ''}${tail}
+${finder.scope ? `${documentScopeLines(zero).join('\n')}\n` : ''}${finder.live ? `${DOCUMENT_LIVE_LINE}\n` : ''}${tail}
 }`;
   });
 }
 
-function listMethod(entity, type, constant) {
+function listMethod(entity, type, constant, live = false) {
+  const all = live ? `bson.D{${DOCUMENT_ALIVE.replace(/^bson\.E/, '')}}` : 'bson.D{}';
   const name = entity.name;
   const idName = entity.idField?.name ?? 'id';
   return `// List implementa domain.${portName(entity)}.
@@ -722,11 +751,11 @@ func (r *${type}) List(ctx context.Context, pageable domain.Pageable) (domain.Pa
 	if err != nil {
 		return domain.Page[*domain.${name}]{}, err
 	}
-	total, err := documents.CountDocuments(ctx, bson.D{})
+	total, err := documents.CountDocuments(ctx, ${all})
 	if err != nil {
 		return domain.Page[*domain.${name}]{}, translate(err)
 	}
-	found, err := r.find(ctx, bson.D{}, options.Find().SetSort(order).SetSkip(pageable.Offset()).SetLimit(int64(pageable.Size)))
+	found, err := r.find(ctx, ${all}, options.Find().SetSort(order).SetSkip(pageable.Offset()).SetLimit(int64(pageable.Size)))
 	if err != nil {
 		return domain.Page[*domain.${name}]{}, err
 	}
@@ -748,6 +777,8 @@ function claimMethods(model, entity, type, constant, uses) {
     const states = claim.from.map((state) => goString(storedState(model, entity, state))).join(', ');
     const setup = [`\tbatch := r.sweeps.BatchSize[${goString(claim.sweepKey)}]`];
     const filter = [`{Key: ${goString(stateKey)}, Value: bson.D{{Key: "$in", Value: bson.A{${states}}}}}`];
+    // Lo borrado lógicamente (DSL 2.28) no es candidato de ningún barrido.
+    if (isLogicallyDeleted(entity)) filter.push(DOCUMENT_ALIVE.replace(/^bson\.E/, ''));
     if (claim.stalled) {
       const seconds = claim.stalled.parameter
         ? `time.Duration(r.parameters.${parameterAccessor({ name: claim.stalled.parameter.name })}()) * ${claim.stalled.parameter.unitSeconds} * time.Second`

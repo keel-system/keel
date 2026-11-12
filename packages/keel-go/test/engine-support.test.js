@@ -3,6 +3,11 @@
 
 import { RELAY_WAKE_SABOTAGES } from '../scripts/lib/relay-wake-probes.js';
 import { READ_SCOPE_SABOTAGE_SPECS } from '../scripts/lib/read-scope-probes.js';
+import { LIFECYCLE_SABOTAGE_SPECS } from '../scripts/lib/lifecycle-probes.js';
+
+// Los sabotajes del ciclo de vida con algo que romper en cada almacén.
+const relationalOf = (specs) => Object.fromEntries(Object.entries(specs).filter(([, spec]) => spec.relational).map(([id, spec]) => [id, spec.relational]));
+const documentOf = (specs) => Object.fromEntries(Object.entries(specs).filter(([, spec]) => spec.document).map(([id, spec]) => [id, spec.document]));
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -37,8 +42,7 @@ test('cada motor relacional que la frontera admite tiene su celda en los mecanis
 });
 
 test('la puerta del incremento 16: nada pendiente, nada sin ejecutar y nada sin falsar', () => {
-  // Salvo el ciclo de vida del dato (DSL 2.28), que es de otro plan: llega en su incremento 4 (PLAN-DSL-228-CICLO-DE-VIDA.md).
-  assert.deepEqual(pending().map(({ id }) => id).filter((id) => id !== 'data-lifecycle'), []);
+  assert.deepEqual(pending().map(({ id }) => id), []);
   assert.deepEqual(unverified().map(({ id, branch }) => `${id}/${branch}`), []);
   assert.deepEqual(unfalsified().map(({ id, branch }) => `${id}/${branch}`), []);
 });
@@ -89,13 +93,15 @@ const FALSIFIED_BY = {
   'timer-relay/relational': ['relay-no-wake', 'relay-no-retry'],
   'timer-relay/document': ['relay-no-wake', 'relay-no-retry'],
   'read-scope/relational': ['rs-no-filter', 'rs-count-unscoped', 'rs-get-leak', 'rs-empty-is-all', 'rs-finder-replace', 'rs-path'],
-  'read-scope/document': ['rs-no-filter', 'rs-count-unscoped', 'rs-get-leak', 'rs-empty-is-all', 'rs-finder-replace', 'rs-path']
+  'read-scope/document': ['rs-no-filter', 'rs-count-unscoped', 'rs-get-leak', 'rs-empty-is-all', 'rs-finder-replace', 'rs-path'],
+  'data-lifecycle/relational': ['lc-no-filter', 'lc-count', 'lc-get-leak', 'lc-unique-all-rows', 'lc-restore-window', 'lc-embed-hidden', 'lc-implicit-replace', 'rt-early', 'rt-anonymize-miss', 'rt-every-replica', 'pd-log-value'],
+  'data-lifecycle/document': ['lc-get-leak', 'lc-unique-all-rows', 'lc-restore-window', 'rt-early', 'rt-anonymize-miss', 'rt-every-replica']
 };
 
 test('el sabotaje con que se falsa cada celda de db-check o doc-check existe de verdad', () => {
   const known = {
-    'db-check': { ...DB_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES, ...RELAY_WAKE_SABOTAGES, ...READ_SCOPE_SABOTAGE_SPECS },
-    'doc-check': { ...DOC_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES, ...RELAY_WAKE_SABOTAGES, ...READ_SCOPE_SABOTAGE_SPECS }
+    'db-check': { ...DB_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES, ...RELAY_WAKE_SABOTAGES, ...READ_SCOPE_SABOTAGE_SPECS, ...relationalOf(LIFECYCLE_SABOTAGE_SPECS) },
+    'doc-check': { ...DOC_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES, ...RELAY_WAKE_SABOTAGES, ...READ_SCOPE_SABOTAGE_SPECS, ...documentOf(LIFECYCLE_SABOTAGE_SPECS) }
   };
   for (const { id, branch, cell } of cells()) {
     if (!known[cell.net]) continue;

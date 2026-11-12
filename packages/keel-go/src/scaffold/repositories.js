@@ -51,6 +51,7 @@ import { PARAMETERS_VAR } from './service-parameters.js';
 import { DEADLINES_VAR, deadlineDependencies, relationalArming } from './timer.js';
 import { loadExpectingAdapter, loadExpectingPort, loadsExpecting } from './conditional-writes.js';
 import { portGuardMethods, relationalGuardMethods } from './mail.js';
+import { deletePortDoc, lifecycleDependencies, liveCondition, liveSuffix, relationalAdapterMethods, restorePortMethods } from './data-lifecycle.js';
 
 // Un identificador en el SQL del adaptador, citado como en el baseline si es una palabra reservada (`"primary"` en
 // PostgreSQL, `` `primary` `` en MySQL).
@@ -118,6 +119,8 @@ export function repositoryArgs(model, entity, tx, bridge, { sweeps = 'sweeps', p
   const args = [tx];
   if (emitsEvents(model, entity)) args.push(bridge);
   for (const dep of claimDependencies(model, entity)) args.push(dep.field === 'sweeps' ? sweeps : parameters);
+  // La ventana de una restauración que lee un parámetro del servicio (DSL 2.28), si el rescate no lo pide ya.
+  if (lifecycleDependencies(model, entity).length > 0 && !claimDependencies(model, entity).some((dep) => dep.field === 'parameters')) args.push(parameters);
   for (const dep of reconciliationDependencies(model, entity)) if (dep.field === 'reconciliation') args.push(reconciliation);
   // Los plazos vigentes (DSL 2.26): el adaptador arma el temporizador al guardar una entidad que entra en su estado.
   if (deadlineDependencies(model, entity).length > 0) args.push(deadlines);
@@ -306,7 +309,9 @@ function portBody(model, entity) {
     'guarda el agregado entero (sus entidades internas y sus listas) y devuelve lo guardado, releído. Con bloqueo optimista, una versión obsoleta es el error de concurrencia del contrato.',
     `Save(ctx context.Context, ${localName(name[0].toLowerCase() + name.slice(1))} *${name}) (*${name}, error)`
   );
-  method('borra el agregado entero; no hace nada si no existe.', `DeleteByID(ctx context.Context, ${id.name} ${id.type}) error`);
+  method(deletePortDoc(model, entity), `DeleteByID(ctx context.Context, ${id.name} ${id.type}) error`);
+  // La restauración de un borrado lógico (DSL 2.28, D6): la borrada por su clave y la restauración por id.
+  for (const [doc, signature] of restorePortMethods(model, entity, id, naturalKeyFinder(model, entity))) method(doc, signature);
   const filters = filterStructs(model, entity).map((struct) => `${struct}
 
 `).join('');
@@ -470,8 +475,8 @@ function batchQuery(model, head, tail, values, array, uses) {
 }
 
 /** El cuerpo de un finder por lote: carga las raíces cuya `column` está en `values`. */
-function batchLoad(model, column, entity, values, uses, cast = null) {
-  const query = batchQuery(model, `WHERE ${column} `, '', values, entity ? idArray(entity) : { cast, helper: null }, uses);
+function batchLoad(model, column, entity, values, uses, cast = null, tail = '') {
+  const query = batchQuery(model, `WHERE ${column} `, tail, values, entity ? idArray(entity) : { cast, helper: null }, uses);
   return `${query.setup ? `\t${query.setup}\n` : ''}\treturn r.load(ctx, ${query.sql}, ${query.args})`;
 }
 
@@ -661,6 +666,8 @@ function adapterBody(model, entity, uses) {
     ...reconciliationDependencies(model, entity),
     ...deadlineDependencies(model, entity)
   ];
+  // La ventana de una restauración que lee un parámetro del servicio (DSL 2.28), si el rescate no lo pide ya.
+  if (!deps.some((dep) => dep.field === 'parameters')) deps.push(...lifecycleDependencies(model, entity));
   const built = [
     events ? ' y el puente de la mensajería' : '',
     deps.some((dep) => dep.field === 'sweeps') ? ', con los barridos del perfil' : '',
@@ -668,6 +675,9 @@ function adapterBody(model, entity, uses) {
     deps.some((dep) => dep.field === 'reconciliation') ? ', con los barridos de reconciliación del perfil' : '',
     deps.some((dep) => dep.field === 'deadlines') ? ', con los plazos vigentes con los que arma sus temporizadores' : ''
   ].join('');
+  // Las lecturas VIVAS (DSL 2.28, D2): con borrado lógico, toda carga y todo listado del puerto deja fuera lo borrado.
+  // FindAllByID no: es la lectura por referencia, y una raíz borrada sigue siendo historia de quien la referencia (D3).
+  const alive = liveSuffix(model, entity);
   parts.push(`${docComment(type, `el adaptador de domain.${portName(entity)} sobre ${sqlDialect(model).label}: el SQL lo escribe build y el mapeo fila ↔ dominio va campo a campo, sin reflexión. Se une a la transacción que abrió el caso de uso; sin ella, cada lectura va sola y cada escritura abre la suya.${eventsDoc}`)}type ${type} struct {
 ${alignRows(deps.map((dep) => ({ indent: '\t', cells: [dep.field, dep.type] }))).join('\n')}
 }
@@ -689,7 +699,7 @@ func (r *${type}) ${signature} (*domain.${name}, bool, error) {
 	}
 	return found[0], true, nil
 }`);
-  one('FindByID', `FindByID(ctx context.Context, ${id.name} ${id.type})`, `WHERE ${root.idColumn} = ${ph(model, 1)}`, id.name);
+  one('FindByID', `FindByID(ctx context.Context, ${id.name} ${id.type})`, `WHERE ${root.idColumn} = ${ph(model, 1)}${alive}`, id.name);
   if (loadsExpecting(model, entity)) parts.push(loadExpectingAdapter(entity, type, portName(entity), id));
   if (idBatchReason(model, entity)) {
     parts.push(`// FindAllByID implementa domain.${portName(entity)}.
@@ -707,7 +717,7 @@ ${batchLoad(model, root.idColumn, entity, 'ids', uses)}
     const quoted = sq(model, column);
     parts.push(`// ${goExported(inverse.finder)} implementa domain.${portName(entity)}.
 func (r *${type}) ${goExported(inverse.finder)}(ctx context.Context, ${param} ${owner?.idField?.goType ?? 'uuid.UUID'}) ([]*domain.${name}, error) {
-	return r.load(ctx, ${goString(`WHERE ${quoted} = ${ph(model, 1)}`)}, ${param})
+	return r.load(ctx, ${goString(`WHERE ${quoted} = ${ph(model, 1)}${alive}`)}, ${param})
 }`);
   }
   for (const finder of keyFinders(model, entity)) {
@@ -719,7 +729,7 @@ func (r *${type}) ${goExported(inverse.finder)}(ctx context.Context, ${param} ${
         conditions.push(`${where.column} = ${ph(model, args.length)}`);
       }
     }
-    one(finder.name, `${finder.name}(ctx context.Context, ${finder.params.map((p) => `${localName(p.name)} ${p.type}`).join(', ')})`, `WHERE ${conditions.join(' AND ')}`, args.join(', '));
+    one(finder.name, `${finder.name}(ctx context.Context, ${finder.params.map((p) => `${localName(p.name)} ${p.type}`).join(', ')})`, `WHERE ${conditions.join(' AND ')}${alive}`, args.join(', '));
   }
   for (const credential of credentialFinders(model, entity)) {
     const list = root.lists.find((candidate) => candidate.method === goExported(credential.field.name));
@@ -728,7 +738,7 @@ func (r *${type}) ${goExported(inverse.finder)}(ctx context.Context, ${param} ${
     one(
       credential.name,
       `${credential.name}(ctx context.Context, ${credential.param} ${credential.element})`,
-      `WHERE ${root.idColumn} IN (SELECT ${list.joinColumn} FROM ${list.table} WHERE ${list.valueColumn} = ${ph(model, 1)})`,
+      `WHERE ${root.idColumn} IN (SELECT ${list.joinColumn} FROM ${list.table} WHERE ${list.valueColumn} = ${ph(model, 1)})${alive}`,
       value
     );
   }
@@ -739,12 +749,12 @@ func (r *${type}) ${batch.name}(ctx context.Context, ${batch.plural} []${batch.p
 	if len(${batch.plural}) == 0 {
 		return nil, nil
 	}
-${batchLoad(model, batch.column, null, batch.plural, uses, batch.cast)}
+${batchLoad(model, batch.column, null, batch.plural, uses, batch.cast, alive)}
 }`);
   }
   // El mapa de orden lo usan el listado y los finders; el List, solo una raíz paginada.
   if (listsUnscoped(model, entity) || entityFinders(model, entity).length > 0) parts.push(sortableMap(model, entity));
-  if (listsUnscoped(model, entity)) parts.push(listMethod(model, entity, root, type));
+  if (listsUnscoped(model, entity)) parts.push(listMethod(model, entity, root, type, alive ? liveCondition(model) : null));
   parts.push(...adapterFinderMethods(model, entity, { type, root, sortable: `${lower(name)}Sortable`, writeValue }));
   // La lectura acotada (DSL 2.27): las cargas y el predicado que los finders acotados suman a su consulta.
   parts.push(...readScopeRelationalMethods(model, entity, { type, root, writeValue }));
@@ -754,13 +764,19 @@ ${batchLoad(model, batch.column, null, batch.plural, uses, batch.cast)}
 
   // ─── Escrituras
   parts.push(saveMethods(model, entity, root, tables, type, uses));
-  parts.push(`// DeleteByID implementa domain.${portName(entity)}. Las filas de las hijas y de las listas caen con la raíz (ON DELETE CASCADE).
+  // Con borrado lógico (DSL 2.28), DeleteByID MARCA, y la restauración y la carga de la borrada van con él.
+  const marking = relationalAdapterMethods(model, entity, { type, port: portName(entity), root, id, keyFinder: naturalKeyFinder(model, entity) });
+  parts.push(
+    ...(marking ?? [
+      `// DeleteByID implementa domain.${portName(entity)}. Las filas de las hijas y de las listas caen con la raíz (ON DELETE CASCADE).
 func (r *${type}) DeleteByID(ctx context.Context, ${id.name} ${id.type}) error {
 	return r.tx.write(ctx, func(q DBTX) error {
 		_, err := q.ExecContext(ctx, ${goString(`DELETE FROM ${root.table} WHERE ${root.idColumn} = ${ph(model, 1)}`)}, ${id.name})
 		return err
 	})
-}`);
+}`
+    ])
+  );
 
   // ─── La carga del agregado
   parts.push(loadMethod(model, root, type));
@@ -1216,7 +1232,7 @@ ${columns.join('\n')}
 }`;
 }
 
-function listMethod(model, entity, root, type) {
+function listMethod(model, entity, root, type, live = null) {
   const name = entity.name;
   const idName = entity.idField?.name ?? 'id';
   return `// List implementa domain.${portName(entity)}.
@@ -1230,10 +1246,10 @@ func (r *${type}) List(ctx context.Context, pageable domain.Pageable) (domain.Pa
 		return domain.Page[*domain.${name}]{}, err
 	}
 	var total int64
-	if err := q.QueryRowContext(ctx, ${goString(`SELECT count(*) FROM ${root.table}`)}).Scan(&total); err != nil {
+	if err := q.QueryRowContext(ctx, ${goString(`SELECT count(*) FROM ${root.table}${live ? ` WHERE ${live}` : ''}`)}).Scan(&total); err != nil {
 		return domain.Page[*domain.${name}]{}, translate(err)
 	}
-	found, err := r.load(ctx, "ORDER BY "+order+" LIMIT ${ph(model, 1)} OFFSET ${ph(model, 2)}", pageable.Size, pageable.Offset())
+	found, err := r.load(ctx, "${live ? `WHERE ${live} ` : ''}ORDER BY "+order+" LIMIT ${ph(model, 1)} OFFSET ${ph(model, 2)}", pageable.Size, pageable.Offset())
 	if err != nil {
 		return domain.Page[*domain.${name}]{}, err
 	}

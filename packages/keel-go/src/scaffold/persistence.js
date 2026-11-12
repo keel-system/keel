@@ -43,7 +43,8 @@ import {
   persistedMembers,
   uniqueFields
 } from '@keel-system/keel-core/gen';
-import { discriminatorColumn } from '@keel-system/keel-core/gen/relational';
+import { discriminatorColumn, isLogicallyDeleted } from '@keel-system/keel-core/gen/relational';
+import { lifecycleMarks } from './data-lifecycle.js';
 import { repositoryRoots, usesRelational } from '@keel-system/keel-core/gen/features';
 import { GENERATED_HEADER, alignRows } from '../lib/go-source.js';
 import { relationalEngine, sqlDialect } from '../lib/relational-engine.js';
@@ -334,22 +335,27 @@ export function schemaTables(model) {
       const timestamp = column.field.endsWith('At');
       columns.push({ name: column.column, base: timestamp ? 'timestamp' : 'string', textual: !timestamp, length: 255, nullable: false });
     }
+    // Las marcas del ciclo de vida del dato (DSL 2.28): deleted_at y anonymized_at, del generador y fuera del dominio.
+    for (const mark of lifecycleMarks(model, entity)) columns.push({ name: mark.column, base: 'timestamp', nullable: true });
+    // Con borrado lógico (DSL 2.28, D4) ninguna unicidad sin condición es de toda la tabla: se evalúa solo entre filas
+    // vivas, y eso es un índice parcial (abajo, con partialIndexSpecs), con el MISMO nombre.
+    const live = isLogicallyDeleted(entity);
 
     // La unicidad: la clave natural y los campos `unique`, como constraints de tabla con su nombre. La sombra de un
     // FILTRO (`filterOnly`) no lleva la unicidad del campo: ese se compara exacto.
     const shadowOf = (name) => keyShadow(members.find((m) => m.kind === 'scalar' && m.name === name)?.field);
-    if (entity.naturalKey?.length > 0) {
+    if (!live && entity.naturalKey?.length > 0) {
       const keyColumns = entity.naturalKey.flatMap((name) => (shadowOf(name) ? [shadowOf(name).column] : columnsFor(model, entity, members, name)));
       constraints.push({ name: `uk_${entity.tableName}_natural`, columns: keyColumns });
     }
-    for (const field of uniqueFields(entity)) {
+    for (const field of live ? [] : uniqueFields(entity)) {
       constraints.push({ name: `uk_${entity.tableName}_${field.columns?.name}`, columns: [shadowOf(field.name)?.column ?? field.columns?.name] });
     }
     // Los índices declarados (el de una lista va en su tabla de elementos), los condicionados con su predicado y el
     // de cada FK que no encabeza ya otro índice.
     const { handled } = collectionIndexesOf(entity, members);
     for (const index of entity.indexes ?? []) {
-      if (index.when || handled.has(index)) continue;
+      if (index.when || handled.has(index) || (live && index.unique)) continue;
       const probe = [];
       const indexColumns = index.fields.flatMap((name) => columnsFor(model, entity, members, name, probe));
       // Un índice sobre lo que no es columna de esta tabla rompería el esquema: lo avisa el modelo.
@@ -360,7 +366,8 @@ export function schemaTables(model) {
     // condición, NULL fuera) al final del índice único, que no restringe las filas con NULL. Es la forma de keel-spring
     // y keel-dotnet sobre el mismo motor, con el mismo nombre de columna (discriminatorColumn de keel-core).
     for (const spec of partialIndexSpecs(model, engine).filter((candidate) => candidate.entity === entity.name)) {
-      const indexColumns = spec.fields.flatMap((name) => columnsFor(model, entity, members, name));
+      // La de un borrado lógico sin `when` trae sus columnas ya resueltas (la sombra plegada incluida): las de keel-core.
+      const indexColumns = spec.when ? spec.fields.flatMap((name) => columnsFor(model, entity, members, name)) : spec.columnList.map((column) => column.replace(/^["`]|["`]$/g, ''));
       if (engine === 'mysql') {
         const flag = discriminatorColumn(spec);
         columns.push({ name: flag, generatedAs: `CASE WHEN ${spec.predicate} THEN 1 END` });

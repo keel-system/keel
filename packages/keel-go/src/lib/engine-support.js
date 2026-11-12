@@ -684,7 +684,27 @@ export const MECHANISMS = {
     }
   },
   'data-lifecycle': {
-    pending: 'el ciclo de vida del dato (DSL 2.28) llega en el incremento 4 de PLAN-DSL-228-CICLO-DE-VIDA.md: hasta entonces supported-features.js lo rechaza entero (dataLifecyclePendingErrors)'
+    parity: {
+      skip: 'ninguna fixture declara el ciclo de vida del dato hasta el incremento 6 de PLAN-DSL-228-CICLO-DE-VIDA.md: los sujetos son los diseños derivados de keel-core/test/helpers/data-lifecycle-designs.js (cards-logical y cards-logical-mongo, el mismo diseño salvo el modelo; codes-anonymize y codes-anonymize-mongo; codes-delete y vault-logical-scoped), los MISMOS que miden los otros tres; test/data-lifecycle-parity.test.js fija la forma y la compara con keel-spring (los mismos casos, índices, kind y claves del barrido)',
+      test: 'test/data-lifecycle-parity.test.js'
+    },
+    emitter: 'src/scaffold/data-lifecycle.js (marcas, lecturas vivas, DeleteByID que marca, Restore, la retención con su Recurring y RetentionSettings) · repositories.js y document-repositories.js · finders.js · persistence.js y document-persistence.js (la unicidad entre vivas) · claim.js y reconciliation-claim.js · timer.js · cache.js · services.js · logging-check.js (PD-1)',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'cards-logical, codes-anonymize, codes-delete y vault-logical-scoped contra el adaptador de database/sql (scripts/lib/lifecycle-probes.js, una prueba por caso en lifecycle_probe_test.go): LC-1 a LC-10, RT-1 a RT-4 y PD-2; PD-1 es el gate ejecutado con bash en test/data-lifecycle-parity.test.js. La unicidad entre vivas es el índice parcial en PostgreSQL y la columna generada en MySQL (T2), con el mismo nombre que la de toda la tabla, y la comprobación del catálogo la mira contra keel-core. RT-3 monta las dos réplicas con el Recurring EMITIDO de la retención. PD-2 se cumple por construcción (translate nunca devuelve el mensaje del motor de una violación de integridad); su sabotaje lo envuelve y solo cae en MySQL, donde el mensaje lleva el valor (Duplicate entry). Falsado en los dos motores, cada sabotaje en exactamente sus casos: lc-no-filter en LC-1 y LC-2, lc-count en LC-2, lc-get-leak en LC-3 y LC-4, lc-unique-all-rows en LC-5, lc-restore-window en LC-7, lc-embed-hidden en LC-9, lc-implicit-replace en LC-10 (y en RS-1, RS-2, RS-6 y RS-8, que miden el mismo alcance), rt-early en RT-1, rt-anonymize-miss en RT-2, rt-every-replica en RT-3 y pd-log-value en PD-2 (MySQL)'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        falsified: true,
+        why: 'cards-logical-mongo y codes-anonymize-mongo contra el driver de MongoDB en un replica set real, con las MISMAS sondas que la rama relacional; el índice parcial lleva deletedAt: null (T1) y la sonda de los índices vivos lo mira contra keel-core. Falsado: lc-get-leak en LC-3 y LC-4, lc-unique-all-rows en LC-5 (y en los índices vivos), lc-restore-window en LC-7, rt-early en RT-1, rt-anonymize-miss en RT-2 y rt-every-replica en RT-3. LC-1, LC-2, LC-9 y LC-10 no tienen sujeto documental (ningún diseño derivado lista, embebe ni acota con borrado lógico sobre documentos): su código es el mismo filtro deletedAt nulo que miden LC-3 y LC-4, pero sin ejecutar, y sus cuatro sabotajes no tienen qué romper. PD-2 no se mide aquí: el driver no escribe en el log ni translate copia su mensaje'
+      }
+    }
   }
 };
 

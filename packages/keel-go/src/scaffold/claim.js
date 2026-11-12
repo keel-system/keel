@@ -23,6 +23,7 @@
 // Lo propio de Go: el reclamo confirma en una transacción NUEVA (`Transactions.fresh`) y se niega a correr con una
 // abierta en el contexto, porque se uniría a ella y el reclamo no existiría para nadie hasta el commit final.
 
+import { DELETED_AT, isLogicallyDeleted } from '@keel-system/keel-core/gen/relational';
 import { claimOrderField, claimsForEntity, screamingSnake, snakeCase, sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
 import { envWithDefault } from '@keel-system/keel-core/gen/profile-values';
 import { usesPersistence, usesRelational } from '@keel-system/keel-core/gen/features';
@@ -324,6 +325,8 @@ export function claimStatements(model, entity, claim) {
       where.push(`${q(claim.due.field)} <= ${next()}`);
       args.push('now');
     }
+    // Lo borrado lógicamente (DSL 2.28) no es candidato de ningún barrido.
+    if (isLogicallyDeleted(entity)) where.push(`${d.quote(DELETED_AT.column)} IS NULL`);
     return { where, args };
   };
   // La lectura de los candidatos, del más antiguo al más nuevo.

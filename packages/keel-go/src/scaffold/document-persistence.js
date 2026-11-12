@@ -41,6 +41,7 @@ import { layout, packageFile } from './render.js';
 import { usesBestEffort } from './messaging.js';
 import { usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { KEEL_TIMER_DOCUMENT } from '@keel-system/keel-core/gen/timer-store';
+import { partialFilterEntries } from './data-lifecycle.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -254,7 +255,9 @@ function indexesBody(model) {
       const keys = spec.paths.map((path) => `{Key: ${goString(path)}, Value: 1}`).join(', ');
       const options = [`SetName(${goString(spec.name)})`];
       if (spec.unique) options.push('SetUnique(true)');
-      if (spec.partialFilter) options.push(`SetPartialFilterExpression(bson.D{{Key: ${goString(spec.partialFilter.path)}, Value: ${filterLiteral(spec.partialFilter.equals)}}})`);
+      // La condición del diseño y, con borrado lógico (DSL 2.28, T1), la vida: deletedAt nulo o ausente.
+      const partial = partialFilterEntries(spec, filterLiteral);
+      if (partial.length > 0) options.push(`SetPartialFilterExpression(bson.D{${partial.join(', ')}})`);
       return `\t\t{Keys: bson.D{${keys}}, Options: options.Index().${options.join('.')}},`;
     });
     return `\t${goString(collection)}: {\n${models.join('\n')}\n\t},`;

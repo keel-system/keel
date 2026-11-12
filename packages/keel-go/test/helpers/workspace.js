@@ -12,6 +12,7 @@ import { tmpDir } from './tmp.js';
 import { FINDER_DESIGNS } from '../../../keel-core/test/helpers/finder-designs.js';
 import { CONDITIONAL_WRITE_DESIGNS } from '../../../keel-core/test/helpers/conditional-write-designs.js';
 import { READ_SCOPE_DESIGNS } from '../../../keel-core/test/helpers/read-scope-designs.js';
+import { DATA_LIFECYCLE_DESIGNS } from '../../../keel-core/test/helpers/data-lifecycle-designs.js';
 
 const here = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.join(here, '..', '..', '..');
@@ -229,6 +230,16 @@ export const UNCOVERED_BRANCHES = [
   // La lectura acotada (DSL 2.27, PLAN-DSL-227-LECTURA-ACOTADA.md): los diseños de keel-core/test/helpers/read-scope-designs.js,
   // los MISMOS que miden keel-spring, keel-nest y keel-dotnet, conduit-optional (level: optional) incluido.
   ...READ_SCOPE_DESIGNS.map((design) => ({
+    name: design.name,
+    from: design.from,
+    mutate(manifest, layers) {
+      manifest.service.name = design.name;
+      design.mutate(layers);
+    }
+  })),
+  // El ciclo de vida del dato (DSL 2.28, PLAN-DSL-228-CICLO-DE-VIDA.md): los diseños de
+  // keel-core/test/helpers/data-lifecycle-designs.js, los MISMOS que miden los otros tres.
+  ...DATA_LIFECYCLE_DESIGNS.map((design) => ({
     name: design.name,
     from: design.from,
     mutate(manifest, layers) {

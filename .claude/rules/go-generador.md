@@ -38,3 +38,23 @@ sabotaje en exactamente sus casos.
 ## Lectura acotada (DSL 2.27, inc. 4 de PLAN-DSL-227-LECTURA-ACOTADA.md)
 
 `src/scaffold/read-scope.js`, con el reparto de los otros tres y lo neutral de `keel-core/gen/read-scope.js`: `domain.ReadScope` (con `CacheKey()`, la forma de keel-core) cuyo **valor cero es el conjunto vacío** —Go no obliga a dar un campo en un literal, así que un mensaje que nadie estampó no ve nada—; el scope del borde en `internal/httpapi/read_scope.go` (`readScopeScoping` sobre `security.CallerScope`, `readScopeOwnerOf<Entidad>` con `callerIdentity` y los roles exentos), que el endpoint estampa en el mensaje (``ReadScope domain.ReadScope `json:"-"` ``) tras el lector; el predicado `scoped` sumado al `filters` del finder tras sus criterios (el salto a otra raíz, una subconsulta `IN` por salto; el `IN` vacío es `1 = 0`, nunca todo) o a las condiciones del documento (resolviendo los `_id` de la otra colección con `idsIn`), y `LoadScoped`/`LoadScopedBy<Clave>` con `admittedOrMiss`, que pregunta al motor con el MISMO predicado. Las sondas RS-1 a RS-8 (`scripts/lib/read-scope-probes.js`) son una prueba por caso con el id en el nombre, en un bloque aparte de `rootProbes` (doc-probes reescribe los repositorios de ese texto con el de la raíz) y con el repositorio de cada almacén; RS-9 a RS-11 son pruebas emitidas que ejecuta `go-check --read-scope`. **Medido**: `rs-finder-replace` escrito como «el predicado sustituye a los criterios» rompía también la sonda 2.22 del finder, que pide con `UnrestrictedScope`; el sabotaje sustituye solo con un scope. En Go, conduit-scoped pasa también las sondas GENERALES de doc-check (el hueco que tiene keel-dotnet no aparece).
+
+## Ciclo de vida del dato (DSL 2.28, inc. 4 de PLAN-DSL-228-CICLO-DE-VIDA.md)
+
+`src/scaffold/data-lifecycle.js`, con el reparto de los otros tres y lo neutral de `keel-core/gen/data-lifecycle.js`:
+`deleted_at`/`anonymized_at` en la tabla (o `deletedAt`/`anonymizedAt` en el documento), que ningún `Rehydrate` lee; las
+lecturas VIVAS (` AND deleted_at IS NULL` en cada `r.load` de una carga, inversa, credencial y lote por clave, el `WHERE` del
+`List` y de su total, `f.alive()` en el finder DETRÁS de `r.scoped`; en documental, `{Key: "deletedAt", Value: nil}` en el
+filtro); `FindAllByID` sin ella (D3); `DeleteByID` que marca, `FindDeletedBy<Clave>` y `Restore` con su ventana, que
+devuelven `(*E, bool, error)` como los finders; la unicidad entre vivas como el índice parcial de `partialIndexSpecs` (con el
+MISMO nombre; en MySQL la columna generada; en Mongo el filtro parcial suma `deletedAt: nil`, `partialFilterEntries`); y la
+retención: `<Raíz>Retention` en el paquete del almacén (`due` por lotes y `apply` en su transacción, con el SQL o el
+`UpdateOne` escritos por build; `$[]` sobre las hijas solo donde el array existe) con su `Recurring(spec)`, que usan el arranque
+y la sonda de RT-3 (así el kind compartido es el emitido), y `RetentionSettings` desde `retention.yaml`. Con caché en las
+lecturas de la raíz, la retención la vacía tras barrer con la MISMA `operationCache` de los casos de uso (el arranque la pone
+en una variable también sin telemetría). Marcar, restaurar y anonimizar suben la versión. Los reclamos de barrido y de
+reconciliación excluyen lo borrado. PD-1 es la regla `personal` de `logging-check.js`; PD-2 se cumple por construcción en Go:
+`translate` nunca devuelve el mensaje del motor de una violación de integridad, el caso de uso solo registra el `code` y el
+borde solo el catch-all 500. Lo miden `test/data-lifecycle-parity.test.js` (paridad con keel-spring y PD-1 con bash) y
+`db-check`/`doc-check` con `scripts/lib/lifecycle-probes.js` (`lifecycle_probe_test.go`, una prueba por caso, que comparte
+base con las demás sondas: el total de una página se mide como diferencia); `--only` admite una lista.

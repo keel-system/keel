@@ -13,6 +13,7 @@ import { goString } from '../lib/go-source.js';
 import { sqlDialect } from '../lib/relational-engine.js';
 import { docComment, localName } from './render.js';
 import { READ_SCOPE_FIELD, RELATIONAL_SCOPE_LINE, isScopedRoot } from './read-scope.js';
+import { RELATIONAL_LIVE_LINE, aliveFilterBlock } from './data-lifecycle.js';
 
 // Las columnas se citan como en el baseline del motor; `qFor` las cita para el modelo que se escribe.
 const qFor = (model) => (name) => sqlDialect(model).quote(name);
@@ -143,7 +144,9 @@ export function adapterFinderMethods(model, entity, { type, root, sortable, writ
     const name = finderMethod(finder);
     const signature = `func (r *${type}) ${name}(${['ctx context.Context', ...finderParams(finder, 'domain.')].join(', ')}) ${finderResult(finder, entity, 'domain.')}`;
     // El alcance de una lectura acotada (DSL 2.27) se SUMA a los criterios (D4): la misma consulta da las filas y el total.
-    const conditions = [...filterLines(model, entity, finder, writeValue), ...(finder.scope ? [RELATIONAL_SCOPE_LINE] : [])];
+    // Lo borrado (DSL 2.28, D2) se SUMA detrás del alcance: sustituir en vez de sumar (lc-implicit-replace) se lleva todo lo
+    // de antes y se ve.
+    const conditions = [...filterLines(model, entity, finder, writeValue), ...(finder.scope ? [RELATIONAL_SCOPE_LINE] : []), ...(finder.live ? [RELATIONAL_LIVE_LINE] : [])];
     if (finder.result === 'page') {
       const zero = `domain.Page[*domain.${entity.name}]{}`;
       return `// ${name} implementa domain.${entity.name}Repository.
@@ -195,6 +198,7 @@ export function filtersUses(model, roots) {
       if (finder.criteria.some((criterion) => criterion.match === 'contains')) uses.add('contains');
       if (finder.criteria.some((criterion) => criterion.match === 'prefix')) uses.add('prefix');
       if (finder.result === 'page') uses.add('page');
+      if (finder.live) uses.add('alive');
     }
     // La lectura acotada (DSL 2.27): el predicado de la raíz con su IN, y la carga, que compara el id.
     if (isScopedRoot(model, entity)) {
@@ -253,6 +257,7 @@ func (f *filters) prefix(column, text string) {
 	f.args = append(f.args, likeLiteral(text)+"%")
 	f.conditions = append(f.conditions, column+${likeTail})
 }`,
+    uses.has('alive') && aliveFilterBlock(d),
     `// where es la cláusula entera, o "" sin condiciones.
 func (f *filters) where() string {
 	if len(f.conditions) == 0 {
