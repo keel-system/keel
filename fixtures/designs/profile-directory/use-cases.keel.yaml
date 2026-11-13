@@ -55,3 +55,19 @@ operations:
       - { code: CARD_NOT_RESTORABLE, when: La ficha se borró hace más de 30 días., http: 409 }
       - { code: EMAIL_ALREADY_EXISTS, when: Otra ficha viva ocupa ya su correo., http: 409 }
       - { code: CARD_ALREADY_EXISTS, when: El titular ya tiene otra ficha viva creada después del borrado., http: 409 }
+
+  getMyCardHistory:
+    description: Devuelve el historial de cambios de la ficha viva del titular, el más reciente primero.
+    kind: query
+    input:
+      fields:
+        callerSubject: { type: string, required: true, description: "Claim sub del token." }
+        field: { type: string, historyFilter: field, description: "Solo las entradas que cambiaron este campo." }
+        from:  { type: timestamp, historyFilter: from, description: "Solo las confirmadas desde este instante." }
+        to:    { type: timestamp, historyFilter: to, description: "Solo las confirmadas hasta este instante." }
+    output: { history: ContactCard, paginated: true }
+    rules:
+      - "La ficha se busca por subject = callerSubject entre las vivas; si no hay ninguna, CARD_NOT_FOUND, también si está borrada."
+      - "Los filtros son opcionales y se combinan: field casa con el campo y con cualquier ruta bajo él, y from y to incluyen sus extremos."
+    errors:
+      - { code: CARD_NOT_FOUND, when: El titular no tiene ficha viva., http: 404 }

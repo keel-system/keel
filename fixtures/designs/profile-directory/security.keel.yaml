@@ -24,3 +24,4 @@ access:
     saveMyCard: { level: required, permissions: [card:self] }
     deleteMyCard: { level: required, permissions: [card:self] }
     restoreMyCard: { level: required, permissions: [card:self] }
+    getMyCardHistory: { level: required, permissions: [card:self] }

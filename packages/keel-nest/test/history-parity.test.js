@@ -18,6 +18,7 @@ import { planService } from '../src/scaffold/index.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
 import { historyCases } from '../scripts/lib/history-probes.js';
 import { HISTORY_SUPPORT_TS } from '../src/scaffold/history.js';
+import { tsString } from '../src/scaffold/render.js';
 import { BSON_VALUES_TS } from '../src/scaffold/document-persistence.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 import { planFixture, transpileTree } from './helpers/emitted.js';
@@ -57,7 +58,7 @@ test('el almacén relacional lleva las sentencias de keel-core TAL CUAL, como ke
     const spring = fileOf(plan('cards-history', { database, generator: planSpring }).files, '/history/JdbcChangeHistory.java');
     const S = historyStatements(database);
     for (const sql of [S.insertEntry, S.insertField, S.pageHead, S.countHead, S.pageTail, S.entriesOfRoot, S.updateChanges, S.deleteFields, S.deleteEntries, ...Object.values(S.filters)]) {
-      assert.ok(nest.includes(JSON.stringify(sql).slice(1, -1)), `${database}: keel-nest no lleva ${sql}`);
+      assert.ok(nest.includes(tsString(sql).slice(1, -1)), `${database}: keel-nest no lleva ${sql}`);
       assert.ok(spring.includes(JSON.stringify(sql).slice(1, -1)), `${database}: keel-spring no lleva ${sql}`);
     }
   }
@@ -140,7 +141,8 @@ test('la query devuelve la página de entradas, con la nota neutral en el handle
 });
 
 test('lo emitido para una fixture sin historial no nombra el historial', () => {
-  const { files } = planFixture('profile-directory', { stack: { database: 'postgresql' } });
+  // profile-directory lo declara desde la v1.2.0: shop-api, relacional y con datos personales, no.
+  const { files } = planFixture('shop-api', { stack: { database: 'postgresql' } });
   assert.ok(!files.some((file) => /history/.test(file.path)));
   assert.ok(!files.some((file) => typeof file.content === 'string' && /ChangeHistory|recordSave/.test(file.content)));
 });

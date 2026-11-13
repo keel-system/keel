@@ -6,8 +6,14 @@
 // (email personal, retención con `anonymize`). Estos sujetos miden lo que las fixtures no tienen: la rama documental de
 // la ficha, la otra salida de la retención y la composición con la lectura acotada (LC-10).
 
-/** La ficha tal como la declara profile-directory, sobre el modelo de persistencia `model`. */
+import { withoutHistory } from './history-designs.js';
+
+/**
+ * La ficha tal como la declara profile-directory, sobre el modelo de persistencia `model`, sin el historial de la v1.2.0
+ * (DSL 2.29): estos sujetos miden el ciclo de vida solo, y el historial con él lo miden los de history-designs.js.
+ */
 function cardsLogical(layers, model) {
+  withoutHistory(layers);
   layers.persistence.default = { ...layers.persistence.default, model };
 }
 

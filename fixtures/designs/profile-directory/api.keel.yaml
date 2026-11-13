@@ -1,5 +1,9 @@
 style: rest
 basePath: /api
+pagination:
+  style: offset
+  defaultSize: 20
+  maxSize: 100
 endpoints:
   getMyCard:
     method: GET
@@ -12,6 +16,9 @@ endpoints:
     method: DELETE
     path: /me/card
     successStatus: 204
+  getMyCardHistory:
+    method: GET
+    path: /me/card/history
   restoreMyCard:
     method: POST
     path: /me/card/restore

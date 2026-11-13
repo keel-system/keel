@@ -60,7 +60,8 @@ test('la seguridad va detrás del borde y delante del enrutador, y decide con el
 test('la identidad del llamante la estampa el lector desde la credencial: no se lee de la petición ni viaja en la query', () => {
   const { files } = plan('profile-directory');
   const endpoints = files.filter((file) => file.path.endsWith('_endpoints.go')).map((file) => file.content).join('\n');
-  assert.equal((endpoints.match(/msg\.CallerSubject, err = callerIdentity\(r\.Context\(\)\)/g) ?? []).length, 4);
+  // Las cuatro de la ficha y, desde la v1.2.0, la query del historial (getMyCardHistory).
+  assert.equal((endpoints.match(/msg\.CallerSubject, err = callerIdentity\(r\.Context\(\)\)/g) ?? []).length, 5);
   assert.doesNotMatch(endpoints, /member\(fields, "callerSubject"/);
   assert.doesNotMatch(content(files, 'internal/httpapi/routes.go'), /callerSubject/);
   assert.match(content(files, 'internal/httpapi/security.go'), /security\.ClaimText\(principal\.Claims, "sub"\)/);

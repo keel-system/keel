@@ -1,11 +1,12 @@
-# Careo de flujos (flow-walkthrough.md) de la v1.1.0, pasada 1, completa. Hecho a mano al migrar la fixture
-# (incremento 6 de PLAN-DSL-228-CICLO-DE-VIDA.md, 2026-11-12), recorriendo cada flujo paso a paso contra el
+# Careo de flujos (flow-walkthrough.md) de la v1.2.0, pasada 1, completa. Hecho a mano al migrar la fixture
+# (incremento 6 de PLAN-DSL-229-HISTORIAL.md, 2026-11-13), recorriendo cada flujo paso a paso contra el
 # manifiesto, las cinco capas y las convenciones, como lo hace keel-flow-review; las decisiones (resolution) son
-# del diseñador. El hallazgo de FL-CRD-003-D es el mismo de la v1.0.0, al que se vuelve a llegar.
-reviewedAt: 1.1.0
+# del diseñador. Los hallazgos de FL-CRD-003-D, FL-CRD-007 y FL-CRD-007-B son los de la v1.1.0, a los que se vuelve
+# a llegar; los de FL-CRD-007-C y FL-CRD-009-C son nuevos, del historial.
+reviewedAt: 1.2.0
 passes: 1
-scenariosSha256: ea418087ff4e2d9001911f021eadc932ef375ff08fb0cfcdb502c9990da129c4
-conventionsSha256: 92a2882b89f1fd9d09f5be14358aee5c35ea061be1df1cfcd4a790326739178b
+scenariosSha256: 0b373ff27f7ab9dda5fcb47790be0b213a547802fc96e1023f7753814f170d9a
+conventionsSha256: f9224f6ca08c439b0383c6f8291678dc9b0521dbf017d6f4eb6a96a19c6e428a
 flows:
   - { id: FL-CRD-001, sha256: 04180943c4f83024258406e2b6e0ee189a396ccd8f330720593915aa590b71a8 }
   - { id: FL-CRD-001-B, sha256: 2ecd18f694119628f378d535587a86d09287004f58e3c31306182a13c02e2a78 }
@@ -17,10 +18,10 @@ flows:
   - { id: FL-CRD-002-B, sha256: b9aee32d51d799bbe6b22f5f87ea146c5430e7b8f6cbdd088c271c92b8106923 }
   - { id: FL-CRD-002-C, sha256: 262f1778254fffa7dcf4d5da759f8b5e80041172facc140f794874224b013b6b }
   - { id: FL-CRD-002-D, sha256: 8582a4bc6366afebb9657fd38e1d3595d6307fe78740867b6b46007202193c71 }
-  - { id: FL-CRD-003, sha256: c7616dfaef44df1effa9b8c00b91bf9cfa40a4fc3dd160e9ede7350f6b940ccf }
+  - { id: FL-CRD-003, sha256: 1a90df3a660e6d5e5ba6cd5e4f2e42086d6aed5c389f3dbb0118dc21a6fa2d53 }
   - { id: FL-CRD-003-B, sha256: 56d34893123be6c0f04bef8d5b0adc34ef39b16a5ba1432eb74de16a2f368271 }
   - { id: FL-CRD-003-C, sha256: 049a9b102cbc9555670f8fa14fc7e7f629ae5859730ed2f57f4dda46368ea703 }
-  - { id: FL-CRD-003-D, sha256: 4c376d4205d038ee723152ab61bdb03c21651afe98bc6175818dd9d9df41b957 }
+  - { id: FL-CRD-003-D, sha256: 7719a52437c5eba20c3da914de564d701a4d21081533ee72228f0c27dd21a521 }
   - { id: FL-CRD-004, sha256: 36c7c51dc1b128a842be29bb7fdc1197dd086d9ccb249a6155a49fe590a231a5 }
   - { id: FL-CRD-004-B, sha256: 6110a0d27895861a261b592e6b66b64808a981fe7ddbaf6b6faadab96d0f5ed1 }
   - { id: FL-CRD-004-C, sha256: 39c23e20f683bd65a0606d33a53652c3f2e5e0a7d785554a6a7b5c383e948109 }
@@ -29,8 +30,21 @@ flows:
   - { id: FL-CRD-005-B, sha256: ad1d04ab03dd3edcf2619bb052afdc721b216e1e6b8678c9545cdb104c181bd4 }
   - { id: FL-CRD-006, sha256: 266026f6a5cd3b84a96be0af414fa7c3a42a368d4d8b3f23a5300f031ed4e98b }
   - { id: FL-CRD-006-B, sha256: 3361a6f799e7a868cb4f543e4c74f09314df9d66c4e6e626109b30049320314d }
-  - { id: FL-CRD-007, sha256: 31468fad4195ffb67c9a4ade4bf7f5499247db774231a47cc04455cfc73f0249 }
+  - { id: FL-CRD-007, sha256: d2f555ba43e8d10b6037742963c621cd41f045301ffff1de1aea29c10bcd8602 }
   - { id: FL-CRD-007-B, sha256: 4f123ce2ae569524a564aea05d04e4aaeacb6e1115afc86cf1683b9f9029a8b2 }
+  - { id: FL-CRD-007-C, sha256: 218efe767f9cb73bd2d1357c52fdbb194e9e7bb707f24c1d06612bab4458f92e }
+  - { id: FL-CRD-008, sha256: 12b6480e84b7b420b00b62ee47a12e99fd62698714bb0ea6e0e3932382e10f5a }
+  - { id: FL-CRD-008-B, sha256: 738cb02b1e934dba3cb51fb1f0ebfac3cbb73af4b6e3c0614464cca79c3cb55b }
+  - { id: FL-CRD-008-C, sha256: ddfc62a75eb340b794b1367ced3622cf8051153acd3dba8eba328cdcea81d26e }
+  - { id: FL-CRD-008-D, sha256: 0ea7c3e8a06944e5adfa6e9823a6ea3f3bd8b28bd335141a09cb08767641a6c7 }
+  - { id: FL-CRD-008-E, sha256: a8fc9c805205b8d1d3e36dfffee8f0161dafeb3e2faf4c8bfc323f5117af0529 }
+  - { id: FL-CRD-009, sha256: 535bf8caf04df591a5dcf5d0f5a70e0714240b902c3303470e3f4bfe3c2b257b }
+  - { id: FL-CRD-009-B, sha256: 910b6599a4e58ffdd8855a17a7cb2a86295ac0948493a7abf4c1f950d363dc4b }
+  - { id: FL-CRD-009-C, sha256: 001f61929097c22ff686e5075cb9ef86c3711db2101695e89be52f4d414a95f6 }
+  - { id: FL-CRD-009-D, sha256: 868bc22803bf43bcdd78c8338a33cc64402e62fc9ed84e915b9f0a41c2911b7c }
+  - { id: FL-CRD-010, sha256: 175d3a310a1fa627d0d002a509801bb9887a7177b9faac983e092fb4570cfefa }
+  - { id: FL-CRD-010-B, sha256: 577cf5b10b114844cca13cdfc54fae778b9449c9abbf21fc50d0b3f677b100f1 }
+  - { id: FL-CRD-010-C, sha256: 21ba12b510bf1a151e13d18e1269fe4403b7b30377a75ffbc1d555606a822046 }
 findings:
   - flow: FL-CRD-003-D
     step: "When"
@@ -75,3 +89,32 @@ findings:
       Aceptarlo: el par FL-CRD-007 / FL-CRD-007-B discrimina, y el Then 2 afirma que lo que no ha vencido sigue.
     resolution: accepted
     reason: "Aceptado: el 409 previo del mismo flujo es la línea base que hace observable la purga sin leer la base."
+  - flow: FL-CRD-007-C
+    step: "Then 1"
+    kind: unobservable
+    artifact: persistence.audit.history
+    evidence: >-
+      Que la purga se lleve el historial de la ficha purgada no se ve desde la API: getMyCardHistory carga la ficha
+      viva antes de leer su historial, y una ficha purgada da el mismo 404 que una borrada, con historial o sin él.
+      El Then 1 lo comprueba en el almacén del generador (change_history), que no está en el contrato; el arnés
+      no trae un helper que lo lea, como sí trae ageDeletion para la marca de borrado.
+    proposal: >-
+      Aceptarlo: el agente de pruebas cuenta las filas con dbSql sobre la tabla y las columnas que nombra la
+      convención «historial de una ficha purgada», igual que la sonda HI-9 de los cuatro generadores. Si una
+      corrida lo tropieza, el helper historyOf entra en el arnés de los cuatro como entró ageDeletion.
+    resolution: accepted
+    reason: "Aceptado: es la evidencia que decide el helper historyOf (PLAN-DSL-229-HISTORIAL.md, decidido en el incremento 5). La convención nombra la tabla y las columnas para que el SQL a mano no tenga que adivinarlas, que es lo que falló con ageDeletion."
+  - flow: FL-CRD-009-C
+    step: "Then 2"
+    kind: other
+    artifact: persistence.audit.history
+    evidence: >-
+      ?to=<t2> tiene que devolver la entrada de <t2>. El cable da el instante truncado a milisegundos
+      (wire-contract.md § Tipos), pero el almacén lo guardaba con la hora del motor en microsegundos
+      (current_timestamp, utc_timestamp(6)): el <t2> leído es anterior al guardado y la entrada quedaba fuera de su
+      propio extremo. Con ?from=<t2> no se ve, porque el error cae del lado bueno.
+    proposal: >-
+      Guardar la hora ya truncada al milisegundo, la precisión del cable, para que el at leído sea el guardado y
+      sirva tal cual de extremo. Es del generador, no del diseño ni del escenario.
+    resolution: accepted
+    reason: "Aceptado sin cambiar el diseño ni el escenario, que dicen lo correcto: el arreglo es de keel-core (HISTORY_NOW de gen/history-store.js, date_trunc('milliseconds', …) y utc_timestamp(3)), medido con el paso historial-hora de timer-sql-check y su sabotaje history-micros, y wire-contract.md § Historial lo dice."

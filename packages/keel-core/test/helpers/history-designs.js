@@ -1,9 +1,18 @@
 // Los diseños DERIVADOS con los que se mide el historial de cambios (DSL 2.29: `audit.history` y la query de
 // `output: { history }`) en los cuatro generadores, el mismo patrón que data-lifecycle-designs.js.
 //
-// Hasta el incremento 6 de PLAN-DSL-229-HISTORIAL.md ninguna fixture lo declara. Entonces profile-directory v1.2.0 guarda
-// el de la ficha, y estos sujetos siguen midiendo lo que ella no tiene: la rama documental, la retención que anonimiza y
-// un agregado con hijas cuya lectura va acotada (HI-3 y HI-7).
+// Desde el incremento 6 de PLAN-DSL-229-HISTORIAL.md, profile-directory v1.2.0 guarda el de la ficha: cards-history es la
+// fixture tal cual (el parche la deja igual), y los demás sujetos miden lo que ella no tiene: la rama documental, la
+// retención que anonimiza y un agregado con hijas cuya lectura va acotada (HI-3 y HI-7).
+
+/** profile-directory sin el historial de la v1.2.0: lo que era la fixture antes de la 2.29, para medir su ausencia. */
+export function withoutHistory(layers) {
+  delete layers.persistence.audit.history;
+  delete layers['use-cases'].operations.getMyCardHistory;
+  delete layers.api.endpoints.getMyCardHistory;
+  delete layers.api.pagination;
+  delete layers.security.access.rules.getMyCardHistory;
+}
 
 /** La query de historial de una raíz, con los tres filtros; `locate` son los campos que localizan la raíz. */
 function historyQuery(root, locate, errors) {

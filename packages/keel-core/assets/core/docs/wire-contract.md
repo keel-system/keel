@@ -101,6 +101,8 @@ fuera de rango, aunque el listado tenga elementos en otras.
 }
 ```
 
+- `at` es la hora a la que se confirmó la escritura, y se guarda con la precisión del cable (milisegundos): el `at` de una
+  entrada sirve tal cual de extremo de los filtros `from` y `to`, que incluyen el suyo.
 - `change` es `created`, `updated`, `deleted`, `restored` o `anonymized`. `deleted` y `restored` llevan `changes: []`.
 - `author` es el actor de la autoría: el `sub` del token, el cliente de la clave de API o `system` (con
   `system:<correlationId>` si hay correlación) cuando la escritura no viene de una petición.

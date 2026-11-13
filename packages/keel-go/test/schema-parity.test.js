@@ -24,6 +24,12 @@ import { BASELINE_FILE, generatorTables, physicalType, schemaSteps, schemaTables
 import { layout } from '../src/scaffold/render.js';
 import { GENERATOR_TABLES, schemaStepSql, stepSlug, storeColumnType } from '@keel-system/keel-core/gen/schema-steps';
 import { storeColumns } from '@keel-system/keel-core/gen/messaging-stores';
+import { CHANGE_HISTORY, CHANGE_HISTORY_FIELD } from '@keel-system/keel-core/gen/history-store';
+
+// Las dos tablas del historial (DSL 2.29) no las lee este cotejo: keel-spring las crea con su migración y no con
+// anotaciones JPA, que es lo que lee springSchema. Su forma la compara test/history-parity.test.js con los datos de
+// keel-core (CHANGE_HISTORY y CHANGE_HISTORY_FIELD), de los que salen las de los cuatro.
+const HISTORY_TABLES = [CHANGE_HISTORY.table, CHANGE_HISTORY_FIELD.table];
 
 /** Las tablas de mecanismos de keel-spring que keel-go todavía no genera, con el incremento que las trae. */
 const MECHANISM_TABLES = {};
@@ -39,6 +45,7 @@ test('hay fixtures relacionales que comparar', () => {
 
 function compare(spring, go) {
   for (const table of Object.keys(MECHANISM_TABLES)) spring.delete(table);
+  for (const table of HISTORY_TABLES) go.delete(table);
   assert.deepEqual([...go.keys()].sort(), [...spring.keys()].sort(), 'las mismas tablas');
   for (const [tableName, want] of spring) {
     const got = go.get(tableName);

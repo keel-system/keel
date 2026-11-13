@@ -88,10 +88,15 @@ type HistoryChange string
 
 // Los cambios del historial, en el orden del contrato.
 const (
-	HistoryCreated    HistoryChange = "created"
-	HistoryUpdated    HistoryChange = "updated"
-	HistoryDeleted    HistoryChange = "deleted"
-	HistoryRestored   HistoryChange = "restored"
+	// HistoryCreated es el alta del agregado, con todos sus campos.
+	HistoryCreated HistoryChange = "created"
+	// HistoryUpdated es un guardado que cambió algún campo; uno sin diferencias no deja entrada.
+	HistoryUpdated HistoryChange = "updated"
+	// HistoryDeleted es la baja, sin cambios.
+	HistoryDeleted HistoryChange = "deleted"
+	// HistoryRestored es la restauración de una baja lógica, sin cambios.
+	HistoryRestored HistoryChange = "restored"
+	// HistoryAnonymized es la retención que anonimiza: los valores personales ya sustituidos.
 	HistoryAnonymized HistoryChange = "anonymized"
 )
 

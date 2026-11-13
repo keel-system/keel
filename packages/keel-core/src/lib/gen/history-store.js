@@ -76,8 +76,12 @@ export function historyFieldRows(changes) {
 // driver. La hora de una entrada es la del MOTOR, como en el cronómetro: con varias réplicas sus relojes se desvían, y el
 // orden de la lectura no puede depender de cuál escribió. A igual hora (dos escrituras en una transacción de PostgreSQL,
 // cuyo current_timestamp es el de su inicio) desempata el id, que es un UUID versión 7: crece con el tiempo.
+//
+// Y truncada al MILISEGUNDO, la precisión del cable (wire.js: el timestamp se trunca a tres decimales): el `at` que lee el
+// cliente es el que está guardado, así que sirve tal cual de extremo de `from`/`to`. Con microsegundos, `to=<at de una
+// entrada>` la dejaba fuera a ella misma (medido al escribir los escenarios de profile-directory v1.2.0).
 
-const HISTORY_NOW = Object.freeze({ postgresql: 'current_timestamp', mysql: 'utc_timestamp(6)' });
+const HISTORY_NOW = Object.freeze({ postgresql: "date_trunc('milliseconds', current_timestamp)", mysql: 'utc_timestamp(3)' });
 
 /** Los motores para los que hay sentencias del historial. */
 export const HISTORY_ENGINES = Object.freeze(Object.keys(HISTORY_NOW));

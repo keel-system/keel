@@ -41,7 +41,7 @@ import {
 import { anonymizeHistoryChanges, anonymizedEntryChanges, historyContractClause, historyNote, historyPersonalPaths, historyPersonalPatterns } from '../src/lib/gen/history.js';
 import { personalDataInventory } from '../src/lib/gen/personal-data.js';
 import { GENERATOR_TABLES, schemaStepSql } from '../src/lib/gen/schema-steps.js';
-import { HISTORY_DESIGNS } from './helpers/history-designs.js';
+import { HISTORY_DESIGNS, withoutHistory } from './helpers/history-designs.js';
 import { PROBE } from './helpers/probe-projection.js';
 
 const FIXTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'fixtures', 'designs');
@@ -86,7 +86,7 @@ test('el modelo: la raíz guarda su historial y la query lo lee con sus tres fil
   // Las demás operaciones no leen historial.
   assert.equal(operationOf(model, 'getMyCard').historyOf, null);
   // Sin historial declarado, nada.
-  const { model: plain } = designOf('profile-directory');
+  const { model: plain } = designOf('profile-directory', withoutHistory);
   assert.equal(usesHistory(plain), false);
   assert.deepEqual(historyOperations(plain), []);
 });
@@ -107,7 +107,7 @@ test('la forma de lo que se registra: rutas del contrato, hijas por relación y 
   });
   // El modelo lleva la misma forma en la raíz que la guarda, y ninguna en las demás.
   assert.deepEqual(derived('cards-history').model.entities.find((entity) => entity.name === 'ContactCard').historyShape, historyShape(layers, 'ContactCard'));
-  assert.equal(designOf('profile-directory').model.entities.find((entity) => entity.name === 'ContactCard').historyShape, null);
+  assert.equal(designOf('profile-directory', withoutHistory).model.entities.find((entity) => entity.name === 'ContactCard').historyShape, null);
   const vault = historyShape(derived('vault-history-scoped').layers, 'Asset');
   assert.deepEqual(vault.children.map((child) => [child.relation, child.entity, child.list]), [['revisions', 'AssetRevision', true]]);
   // La hija no registra su vuelta a la raíz: no es una referencia a otro agregado.
@@ -229,7 +229,7 @@ test('la frontera común: rechaza el historial y su query con el mismo mensaje, 
   for (const error of errors) {
     assert.match(error, /keel-x todavía no lo genera — llega en el incremento 9 de PLAN-DSL-229-HISTORIAL\.md/);
   }
-  assert.deepEqual(historyPendingErrors(designOf('profile-directory').layers, 'keel-x', 9), []);
+  assert.deepEqual(historyPendingErrors(designOf('profile-directory', withoutHistory).layers, 'keel-x', 9), []);
 });
 
 test('cada sabotaje cae en casos que existen, y cada caso lo derriba algún sabotaje o se mide por su lado', () => {
@@ -297,7 +297,8 @@ test('las sentencias del almacén: la página se compone con los filtros present
     assert.equal(historyPageSql(S, { to: 't', field: 'email' }), S.pageHead + S.filters.field + S.filters.to + S.pageTail);
     assert.equal(historyCountSql(S, { from: 'f' }), S.countHead + S.filters.from);
     assert.match(S.pageTail, /ORDER BY h\.at DESC, h\.id DESC/);
-    assert.match(S.insertEntry, engine === 'mysql' ? /utc_timestamp\(6\)/ : /current_timestamp/);
+    // La hora del motor, truncada a la precisión del cable: el `at` leído sirve de extremo de `from`/`to`.
+    assert.match(S.insertEntry, engine === 'mysql' ? /utc_timestamp\(3\)/ : /date_trunc\('milliseconds', current_timestamp\)/);
     const sql = schemaStepSql(engine, GENERATOR_TABLES);
     assert.match(sql, /CREATE TABLE IF NOT EXISTS change_history \(/);
     assert.match(sql, /CONSTRAINT fk_change_history_field_entry FOREIGN KEY \(entry_id\) REFERENCES change_history \(id\) ON DELETE CASCADE/);
@@ -341,5 +342,5 @@ test('el contrato: las rutas personales legibles, la cláusula de la respuesta y
   assert.match(inventory, /\| ContactCard \| [^|]*`email`[^|]* \| cuando la retención anonimiza la raíz/);
   assert.match(personalDataInventory(derived('cards-history').model).content, /cuando la retención borra la raíz, se borran todas sus entradas/);
   // Sin historial, el inventario de la 2.28 no cambia.
-  assert.doesNotMatch(personalDataInventory(designOf('profile-directory').model).content, /historial/);
+  assert.doesNotMatch(personalDataInventory(designOf('profile-directory', withoutHistory).model).content, /historial/);
 });

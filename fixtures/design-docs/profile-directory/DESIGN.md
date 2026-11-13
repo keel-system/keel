@@ -1,16 +1,18 @@
 # profile-directory — Documento de diseño
 
-> specs/profile-directory v1.1.0. Diseño cerrado al preparar la corrida del incremento 8 de keel-nest
-> (2026-10-07) y ampliado en la v1.1.0 (DSL 2.28, incremento 6 de PLAN-DSL-228-CICLO-DE-VIDA.md) con el
-> correo, el borrado lógico, la restauración y la retención; las decisiones las tomó quien lo preparaba,
-> por delegación del diseñador.
+> specs/profile-directory v1.2.0. Diseño cerrado al preparar la corrida del incremento 8 de keel-nest
+> (2026-10-07), ampliado en la v1.1.0 (DSL 2.28, incremento 6 de PLAN-DSL-228-CICLO-DE-VIDA.md) con el
+> correo, el borrado lógico, la restauración y la retención, y en la v1.2.0 (DSL 2.29, incremento 6 de
+> PLAN-DSL-229-HISTORIAL.md) con el historial de cambios de la ficha; las decisiones las tomó quien lo
+> preparaba, por delegación del diseñador.
 
 ## 1. Propósito y alcance
 
 Guarda la **ficha de contacto** del titular de un token, y solo la suya: quien llama la consulta, la
-reemplaza, la borra y la restaura en `/me/card`, sin poder nombrar a nadie más. Es la silueta mínima de un
+reemplaza, la borra, la restaura y consulta su historial en `/me/card`, sin poder nombrar a nadie más. Es la silueta mínima de un
 servicio cuya identidad del llamante sale de un **claim** del token (`sub`) y no del cuerpo, y el contraste
-del ciclo de vida del dato: qué es personal, qué significa borrar y cuánto vive lo borrado.
+del ciclo de vida del dato: qué es personal, qué significa borrar, cuánto vive lo borrado y qué pasa con
+el rastro de cada cambio.
 
 Queda fuera, a propósito: la consulta de fichas ajenas por cualquier rol, el consumo desde un navegador
 (no hay `cors`) y la supresión del interesado como operación propia (RGPD art. 17). Motivos en § 7.
@@ -36,6 +38,10 @@ generado. Sin ciclo de vida de negocio: la ficha está viva o borrada, y esa mar
 - `restoreMyCard` devuelve la ficha borrada más reciente durante **30 días**, con su `id` y sus datos; no
   desplaza a nadie: si su `subject` o su `email` los ocupa otra ficha viva, responde el 409 de esa unicidad.
 - La **retención** purga cada ficha borrada a los 30 días del borrado; la ficha viva no caduca.
+- Cada escritura **confirmada** deja una entrada en el **historial** de la ficha: quién (`sub`), cuándo, qué
+  cambió (`created`, `updated`, `deleted`, `restored`) y, por campo, desde qué valor y a cuál. Un guardado
+  sin diferencias o una escritura rechazada no la dejan. El historial sigue a la ficha: borrada no se lee,
+  restaurada vuelve con sus entradas, y la purga se las lleva.
 - La identidad la estampa el servidor desde el claim `sub` (`authentication.callerIdentity`): un
   `callerSubject` en el cuerpo se ignora.
 
@@ -47,15 +53,17 @@ generado. Sin ciclo de vida de negocio: la ficha está viva o borrada, y esa mar
 | `saveMyCard` | `PUT /api/v1/me/card` | `200` con la ficha creada o reemplazada | `400 VALIDATION_ERROR` (cotas), `409 EMAIL_ALREADY_EXISTS`, `409 CARD_ALREADY_EXISTS` (carrera de la primera escritura) |
 | `deleteMyCard` | `DELETE /api/v1/me/card` | `204` | `404 CARD_NOT_FOUND` si no tiene ficha viva |
 | `restoreMyCard` | `POST /api/v1/me/card/restore` | `204` | `404 CARD_NOT_FOUND` (nada borrado), `409 CARD_NOT_RESTORABLE` (más de 30 días), `409 CARD_ALREADY_EXISTS` / `EMAIL_ALREADY_EXISTS` (clave ocupada) |
+| `getMyCardHistory` | `GET /api/v1/me/card/history` | `200` con una página de entradas, la más reciente primero; filtros opcionales `field`, `from` y `to` (extremos incluidos) | `404 CARD_NOT_FOUND` si no tiene ficha viva |
 
-Las cuatro exigen un token válido (`401 UNAUTHENTICATED` sin él) con el permiso `card:self`, que otorga el
+Las cinco exigen un token válido (`401 UNAUTHENTICATED` sin él) con el permiso `card:self`, que otorga el
 rol `card-holder` (`403 ACCESS_DENIED` sin él).
 
 ## 5. Fronteras e integraciones
 
 Un proveedor de identidad OIDC (Keycloak o Cognito según el stack) emite los tokens; el servicio solo
 los valida. No publica ni consume eventos y no llama a nadie. La purga la ejecuta el cronómetro del
-servicio (un recurrente, una sola réplica por pasada).
+servicio (un recurrente, una sola réplica por pasada). El historial lo guarda el almacén del generador
+(`change_history`), en la misma transacción que la escritura de la ficha.
 
 ## 6. Decisiones de diseño (qué / por qué)
 
@@ -69,14 +77,22 @@ servicio (un recurrente, una sola réplica por pasada).
   datos personales, así que lo borrado no se conserva más allá de la ventana en la que se puede
   restaurar. Una ficha borrada da `404`, nunca `410`: el cuerpo no revela que existió.
 - **El correo compara exacto**: `ana@` y `Ana@` son correos distintos; nada se normaliza.
-- **Sin caché ni auditoría**: el titular lee lo que acaba de hacer, y el autor es siempre él.
+- **Historial en vez de auditoría**: `timestamps` y `authorship` siguen en `none`, porque la última
+  escritura y su autor ya son la primera entrada del historial; el historial guarda todas, con el `sub` de
+  quien escribió.
+- **El historial paginado y con orden fijo**: 20 entradas por defecto y 100 como máximo, la más reciente
+  primero; el cliente no elige el orden. Un filtro que no casa con nada es una página vacía, no un error.
+- **El historial sigue el régimen de la ficha**: sin retención propia; la purga de la ficha se lleva sus
+  entradas, y mientras está borrada no se lee.
+- **Sin caché**: el titular lee lo que acaba de hacer.
 
 ## 7. Ficha de reutilización
 
 ### Contrato estable vs adaptable
 
-Estable: las cuatro rutas, la forma `{id, subject, displayName, email}` con `null` explícito, los `code`
-y el `204` sin cuerpo del borrado y la restauración.
+Estable: las cinco rutas, la forma `{id, subject, displayName, email}` con `null` explícito, la entrada
+del historial `{at, author, change, changes}`, los `code` y el `204` sin cuerpo del borrado y la
+restauración.
 Adaptable: el proveedor de identidad, el claim que identifica al titular, las cotas de los campos y los
 dos plazos de 30 días.
 
@@ -91,4 +107,5 @@ dos plazos de 30 días.
 
 Cambiar el claim de `callerIdentity.from.name` (por ejemplo, a un identificador de empleado), añadir a
 `ContactCard` los campos de la ficha que haga falta (marcando `personal` los que hablen de la persona) y
-ajustar `restorableFor` y `retention` a lo que pida el negocio. La clave natural sigue siendo el titular.
+ajustar `restorableFor` y `retention` a lo que pida el negocio. Si nadie tiene que responder qué valía un
+campo en una fecha, `audit.history` y `getMyCardHistory` se quitan juntos. La clave natural sigue siendo el titular.

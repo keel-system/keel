@@ -30,7 +30,6 @@ const MOTIVOS = {
 };
 
 const EXCEPCIONES = new Map([
-  ['persistence.audit.history', { motivo: MOTIVOS.soloCadenas, porque: 'el historial de cambios (DSL 2.29) lo genera keel-go desde el incremento 4 de PLAN-DSL-229-HISTORIAL.md, sobre los parches cards-history y compañía de keel-core/test/helpers/history-designs.js (test/history-parity.test.js, go-check, db-check y doc-check); ninguna fixture lo declara hasta el incremento 6 (profile-directory v1.2.0), y entonces esta fila se borra.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     { motivo: MOTIVOS.informativo, porque: 'solo entra en el comentario del mensaje de la suscripción (messaging.js): ningún lector depende de él.' }

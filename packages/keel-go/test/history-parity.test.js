@@ -174,7 +174,8 @@ test('la entrada del cable lleva at, author, change y changes, en ese orden', ()
 });
 
 test('lo emitido para una fixture sin historial no nombra el historial', () => {
-  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'profile-directory'));
+  // profile-directory lo declara desde la v1.2.0: shop-api, relacional y con datos personales, no.
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'shop-api'));
   const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: 'postgresql' } });
   assert.ok(!files.some((file) => /\/history(_test)?\.go$/.test(file.path)));
   assert.ok(!files.some((file) => typeof file.content === 'string' && /recordSave|HistoryEntry|change_history|historyBefore/.test(file.content)));

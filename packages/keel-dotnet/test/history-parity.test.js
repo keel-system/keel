@@ -172,7 +172,8 @@ test('la query devuelve la página de entradas, con la nota neutral en el handle
 });
 
 test('lo emitido para una fixture sin historial no nombra el historial', async () => {
-  const { files } = await planFixture('profile-directory', { stack: { database: 'postgresql' } });
+  // profile-directory lo declara desde la v1.2.0: shop-api, relacional y con datos personales, no.
+  const { files } = await planFixture('shop-api', { stack: { database: 'postgresql' } });
   assert.ok(!files.some((file) => /History\//.test(file.path) || /ChangeHistory/.test(file.path)));
   assert.ok(!files.some((file) => typeof file.content === 'string' && /ChangeHistory|RecordSave|HistoryEntry/.test(file.content)));
 });

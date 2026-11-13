@@ -38,6 +38,8 @@ const SABOTAGES = {
   'no-fence': { breaks: ['valla'], apply: (s) => ({ ...s, complete: s.complete.replace(' AND claim_token = :token', '') }) },
   // La página del historial sin el desempate del id (DSL 2.29): a igual hora el orden lo decide el motor.
   'history-order': { breaks: ['historial-orden'], apply: (s) => s, history: (h) => ({ ...h, pageTail: h.pageTail.replace(', h.id DESC', ', h.id ASC') }) },
+  // La hora de la entrada con microsegundos: el `at` del cable ya no es el guardado.
+  'history-micros': { breaks: ['historial-hora'], apply: (s) => s, history: (h) => ({ ...h, insertEntry: h.insertEntry.replace("date_trunc('milliseconds', current_timestamp)", 'current_timestamp').replace('utc_timestamp(3)', 'utc_timestamp(6)') }) },
   // El filtro por campo solo con la ruta entera: `price` ya no casa `price.amount`.
   'history-filter': { breaks: ['historial-filtro'], apply: (s) => s, history: (h) => ({ ...h, filters: { ...h.filters, field: h.filters.field.replace(' OR f.top = :field', '') } }) },
   // ageDeletion sin «solo si está borrada»: en PostgreSQL cuenta como envejecida una fila VIVA (NULL - intervalo sigue NULL,
@@ -337,6 +339,12 @@ async function check(engine) {
     entry(e(4), 'deleted', [], at(9));
     // Otra raíz con el mismo tipo: no se cuela en la página.
     run(H.insertEntry, { id: e(9), rootType: 'ContactCard', rootId: 'card-43', author: 'sub-2', change: 'created', changes: '[]' });
+    // La hora la pone el motor truncada al milisegundo, la precisión del cable: ninguna entrada guarda microsegundos.
+    const micro = engine === 'postgresql' ? '(extract(microseconds FROM at)::bigint % 1000)' : '(MICROSECOND(at) % 1000)';
+    for (const n of [6, 7, 8]) run(H.insertEntry, { id: e(n), rootType: 'ContactCard', rootId: 'card-44', author: 'sub-3', change: 'created', changes: '[]' });
+    const subMillis = run(`SELECT count(*) FROM change_history WHERE root_id IN ('card-43', 'card-44') AND ${micro} <> 0`, {})[0][0];
+    step(engine, 'historial-hora', subMillis === '0', `${subMillis} de 4 entradas con microsegundos`);
+    sql(engine, name, "DELETE FROM change_history WHERE root_id = 'card-44';");
     const page = (filters, limit = 10, offset = 0) =>
       run(historyPageSql(H, filters).replace('SELECT h.id,', `SELECT ${hex('h.id')},`), { ...ROOT, ...filters, limit, offset }).map((row) => row[0].slice(-1));
     const total = (filters) => Number(run(historyCountSql(H, filters), { ...ROOT, ...filters })[0][0]);

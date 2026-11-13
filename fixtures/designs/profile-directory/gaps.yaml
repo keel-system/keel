@@ -1,11 +1,13 @@
 # El análisis de huecos de este diseño (gap-analysis.md), hecho al preparar la corrida del incremento 8
 # de keel-nest (2026-10-07) y vuelto a recorrer en la v1.1.0 (incremento 6 de PLAN-DSL-228-CICLO-DE-VIDA.md,
-# 2026-11-12), que añade el email, el borrado lógico, la restauración y la retención. Las decisiones las tomó
+# 2026-11-12), que añade el email, el borrado lógico, la restauración y la retención, y en la v1.2.0
+# (incremento 6 de PLAN-DSL-229-HISTORIAL.md, 2026-11-13), que añade el historial de la ficha y su lectura,
+# getMyCardHistory. Las decisiones las tomó
 # quien preparaba la fixture por delegación del diseñador: van como decididas en el artefacto que las
 # sostiene, y las de la clase 16 como riesgo aceptado, que es lo que la doctrina pide cuando el diseñador dijo
 # «lo que recomiendes».
 reviewedBy: keel-gap-sweep
-reviewedAt: 1.1.0
+reviewedAt: 1.2.0
 
 coverage:
   - class: 2
@@ -18,10 +20,10 @@ coverage:
     units: [ saveMyCard, deleteMyCard, restoreMyCard ]
     result: findings
   - class: 5
-    units: [ getMyCard ]
-    result: clean
+    units: [ getMyCard, getMyCardHistory ]
+    result: findings
   - class: 9
-    units: [ getMyCard, saveMyCard, deleteMyCard, restoreMyCard ]
+    units: [ getMyCard, saveMyCard, deleteMyCard, restoreMyCard, getMyCardHistory ]
     result: clean
   - class: 12
     units: [ service ]
@@ -30,10 +32,10 @@ coverage:
     units: [ ContactCard ]
     result: findings
   - class: 15
-    units: [ getMyCard, saveMyCard, deleteMyCard, restoreMyCard ]
+    units: [ getMyCard, saveMyCard, deleteMyCard, restoreMyCard, getMyCardHistory ]
     result: findings
   - class: 16
-    units: [ '3.2', '3.3', '3.7', '3.9', '3.9b', '3.13' ]
+    units: [ '3.2', '3.3', '3.7', '3.8', '3.9', '3.9b', '3.13' ]
     result: findings
   - class: 19
     units: [ ContactCard ]
@@ -108,6 +110,26 @@ findings:
     reason: "Aceptado: si el borrado llega primero, el guardado crea una ficha nueva (FL-CRD-005); si llega
       después, borra la ficha guardada. Las dos son lo que el titular hizo, en el orden en que llegó."
 
+  # --- Clase 5 ---
+  - class: 5
+    unit: getMyCardHistory
+    what: >-
+      El historial de una ficha crece con cada guardado y no tiene tope: devolverlo entero es una respuesta sin
+      cota. Y sin filtros, quien busca cuándo cambió el correo tiene que recorrerlo todo.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.2.0: paginado (offset, 20 por defecto, 100 como máximo; registro estructural § 3.8),
+      el más reciente primero, y filtrable por campo y por fechas con los extremos incluidos (historyFilter). Lo
+      afirman FL-CRD-008-E y FL-CRD-009."
+  - class: 5
+    unit: getMyCardHistory
+    what: >-
+      Un filtro por un campo que ninguna entrada cambió (o que la ficha no tiene), ¿es un 400 o una página vacía?
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.2.0: página vacía, sin error. El filtro pregunta por las entradas que cambiaron ese
+      campo, y que no haya ninguna es una respuesta (FL-CRD-009-B)."
+
   # --- Clase 12 ---
   - class: 12
     unit: service
@@ -175,6 +197,15 @@ findings:
     reason: "Decidido en v1.1.0: 404 CARD_NOT_FOUND, el mismo en los dos casos para no revelar que hubo una ficha
       (FL-CRD-004-B)."
 
+  - class: 15
+    unit: getMyCardHistory
+    what: >-
+      El historial de una ficha borrada: ¿se lee (para ver qué se borró) o desaparece con ella?
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.2.0: sigue a la ficha. Borrada, getMyCardHistory responde el mismo 404 que getMyCard y
+      no dice que estuvo (FL-CRD-010); restaurada, vuelve con sus entradas y una restored (FL-CRD-010-B)."
+
   # --- Clase 16 ---
   - class: 16
     unit: '3.2'
@@ -188,6 +219,12 @@ findings:
     severity: risk
     state: accepted
     reason: "Aceptado: el titular lee lo que acaba de guardar; una respuesta cacheada le mentiría."
+  - class: 16
+    unit: '3.8'
+    what: getMyCardHistory paginado con offset, 20 por defecto y 100 como máximo, decidido por quien preparaba la fixture.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: es el sobre de página de siempre, y el orden lo fija el historial, no el cliente."
   - class: 16
     unit: '3.7'
     what: transactionalBoundary per-aggregate, decidido por quien preparaba la corrida.
@@ -205,7 +242,8 @@ findings:
     what: audit timestamps y authorship none, decididos por quien preparaba la corrida.
     severity: risk
     state: accepted
-    reason: "Aceptado: nadie lee el rastro y el autor es siempre el titular (subject)."
+    reason: "Aceptado: el rastro de quién y cuándo lo guarda el historial (audit.history), no dos columnas de la
+      ficha, y el autor de cada escritura es el titular (subject)."
   - class: 16
     unit: '3.13'
     what: deletion logical con 30 días de ventana y de retención, decidido por quien preparaba la fixture.
@@ -231,3 +269,13 @@ findings:
     reason: "Decidido en v1.1.0: retention from deleted, 30 días, then delete. Ningún otro agregado apunta a la
       ficha, así que borrarla entera no deja nada colgando; y la ficha viva no caduca, porque es la que el
       titular usa."
+  - class: 19
+    unit: ContactCard
+    what: >-
+      ¿Tendrá alguien que responder qué valía un campo de la ficha en una fecha, quién lo cambió y desde qué valor?
+      Es lo único de la clase que no se decide tarde: lo que no se guardó no se reconstruye.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.2.0: audit.history [ContactCard], leído por el propio titular con getMyCardHistory. Sus
+      valores personales siguen el régimen de la ficha: la purga a los 30 días del borrado se lleva también sus
+      entradas (FL-CRD-007-C), y no hay retención propia del historial."

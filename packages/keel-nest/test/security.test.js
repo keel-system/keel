@@ -29,7 +29,8 @@ test('profile-directory: el hook, las reglas, el JWT y la identidad; jose como d
   assert.match(files['src/infrastructure/http/http-platform.ts'], /installSecurity\(fastify, app\.get<Configuration>\(CONFIGURATION\)\)/);
   // La identidad se estampa desde la credencial, nunca desde el cuerpo.
   const controller = Object.entries(files).find(([file]) => file.includes('rest/controllers/contact-card'))[1];
-  assert.equal((controller.match(/callerSubject: CallerIdentity\.resolve\(\)/g) ?? []).length, 2);
+  // Desde la v1.2.0 también la query del historial (getMyCardHistory).
+  assert.equal((controller.match(/callerSubject: CallerIdentity\.resolve\(\)/g) ?? []).length, 3);
   assert.doesNotMatch(controller, /fields\['callerSubject'\]/);
   assert.ok('.claude/skills/keel-nest-keycloak/SKILL.md' in files);
 });

@@ -20,6 +20,12 @@ import { planService as planSpring } from '../../keel-spring/src/scaffold/index.
 import { springSchema, springCrossAggregateForeignKeys, schemaTable } from '../../keel-spring/test/helpers/schema-table.js';
 import { planFixture, FIXTURES_DIR } from './helpers/workspace.js';
 import { dotnetSchema } from './helpers/schema.js';
+import { CHANGE_HISTORY, CHANGE_HISTORY_FIELD } from '@keel-system/keel-core/gen/history-store';
+
+// Las dos tablas del historial (DSL 2.29) no las lee este cotejo: keel-spring las crea con su migración y no con
+// anotaciones JPA, que es lo que lee springSchema. Su forma la compara test/history-parity.test.js con los datos de
+// keel-core (CHANGE_HISTORY y CHANGE_HISTORY_FIELD), de los que salen las de los cuatro.
+const HISTORY_TABLES = [CHANGE_HISTORY.table, CHANGE_HISTORY_FIELD.table];
 
 const relational = fs.readdirSync(FIXTURES_DIR).filter((name) => {
   const file = path.join(FIXTURES_DIR, name, 'persistence.keel.yaml');
@@ -40,6 +46,7 @@ for (const name of relational) {
     const spring = springSchema(springFiles);
     for (const [tableName, fks] of springCrossAggregateForeignKeys(springFiles)) for (const fk of fks) schemaTable(spring, tableName).names.add(fk);
     const dotnet = dotnetSchema((await planFixture(name)).files);
+    for (const table of HISTORY_TABLES) dotnet.delete(table);
     assert.deepEqual([...dotnet.keys()].sort(), [...spring.keys()].sort(), 'las mismas tablas');
     for (const [tableName, want] of spring) {
       const got = dotnet.get(tableName);
@@ -120,6 +127,7 @@ for (const name of relational) {
     for (const [index, { table }] of springFlags) schemaTable(spring, table).names.add(index);
     const dotnetFiles = (await planFixture(name, { stack: { database: 'mysql' } })).files;
     const dotnet = dotnetSchema(dotnetFiles);
+    for (const table of HISTORY_TABLES) dotnet.delete(table);
     assert.deepEqual([...dotnet.keys()].sort(), [...spring.keys()].sort(), 'las mismas tablas');
     for (const [tableName, want] of spring) {
       const got = dotnet.get(tableName);

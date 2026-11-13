@@ -53,7 +53,8 @@ test('el middleware decide con la plantilla de la ruta que casó y deja el princ
 test('la identidad del llamante la estampa el lector desde la credencial: no se lee de la petición ni viaja en la query', () => {
   const { files } = plan('profile-directory');
   const endpoints = content(files, '/ContactCardV1Endpoints.cs');
-  assert.equal((endpoints.match(/CallerSubject = CallerIdentity\.Resolve\(\),/g) ?? []).length, 2);
+  // Desde la v1.2.0 también la query del historial (getMyCardHistory).
+  assert.equal((endpoints.match(/CallerSubject = CallerIdentity\.Resolve\(\),/g) ?? []).length, 3);
   assert.doesNotMatch(endpoints, /"callerSubject"/);
   const routes = content(files, '/ApiRoutes.cs');
   assert.doesNotMatch(routes, /callerSubject/);

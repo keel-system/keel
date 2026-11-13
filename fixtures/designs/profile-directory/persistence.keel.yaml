@@ -15,6 +15,10 @@ entities:
 audit:
   timestamps: none
   authorship: none
+  # v1.2.0: cada escritura confirmada de la ficha deja una entrada (quién, cuándo y qué campos, desde qué valor), y el
+  # titular la consulta con getMyCardHistory. Sus valores personales siguen el régimen de la ficha: la purga se lleva
+  # el historial con ella.
+  history: [ContactCard]
 
 consistency:
   transactionalBoundary: per-aggregate

@@ -27,6 +27,7 @@ import { checkGoIdioms } from './helpers/go-idioms.js';
 import { goView } from './helpers/contract.js';
 import { goSchema } from './helpers/schema.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
+import { CHANGE_HISTORY, CHANGE_HISTORY_FIELD } from '@keel-system/keel-core/gen/history-store';
 
 const MYSQL = { database: 'mysql' };
 const STORE = 'internal/infrastructure/mysql';
@@ -77,6 +78,8 @@ for (const { name, design, plan } of relational) {
     for (const table of MECHANISM_TABLES) spring.delete(table);
 
     const go = goSchema(plan.files);
+    // Las dos del historial las crea keel-spring con su migración, no con JPA: las compara test/history-parity.test.js.
+    for (const table of [CHANGE_HISTORY.table, CHANGE_HISTORY_FIELD.table]) go.delete(table);
     assert.deepEqual([...go.keys()].sort(), [...spring.keys()].sort(), 'las mismas tablas');
     const goFlags = new Map();
     for (const [tableName, want] of spring) {
