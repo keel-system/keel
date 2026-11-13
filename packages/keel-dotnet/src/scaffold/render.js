@@ -105,6 +105,10 @@ export const PLACES = {
   purge: ['infrastructure', 'Persistence/Purge'],
   // La retención de los agregados (DSL 2.28): qué ha vencido y qué se hace con ello; la dispara el cronómetro.
   retention: ['infrastructure', 'Persistence/Retention'],
+  // El historial de cambios (DSL 2.29): la entrada, el cambio y el filtro son dominio (los nombra el puerto de la raíz); el
+  // diff, las raíces y el almacén, infraestructura.
+  history: ['domain', 'History'],
+  historyInfra: ['infrastructure', 'Persistence/History'],
   // Lo que corre por reloj: el registro de tareas y un scheduler por grupo de operaciones con `schedule` (incremento 10b).
   scheduling: ['infrastructure', 'Scheduling'],
   // Los plazos de negocio (DSL 2.26): la duración vigente de cada plazo es dominio (la usa el rechazo tardío); el

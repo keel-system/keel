@@ -33,6 +33,7 @@ import { sortablePaths } from '@keel-system/keel-core/gen/document';
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import { DOCUMENT_SCOPE_LINE, readScopeDocumentMethods, scopedLoadsOf } from './read-scope.js';
 import * as lifecycle from './data-lifecycle.js';
+import * as history from './history.js';
 import { isLogicallyDeleted } from '@keel-system/keel-core/gen/relational';
 export { sortablePaths };
 
@@ -299,6 +300,14 @@ function saveMethodBody(model, entity) {
   if (needs.actor) lines.push('var actor = BsonValues.Of(AuditActor.Current());');
   lines.push(...declared);
   lines.push(`var id = document[${csString(DOCUMENT_ID)}];`, `var fields = new BsonDocument(document.Where(element => element.Name != ${csString(DOCUMENT_ID)}));`);
+  // El historial (DSL 2.29, T1): lo que había, LEÍDO de la base antes de escribirlo y con la sesión de la transacción.
+  const recorded = history.recordsHistory(entity);
+  if (recorded) {
+    lines.push(
+      `var historyDocument = await Collection.Find(session, new BsonDocument(${csString(DOCUMENT_ID)}, id)).FirstOrDefaultAsync(cancellationToken);`,
+      `var historyBefore = historyDocument is null ? null : HistorySnapshot(ToDomain${entity.name}(historyDocument));`
+    );
+  }
   // El armado del plazo (DSL 2.26): el estado que el documento tenía en la base, leído en la sesión antes de escribirlo.
   const arming = documentArming(model, entity, storedState);
   if (arming) lines.push(...arming.before);
@@ -350,8 +359,11 @@ function saveMethodBody(model, entity) {
   if (emitsEvents(model, entity)) {
     lines.push(usesBridge(model) ? 'await events.Publish(entity.PullDomainEvents(), cancellationToken);' : 'entity.PullDomainEvents();');
   }
-  if (arming) {
-    lines.push(`var saved = ToDomain${entity.name}(new BsonDocument(${csString(DOCUMENT_ID)}, id).AddRange(fields));`, ...arming.after, 'return saved;');
+  if (arming || recorded) {
+    lines.push(`var saved = ToDomain${entity.name}(new BsonDocument(${csString(DOCUMENT_ID)}, id).AddRange(fields));`, ...(arming?.after ?? []));
+    // La entrada del historial, en la misma transacción y tras confirmar la versión: un 409 no deja ninguna (T5).
+    if (recorded) lines.push('await RecordSave(historyBefore, saved, cancellationToken);');
+    lines.push('return saved;');
   } else {
     lines.push(`return ToDomain${entity.name}(new BsonDocument(${csString(DOCUMENT_ID)}, id).AddRange(fields));`);
   }
@@ -522,13 +534,19 @@ export function renderDocumentAdapter(model, entity) {
         await transactions.InTransaction(
             async () =>
             {
-                await Collection.DeleteOneAsync(transactions.Session!, ${idFilter}, cancellationToken: cancellationToken);
+                ${history.recordsHistory(entity) ? 'var removed = ' : ''}await Collection.DeleteOneAsync(transactions.Session!, ${idFilter}, cancellationToken: cancellationToken);${history.recordsHistory(entity) ? `
+                if (removed.DeletedCount > 0)
+                {
+${history.historyRecordLine(entity, 'deleted', idName, '                    ')}                }` : ''}
                 return true;
             },
             readOnly: false,
             cancellationToken);
     }`
-    ])
+    ]),
+    // El historial de cambios (DSL 2.29): la lectura (D7) y lo que Save necesita para escribir su entrada (D2, D3).
+    ...history.historyReadMethods(model, entity),
+    ...history.historyAdapterHelpers(model, entity)
   );
 
   // Lo que recibe el constructor: la transacción, el puente si la raíz emite eventos, y lo de sus reclamos.
@@ -541,7 +559,8 @@ export function renderDocumentAdapter(model, entity) {
   // La ventana de una restauración que lee un parámetro del servicio (DSL 2.28), si no lo recibe ya.
   const others = [...claimed, ...lifecycle.lifecycleDependencies(model, entity).filter((dep) => !claimed.some((other) => other.name === dep.name))];
   // Los plazos de negocio (DSL 2.26): el almacén del cronómetro y los plazos vigentes, para armar al guardar.
-  for (const dep of [...others, ...replicaDependencies(entity, others), ...timerDependencies(model, entity)]) {
+  // El almacén del historial (DSL 2.29), detrás de todos: lo escriben Save, DeleteById y Restore.
+  for (const dep of [...others, ...replicaDependencies(entity, others), ...timerDependencies(model, entity), ...history.historyDependency(model, entity)]) {
     ctor.push(`${dep.type} ${dep.name}`);
     usings.push(...dep.usings);
   }

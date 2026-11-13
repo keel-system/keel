@@ -229,7 +229,8 @@ function renderEndpoint(model, operation, usings) {
   const call = `await Mediator(http).${dispatch}(message, http.RequestAborted)`;
   const status = operation.route.status;
   let statements;
-  if (operation.responseDto) {
+  // La query de historial (DSL 2.29) responde la página de entradas, como cualquier otra respuesta.
+  if (operation.responseDto || operation.historyOf) {
     // Con escritura condicional el handler devuelve Versioned<T> (D6): la versión va al ETag y el valor al cuerpo.
     const versioned = returnsVersioned(model, operation);
     const lines = [`        var message = ${read};`, `        var ${versioned ? 'versioned' : 'response'} = ${call};`];

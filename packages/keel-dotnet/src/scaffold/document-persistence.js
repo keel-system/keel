@@ -32,7 +32,8 @@ import { csFile, csString, located, namespaceOf, typeUsings } from './render.js'
 import { partialFilterLiteral } from './data-lifecycle.js';
 import { configNamespace } from './config.js';
 import { usesDocument, persistedEntities, usesTextFold, textFoldFile } from './persistence.js';
-import { auditActorFiles, usesAuthorship } from './persistence-runtime.js';
+import { auditActorFiles, emitsAuditActor } from './persistence-runtime.js';
+import { historyDocumentIndexEntry, historyRegistration } from './history.js';
 import { repositoryRoots, portClass, adapterClass, repositoriesNamespace } from './repositories.js';
 import { idempotencyRegistration, idempotencyRegistrationUsings } from './request-idempotency.js';
 import { usesSweepClaims } from './claim.js';
@@ -72,7 +73,8 @@ export function generate(model) {
         namespaceOf(model, 'repositoryAdapters'),
         namespaceOf(model, 'ports'),
         ...idempotencyRegistrationUsings(model),
-        ...(persistenceTimerRegistration(model)?.usings ?? [])
+        ...(persistenceTimerRegistration(model)?.usings ?? []),
+        ...(historyRegistration(model)?.usings ?? [])
       ],
       registrationBody(model)
     ),
@@ -81,7 +83,7 @@ export function generate(model) {
   const enums = documentEnums(model);
   if (enums.length > 0) files.push(file('EnumColumns', typeUsings(model, enums.map((e) => e.name)), enumColumnsBody(enums)));
   if (usesTextFold(model)) files.push(textFoldFile(model));
-  if (usesAuthorship(model)) files.push(...auditActorFiles(model));
+  if (emitsAuditActor(model)) files.push(...auditActorFiles(model));
   return files;
 }
 
@@ -498,6 +500,9 @@ function documentIndexesBody(model) {
     });
     return `            [${csString(collection)}] =\n            [\n${indexes.join(',\n')}\n            ]`;
   });
+  // El índice de la lectura del historial (DSL 2.29): una raíz, la entrada más reciente primero.
+  const historyIndex = historyDocumentIndexEntry(model);
+  if (historyIndex) entries.push(historyIndex);
   return `/// <summary>
 /// Los índices de las colecciones del servicio, derivados de persistence.keel.yaml (clave natural, campos únicos e
 /// índices declarados, con su filtro parcial si el diseño los condiciona al estado) y de los almacenes del generador. Son
@@ -849,6 +854,9 @@ function registrationBody(model) {
   // El cronómetro (DSL 2.26): lo que el armado necesita, con los adaptadores que lo usan.
   const timer = persistenceTimerRegistration(model);
   if (timer) repositories.push(timer.line);
+  // El almacén del historial de cambios (DSL 2.29): uno por ámbito, sobre la sesión de su PersistenceTransactions.
+  const history = historyRegistration(model);
+  if (history) repositories.push(history.line);
   return `/// <summary>
 /// La persistencia documental en el contenedor: el cliente del perfil (uno por proceso), la transacción del caso de uso
 /// y un adaptador por puerto. El ÚNICO sitio que registra los repositorios.

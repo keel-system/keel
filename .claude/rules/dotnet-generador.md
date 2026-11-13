@@ -256,3 +256,34 @@ proyecto. Las redes en vivo por mecanismo están en `CLAUDE.md` § Comandos.
 - Los `using` van DENTRO del namespace (una entidad `Application` chocaba con el namespace `X.Application`).
 - El `decimal` de .NET redondea EN SILENCIO por encima de 28 decimales: el conversor lo rechaza comparando escalas.
 - EF 10 se niega a `Migrate` sin migraciones (cambios pendientes): `develop` necesita el baseline de `dotnet ef`.
+
+## Historial de cambios (DSL 2.29, incremento 3 de `PLAN-DSL-229-HISTORIAL.md`)
+
+`src/scaffold/history.js` emite la entrada, el cambio y el filtro en `Domain/History` (los valores de un cambio son
+`JsonElement`: ya van en la forma del cable), y el resto en `Infrastructure/Persistence/History`: el diff (D2) sobre el TEXTO
+del cable que escribe `WireJson`, la anonimización (D8), las rutas personales de cada raíz (`HistoryRoots`) y el almacén. El
+relacional es `ChangeHistory` con las sentencias de keel-core tal cual por la conexión y la transacción del DbContext, como
+`TimerStore`, y las dos tablas mapeadas solo para el esquema (`ChangeHistoryRow`, que `generatorTables` detecta para el paso de
+esquema de build); el documental, un documento por entrada con su índice en `DocumentIndexes`.
+
+T1: EF tiene la fila RASTREADA que el `Save` ya carga, así que la instantánea «antes» sale de ella antes de `Apply`, sin otra
+lectura (como keel-spring); en documental se lee el documento antes de escribirlo (como keel-nest). La entrada se escribe tras
+`SaveChangesAsync`, así que un 409 no deja ninguna (T5). La baja, la restauración y la retención escriben o se llevan su entrada
+desde `data-lifecycle.js`; la retención resuelve el almacén del ámbito de su pasada. Los cambios guardados se leen a mano
+(`ReadChanges`) y no con `WireJson`, porque su conversor de `JsonElement` toma una cadena por un documento serializado (leído en
+`wire.js`, no medido con un fallo). El id de la entrada sale de `HistorySupport.NextId()`, monótono en el proceso: en MongoDB la
+hora es de milisegundos, y **medido** que `Guid.CreateVersion7()` no crece dentro del mismo milisegundo (sin el arreglo, la
+prueba emitida que pide diez mil ids crecientes cae), así que el desempate de D10 podía invertir dos escrituras seguidas. El
+método de la página se llama `PageOf` para no competir con el tipo `Page<T>` dentro de la clase. La prueba emitida
+`HistorySupportTests` (`src/scaffold/history-tests.js`) EJECUTA el diff, la anonimización y el id contra las referencias de
+keel-core, con los resultados calculados en build; la falsan `cs-check --fixtures --only=cards-history
+--sabotage=history-diff|history-next-id`, cada uno en exactamente sus pruebas.
+
+Lo miden `test/history-parity.test.js` (casos, sentencias, tablas, patrones personales y nota contra keel-spring y keel-nest) y
+`db-check`/`doc-check` con `scripts/lib/history-probes.js` (HI-1 a HI-10, un `[Fact]` por caso, `--sabotage=hi-*`). El reemplazo
+de miembros de la muestra de `lifecycle-probes.js` solo ve una línea; la lista de hijas ocupa varias, y `history-probes.js` corta
+el miembro donde se cierran sus paréntesis. `hi-outside-tx` relacional escribe la entrada por una conexión CLONADA: sobre la misma
+conexión la sentencia seguiría dentro de la transacción abierta. En documental, `cards-history*-mongo` se juzgan
+solo en HI y en el ciclo de vida (el hueco de la sonda general de `cards-logical-mongo`), y la comprobación de los índices vivos
+mira `change_history` contra `CHANGE_HISTORY_COLLECTION`. RT-4 de `lifecycle-probes.js` daba por hecho que `from: deleted`
+purga; con `then: anonymize` anonimiza.

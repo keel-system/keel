@@ -30,6 +30,7 @@ import { csFile, csMember, csString, located, namespaceOf } from './render.js';
 import { configNamespace } from './config.js';
 import { parametersClass, parametersNamespace } from './service-parameters.js';
 import { cacheMember } from './cache.js';
+import { CHANGE_HISTORY_CLASS, historyInfraNamespace, historyRecordLine, recordsHistory, rootMember } from './history.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -193,7 +194,7 @@ export function relationalAdapterMethods(model, entity, { idType, idName, keyFin
                 {
                     found.${deletedAt} = DateTimeOffset.UtcNow;${rowBump(entity, 'found', '                    ')}
                     await db.SaveChangesAsync(cancellationToken);
-                }
+${historyRecordLine(entity, 'deleted', idName, '                    ')}                }
                 return true;
             },
             readOnly: false,
@@ -228,7 +229,7 @@ ${keyQuery.locals.map((line) => `${line}\n`).join('')}        var found = await 
                 // Si una fila viva ocupa ya su clave, la unicidad entre vivas salta AQUÍ, con su nombre: el 409 que la traduce.
                 deleted.${deletedAt} = null;${rowBump(entity, 'deleted', '                ')}
                 await db.SaveChangesAsync(cancellationToken);
-                return ToDomain(deleted);
+${historyRecordLine(entity, 'restored', idName, '                ')}                return ToDomain(deleted);
             },
             readOnly: false,
             cancellationToken);`);
@@ -254,11 +255,14 @@ export function documentAdapterMethods(model, entity, { idType, idName, idFilter
         await transactions.InTransaction(
             async () =>
             {
-                await Collection.UpdateOneAsync(
+                ${recordsHistory(entity) ? 'var marked = ' : ''}await Collection.UpdateOneAsync(
                     transactions.Session!,
                     Builders<BsonDocument>.Filter.And(${idFilter}, NotDeleted),
                     new BsonDocument { { "$set", new BsonDocument(${field}, BsonValues.Of(DateTimeOffset.UtcNow)) }${documentBump(entity)} },
-                    cancellationToken: cancellationToken);
+                    cancellationToken: cancellationToken);${recordsHistory(entity) ? `
+                if (marked.ModifiedCount > 0)
+                {
+${historyRecordLine(entity, 'deleted', idName, '                    ')}                }` : ''}
                 return true;
             },
             readOnly: false,
@@ -296,7 +300,7 @@ export function documentAdapterMethods(model, entity, { idType, idName, idFilter
                     ${idFilter},
                     new BsonDocument { { "$set", new BsonDocument(${field}, BsonNull.Value) }${documentBump(entity)} },
                     cancellationToken: cancellationToken);
-                var restored = await Collection.Find(session, ${idFilter}).FirstOrDefaultAsync(cancellationToken);
+${historyRecordLine(entity, 'restored', idName, '                ')}                var restored = await Collection.Find(session, ${idFilter}).FirstOrDefaultAsync(cancellationToken);
                 return restored is null ? null : ToDomain${entity.name}(restored);
             },
             readOnly: false,
@@ -468,7 +472,7 @@ function relationalRetention(model, entity, root) {
                 if (found is not null)
                 {
                     db.Remove(found);
-                    await db.SaveChangesAsync(cancellationToken);
+                    await db.SaveChangesAsync(cancellationToken);${retentionHistory(model, entity, retention, usings, '                    ')}
                 }`;
   } else {
     const plan = anonymizePlan(model, root, { document: false });
@@ -483,7 +487,7 @@ function relationalRetention(model, entity, root) {
                 }
 ${lines.join('\n')}
                 found.${csMember(ANONYMIZED_AT.field)} = DateTimeOffset.UtcNow;${rowBump(entity, 'found', '                ')}
-                await db.SaveChangesAsync(cancellationToken);`;
+                await db.SaveChangesAsync(cancellationToken);${retentionHistory(model, entity, retention, usings, '                ')}`;
   }
   const pending = retention.then === 'anonymize' ? ` && r.${csMember(ANONYMIZED_AT.field)} == null` : '';
   const body = `${retentionDoc(entity, retention)}
@@ -521,6 +525,20 @@ ${outcome}
   return { path, content: csFile({ namespace, usings, body }) };
 }
 
+/**
+ * Lo que la retención le hace al historial de la raíz (DSL 2.29, D8): `then: delete` se lo lleva y `then: anonymize`
+ * reescribe sus valores personales y deja la entrada `anonymized`, en la misma transacción (el almacén del ámbito de la
+ * pasada usa su contexto o su sesión). Las líneas a continuación de lo que hace la retención, o '' sin historial.
+ */
+function retentionHistory(model, entity, retention, usings, pad) {
+  if (!recordsHistory(entity)) return '';
+  usings.push(historyInfraNamespace(model));
+  const call = retention.then === 'delete'
+    ? `Purge(${rootMember(entity)}.Type, HistorySupport.Key(id), cancellationToken)`
+    : `Anonymize(${rootMember(entity)}.Type, HistorySupport.Key(id), ${rootMember(entity)}.Personal, cancellationToken)`;
+  return `\n${pad}// El historial de la raíz sigue su régimen (DSL 2.29, D8), en la misma transacción.\n${pad}await scope.ServiceProvider.GetRequiredService<${CHANGE_HISTORY_CLASS}>().${call};`;
+}
+
 /** Las rutas de navegación del agregado (las del Graph() del adaptador): lo que se carga y se borra con la raíz. */
 function includeTree(model, entity, prefix = '', seen = new Set([entity.name])) {
   const paths = [];
@@ -550,7 +568,7 @@ function documentRetention(model, entity, root) {
   let outcome;
   if (retention.then === 'delete') {
     outcome = `                // then: delete. El agregado es el documento: sus hijas se van con él.
-                await collection.DeleteOneAsync(transactions.Session!, new BsonDocument(${csString(DOCUMENT_ID)}, ${write}), cancellationToken: cancellationToken);`;
+                await collection.DeleteOneAsync(transactions.Session!, new BsonDocument(${csString(DOCUMENT_ID)}, ${write}), cancellationToken: cancellationToken);${retentionHistory(model, entity, retention, usings, '                ')}`;
   } else {
     const plan = anonymizePlan(model, root, { document: true });
     usings.push(...anonymizeUsings(plan));
@@ -566,7 +584,7 @@ function documentRetention(model, entity, root) {
                 }
 ${lines.join('\n')}
                 found[${csString(ANONYMIZED_AT.field)}] = BsonValues.Of(DateTimeOffset.UtcNow);${entity.usesOptimisticLocking ? `\n                found[${csString(LOCK_VERSION.column)}] = found[${csString(LOCK_VERSION.column)}].IsInt32 ? new BsonInt32(found[${csString(LOCK_VERSION.column)}].AsInt32 + 1) : new BsonInt64(found[${csString(LOCK_VERSION.column)}].ToInt64() + 1);` : ''}
-                await collection.ReplaceOneAsync(session, filter, found, cancellationToken: cancellationToken);`;
+                await collection.ReplaceOneAsync(session, filter, found, cancellationToken: cancellationToken);${retentionHistory(model, entity, retention, usings, '                ')}`;
   }
   const pending = retention.then === 'anonymize' ? `, { ${csString(ANONYMIZED_AT.field)}, BsonNull.Value }` : '';
   const body = `${retentionDoc(entity, retention)}

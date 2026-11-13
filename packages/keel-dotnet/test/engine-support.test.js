@@ -50,8 +50,7 @@ test('las dos persistencias que keel-dotnet genera las ejecuta su red en vivo', 
 });
 
 test('no queda ninguna fila pendiente de un incremento (desde el 14f)', () => {
-  // Salvo el historial de cambios (DSL 2.29), que es de otro plan: llega en su incremento 3 (PLAN-DSL-229-HISTORIAL.md).
-  assert.deepEqual(pending().map(({ id }) => id).filter((id) => id !== 'history'), []);
+  assert.deepEqual(pending().map(({ id }) => id), []);
 });
 
 test('cada motor relacional que la frontera admite tiene su celda en los mecanismos por motor', () => {

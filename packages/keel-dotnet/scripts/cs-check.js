@@ -139,6 +139,18 @@ const FIXTURE_SABOTAGES = {
   // cae en RS-9, y el claim ausente leído como todo, la mitad del borde de rs-empty-is-all, en RS-10.
   'rs-cache-key': ['vault-scoped/src/VaultScoped.Application/Support/CachedOperations.cs', 'CacheKey.Of(message.Id, message.ReadScope.CacheKey())', 'CacheKey.Of(message.Id)'],
   'rs-empty-is-all': ['vault-scoped/src/VaultScoped.Infrastructure/Security/ReadScopes.cs', 'ReadScope.Within(scope.ScopedValues())', 'ReadScope.Within(scope.ScopedValues()) is { Values.Count: 0 } ? ReadScope.Unrestricted() : ReadScope.Within(scope.ScopedValues())'],
+  // El historial de cambios (DSL 2.29), en la prueba emitida HistorySupportTests (con --only=cards-history): el diff que se
+  // deja las rutas de las hijas, y el id de la entrada que deja de crecer dentro del mismo milisegundo.
+  'history-diff': [
+    'cards-history/src/CardsHistory.Infrastructure/Persistence/History/HistorySupport.cs',
+    'if (!string.Equals(was, now, StringComparison.Ordinal))',
+    "if (!string.Equals(was, now, StringComparison.Ordinal) && !path.Contains('[', StringComparison.Ordinal))"
+  ],
+  'history-next-id': [
+    'cards-history/src/CardsHistory.Infrastructure/Persistence/History/HistorySupport.cs',
+    'if (string.CompareOrdinal(id.ToString("D"), lastId.ToString("D")) <= 0)',
+    'if (string.CompareOrdinal(id.ToString("D"), lastId.ToString("D")) < int.MinValue + 1)'
+  ],
   // level: optional (DSL 2.27), en la prueba emitida OptionalAuthTests: un token que no vale pasa como anónimo (OA-3), o la
   // identidad no llega nunca, ni con un token válido (OA-2).
   'oa-degrade': [

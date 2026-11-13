@@ -14,6 +14,7 @@ import { CONDITIONAL_WRITE_DESIGNS } from '../../../keel-core/test/helpers/condi
 import { READ_SCOPE_DESIGNS } from '../../../keel-core/test/helpers/read-scope-designs.js';
 import { IDENTITY_DESIGNS } from '../../../keel-core/test/helpers/identity-designs.js';
 import { DATA_LIFECYCLE_DESIGNS } from '../../../keel-core/test/helpers/data-lifecycle-designs.js';
+import { HISTORY_DESIGNS } from '../../../keel-core/test/helpers/history-designs.js';
 
 const here = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.join(here, '..', '..', '..');
@@ -194,6 +195,16 @@ export const UNCOVERED_BRANCHES = [
   // El ciclo de vida del dato (DSL 2.28, PLAN-DSL-228-CICLO-DE-VIDA.md): los diseños de
   // keel-core/test/helpers/data-lifecycle-designs.js, los MISMOS que miden keel-spring y keel-nest.
   ...DATA_LIFECYCLE_DESIGNS.map((design) => ({
+    name: design.name,
+    from: design.from,
+    mutate(manifest, layers, name) {
+      manifest.service.name = name;
+      design.mutate(layers);
+    }
+  })),
+  // El historial de cambios (DSL 2.29, PLAN-DSL-229-HISTORIAL.md): los diseños de keel-core/test/helpers/history-designs.js,
+  // los MISMOS que miden keel-spring y keel-nest. Ninguna fixture lo declara hasta el incremento 6.
+  ...HISTORY_DESIGNS.map((design) => ({
     name: design.name,
     from: design.from,
     mutate(manifest, layers, name) {

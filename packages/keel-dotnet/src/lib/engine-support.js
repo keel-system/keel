@@ -800,7 +800,28 @@ export const MECHANISMS = {
     }
   },
   history: {
-    pending: 'el historial de cambios (DSL 2.29) llega en el incremento 3 de PLAN-DSL-229-HISTORIAL.md: hasta entonces supported-features.js lo rechaza entero (historyPendingErrors)'
+    parity: {
+      skip: 'ninguna fixture declara el historial hasta el incremento 6 de PLAN-DSL-229-HISTORIAL.md: los sujetos son los diseños derivados de keel-core/test/helpers/history-designs.js (cards-history y cards-history-mongo, el mismo diseño salvo el modelo; cards-history-anonymize y cards-history-anonymize-mongo; vault-history-scoped y vault-history-scoped-mongo), los MISMOS que miden keel-spring y keel-nest; test/history-parity.test.js fija la forma y la compara con los dos (las sentencias, las tablas, los patrones personales, la nota y los casos)',
+      test: 'test/history-parity.test.js'
+    },
+    emitter: 'src/scaffold/history.js (la entrada, el diff, la anonimización, el id monótono y el almacén) · repositories.js y document-repositories.js (Save, DeleteById y la lectura HistoryOf) · data-lifecycle.js (la baja lógica, la restauración y la retención) · persistence.js, persistence-runtime.js y document-persistence.js (las tablas, el índice, el registro y el actor) · services.js, mediator.js y endpoints.js',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'cards-history (alta, cambio, baja lógica, restauración y purga de lo borrado), cards-history-anonymize y vault-history-scoped (hijas por su id y la lectura acotada) contra el adaptador de EF Core y el almacén por la conexión y la transacción del DbContext con las sentencias de keel-core (scripts/lib/history-probes.js, un [Fact] por caso): HI-1 a HI-10, y el catálogo del motor con las dos tablas, su índice y su FK. T1 medido: la instantánea «antes» sale de la fila rastreada que el Save ya carga, antes de volcar el agregado, sin otra lectura. Falsado en los dos motores, cada sabotaje en exactamente sus casos: hi-outside-tx en HI-1 (la entrada por otra conexión), hi-full-snapshot en HI-2, hi-sensitive en HI-4, hi-author en HI-5, hi-order en HI-6, hi-unscoped en HI-7, hi-anonymize-miss en HI-8 y hi-purge-miss en HI-9'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'cards-history-mongo, cards-history-anonymize-mongo y vault-history-scoped-mongo contra MongoDB.Driver en un replica set real, con las MISMAS sondas que la rama relacional: la entrada en la sesión de la transacción, el orden por at y _id, el filtro sobre fields.path y fields.top y el índice de la lectura en DocumentIndexes, que la comprobación de los índices vivos mira contra CHANGE_HISTORY_COLLECTION de keel-core, direcciones incluidas. La hora es de milisegundos, así que el desempate es el id, y Guid.CreateVersion7() no crece dentro de un mismo milisegundo: el id de la entrada sale de HistorySupport.NextId(), monótono en el proceso. En las dos cards doc-check juzga solo los casos HI y los del ciclo de vida, por el mismo hueco de la sonda general que cards-logical-mongo. Falsado con los mismos sabotajes, cada uno en exactamente sus casos'
+      }
+    }
   }
 };
 

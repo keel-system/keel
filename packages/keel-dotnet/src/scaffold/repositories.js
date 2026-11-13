@@ -39,6 +39,7 @@ import { adapterClaimMethods, adapterGuardMethods, claimDependencies, claimUsing
 import { adapterReconciliationMethods, portReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
 import { renderDocumentAdapter } from './document-repositories.js';
 import * as lifecycle from './data-lifecycle.js';
+import * as history from './history.js';
 import { isLogicallyDeleted } from '@keel-system/keel-core/gen/relational';
 import {
   usesPersistence,
@@ -379,6 +380,9 @@ function renderPort(model, entity) {
   );
   // La restauración de un borrado lógico (DSL 2.28, D6): la borrada por su clave y la restauración por id.
   methods.push(...lifecycle.restorePortMethods(model, entity, idType, idName, finderWithLocals(finder)));
+  // El historial de cambios (DSL 2.29, D7): su lectura carga la raíz como su ficha.
+  methods.push(...history.historyPortMethods(model, entity));
+  usings.push(...history.historyUsings(model, entity));
   const body = `${xmlDoc(['Puerto de persistencia del agregado ' + entity.name + '. El dominio solo ve esto; el adaptador vive en', 'Infrastructure/Persistence/Repositories.'])}public interface ${portClass(entity)}
 {
 ${methods.join('\n\n')}
@@ -562,13 +566,16 @@ ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Gr
                 {
                     db.Remove(found);
                     await db.SaveChangesAsync(cancellationToken);
-                }
+${history.historyRecordLine(entity, 'deleted', idName, '                    ')}                }
                 return true;
             },
             readOnly: false,
             cancellationToken);
     }`
-    ])
+    ]),
+    // El historial de cambios (DSL 2.29): la lectura (D7) y lo que Save necesita para escribir su entrada (D2, D3).
+    ...history.historyReadMethods(model, entity),
+    ...history.historyAdapterHelpers(model, entity)
   );
 
   const includes = includePaths(model, entity).map((pathName) => `.Include(${csString(pathName)})`).join('');
@@ -651,7 +658,8 @@ function adapterExtras(model, entity) {
   // Los plazos de negocio (DSL 2.26): el almacén del cronómetro y los plazos vigentes, para armar al guardar.
   // La ventana de una restauración que lee un parámetro del servicio (DSL 2.28), si no lo recibe ya.
   const windows = lifecycle.lifecycleDependencies(model, entity).filter((dep) => !others.some((other) => other.name === dep.name));
-  return [...others, ...windows, ...replicaDependencies(entity, others), ...timerDependencies(model, entity)];
+  // El almacén del historial (DSL 2.29), detrás de todos: lo escriben Save, DeleteById y Restore.
+  return [...others, ...windows, ...replicaDependencies(entity, others), ...timerDependencies(model, entity), ...history.historyDependency(model, entity)];
 }
 
 function saveMethod(model, entity, helpers) {
@@ -668,6 +676,10 @@ function saveMethodBody(model, entity, helpers) {
   const arming = relationalArming(model, entity);
   const lines = [];
   if (arming) lines.push(`                ${arming.declare}`);
+  // El historial (DSL 2.29, T1): lo que había, tomado de la fila RASTREADA que el Save ya carga, antes de volcar el agregado.
+  const recorded = history.recordsHistory(entity);
+  const snapshotBefore = recorded ? '\n                    historyBefore = HistorySnapshot(ToDomain(row));' : '';
+  if (recorded) lines.push('                Dictionary<string, string>? historyBefore = null;');
   if (versioned) {
     lines.push(`                ${row} row;
                 var expected = entity.${versionProp};
@@ -684,7 +696,7 @@ function saveMethodBody(model, entity, helpers) {
                     // La versión que el agregado LEYÓ es el valor original del token: EF escribe
                     // UPDATE … WHERE lock_version = @leída, y cero filas es otra escritura que ganó (o la borró).
                     row = await Graph().SingleOrDefaultAsync(r => r.${idProp} == entity.${idProp}, cancellationToken)
-                        ?? throw new OptimisticLockConflict(${csString(entity.name)}, entity.${idProp}.ToString());${arming ? `\n                    ${arming.capture}` : ''}
+                        ?? throw new OptimisticLockConflict(${csString(entity.name)}, entity.${idProp}.ToString());${arming ? `\n                    ${arming.capture}` : ''}${snapshotBefore}
                     Apply(row, entity);
                     db.Entry(row).Property(r => r.${versionProp}).OriginalValue = expected;
                     row.${versionProp} = expected + 1;
@@ -695,7 +707,7 @@ function saveMethodBody(model, entity, helpers) {
                 {
                     row = new ${row} { ${idProp} = entity.${idProp} };
                     db.Add(row);
-                }${arming ? `\n                else\n                {\n                    ${arming.capture}\n                }` : ''}
+                }${arming || recorded ? `\n                else\n                {${arming ? `\n                    ${arming.capture}` : ''}${snapshotBefore}\n                }` : ''}
                 Apply(row, entity);`);
   }
   if (helpers.now) lines.push('                var now = DateTimeOffset.UtcNow;');
@@ -712,8 +724,11 @@ function saveMethodBody(model, entity, helpers) {
     );
   }
   lines.push('                await db.SaveChangesAsync(cancellationToken);');
-  if (arming) {
-    lines.push('                var saved = ToDomain(row);', ...arming.after.map((line) => `                ${line}`), '                return saved;');
+  if (arming || recorded) {
+    lines.push('                var saved = ToDomain(row);', ...(arming?.after ?? []).map((line) => `                ${line}`));
+    // La entrada del historial, en la misma transacción y tras confirmar la versión: un 409 no deja ninguna (T5).
+    if (recorded) lines.push('                await RecordSave(historyBefore, saved, cancellationToken);');
+    lines.push('                return saved;');
   } else {
     lines.push('                return ToDomain(row);');
   }

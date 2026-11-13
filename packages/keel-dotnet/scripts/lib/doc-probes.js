@@ -36,6 +36,7 @@ import { bridgeClass, messagingNamespace, usesBridge, usesDotnetOutbox, usesProc
 import { purgeNamespace, tablePurges } from '../../src/scaffold/purge.js';
 import { purgeTimerFixtureRegistration, purgeTimerProbeBlock, purgeTimerProbeUsings, timerFixtureRegistration, timerProbeBlock, timerProbeUsings } from './timer-probes.js';
 import { lifecycleFixtureRegistration, lifecycleProbeBlock, lifecycleProbeUsings } from './lifecycle-probes.js';
+import { historyProbeBlock, historyProbeUsings } from './history-probes.js';
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
 import { parametersNamespace, parametersTestInstance, usesServiceParameters } from '../../src/scaffold/service-parameters.js';
@@ -513,6 +514,9 @@ function probesCs(model, namespace) {
   // El ciclo de vida del dato (DSL 2.28): LC, RT y PD-2 en ESTA clase. Antes de los Ensure: sus muestras los piden.
   const lifecycle = lifecycleProbeBlock(model, ctx, { document: true });
   if (lifecycle) blocks.push(lifecycle.methods);
+  // El historial de cambios (DSL 2.29): HI-1 a HI-10 en ESTA clase, también antes de los Ensure.
+  const history = historyProbeBlock(model, ctx, { document: true });
+  if (history) blocks.push(history.methods);
 
   // Las raíces a las que apunta una referencia: se guarda UNA de cada, y su id vale para todas las sondas.
   const ensures = [];
@@ -554,6 +558,7 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
     ...timerProbeUsings(model),
     ...purgeTimerProbeUsings(model),
     ...lifecycleProbeUsings(model, { document: true }),
+    ...historyProbeUsings(model, { document: true }),
     'System.Text.Json',
     'System.Text.Json.Nodes',
     'Microsoft.Extensions.DependencyInjection',

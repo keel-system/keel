@@ -193,7 +193,7 @@ export function lifecycleSabotageVerdict(failures, id, model, { engine }) {
 // ─── El bloque ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Sustituye miembros del inicializador `<Entidad>State` que da sampleState: `{ Miembro: expresión }`. */
-function overriding(state, overrides) {
+export function overriding(state, overrides) {
   let text = state;
   for (const [member, value] of Object.entries(overrides)) {
     const line = new RegExp(`^(\\s*)${member} = [^\\n]*,$`, 'm');
@@ -224,9 +224,9 @@ export function lifecycleFixtureRegistration(model, { document }) {
 }
 
 /** La caché de las lecturas de la raíz, doblada (T5): el recurrente la vacía tras barrer, y aquí no hay Redis. */
-const cacheArg = (model, entity) => (retentionCaches(model, entity.name).length > 0 ? ', new LcNoCache()' : '');
+export const cacheArg = (model, entity) => (retentionCaches(model, entity.name).length > 0 ? ', new LcNoCache()' : '');
 
-const retentionSettings = (model, batch) => `new RetentionSettings(${retentionRoots(model).map(() => `new RetentionSweep("0 30 2 * * *", ${batch})`).join(', ')})`;
+export const retentionSettings = (model, batch) => `new RetentionSettings(${retentionRoots(model).map(() => `new RetentionSweep("0 30 2 * * *", ${batch})`).join(', ')})`;
 
 export function lifecycleProbeUsings(model, { document }) {
   if (lifecycleRoots(model).length === 0) return [];
@@ -497,8 +497,11 @@ ${[...[...refs].map((ref) => `            var ${csLocal(`${ref}Id`)} = await Ens
           // Tres, con el lote de dos: el tick repite mientras salga lleno.
           const lines = [...fresh('vieja1', refs), ...fresh('vieja2', refs), ...fresh('vieja3', refs)];
           for (const variable of ['vieja1', 'vieja2', 'vieja3']) lines.push(remove(variable), `            await LcBackdate${name}(${variable}.${id}, ${span.days + 1});`);
-          lines.push(tick, ...['vieja1', 'vieja2', 'vieja3'].map((variable) => `            Assert.False(${present(variable)}, "lo borrado hace más de la retención se purga, también más allá del primer lote");`));
-          fact('RT-4', 'LoBorradoHaceMasDeLaRetencionSePurga', lines, refs);
+          // Lo vencido se borra o, con then: anonymize (el primer sujeto que lo junta con from: deleted es el del historial,
+          // DSL 2.29), se queda anonimizado.
+          const gone = retention.then === 'delete' ? (variable) => `!(${present(variable)})` : (variable) => markOf(variable, 'anonymizedAt');
+          lines.push(tick, ...['vieja1', 'vieja2', 'vieja3'].map((variable) => `            Assert.True(${gone(variable)}, "lo borrado hace más de la retención vence, también más allá del primer lote");`));
+          fact('RT-4', 'LoBorradoHaceMasDeLaRetencionVence', lines, refs);
         }
       } else {
         const fromMember = csMember(retention.from);

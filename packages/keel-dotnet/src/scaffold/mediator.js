@@ -352,6 +352,8 @@ function registrationUsings(model) {
   for (const operation of operations(model)) {
     usings.push(messageNamespace(model, operation));
     if (operation.responseDto) usings.push(...typeUsings(model, [operation.responseDto.name, 'PagedResponse']));
+    // La query de historial (DSL 2.29) devuelve la página de entradas.
+    if (operation.historyOf) usings.push(...typeUsings(model, ['PagedResponse']), namespaceOf(model, 'history'));
   }
   return usings;
 }

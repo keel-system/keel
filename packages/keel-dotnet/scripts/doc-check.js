@@ -53,12 +53,18 @@
 // sabotaje cae en EXACTAMENTE sus casos DL (scripts/lib/timer-probes.js):
 //   dl-boundary  dl-no-guard  dl-no-revalidate  dl-no-lease  dl-outside-tx
 //
+// Los del historial de cambios (DSL 2.29), sobre las variantes -mongo de history-designs.js (sin --only, esas), cada uno en
+// EXACTAMENTE sus casos HI (scripts/lib/history-probes.js): hi-outside-tx, hi-full-snapshot, hi-sensitive, hi-author,
+// hi-order, hi-unscoped, hi-anonymize-miss y hi-purge-miss.
+//
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { documentIndexes } from '@keel-system/keel-core/gen/document';
+import { usesHistory } from '@keel-system/keel-core/gen/history';
+import { CHANGE_HISTORY_COLLECTION } from '@keel-system/keel-core/gen/history-store';
 import { planFixture, makeWorkspace, UNCOVERED_BRANCHES } from '../test/helpers/workspace.js';
 import { docProbeProject, documentDatabaseOf } from './lib/doc-probes.js';
 import { DRAIN_SABOTAGES, drainSabotageVerdict, isDrainSabotage } from './lib/timer-probes.js';
@@ -68,6 +74,7 @@ import { PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSa
 import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
 import { READ_SCOPE_SABOTAGE_SPECS, READ_SCOPE_SUBJECTS, isReadScopeSabotage, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
 import { LIFECYCLE_SABOTAGE_SPECS, LIFECYCLE_SUBJECTS, isLifecycleSabotage, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
+import { HISTORY_SABOTAGE_SPECS, HISTORY_SUBJECTS, isHistorySabotage, historySabotageVerdict } from './lib/history-probes.js';
 import { resolveRuntime, startMongo, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const args = process.argv.slice(2);
@@ -108,7 +115,7 @@ const SUBJECTS = [
     }
   },
   // `optimisticLocking: declared` sobre documentos: la versión que declara el dominio (el MISMO parche que compila cs-check).
-  ...UNCOVERED_BRANCHES.filter((branch) => ['mailer-mongo-lock', 'jobs-mongo-finder', 'mailer-mongo-author', 'catalog-conditional-mongo', ...READ_SCOPE_SUBJECTS.document, ...LIFECYCLE_SUBJECTS.document].includes(branch.name)).map((branch) => ({
+  ...UNCOVERED_BRANCHES.filter((branch) => ['mailer-mongo-lock', 'jobs-mongo-finder', 'mailer-mongo-author', 'catalog-conditional-mongo', ...READ_SCOPE_SUBJECTS.document, ...LIFECYCLE_SUBJECTS.document, ...HISTORY_SUBJECTS.document].includes(branch.name)).map((branch) => ({
     name: branch.name,
     from: branch.from,
     mutate: (manifest, layers) => branch.mutate(manifest, layers, branch.name),
@@ -119,12 +126,16 @@ const SUBJECTS = [
     // cards-logical-mongo (profile-directory sobre documentos, DSL 2.28) tropieza con lo mismo que conduit en Profile: una raíz
     // con clave natural y sin bloqueo optimista, en la que la sonda GENERAL del conflicto transitorio no ve el 409. Su Save no
     // lo toca el ciclo de vida: aquí se juzgan solo los casos LC, RT y PD (PLAN-DSL-228, inc. 3).
-    lifecycleOnly: branch.name === 'cards-logical-mongo'
+    lifecycleOnly: branch.name === 'cards-logical-mongo',
+    // La misma ficha con historial (DSL 2.29): se juzgan los casos HI y los del ciclo de vida que la acompañan (PLAN-DSL-229, inc. 3).
+    historyOnly: ['cards-history-mongo', 'cards-history-anonymize-mongo'].includes(branch.name)
   }))
 ].filter((subject) =>
   only
     ? only.split(',').includes(subject.name)
-    : isLifecycleSabotage(sabotage)
+    : isHistorySabotage(sabotage)
+      ? HISTORY_SUBJECTS.document.includes(subject.name)
+      : isLifecycleSabotage(sabotage)
       ? LIFECYCLE_SUBJECTS.document.includes(subject.name)
       : isReadScopeSabotage(sabotage)
       ? READ_SCOPE_SUBJECTS.document.includes(subject.name)
@@ -216,7 +227,9 @@ const SABOTAGES = {
   ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document])),
   // El ciclo de vida del dato (DSL 2.28): sobre cards-logical-mongo y codes-anonymize-mongo, cada uno en exactamente sus
   // casos. pd-log-value no tiene qué romper en documental (ver scripts/lib/lifecycle-probes.js).
-  ...Object.fromEntries(Object.entries(LIFECYCLE_SABOTAGE_SPECS).filter(([, spec]) => spec.document).map(([id, spec]) => [id, spec.document]))
+  ...Object.fromEntries(Object.entries(LIFECYCLE_SABOTAGE_SPECS).filter(([, spec]) => spec.document).map(([id, spec]) => [id, spec.document])),
+  // El historial de cambios (DSL 2.29): sobre los sujetos documentales de history-designs.js, cada uno en exactamente sus casos HI.
+  ...Object.fromEntries(Object.entries(HISTORY_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document]))
 };
 // El sabotaje del uuid tiene que cambiar las DOS direcciones (si no, la ida y vuelta lo cazaría sola): también al escribir.
 // Y el del clasificador, sus DOS vías: la etiqueta y el código 112 dicen lo mismo, así que quitar una sola es una mutación
@@ -317,6 +330,11 @@ try {
   for (const subject of subjects) {
     const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
     const ran = tested.output.includes(`${subject.probes.name}.dll`);
+    if (isHistorySabotage(sabotage)) {
+      const verdict = historySabotageVerdict(mine, sabotage, subject.model);
+      step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
     if (isLifecycleSabotage(sabotage)) {
       const verdict = lifecycleSabotageVerdict(mine, sabotage, subject.model, { engine: 'mongodb' });
       step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
@@ -345,6 +363,11 @@ try {
     if (isTimerSabotage(sabotage) && timerSubject(subject.model)) {
       const verdict = timerSabotageVerdict(mine, sabotage, 'document');
       step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
+    if (subject.historyOnly) {
+      const judged = mine.filter((line) => /_(HI|LC|RT|PD)\d+_/.test(line));
+      step(`${subject.name}: el historial (HI-*) y el ciclo de vida (LC-*, RT-*) contra MongoDB`, ran && judged.length === 0, ran ? judged.join('; ') : 'las sondas no se ejecutaron');
       continue;
     }
     if (subject.lifecycleOnly) {
@@ -424,9 +447,21 @@ function indexCheck({ model }) {
     }
     for (const index of have) if (!specs.some((spec) => spec.name === index.name)) problems.push(`${collection}: sobra ${index.name}`);
   }
+  // El historial de cambios (DSL 2.29): su colección con el índice de la lectura, con sus direcciones (keel-core,
+  // CHANGE_HISTORY_COLLECTION). documentIndexes no lo lleva: lo añade cada generador.
+  const history = usesHistory(model) ? CHANGE_HISTORY_COLLECTION : null;
+  if (history) {
+    const have = (live[history.collection] ?? []).filter((index) => index.name !== '_id_');
+    for (const spec of history.indexes) {
+      const index = have.find((candidate) => candidate.name === spec.name);
+      if (!index) problems.push(`${history.collection}: falta ${spec.name}`);
+      else if (JSON.stringify(Object.entries(index.key)) !== JSON.stringify(spec.keys)) problems.push(`${spec.name}: claves ${JSON.stringify(Object.entries(index.key))}, no ${JSON.stringify(spec.keys)}`);
+    }
+    for (const index of have) if (!history.indexes.some((spec) => spec.name === index.name)) problems.push(`${history.collection}: sobra ${index.name}`);
+  }
   // Una colección con índices que el contrato no conoce: los creó otra cosa.
   for (const [collection, indexes] of Object.entries(live)) {
-    if (expected.some((entry) => entry.collection === collection)) continue;
+    if (expected.some((entry) => entry.collection === collection) || collection === history?.collection) continue;
     const extra = indexes.filter((index) => index.name !== '_id_').map((index) => index.name);
     if (extra.length > 0) problems.push(`${collection}: índices fuera del contrato (${extra.join(', ')})`);
   }

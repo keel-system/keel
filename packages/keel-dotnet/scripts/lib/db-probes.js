@@ -49,6 +49,7 @@ import { messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents }
 import { purgeNamespace, tablePurges } from '../../src/scaffold/purge.js';
 import { DRAIN_SAMPLES, drainProbes, drainSubject, purgeTimerFixtureRegistration, purgeTimerProbeBlock, purgeTimerProbeUsings, timerFixtureRegistration, timerProbeBlock, timerProbeUsings } from './timer-probes.js';
 import { lifecycleFixtureRegistration, lifecycleProbeBlock, lifecycleProbeUsings } from './lifecycle-probes.js';
+import { historyProbeBlock, historyProbeUsings } from './history-probes.js';
 import { claimOrderField, claimsForEntity, rescueProbes, screamingSnake, snakeCase, sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
@@ -637,6 +638,9 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
   // El ciclo de vida del dato (DSL 2.28): LC, RT y PD-2 en ESTA clase. Antes de los Ensure: sus muestras los piden.
   const lifecycle = lifecycleProbeBlock(model, ctx, { document: false });
   if (lifecycle) blocks.push(lifecycle.methods);
+  // El historial de cambios (DSL 2.29): HI-1 a HI-10 en ESTA clase, también antes de los Ensure.
+  const history = historyProbeBlock(model, ctx, { document: false });
+  if (history) blocks.push(history.methods);
 
   // Las raíces a las que apunta una referencia obligatoria: se guarda UNA de cada, y su id vale para todas las sondas.
   const ensures = [];
@@ -678,6 +682,7 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
     ...timerProbeUsings(model),
     ...purgeTimerProbeUsings(model),
     ...lifecycleProbeUsings(model, { document: false }),
+    ...historyProbeUsings(model, { document: false }),
     'System.Text.Json',
     'System.Text.Json.Nodes',
     'Microsoft.EntityFrameworkCore',

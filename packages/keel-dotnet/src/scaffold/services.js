@@ -51,6 +51,7 @@ import { isPartialUpdate } from '@keel-system/keel-core/gen/features';
 import { compensationNote } from '@keel-system/keel-core/gen/compensation';
 import { deadlineHandlerNote, lateTransitionNote } from '@keel-system/keel-core/gen/deadlines';
 import { deadlinesClass, deadlinesNamespace } from './timer.js';
+import * as history from './history.js';
 
 /** El campo con el que un handler recibe los plazos vigentes: `verificationCodesDeadlines`. */
 export const deadlinesLocal = (model) => `${deadlinesClass(model)[0].toLowerCase()}${deadlinesClass(model).slice(1)}`;
@@ -105,6 +106,8 @@ export function messageNamespace(model, operation) {
 
 /** El tipo de retorno de la operación, o null si no devuelve nada. */
 export function returnTypeOf(operation, model = null) {
+  // La query de historial (DSL 2.29) devuelve la página de entradas de wire-contract.md, no un DTO del diseño.
+  if (operation.historyOf) return history.HISTORY_RESPONSE;
   if (!operation.responseDto) return null;
   // La lectura que da el ETag y la escritura condicional que devuelve su raíz devuelven también la versión (D6 de
   // PLAN-DSL-225-ESCRITURA-CONDICIONAL.md): el compilador obliga al agente a darla.
@@ -265,6 +268,7 @@ function idempotencyScope(model, operation) {
 }
 
 function resultUsings(model, operation) {
+  if (operation.historyOf) return [...typeUsings(model, ['PagedResponse']), history.historyNamespace(model)];
   if (!operation.responseDto) return [];
   return typeUsings(model, [operation.responseDto.name, ...(operation.paginated ? ['PagedResponse'] : [])]);
 }
@@ -458,6 +462,11 @@ function handlerNotes(model, operation) {
     const byKey = keyFinder ? `await ${port}.${keyFinder.name.replace(/^FindBy/, 'FindDeletedBy')}(..., cancellationToken)` : '<el id de la borrada>';
     const restore = restoreNote(model, operation, { findCall: byKey, restoreCall: `await ${port}.Restore(<su id>, cancellationToken)` });
     if (restore) notes.push(restore);
+  }
+  // El historial (DSL 2.29): la nota neutral, con la llamada al puerto de la raíz.
+  if (operation.historyOf) {
+    const historyRead = history.handlerNote(model, operation);
+    if (historyRead) notes.push(historyRead);
   }
   // La búsqueda con finder (DSL 2.22) ya aplica sus filtros, plegado incluido: su nota sustituye a las de los filtros de texto.
   const finder = finderNote(operation, { call: operation.finder ? finderCall(model, operation.finder) : '' });

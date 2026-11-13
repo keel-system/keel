@@ -167,3 +167,18 @@ test('el ciclo de vida del dato entero (persistence *.deletion, *.restorableFor,
     assert.ok(files.some((file) => /RetentionTimer\.cs$/.test(file.path)), `${name}: sin el recurrente de la retención`);
   }
 });
+
+// El historial de cambios (DSL 2.29): persistence audit.history y use-cases *.output.history, que ninguna fixture declara
+// hasta el incremento 6 de PLAN-DSL-229-HISTORIAL.md. Los sujetos son los de keel-core (los mismos que miden keel-spring y
+// keel-nest); la forma entera la fija history-parity.test.js.
+test('el historial de cambios entero (persistence audit.history y use-cases *.output.history)', async () => {
+  const { checkSupportedFeatures } = await import('../src/lib/supported-features.js');
+  for (const name of ['cards-history', 'cards-history-mongo', 'cards-history-anonymize', 'cards-history-anonymize-mongo', 'vault-history-scoped', 'vault-history-scoped-mongo']) {
+    const { manifest, layers } = loadService(path.join(FIXTURES_DIR, branch(name).from));
+    branch(name).mutate(manifest, layers, name);
+    assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, [], `${name}: la frontera todavía lo rechaza`);
+    const files = await emitted(name);
+    assert.ok(files.some((file) => file.path.endsWith('Persistence/History/ChangeHistory.cs')), `${name}: sin el almacén del historial`);
+    assert.ok(files.some((file) => /HistoryQuery\.cs$/.test(file.path) && file.content.includes('IQuery<PagedResponse<HistoryEntry>>')), `${name}: la query no devuelve la página de entradas`);
+  }
+});
