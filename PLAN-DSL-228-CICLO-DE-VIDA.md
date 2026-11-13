@@ -445,13 +445,19 @@ Cada corrida se lanza con `cd D:\keel-example\<workspace>\services\profile-direc
 | `cards-228-nest-postgre` | keel-nest | PostgreSQL · Keycloak | hecha (24/24, 2026-11-12, a la primera; huella 6: 5 TODO y el README; FL-CRD-007 con `db(...)`) |
 | `cards-228-dotnet-postgre` | keel-dotnet | PostgreSQL · Keycloak | hecha (24/24, 2026-11-12, en la segunda puntuación: el Given de FL-CRD-007 nombraba mal la tabla; huella 6: 5 TODO y el README) |
 | `cards-228-go-postgre` | keel-go | PostgreSQL · Keycloak | hecha (24/24, 2026-11-12, en la segunda puntuación: el mismo `contact_card` que keel-dotnet; huella 6: 5 TODO y el README) |
-| `cards-228-dotnet-mysql` | keel-dotnet | MySQL · Keycloak | T2: las columnas generadas `uk_contact_cards_{natural,email}_flag` (`CASE WHEN deleted_at IS NULL THEN 1 END`) |
+| `cards-228-dotnet-mysql` | keel-dotnet | MySQL · Keycloak | hecha (24/24, 2026-11-12, en la segunda puntuación, con el mismo `contact_card`): T2 medido, con las columnas `uk_contact_cards_{natural,email}_flag` en el baseline y FL-CRD-005/006 en verde |
 
 verification-codes no tiene `validation-scenarios.md`: una corrida suya no tendría flujos que puntuar, así que su retención
 con `anonymize` no la vería ningún escenario. Por eso no se preparó, y el usuario decidió dejarla fuera (2026-11-12): las corridas de profile-directory cubren el
 borrado lógico, la restauración y la purga, y `anonymize` ya está medido en vivo con los sujetos `codes-anonymize[-mongo]`. Para FL-CRD-007 los
 cuatro arneses traen ya con qué ejecutar SQL contra la base (`dbSql` en keel-spring, `Db` en keel-dotnet y la consulta por
 `psql` de keel-nest y keel-go). El helper `ageDeletion` solo hará falta si el agente no se las arregla con eso.
+
+**Resultado (2026-11-12):** las cinco corridas están en verde (24/24 cada una), sin designGaps ni huecos del generador, y
+con una huella de 5 o 6 archivos, todos TODO salvo el README. En tres de las cinco, el Given de FL-CRD-007 nombró la
+tabla `contact_card` en vez de `contact_cards` y lo corrigió el propio pipeline en la segunda puntuación. Es la señal a
+favor del helper `ageDeletion` en los cuatro arneses, que tomaría la tabla y la columna del modelo, como `ageForDeadline`.
+Pendiente de la decisión del usuario.
 
 ## Puerta de cierre
 
