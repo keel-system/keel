@@ -434,6 +434,24 @@ incremento termina con su «Para retomar» y un commit.
 - Una corrida con MySQL, para la columna generada (T2).
 - Se registran en `docs/corridas/`.
 
+Preparadas el 2026-11-12. En cada workspace se hizo `keel init`, se copió el diseño a `specs/`, su DESIGN.md a `docs/`, se
+sembró `keel-stack.json` y se ejecutó `build`. profile-directory v1.1.0 está 13/13 en `--ready`, y el build no da avisos.
+Cada corrida se lanza con `cd D:\keel-example\<workspace>\services\profile-directory-<generador>` y después
+`/keel-generate-<generador>`. En keel-nest hay que hacer `npm install` antes.
+
+| Workspace (`D:\keel-example\`) | Generador | Stack | Lo que añade |
+|---|---|---|---|
+| `cards-228-spring-postgre` | keel-spring | PostgreSQL · Keycloak | sin correr |
+| `cards-228-nest-postgre` | keel-nest | PostgreSQL · Keycloak | sin correr |
+| `cards-228-dotnet-postgre` | keel-dotnet | PostgreSQL · Keycloak | sin correr |
+| `cards-228-go-postgre` | keel-go | PostgreSQL · Keycloak | sin correr |
+| `cards-228-dotnet-mysql` | keel-dotnet | MySQL · Keycloak | T2: las columnas generadas `uk_contact_cards_{natural,email}_flag` (`CASE WHEN deleted_at IS NULL THEN 1 END`) |
+
+verification-codes no tiene `validation-scenarios.md`: una corrida suya no tendría flujos que puntuar, así que su retención
+con `anonymize` no la vería ningún escenario. Por eso no se preparó; queda a decisión del usuario. Para FL-CRD-007 los
+cuatro arneses traen ya con qué ejecutar SQL contra la base (`dbSql` en keel-spring, `Db` en keel-dotnet y la consulta por
+`psql` de keel-nest y keel-go). El helper `ageDeletion` solo hará falta si el agente no se las arregla con eso.
+
 ## Puerta de cierre
 
 - Las suites de los cinco paquetes en verde.
@@ -470,7 +488,8 @@ Un generador que no llegue a la puerta rechaza la capacidad con su motivo.
 
 Los incrementos 0 a 6 están hechos. Lo del 6 está en § «Decidido al escribir el incremento 6».
 
-Siguiente, el incremento 7: las corridas de control, que lanza el usuario (dos a la vez como mucho). profile-directory
+Siguiente, el incremento 7: las corridas de control, que lanza el usuario (dos a la vez como mucho). Están preparadas en
+`D:\keel-example\cards-228-*`, con la tabla en el § 7. profile-directory
 v1.1.0 genera sin `--accept-unready`; verification-codes lo sigue necesitando. Lo que hay que mirar en ellas: si el
 agente de pruebas se las arregla con `dbSql`/`mongoEval` para envejecer el borrado de FL-CRD-007 (si no, el helper
 `ageDeletion` en los cuatro arneses), la columna generada de MySQL (T2) en una corrida con ese motor, y los designGaps,
