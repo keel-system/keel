@@ -348,7 +348,7 @@ Un cobro es dinero de una persona real que sale por un sistema que no es el nues
 
 ### 19. Ciclo de vida del dato
 
-*Aplica si:* algún agregado tiene campos `personal`, o alguna raíz declara `deletion`, `restorableFor` o `retention`. Las unidades son esas raíces.
+*Aplica si:* algún agregado tiene campos `personal`, alguna raíz declara `deletion`, `restorableFor` o `retention`, o está en `audit.history`. Las unidades son esas raíces.
 
 Un dato tiene tres momentos que el resto de clases no mira: cuando se **borra**, cuánto **vive** y de **quién** es. Los tres son verdad del servicio aunque nadie lo construya, y casi siempre son además obligación legal (RGPD, LGPD, CCPA, Ley 1581). Y los tres fallan en silencio: un email personal en un log, un pedido que se guarda para siempre o una clave que no se puede volver a registrar no rompen ningún escenario.
 
@@ -356,6 +356,7 @@ Un dato tiene tres momentos que el resto de clases no mira: cuando se **borra**,
 - **Qué significa borrar.** ¿El `DELETE` de esta raíz la hace desaparecer, o la oculta y la conserva (`deletion: logical`)? Lo segundo es lo que pide un agregado que otros referencian (la factura conserva a su cliente) o uno que se puede deshacer. Con borrado lógico, la clave del borrado (el email) queda libre para un registro nuevo, y quien pide la fila borrada recibe 404.
 - **Si se puede deshacer.** ¿Durante cuánto tiempo (`restorableFor`), con qué operación (`restores`) y con qué error pasada la ventana? ¿Y si mientras tanto otro registro ocupó su clave? Recibe el 409 de esa unicidad: ¿es lo que el cliente espera?
 - **Cuánto vive.** ¿Desde qué instante se cuenta (`retention.from`: el cierre, la emisión, el borrado) y cuánto (`keep`)? ¿Hay una obligación de conservar (fiscal, sanitaria) que manda sobre la de borrar? Una raíz con datos personales sin `retention` abre `OBL-PERSONAL-RETENTION-UNDECIDED`: se acepta solo con su motivo.
+- **Su historial.** ¿Alguien tendrá que responder qué valía un campo en una fecha, quién lo cambió y desde qué valor (`audit.history`)? Es lo único de esta clase que no se puede decidir tarde: lo que no se guardó desde el principio no se reconstruye. Si se guarda, ¿qué query lo lee y con qué alcance? Una raíz con historial que ninguna query lee abre `OBL-HISTORY-UNREAD`. El historial hereda el régimen de su raíz: la retención que borra la raíz borra sus entradas, y la que anonimiza reescribe también ahí los valores personales.
 - **Y después.** ¿Se borra el agregado entero (`then: delete`) o se conserva sin sus datos personales (`then: anonymize`)? Una raíz que otro agregado referencia no se puede borrar sin dejar referencias colgando. Anonimizar deja a null los campos personales opcionales y escribe un sustituto irreversible en los obligatorios de texto: ¿la forma de cada uno lo admite?
 
 ### 16. Decisiones estructurales sin dueño

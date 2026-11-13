@@ -189,6 +189,13 @@ export const CHECKS = {
     title: 'un rol exento de una regla de propiedad que no está en el catálogo de roles',
     closes: 'declarar el rol en roles, o quitarlo de ownership.<E>.exemptRoles'
   },
+  'CHK-SECURITY-HISTORY-UNSCOPED': {
+    layer: 'security',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'la lectura por id de una raíz va acotada y la de su historial no',
+    closes: 'añadir la query de historial a los reads del mismo bloque de scoping u ownership'
+  },
   // La lectura acotada (2.27): errores, porque el generador escribe el predicado del adaptador con ellas, y con una pieza
   // que no existe lo escribiría sobre nada.
   'CHK-SECURITY-READS-OPERATION': {
@@ -560,6 +567,41 @@ export const CHECKS = {
     nature: 'incoherence',
     title: 'anonimizar no puede vaciar un campo personal obligatorio (no es texto, o su forma no admite el sustituto)',
     closes: 'hacer el campo opcional (se anonimiza a null) o relajar su pattern, enum o maxLength'
+  },
+  'CHK-PERSIST-HISTORY-NOT-ROOT': {
+    layer: 'persistence',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'audit.history nombra una entidad que no es la raíz persistida de un agregado',
+    closes: 'nombrar la raíz: el historial es del agregado entero'
+  },
+  'CHK-PERSIST-HISTORY-NO-SECURITY': {
+    layer: 'persistence',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'audit.history sin capa security: no hay autor que registrar',
+    closes: 'declarar la capa security, o quitar audit.history'
+  },
+  'CHK-USECASES-HISTORY-UNKNOWN': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una query lee el historial de una raíz que no lo guarda',
+    closes: 'añadir la raíz a persistence.audit.history, o quitar la query'
+  },
+  'CHK-USECASES-HISTORY-SHAPE': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'output: { history } en algo que no es una query paginada',
+    closes: 'kind: query y paginated: true'
+  },
+  'CHK-USECASES-HISTORY-FILTER': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'un historyFilter fuera de una query de historial, con otro tipo o repetido, o un filter en una query de historial',
+    closes: 'historyFilter solo en el input de la query de historial: field (string), from y to (timestamp), cada uno una vez'
   },
   'CHK-FIELD-COMPARE-NOT-TEXT': {
     layer: 'domain',
@@ -1225,6 +1267,13 @@ export const CHECKS = {
     nature: 'incoherence',
     title: 'una lectura acotada no tiene escenario `FL-` de la fila ajena',
     closes: 'un escenario con dos llamantes que nombre la lectura: la fila del otro no aparece (ni cuenta en el total), o su readMiss por id'
+  },
+  'CHK-SCEN-HISTORY-UNCOVERED': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'una query de historial no tiene escenario `FL-`',
+    closes: 'un escenario que escriba y después llame a la query, afirmando qué entradas deja cada cambio'
   },
   'CHK-SCEN-DELETION-UNCOVERED': {
     layer: 'validation-scenarios',

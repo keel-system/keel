@@ -17,6 +17,7 @@
 
 import { undecidedConditionalWrites } from './gen/conditional-writes.js';
 import { dataLifecycleRoots, deletedRoots } from './gen/data-lifecycle.js';
+import { historyRoots, isPersistedRoot } from './gen/history.js';
 
 const values = (collection) => Object.values(collection ?? {}).map((value) => value ?? {});
 const keys = (collection) => Object.keys(collection ?? {});
@@ -193,7 +194,9 @@ export const GAP_CLASSES = {
     // Aplica cuando el diseño ya habla del ciclo de vida (un campo personal, un borrado, una retención): las preguntas de
     // los que no lo hacen las abren OBL-PERSONAL-RETENTION-UNDECIDED y el default estructural de `deletion`.
     title: 'Ciclo de vida del dato',
-    units: (layers) => dataLifecycleRoots(layers)
+    // El historial (DSL 2.29) es parte del ciclo de vida: una raíz que lo guarda pregunta también quién lo lee y qué
+    // pasa con sus datos personales cuando vence la retención.
+    units: (layers) => [...new Set([...dataLifecycleRoots(layers), ...historyRoots(layers).filter((root) => isPersistedRoot(layers, root))])]
   }
 };
 

@@ -50,6 +50,7 @@ const MOTIVOS = {
  * muertas, para que la tabla no se convierta en la lista de lo que hubo alguna vez.
  */
 const EXCEPCIONES = new Map([
+  ['persistence.audit.history', { motivo: MOTIVOS.hueco, porque: 'el historial de cambios (DSL 2.29) lo rechaza la frontera de keel-spring (historyPendingErrors) hasta el incremento 1 de PLAN-DSL-229-HISTORIAL.md, y ninguna fixture lo declara hasta el 6; entonces esta fila se borra.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     {

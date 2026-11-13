@@ -155,6 +155,22 @@ Hay un segundo efecto, y es el que importa en una **compensación**: una transic
 
 `idempotency` y `cache` son **decisiones estructurales**: fijan lo que el servicio garantiza (qué se puede repetir sin daño, qué puede llegar rancio), así que las decide el diseñador y no el agente. El agente recomienda con su porqué y pregunta; nunca las escribe en silencio. Ejes de decisión, consecuencias observables y trampas: `references/structural-decisions.md` de la skill `keel-design` §3.2 y §3.3.
 
+**El historial de una raíz (2.29).** Una query con `output: { history: <Raíz>, paginated: true }` devuelve el historial de cambios de una raíz que lo guarda (`persistence.audit.history`, `CHK-USECASES-HISTORY-UNKNOWN`): una página de entradas, la más reciente primero, con la forma que fija `wire-contract.md` § Historial. Siempre es una query y siempre paginada (`CHK-USECASES-HISTORY-SHAPE`). Los campos de su `input` que declaran **`historyFilter`** filtran las entradas: `field` (string, la ruta entera de un campo o el campo de la raíz que la contiene: `price` casa `price.amount`), `from` y `to` (timestamp, extremos incluidos), cada uno a lo sumo una vez y en ningún otro sitio (`CHK-USECASES-HISTORY-FILTER`). Los demás campos del input **localizan la raíz**, igual que en su lectura por id, y leer el historial pasa por esa misma lectura: una raíz que no existe, que está borrada o que el llamante no puede ver responde el mismo error. Por eso, si la lectura por id va acotada (`reads` de `scoping` u `ownership`), la del historial también (`CHK-SECURITY-HISTORY-UNSCOPED`).
+
+```yaml
+getMyCardHistory:
+  kind: query
+  input:
+    fields:
+      callerSubject: { type: string, required: true }
+      field: { type: string, historyFilter: field }
+      from:  { type: timestamp, historyFilter: from }
+      to:    { type: timestamp, historyFilter: to }
+  output: { history: ContactCard, paginated: true }
+  errors:
+    - { code: CARD_NOT_FOUND, when: El titular no tiene ficha viva., http: 404 }
+```
+
 **`restores` — una operación que deshace un borrado (2.28).** Un command con `restores: <Raíz>` deshace el borrado lógico de esa raíz dentro de su ventana (`persistence.entities.<Raíz>.restorableFor`), y los dos van siempre juntos. Con él, el puerto del repositorio gana la restauración: dentro de la ventana la fila vuelve a estar viva; fuera, el `error` de `restorableFor`, que esta operación declara; con su clave ocupada por una fila viva, el 409 de esa unicidad. Ver `persistence.md` § El ciclo de vida del dato.
 
 ## Triggers: quién activa cada operación

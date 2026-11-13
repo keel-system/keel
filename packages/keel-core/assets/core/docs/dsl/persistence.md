@@ -150,6 +150,41 @@ entities:
 en reposo, la base legal del tratamiento ni el consentimiento (que se modela como dato con las capas que ya existen).
 La operación de supresión del interesado (RGPD art. 17) queda fuera hasta que un diseño la pida.
 
+## El historial de cambios (DSL 2.29)
+
+`audit` registra la **última** escritura. Cuando alguien tiene que poder responder **qué valía un campo en una fecha,
+quién lo cambió y desde qué valor** —una póliza, una cuenta, una historia clínica, una ficha con datos personales—, la
+raíz guarda además su historial:
+
+```yaml
+audit:
+  timestamps: none
+  authorship: none
+  history: [ContactCard]          # raíces persistidas con historial
+```
+
+- Cada escritura **confirmada** sobre el agregado (la raíz y sus entidades internas) deja una entrada con el instante,
+  el autor, el tipo de cambio (`created`, `updated`, `deleted`, `restored`, `anonymized`) y, por cada campo que cambió,
+  su valor antes y después. Un guardado que no cambia nada no deja entrada. La escribe el adaptador en la misma
+  transacción que la escritura: lo que se revierte no deja rastro, y el handler no tiene que acordarse.
+- El campo se nombra con su ruta del contrato: `email`, `price.amount` para la hoja de un value object compuesto,
+  `lines[<id>].quantity` para una hija, `<relación>Id` para una referencia a otro agregado. Los campos `sensitive` y los
+  `generated` (la versión, la auditoría) **no entran**: un secreto no puede sobrevivir en otra tabla.
+- El **autor** es el mismo actor que `authorship` (el claim `sub` del token, el cliente de una clave de API, o el
+  centinela `system` fuera de una petición), así que `history` exige la capa `security`
+  (`CHK-PERSIST-HISTORY-NO-SECURITY`) aunque `authorship` sea `none`. Solo se declara en una raíz persistida
+  (`CHK-PERSIST-HISTORY-NOT-ROOT`).
+- **El historial sigue el régimen de su raíz.** Una retención `then: delete` (y la purga de lo borrado) se lleva sus
+  entradas; una `then: anonymize` reescribe en ellas los valores de los campos `personal` con el mismo sustituto y deja
+  una entrada `anonymized`. El historial no tiene retención propia.
+- Se lee con una query de `output: { history: <Raíz>, paginated: true }` (ver `use-cases.md` § El historial). Una raíz
+  con historial que ninguna query lee abre `OBL-HISTORY-UNREAD`: se acepta en `decisions.yaml` si lo consulta un
+  auditor directamente en la base.
+
+**Qué no entra.** Dónde se guarda (una tabla del generador, fuera del contrato) y cómo se calcula la diferencia son del
+generador. Tampoco la reconstrucción de la raíz entera en un instante, el *event sourcing* como modelo de persistencia ni
+la firma criptográfica de las entradas: el historial es la propiedad observable que se suele pedir de ellos.
+
 ## Qué NO va aquí
 
 - La forma de las entidades (campos, tipos, invariantes) → capa `domain`.

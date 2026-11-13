@@ -147,6 +147,11 @@
           "enum": ["exact", "ignore-case", "ignore-case-accents"],
           "description": "Cómo se comparan dos valores de TEXTO de este campo. En domain gobierna la unicidad y la igualdad (`ACME` y `Acmé` son el mismo nombre con ignore-case-accents); en el input de una query, cómo casa el filtro. Por defecto exact."
         },
+        "historyFilter": {
+          "type": "string",
+          "enum": ["field", "from", "to"],
+          "description": "Qué filtra este campo del input de una query de historial (output: { history: <Raíz> }, DSL 2.29): field, las entradas que cambiaron ese campo (su dot-path del contrato, string); from y to, las confirmadas desde o hasta ese instante, extremos incluidos (timestamp). Cada uno a lo sumo una vez; los demás campos del input localizan la raíz."
+        },
         "match": {
           "type": "string",
           "enum": ["exact", "contains", "prefix"],
@@ -247,6 +252,16 @@
           "additionalProperties": false,
           "properties": {
             "fields": { "$ref": "#/$defs/fieldMap" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["history"],
+          "additionalProperties": false,
+          "description": "El historial de cambios de una raíz con persistence.audit.history (DSL 2.29): una página de entradas, una por escritura confirmada, del cambio más reciente al más antiguo. La forma de cada entrada (at, author, change, changes[{field, before, after}]) la fija wire-contract.md § Historial, no el diseño. Solo en el output de una query, y siempre paginada.",
+          "properties": {
+            "history": { "$ref": "#/$defs/typeName" },
+            "paginated": { "type": "boolean", "default": false }
           }
         }
       ]

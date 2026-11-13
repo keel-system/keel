@@ -59,6 +59,12 @@ export {
 } from './data-lifecycle.js';
 export { hidesDeleted, implicitPredicates, hasImplicitPredicate } from './implicit-predicates.js';
 export { PERSONAL_DATA_FILE, usesPersonalData, personalFieldNames, personalDataInventory } from './personal-data.js';
+export {
+  HISTORY_CHANGES, HISTORY_FILTERS, HISTORY_ENTRY_FIELDS, historyShape, historyDiff, historyEntry, historyMatches,
+  compareHistoryEntries, topFieldOf, historyPendingErrors, historyRootNames, usesHistory, historyOperations,
+  HISTORY_CASES, HISTORY_SABOTAGES
+} from './history.js';
+export { CHANGE_HISTORY, CHANGE_HISTORY_FIELD, CHANGE_HISTORY_COLLECTION, historyFieldRows } from './history-store.js';
 export { domainGuardKind } from './domain-guard.js';
 export { cronPeriodSeconds, fastestSchedulePeriod } from './cron-period.js';
 export { orphanInternalOperations, dispatchingOperations, usesCommandDispatcher, dispatchNote } from './dispatch.js';

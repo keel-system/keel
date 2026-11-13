@@ -123,6 +123,9 @@ export function toOnePaths(domain, from, to) {
 /** La forma de la salida de una query: `{ entity, shape }` con `single`, `list` o `page`, o null si no es una entidad. */
 export function readShapeOf(op) {
   const output = op?.output;
+  // El historial de una raíz (DSL 2.29) se lee como su ficha: carga la raíz por id con el mismo alcance (D7 de
+  // PLAN-DSL-229-HISTORIAL.md), así que su forma es la de una lectura de UNA, aunque la respuesta sea una página.
+  if (output && typeof output === 'object' && output.history) return { entity: output.history, shape: 'single', history: true };
   if (!output || typeof output !== 'object' || !output.entity) return null;
   return { entity: output.entity, shape: output.paginated ? 'page' : output.list ? 'list' : 'single' };
 }

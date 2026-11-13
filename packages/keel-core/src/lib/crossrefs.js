@@ -12,6 +12,7 @@ import { domainGuardKind } from './gen/domain-guard.js';
 import { declaredDeadlines } from './gen/deadlines.js';
 import { readScopesOfLayers, optionalAuthRules } from './gen/read-scope.js';
 import { declaredLifecycles, restoringOperations, personalFieldsOfAggregate, incomingReferences, substituteProblem, aggregateIndex, FROM_DELETED } from './gen/data-lifecycle.js';
+import { historyRoots, historyQueries, historyFilterFields, isPersistedRoot, HISTORY_FILTERS } from './gen/history.js';
 
 const BASE_TYPES = new Set(['string', 'text', 'int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json', 'file']);
 
@@ -220,6 +221,121 @@ function checkDataLifecycle(layers, manifest, error, obligation) {
       `persistence: ${entityName} guarda datos personales (${personal.map((p) => `${p.entity}.${p.field}`).join(', ')}) y no declara retention — ` +
         'nada dice cuánto viven ni qué pasa después, y el default es guardarlos para siempre. Declara retention (from, keep, then) o ' +
         'acéptalo en decisions.yaml con su motivo (una obligación legal de conservarlos) — ver docs/dsl/persistence.md § El ciclo de vida del dato'
+    );
+  }
+}
+
+// ─── El historial de cambios consultable (DSL 2.29: audit.history y output: { history }) ─────────────────────
+
+/**
+ * El historial contra el resto del diseño. Lo mecanizable es la forma: que se guarde de una raíz persistida y con un
+ * actor (la capa security), que la query que lo lee sea una query paginada sobre una raíz que lo guarda, que sus filtros
+ * sean los tres del método y con su tipo, y que no deje ver lo que la lectura por id de la raíz esconde. Y una pregunta
+ * sin contestar: un historial que se escribe y que ninguna operación lee.
+ */
+function checkHistory(layers, error, obligation) {
+  const roots = historyRoots(layers);
+  const queries = historyQueries(layers);
+  for (const root of roots) {
+    if (!isPersistedRoot(layers, root)) {
+      error('CHK-PERSIST-HISTORY-NOT-ROOT',
+        `persistence: audit.history nombra '${root}', que ${layers.domain?.entities?.[root] ? 'no es la raíz persistida de un agregado' : 'no existe en domain: entities'} — ` +
+          'el historial es del agregado entero y se guarda en su raíz: nombra la raíz'
+      );
+    }
+  }
+  if (roots.length > 0 && !layers.security) {
+    error('CHK-PERSIST-HISTORY-NO-SECURITY',
+      'persistence: audit.history exige la capa security — una entrada del historial dice QUIÉN hizo el cambio, y sin ' +
+        'principal autenticado no hay autor que registrar (el mismo actor que audit.authorship)'
+    );
+  }
+  for (const { operation, op, root } of queries) {
+    const where = `use-cases: ${operation}.output.history`;
+    if (!roots.includes(root)) {
+      error('CHK-USECASES-HISTORY-UNKNOWN',
+        `${where}: '${root}' no está en persistence.audit.history — no se guarda su historial, así que no hay nada que leer`
+      );
+    }
+    const problems = [];
+    if ((op.kind ?? 'command') !== 'query') problems.push('no es una query (kind: query): leer el historial no muta nada');
+    if (op.output.paginated !== true) problems.push('no es paginated: true — el historial crece con cada escritura y se lee por páginas');
+    if (problems.length > 0) error('CHK-USECASES-HISTORY-SHAPE', `${where}: ${problems.join('; ')}`);
+    const seen = new Map();
+    for (const { field, role, spec } of historyFilterFields(op)) {
+      const expected = HISTORY_FILTERS[role];
+      const base = layers.domain?.types?.[spec.type]?.base ?? spec.type;
+      if (base !== expected || spec.list === true) {
+        error('CHK-USECASES-HISTORY-FILTER',
+          `use-cases: ${operation}.input.${field}: historyFilter: ${role} es ${spec.list ? 'una lista' : spec.type}, y el filtro ${role} es un ${expected}`
+        );
+      }
+      if (seen.has(role)) {
+        error('CHK-USECASES-HISTORY-FILTER',
+          `use-cases: ${operation}.input.${field}: historyFilter: ${role} repite el de ${seen.get(role)} — cada filtro, a lo sumo una vez`
+        );
+      }
+      seen.set(role, field);
+    }
+    for (const [field, spec] of Object.entries(op.input?.fields ?? {})) {
+      if (spec?.filter) {
+        error('CHK-USECASES-HISTORY-FILTER',
+          `use-cases: ${operation}.input.${field}: filter restringe campos de una entidad de salida, y las de un historial son entradas — ` +
+            'usa historyFilter (field, from o to); los demás campos del input localizan la raíz'
+        );
+      }
+    }
+  }
+  // historyFilter fuera del input de una query de historial: en cualquier otro sitio no filtra nada.
+  const historyOps = new Set(queries.map((query) => query.operation));
+  const misplaced = (where, fields) => {
+    for (const [field, spec] of Object.entries(fields ?? {})) {
+      if (spec?.historyFilter === undefined) continue;
+      error('CHK-USECASES-HISTORY-FILTER',
+        `${where}.${field}: historyFilter solo tiene sentido en el input de una query de historial (output: { history: <Raíz> })`
+      );
+    }
+  };
+  for (const [operation, op] of Object.entries(layers['use-cases']?.operations ?? {})) {
+    if (!historyOps.has(operation) && typeof op?.input === 'object') misplaced(`use-cases: ${operation}.input`, op.input?.fields);
+    if (typeof op?.output === 'object') misplaced(`use-cases: ${operation}.output`, op.output?.fields);
+  }
+  for (const [entityName, entity] of Object.entries(layers.domain?.entities ?? {})) misplaced(`domain: ${entityName}.fields`, entity?.fields);
+  for (const [typeName, type] of Object.entries(layers.domain?.types ?? {})) misplaced(`domain: types.${typeName}.fields`, type?.fields);
+  for (const [eventName, event] of Object.entries(layers.messaging?.publishing?.events ?? {})) misplaced(`messaging: ${eventName}.payload`, event?.payload);
+  // El historial no puede enseñar lo que la ficha esconde (D7): si la lectura por id de la raíz va acotada, la de su
+  // historial también.
+  const security = layers.security;
+  const blocks = [];
+  if (security?.authentication?.scoping?.reads) {
+    blocks.push({ where: 'security.authentication.scoping', reads: security.authentication.scoping.reads });
+  }
+  for (const [entity, rule] of Object.entries(security?.ownership ?? {})) {
+    if (rule?.reads) blocks.push({ where: `security.ownership.${entity}`, reads: rule.reads });
+  }
+  const operations = layers['use-cases']?.operations ?? {};
+  for (const { operation, root } of queries) {
+    for (const block of blocks) {
+      if (block.reads.includes(operation)) continue;
+      const scopedGet = block.reads.find((name) => {
+        const output = operations[name]?.output;
+        return typeof output === 'object' && output?.entity === root && !output.list && !output.paginated;
+      });
+      if (scopedGet) {
+        error('CHK-SECURITY-HISTORY-UNSCOPED',
+          `${block.where}.reads: acota ${scopedGet}, que lee ${root} por id, y no ${operation}, que lee su historial — ` +
+            `el historial enseñaría los valores de la ficha que esa lectura esconde. Añade ${operation} a reads`
+        );
+      }
+    }
+  }
+  // La pregunta sin contestar: un historial que se escribe y que nadie lee por la API.
+  for (const root of roots) {
+    if (!isPersistedRoot(layers, root) || queries.some((query) => query.root === root)) continue;
+    obligation('OBL-HISTORY-UNREAD', `persistence.audit.history.${root}`,
+      `persistence: audit.history guarda el historial de ${root} y ninguna query lo lee (output: { history: ${root} }) — ` +
+        'se escribe en cada cambio y nadie lo puede consultar por la API. Declara la query, o acéptalo en decisions.yaml con ' +
+        'su motivo (lo consulta un auditor directamente en la base) — ver docs/dsl/persistence.md § El historial de cambios'
     );
   }
 }
@@ -4315,6 +4431,17 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       }
     }
   }
+  // El historial de cambios (2.29): la query que lo lee no la ejerce ninguna escritura, y sin un escenario que la llame
+  // tras escribir nadie afirma qué entradas deja cada cambio. Aviso, como toda regla sobre el documento de escenarios.
+  if (scenarios !== null) {
+    for (const { operation } of historyQueries(layers)) {
+      if (scenariosMentioning(operation).length > 0) continue;
+      warn('CHK-SCEN-HISTORY-UNCOVERED',
+        `validation-scenarios.md: no encuentro ningún escenario FL- que nombre '${operation}' — nadie afirma qué entradas ` +
+          'deja cada escritura (quién, cuándo, qué campo, antes y después), y es justo lo que una corrida verde no distingue de un historial vacío'
+      );
+    }
+  }
   // Auditoría: cada eje ('timestamps', 'authorship') se declara de UNA sola forma.
   // Con 'all' las columnas las pone la infraestructura y no se nombran en domain; con
   // 'declared' se nombran ahí porque el diseño quiere proyectarlas en algún output.
@@ -5212,6 +5339,9 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
 
   // El ciclo de vida del dato (DSL 2.28): borrado lógico, restauración, retención y datos personales.
   checkDataLifecycle(layers, manifest, error, obligation);
+
+  // El historial de cambios consultable (DSL 2.29): de qué raíces se guarda, quién lo lee y con qué filtros.
+  checkHistory(layers, error, obligation);
 
   // En el modelo documental una entidad interna del agregado NO es una colección propia:
   // va anidada dentro del documento de su raíz, y la auditoría automática puebla el objeto

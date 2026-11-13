@@ -731,7 +731,59 @@ function withDataLifecycle(d) {
   );
 }
 
+/**
+ * El historial de cambios consultable (DSL 2.29): se guarda el de los tickets y `getTicketHistory` lo lee por páginas,
+ * filtrado por campo y por fechas. Con su escenario, así que el diseño sigue en silencio.
+ */
+function withHistory(d) {
+  d.layers.persistence.audit.history = ['Ticket'];
+  d.layers.api.pagination = { style: 'offset', defaultSize: 20, maxSize: 100 };
+  ops(d).getTicketHistory = {
+    description: 'Devuelve el historial de cambios de un ticket.',
+    kind: 'query',
+    input: {
+      fields: {
+        id: { type: 'uuid', required: true },
+        field: { type: 'string', historyFilter: 'field', description: 'Solo las entradas que cambiaron este campo.' },
+        from: { type: 'timestamp', historyFilter: 'from' },
+        to: { type: 'timestamp', historyFilter: 'to' }
+      }
+    },
+    output: { history: 'Ticket', paginated: true },
+    errors: [{ ...TICKET_NOT_FOUND }]
+  };
+  d.layers.api.endpoints.getTicketHistory = { method: 'GET', path: '/tickets/{id}/history' };
+  addMatrixRow(d, '| getTicketHistory | FL-TCK-007 | usuarios |');
+  insertScenarioBefore(
+    d,
+    '### FL-ESC-001',
+    `### FL-TCK-007: el historial de un ticket
+
+**Given** un \`Ticket\` abierto por un agente y cerrado por otro.
+**When** se llama a \`getTicketHistory\` con su id.
+**Then** responde 200 con dos entradas: la del cierre primero (\`updated\`, el status de open a closed, con el autor del cierre) y la del alta después (\`created\`).`
+  );
+}
+
+/** El historial sobre la lectura acotada por propiedad: la ficha ajena es un 404, y su historial también. */
+function withOwnedHistory(d) {
+  withOwnedReads(d);
+  withHistory(d);
+  d.layers.security.ownership.Ticket.reads.push('getTicketHistory');
+  insertScenarioBefore(
+    d,
+    '### FL-ESC-001',
+    `### FL-OWN-003: el historial de un ticket ajeno
+
+**Given** un ticket que abrió otro agente.
+**When** el agente llama a \`getTicketHistory\` con su id.
+**Then** responde 404 con \`TICKET_NOT_FOUND\`, igual que uno que no existe: el historial ajeno no se ve.`
+  );
+}
+
 export const EXTENSIONS = {
+  history: withHistory,
+  ownedHistory: withOwnedHistory,
   dataLifecycle: withDataLifecycle,
   deadline: withDeadline,
   concurrency: withConcurrency,
@@ -1933,6 +1985,98 @@ export const MUTATIONS = [
         '**When** se consultan los dos.\n**Then** responden 200.');
     },
     expect: ['CHK-SCEN-RETENTION-UNCOVERED']
+  },
+  // ── El historial de cambios consultable (DSL 2.29) ──
+  {
+    id: 'M-PERSIST-HISTORY-NOT-ROOT',
+    title: 'el historial se pide de una entidad interna del agregado',
+    extends: 'history',
+    mutate: (d) => {
+      d.layers.persistence.audit.history.push('TicketNote');
+    },
+    expect: ['CHK-PERSIST-HISTORY-NOT-ROOT']
+  },
+  {
+    id: 'M-PERSIST-HISTORY-NO-SECURITY',
+    title: 'un historial sin capa security que diga quién hizo cada cambio',
+    extends: 'history',
+    mutate: (d) => {
+      delete d.layers.security;
+    },
+    // Co-disparada por construcción, como CHK-DEPS-REPLICA-UNPERSISTED: la query que lee el historial es de la API, y una
+    // capa api sin security ya es CHK-API-NO-SECURITY. Sin api la query se queda huérfana y salen otros ids.
+    expect: ['CHK-API-NO-SECURITY', 'CHK-PERSIST-HISTORY-NO-SECURITY']
+  },
+  {
+    id: 'M-USECASES-HISTORY-UNKNOWN',
+    title: 'una query lee el historial de una raíz que no lo guarda',
+    extends: 'history',
+    mutate: (d) => {
+      ops(d).getQueueHistory = {
+        description: 'Devuelve el historial de cambios de una cola.',
+        kind: 'query',
+        input: { fields: { id: { type: 'uuid', required: true } } },
+        output: { history: 'Queue', paginated: true },
+        errors: [{ code: 'QUEUE_NOT_FOUND', when: 'No existe una cola con ese id.', http: 404 }]
+      };
+      d.layers.api.endpoints.getQueueHistory = { method: 'GET', path: '/queues/{id}/history' };
+      addMatrixRow(d, '| getQueueHistory | FL-QUE-003 | usuarios |');
+      insertScenarioBefore(d, '### FL-ESC-001', `### FL-QUE-003: el historial de una cola
+
+**Given** una \`Queue\` archivada.
+**When** se llama a \`getQueueHistory\` con su id.
+**Then** responde 200 con la entrada del archivado primero.`);
+    },
+    expect: ['CHK-USECASES-HISTORY-UNKNOWN']
+  },
+  {
+    id: 'M-USECASES-HISTORY-SHAPE',
+    title: 'la query de historial no es paginada',
+    extends: 'history',
+    mutate: (d) => {
+      ops(d).getTicketHistory.output.paginated = false;
+    },
+    expect: ['CHK-USECASES-HISTORY-SHAPE']
+  },
+  {
+    id: 'M-USECASES-HISTORY-FILTER',
+    title: 'el filtro desde de un historial no es un instante',
+    extends: 'history',
+    mutate: (d) => {
+      ops(d).getTicketHistory.input.fields.from.type = 'string';
+    },
+    expect: ['CHK-USECASES-HISTORY-FILTER']
+  },
+  {
+    id: 'M-SECURITY-HISTORY-UNSCOPED',
+    title: 'la ficha de un ticket ajeno es un 404 y su historial no está acotado',
+    extends: 'ownedHistory',
+    mutate: (d) => {
+      const reads = d.layers.security.ownership.Ticket.reads;
+      reads.splice(reads.indexOf('getTicketHistory'), 1);
+    },
+    expect: ['CHK-SECURITY-HISTORY-UNSCOPED']
+  },
+  {
+    id: 'M-OBL-HISTORY-UNREAD',
+    title: 'se guarda el historial de los tickets y ninguna query lo lee',
+    extends: 'history',
+    mutate: (d) => {
+      delete ops(d).getTicketHistory;
+      delete d.layers.api.endpoints.getTicketHistory;
+      replaceIn(d, '| getTicketHistory | FL-TCK-007 | usuarios |\n', '');
+      replaceIn(d, 'se llama a `getTicketHistory` con su id', 'se consulta su historial en la base');
+    },
+    expect: ['OBL-HISTORY-UNREAD']
+  },
+  {
+    id: 'M-SCEN-HISTORY-UNCOVERED',
+    title: 'la query de historial no tiene escenario',
+    extends: 'history',
+    mutate: (d) => {
+      replaceIn(d, 'se llama a `getTicketHistory` con su id', 'se consulta su historial');
+    },
+    expect: ['CHK-SCEN-HISTORY-UNCOVERED']
   },
   // ── Los plazos de negocio (DSL 2.26) ──
   {

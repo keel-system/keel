@@ -87,6 +87,27 @@ fuera de rango, aunque el listado tenga elementos en otras.
 `eventType`, `eventVersion`, `occurredAt`, `source`, `correlationId`, `traceparent` (ver
 `docs/dsl/messaging.md § La envoltura Keel`).
 
+**Entrada del historial** (DSL 2.29) — `at`, `author`, `change`, `changes`; cada elemento de `changes`, `field`,
+`before`, `after`. Va dentro de la página de arriba, la más reciente primero y, a igual `at`, en un orden estable:
+
+```json
+{
+  "at": "2026-11-13T10:02:00.000Z",
+  "author": "6f1c9a2e-0b7d-4f53-9a51-0c1e9d2a7b44",
+  "change": "updated",
+  "changes": [
+    { "field": "email", "before": "ana@example.com", "after": "ana.r@example.com" }
+  ]
+}
+```
+
+- `change` es `created`, `updated`, `deleted`, `restored` o `anonymized`. `deleted` y `restored` llevan `changes: []`.
+- `author` es el actor de la autoría: el `sub` del token, el cliente de la clave de API o `system` (con
+  `system:<correlationId>` si hay correlación) cuando la escritura no viene de una petición.
+- `field` es la ruta del contrato (`price.amount`, `lines[<id>].quantity`, `categoryId`). `before` y `after` llevan el
+  valor con las reglas de § Tipos, y `null` cuando no había o ya no hay. En una entrada `anonymized` los dos son el
+  valor anonimizado: el anterior ya no existe en ninguna parte.
+
 ## Escritura condicional
 
 Solo en las operaciones de `api.concurrency` (ver `docs/dsl/api.md § concurrency`).

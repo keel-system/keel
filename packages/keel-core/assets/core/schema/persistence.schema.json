@@ -204,6 +204,13 @@
           "enum": ["all", "declared", "none"],
           "default": "none",
           "description": "Registro de quién creó y modificó cada fila; exige capa security (el autor es el identificador estable del principal autenticado: con token, su claim sub). 'all': todas las entidades persistidas lo llevan, invisible al contrato. 'declared': solo las que declaren los campos reservados 'createdBy'/'updatedBy' en domain, que quedan visibles en los output que los proyecten. 'none': ninguna."
+        },
+        "history": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" },
+          "description": "Raíces persistidas cuyo historial de cambios se conserva (DSL 2.29): cada escritura confirmada sobre el agregado deja una entrada con el instante, el autor (el mismo actor que authorship), el tipo de cambio y, por campo cambiado, su valor antes y después. Exige capa security. Los campos sensitive y generated no entran; los personal siguen la retención de su raíz. Se lee con una query de output: { history: <Raíz>, paginated: true }."
         }
       }
     },

@@ -341,6 +341,20 @@ export const REVIEWS = {
   },
 
   // ─── persistence ───────────────────────────────────────────────────────────
+  'REV-HISTORY-SCOPE': {
+    scope: 'persistence',
+    gapClass: 19,
+    severity: 'strong',
+    // Solo donde el diseño ya guarda algún historial: la pregunta es si se dejó una raíz, y elegirla por su nombre sería
+    // adivinar. Un diseño sin ninguno lo pregunta la clase 19 del análisis de huecos al recorrerlo.
+    appliesTo: (layers) => (layers.persistence?.audit?.history?.length ?? 0) > 0,
+    title: 'una raíz que tendría que guardar su historial y no lo guarda',
+    asks:
+      'por cada raíz fuera de audit.history, ¿mueve dinero, tiene un estado regulado (una póliza, una cuenta, una historia ' +
+      'clínica) o guarda datos personales que alguien pueda pedir ver cómo cambiaron? Si un auditor tendría que contestar ' +
+      'qué valía y quién lo cambió, falta; el historial no se reconstruye después'
+  },
+
   'REV-PERSIST-MISSING-INDEX': {
     scope: 'persistence',
     gapClass: 5,

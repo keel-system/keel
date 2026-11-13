@@ -30,6 +30,7 @@ const MOTIVOS = {
 };
 
 const EXCEPCIONES = new Map([
+  ['persistence.audit.history', { motivo: MOTIVOS.pendiente, porque: 'el historial de cambios (DSL 2.29) lo rechaza la frontera de keel-go (historyPendingErrors) hasta el incremento 4 de PLAN-DSL-229-HISTORIAL.md, y ninguna fixture lo declara hasta el 6; entonces esta fila se borra.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     { motivo: MOTIVOS.informativo, porque: 'solo entra en el comentario del mensaje de la suscripción (messaging.js): ningún lector depende de él.' }

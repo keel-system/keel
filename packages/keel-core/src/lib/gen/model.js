@@ -710,7 +710,9 @@ const AUDIT_FIELDS = {
 export function auditPolicies(persistence) {
   return {
     timestamps: persistence?.audit?.timestamps ?? 'all',
-    authorship: persistence?.audit?.authorship ?? 'none'
+    authorship: persistence?.audit?.authorship ?? 'none',
+    // Las raíces con historial de cambios consultable (DSL 2.29): un eje aparte, no una política de columnas.
+    history: [...(persistence?.audit?.history ?? [])]
   };
 }
 
@@ -864,7 +866,9 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
       // El ciclo de vida del dato (DSL 2.28): qué significa borrar la raíz, su ventana de restauración y su retención.
       deletion: persistenceMeta.deletion ?? 'physical',
       restorableFor: persistenceMeta.restorableFor ? { ...persistenceMeta.restorableFor } : null,
-      retention: persistenceMeta.retention ? { ...persistenceMeta.retention, keep: { ...persistenceMeta.retention.keep } } : null
+      retention: persistenceMeta.retention ? { ...persistenceMeta.retention, keep: { ...persistenceMeta.retention.keep } } : null,
+      // El historial de cambios consultable (DSL 2.29): solo de una raíz persistida, y alcanza a su agregado entero.
+      history: persisted && !internalOf.has(name) && (persistence?.audit?.history ?? []).includes(name)
     });
   }
 
@@ -1147,7 +1151,10 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
 
     // Mensaje CQRS de la operación (patrón mediator): las queries con respuesta
     // son Query<R>; los commands con respuesta ReturningCommand<R>; el resto Command.
-    const hasResponse = outputFields.length > 0;
+    // La raíz cuyo historial devuelve una query (DSL 2.29): su respuesta es la página de entradas de wire-contract.md,
+    // no un DTO del diseño, así que no tiene outputFields y la construye cada generador.
+    const historyOf = typeof op.output === 'object' && op.output?.history ? op.output.history : null;
+    const hasResponse = outputFields.length > 0 || historyOf !== null;
     const kind = op.kind ?? 'command';
     const messageKind = kind === 'query' && hasResponse ? 'query' : hasResponse ? 'returningCommand' : 'command';
     const messageClass = `${pascalCase(opName)}${messageKind === 'query' ? 'Query' : 'Command'}`;
@@ -1167,6 +1174,9 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
       where: op.where ? { ...op.where } : null,
       // La raíz cuyo borrado lógico deshace esta operación (DSL 2.28): su puerto gana la restauración.
       restores: op.restores ?? null,
+      // El historial que lee esta query (DSL 2.29) y qué campo del input hace de cada filtro (field, from, to), o null.
+      historyOf,
+      historyFilters: historyFiltersOf(op),
       // La entidad sobre la que actúa (operationTargetEntity): la raíz que compara una escritura condicional.
       targetEntity,
       route,
@@ -3090,7 +3100,18 @@ function payloadEntity(payload) {
  * la exporta el modelo para que keel validate la derive igual.
  */
 export function operationTargetEntity(opName, op, domainEntities) {
-  return payloadEntity(op.output) ?? payloadEntity(op.input) ?? entityFromOperationName(opName, domainEntities);
+  const history = typeof op.output === 'object' && op.output?.history ? op.output.history : null;
+  return payloadEntity(op.output) ?? history ?? payloadEntity(op.input) ?? entityFromOperationName(opName, domainEntities);
+}
+
+/** Qué campo del input de una query de historial (DSL 2.29) hace de cada filtro: `{ field, from, to }`, null el que falte. */
+export function historyFiltersOf(op) {
+  const filters = { field: null, from: null, to: null };
+  const fields = typeof op?.input === 'object' ? op.input?.fields ?? {} : {};
+  for (const [name, spec] of Object.entries(fields)) {
+    if (spec?.historyFilter in filters && filters[spec.historyFilter] === null) filters[spec.historyFilter] = name;
+  }
+  return filters;
 }
 
 // Operaciones sin entidad en el payload (ej. retireProduct con input { id } y

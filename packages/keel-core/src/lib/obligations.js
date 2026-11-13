@@ -198,6 +198,18 @@ export const OBLIGATIONS = {
     doc: 'dsl/persistence.md'
   },
 
+  'OBL-HISTORY-UNREAD': {
+    gapClass: 19,
+    when: 'persistence: una raíz en `audit.history` que ninguna query lee (`output: { history: <Raíz> }`)',
+    kind: 'decision',
+    // Exentable por raíz: que el historial lo consulte un auditor en la base, y no la API, es legítimo. Lo que no lo es es
+    // escribirlo en cada cambio sin haber decidido quién lo lee (R12 de la evaluación 2.24).
+    waivable: true,
+    title: 'no está decidido quién lee el historial de una raíz',
+    closes: 'una query con `output: { history: <Raíz>, paginated: true }`, o exención razonada por raíz',
+    doc: 'dsl/persistence.md'
+  },
+
   'OBL-PAYMENTS-FOLLOWUP-REJECTED': {
     gapClass: 18,
     when: 'payments: una acción de seguimiento (`capture`, `void`, `refund`) sin `onRejected`',
