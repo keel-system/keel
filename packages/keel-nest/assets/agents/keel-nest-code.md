@@ -73,6 +73,12 @@ corto a romper un escenario que ya estaba en verde.
      ventana y la clave ocupada las comprueba el adaptador, no el handler. La retención la ejecuta el cronómetro, no
      un caso de uso. Un campo `personal` del diseño no va nunca en un log ni en un atributo de span: loguea el id del
      agregado (`check-logging.sh` lo veta con su regla `personal`). Lo inventaría `{{keel:docs}}/personal-data.md`.
+   - **El historial de cambios** (DSL 2.29). Con `audit.history`, las entradas las escribe el adaptador en el
+     `save`, la baja y la restauración, en la misma transacción: ningún handler escribe una ni sabe que existe. La
+     query de historial llama a `historyOf(id[, scope], filter, pageable)` del puerto de la raíz (o `historyOfBy<Clave>`), que carga
+     la raíz como su ficha —viva y acotada si va en `reads`— y devuelve la página ya ordenada y filtrada; su vacío
+     es el error de no encontrado del diseño. Nada de ordenar, filtrar ni leer el almacén por otra vía. El `before`
+     y el `after` de un campo `personal` tampoco van a un log.
    - **La mensajería**, si el diseño la declara: lee el SKILL.md de `{{keel:skills}}/keel-nest-<broker>/`
      (el broker de `keel-stack.json`). Escribes el envío —la implementación de `OutboxDispatcher` con
      `reliability: outbox`, o de cada `<Evento>Publisher` con `best-effort`— y los listeners (con RabbitMQ, uno

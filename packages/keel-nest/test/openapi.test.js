@@ -21,6 +21,8 @@ import { CONDITIONAL_WRITE_DESIGNS } from '../../keel-core/test/helpers/conditio
 import { READ_SCOPE_DESIGNS } from '../../keel-core/test/helpers/read-scope-designs.js';
 import { DATA_LIFECYCLE_DESIGNS } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { deletedRootOf } from '@keel-system/keel-core/gen/data-lifecycle';
+import { HISTORY_CHANGES, HISTORY_ENTRY_FIELDS, historyPersonalPaths } from '@keel-system/keel-core/gen/history';
+import { HISTORY_DESIGNS } from '../../keel-core/test/helpers/history-designs.js';
 import { planFixture, transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 import { tmpDir } from './helpers/tmp.js';
@@ -298,4 +300,64 @@ test('cards-logical: el email viaja marcado x-personal, el borrado lo dice y la 
   assert.match(text, /email:\n(?: {8,}.*\n)*? {8,}x-personal: true/);
   assert.match(text, /Se puede deshacer con restoreMyCard durante 30 días\./);
   assert.match(text, /pasados 30 días desde el borrado, `CARD_NOT_RESTORABLE`/);
+});
+
+// El historial de cambios (DSL 2.29): sus sujetos son los diseños derivados que miden los cuatro generadores. El mismo
+// documento en los cuatro; la query de historial responde la página de `<Raíz>HistoryEntry` con la forma del cable
+// (wire-contract.md § Historial), sin `sort` (D10) en el contrato ni en la tabla de rutas que EJECUTA keel-nest; las rutas
+// personales de la raíz van en `x-personal-fields`; y sin deriva para CHK-DOCS-OPENAPI-DRIFT.
+for (const derived of HISTORY_DESIGNS) {
+  test(`${derived.name}: el openapi describe la página del historial, el mismo en los cuatro generadores`, async () => {
+    const load = () => {
+      const service = loadService(path.join(FIXTURES_DIR, derived.from));
+      derived.mutate(service.layers);
+      return service;
+    };
+    const { manifest, layers } = load();
+    const database = layers.persistence?.default?.model === 'document' ? 'mongodb' : 'postgresql';
+    const documents = [planSpring, planDotnet, planGo].map((plan) => {
+      const service = load();
+      return plan({ ...service, workspace: FIXTURES_DIR, stack: { database } }).files.find((f) => f.path === DOC)?.content;
+    });
+    const nest = planFixture(derived.from, { mutate: derived.mutate, stack: { database } });
+    const fromNest = nest.files.find((f) => f.path === DOC).content;
+    for (const other of documents) assert.equal(other, fromNest, 'el mismo contrato en los cuatro generadores');
+
+    const document = YAML.parse(fromNest);
+    assert.deepEqual(danglingRefs(document), []);
+    const { ROUTES } = await transpileTree(nest.files).load('src/infrastructure/rest/routes.ts');
+    const queries = nest.model.services.flatMap((s) => s.operations).filter((op) => op.historyOf && op.route);
+    assert.ok(queries.length > 0, 'el sujeto tiene una query de historial');
+    for (const operation of queries) {
+      const op = Object.values(document.paths).flatMap((methods) => Object.values(methods)).find((candidate) => candidate.operationId === operation.name);
+      const query = (op.parameters ?? []).filter((p) => p.in === 'query').map((p) => p.name);
+      assert.ok(!query.includes('sort'), `${operation.name}: el orden del historial es fijo`);
+      const route = ROUTES.find((candidate) => candidate.operation === operation.name);
+      assert.deepEqual([...route.query].sort(), [...query].sort(), `${operation.name}: la tabla de rutas dice lo mismo`);
+      const success = op.responses[String(operation.route.status)];
+      assert.match(success.description, new RegExp(`Historial de ${operation.historyOf} \\(output\\.history, DSL 2\\.29\\)`));
+      const paged = document.components.schemas[`Paged${operation.historyOf}HistoryEntry`];
+      assert.deepEqual(success.content['application/json'].schema, { $ref: `#/components/schemas/Paged${operation.historyOf}HistoryEntry` });
+      assert.deepEqual(Object.keys(paged.properties), ['items', 'page', 'size', 'totalElements', 'totalPages']);
+      const entry = document.components.schemas[`${operation.historyOf}HistoryEntry`];
+      assert.deepEqual(Object.keys(entry.properties), [...HISTORY_ENTRY_FIELDS]);
+      assert.deepEqual(entry.properties.change.enum, [...HISTORY_CHANGES]);
+      assert.deepEqual(Object.keys(document.components.schemas.HistoryChange.properties), ['field', 'before', 'after']);
+      const root = nest.model.entities.find((entity) => entity.name === operation.historyOf);
+      const personal = historyPersonalPaths(root.historyShape);
+      assert.deepEqual(entry.properties.changes['x-personal-fields'] ?? [], personal);
+    }
+
+    const docsDir = tmpDir('keel-openapi-hi-');
+    fs.writeFileSync(path.join(docsDir, 'openapi.yaml'), fromNest);
+    const { findings } = checkDerivedCoherence({ layers: { api: layers.api, 'use-cases': layers['use-cases'], domain: layers.domain }, manifest, docsDir });
+    assert.deepEqual(findings.filter((finding) => finding.id === 'CHK-DOCS-OPENAPI-DRIFT').map((finding) => finding.message), []);
+  });
+}
+
+test('cards-history: el email de la ficha es una ruta personal del historial', () => {
+  const derived = HISTORY_DESIGNS.find((entry) => entry.name === 'cards-history');
+  const nest = planFixture(derived.from, { mutate: derived.mutate, stack: { database: 'postgresql' } });
+  const entry = YAML.parse(nest.files.find((f) => f.path === DOC).content).components.schemas.ContactCardHistoryEntry;
+  assert.ok(entry.properties.changes['x-personal-fields'].includes('email'));
 });

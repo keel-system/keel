@@ -494,8 +494,8 @@ function routesFile(model) {
         ? []
         : messageComponents(model, operation)
             .filter((c) => !fromPath.has(c.name) && !c.resolvedIdentity && !c.file)
-            // El Pageable viaja como los tres parámetros de Spring Data.
-            .flatMap((c) => (c.pageable ? ['page', 'size', 'sort'] : [c.name]));
+            // El Pageable viaja como los tres parámetros de Spring Data; el historial (DSL 2.29, D10) no admite `sort`.
+            .flatMap((c) => (c.pageable ? (operation.historyOf ? ['page', 'size'] : ['page', 'size', 'sort']) : [c.name]));
       rows.push(
         `  { operation: ${tsString(operation.name)}, method: ${tsString(operation.route.method)}, path: ${tsString(`${model.api.routeBase}${operation.route.path}`)}, ` +
           `status: ${operation.route.status}, location: ${returnsLocation(model, operation)}, query: [${query.map(tsString).join(', ')}], ` +

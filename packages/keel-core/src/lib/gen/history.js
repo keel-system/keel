@@ -18,6 +18,9 @@ export const HISTORY_FILTERS = Object.freeze({ field: 'string', from: 'timestamp
 /** Los campos de una entrada en el cable, en su orden (wire-contract.md § Historial). */
 export const HISTORY_ENTRY_FIELDS = Object.freeze(['at', 'author', 'change', 'changes']);
 
+/** Los campos de cada elemento de `changes`, en su orden (wire-contract.md § Historial). */
+export const HISTORY_CHANGE_FIELDS = Object.freeze(['field', 'before', 'after']);
+
 // ─── Desde las capas ─────────────────────────────────────────────────────────
 
 /** Las raíces que el diseño nombra en `persistence.audit.history`, en su orden. */
@@ -341,6 +344,43 @@ export function historyNote(operation, { historyCall }) {
     '(la más reciente primero) y filtrada; vacío si la raíz no existe, está borrada o es ajena con readMiss: not-found. Ese ' +
     'vacío es el error de no encontrado del diseño. Las entradas las escribe el adaptador en cada escritura: aquí no se ' +
     `escribe ninguna, ni se lee el almacén por otra vía.${filters.length > 0 ? ` Filtros del input: ${filters.join(', ')}; uno nulo no filtra.` : ''}`
+  );
+}
+
+/**
+ * Las rutas personales del historial de una raíz como las lee una persona: `email`, `revisions[<id>].note`. Es lo que el
+ * contrato formal marca como `x-personal-fields` y lo que lista `personal-data.md`: un cambio de esas rutas lleva un dato
+ * personal en `before` y `after`, y sigue el régimen de su raíz (D8).
+ */
+export function historyPersonalPaths(shape) {
+  if (!shape) return [];
+  const out = shape.personal.map(({ path }) => path);
+  for (const child of shape.children) {
+    const prefix = child.list ? `${child.relation}[<${child.idField}>].` : `${child.relation}.`;
+    for (const { path } of child.personal) out.push(`${prefix}${path}`);
+  }
+  return out;
+}
+
+/**
+ * Lo que el CONTRATO formal (`gen/openapi.js`) dice de una query de historial en su respuesta de éxito: el orden fijo
+ * (D10: el cliente no lo elige, así que no hay `sort`), qué casa con cada filtro y que la raíz se carga como su ficha
+ * (D7). Null si la operación no lee un historial.
+ */
+export function historyContractClause(operation) {
+  if (!operation?.historyOf) return null;
+  const { field, from, to } = operation.historyFilters ?? {};
+  const filters = [
+    field ? `\`${field}\` casa con la ruta exacta o con el campo de la raíz que la contiene (\`price\` casa \`price.amount\`)` : null,
+    from ? `\`${from}\` deja las confirmadas desde ese instante, incluido` : null,
+    to ? `\`${to}\` las confirmadas hasta ese instante, incluido` : null
+  ].filter(Boolean);
+  return (
+    `Historial de ${operation.historyOf} (output.history, DSL 2.29): una entrada por escritura confirmada, la más reciente ` +
+    'primero y, a igual instante, en un orden estable; el orden es fijo y no se elige.' +
+    (filters.length > 0 ? ` Filtros opcionales, combinados con AND: ${filters.join('; ')}.` : '') +
+    ` ${operation.historyOf} se carga con la misma lectura que su ficha: si no existe, está borrado o no es visible para el ` +
+    'llamante, la respuesta es el error de esa lectura, nunca una página vacía.'
   );
 }
 

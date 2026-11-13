@@ -38,7 +38,8 @@ import {
   historyPageSql,
   historyStatements
 } from '../src/lib/gen/history-store.js';
-import { anonymizeHistoryChanges, anonymizedEntryChanges, historyNote, historyPersonalPatterns } from '../src/lib/gen/history.js';
+import { anonymizeHistoryChanges, anonymizedEntryChanges, historyContractClause, historyNote, historyPersonalPaths, historyPersonalPatterns } from '../src/lib/gen/history.js';
+import { personalDataInventory } from '../src/lib/gen/personal-data.js';
 import { GENERATOR_TABLES, schemaStepSql } from '../src/lib/gen/schema-steps.js';
 import { HISTORY_DESIGNS } from './helpers/history-designs.js';
 import { PROBE } from './helpers/probe-projection.js';
@@ -313,4 +314,32 @@ test('la nota del handler: la llamada del generador, el vacío como no encontrad
   assert.match(note, /Ese vacío es el error de no encontrado del diseño/);
   assert.match(note, /Filtros del input: field \(field\), from \(from\), to \(to\); uno nulo no filtra\.$/);
   assert.equal(historyNote(operationOf(model, 'getMyCard'), { historyCall: 'x' }), null);
+});
+
+test('el contrato: las rutas personales legibles, la cláusula de la respuesta y el historial en el inventario de datos personales', () => {
+  const vault = derived('vault-history-scoped').model;
+  const asset = vault.entities.find((entity) => entity.name === 'Asset');
+  for (const path of historyPersonalPaths(asset.historyShape)) {
+    // Cada ruta legible es la de un patrón de la anonimización, con el id de la hija en su sitio.
+    const concrete = path.replace(/<[^>]+>/g, '0190a1b2-0000-7000-8000-000000000001');
+    assert.ok(historyPersonalPatterns(asset.historyShape).some(({ pattern }) => new RegExp(pattern).test(concrete)), path);
+  }
+  assert.deepEqual(historyPersonalPaths(null), []);
+
+  const { model } = derived('cards-history-anonymize');
+  const card = model.entities.find((entity) => entity.name === 'ContactCard');
+  assert.ok(historyPersonalPaths(card.historyShape).includes('email'));
+  const clause = historyContractClause(operationOf(model, 'getMyCardHistory'));
+  assert.match(clause, /^Historial de ContactCard \(output\.history, DSL 2\.29\)/);
+  assert.match(clause, /el orden es fijo/);
+  assert.match(clause, /`field` casa con la ruta exacta/);
+  assert.match(clause, /nunca una página vacía/);
+  assert.equal(historyContractClause(operationOf(model, 'getMyCard')), null);
+
+  const inventory = personalDataInventory(model).content;
+  assert.match(inventory, /## En el historial de cambios/);
+  assert.match(inventory, /\| ContactCard \| [^|]*`email`[^|]* \| cuando la retención anonimiza la raíz/);
+  assert.match(personalDataInventory(derived('cards-history').model).content, /cuando la retención borra la raíz, se borran todas sus entradas/);
+  // Sin historial, el inventario de la 2.28 no cambia.
+  assert.doesNotMatch(personalDataInventory(designOf('profile-directory').model).content, /historial/);
 });

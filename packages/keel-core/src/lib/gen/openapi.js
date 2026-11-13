@@ -27,6 +27,7 @@ import {
   returnsVersioned
 } from './conditional-writes.js';
 import { lifecycleContractClause } from './data-lifecycle.js';
+import { HISTORY_CHANGES, HISTORY_CHANGE_FIELDS, HISTORY_ENTRY_FIELDS, historyContractClause, historyPersonalPaths } from './history.js';
 
 const API_KEY_HEADER = 'X-API-Key';
 const OPENAPI_VERSION = '3.1.0';
@@ -110,9 +111,12 @@ function operationObject(context, operation) {
     const pagination = model.pagination ?? {};
     parameters.push(
       { name: 'page', in: 'query', required: false, schema: { type: 'integer', minimum: 0, default: 0 } },
-      { name: 'size', in: 'query', required: false, schema: { type: 'integer', minimum: 1, ...(pagination.maxSize ? { maximum: pagination.maxSize } : {}), ...(pagination.defaultSize ? { default: pagination.defaultSize } : {}) } },
-      { name: 'sort', in: 'query', required: false, schema: { type: 'array', items: { type: 'string' } }, description: '`campo,asc|desc`; sin él, el orden que declara el diseño.' }
+      { name: 'size', in: 'query', required: false, schema: { type: 'integer', minimum: 1, ...(pagination.maxSize ? { maximum: pagination.maxSize } : {}), ...(pagination.defaultSize ? { default: pagination.defaultSize } : {}) } }
     );
+    // El historial (DSL 2.29, D10) tiene un orden fijo: el cliente no lo elige, así que no se le ofrece `sort`.
+    if (!operation.historyOf) {
+      parameters.push({ name: 'sort', in: 'query', required: false, schema: { type: 'array', items: { type: 'string' } }, description: '`campo,asc|desc`; sin él, el orden que declara el diseño.' });
+    }
   }
   // La escritura condicional (api.concurrency, DSL 2.25): el ETag de la última lectura, obligatorio con `required`.
   if (conditionalWrite(model, operation)) {
@@ -172,6 +176,10 @@ function responses(context, operation, inputs) {
     const item = context.schema(dto.name, () => dtoSchema(context, dto.fields));
     const body = operation.paginated ? pagedSchema(context, dto.name, item) : operation.returnsList ? { type: 'array', items: item } : item;
     success.content = { 'application/json': { schema: body } };
+  }
+  if (operation.historyOf) {
+    const entry = historyEntrySchema(context, operation.historyOf);
+    success.content = { 'application/json': { schema: pagedSchema(context, `${operation.historyOf}HistoryEntry`, entry) } };
   }
   if (returnsLocation(model, operation)) {
     const target = locationTarget(model, operation);
@@ -247,6 +255,9 @@ function successDescription(model, operation) {
   // El ciclo de vida del dato (DSL 2.28): un borrado lógico o una restauración, con su ventana.
   const lifecycle = lifecycleContractClause(model, operation);
   if (lifecycle) parts.push(lifecycle);
+  // El historial (DSL 2.29): el orden fijo, qué casa con cada filtro y que la raíz se carga como su ficha.
+  const history = historyContractClause(operation);
+  if (history) parts.push(history);
   return parts.join('\n\n');
 }
 
@@ -323,6 +334,48 @@ function pagedSchema(context, dtoName, item) {
       type: 'object',
       properties: Object.fromEntries(WIRE_SHAPES.pagedResponse.map((name) => [name, types[name]])),
       required: [...WIRE_SHAPES.pagedResponse],
+      additionalProperties: false
+    };
+  });
+}
+
+/**
+ * La entrada del historial de una raíz (DSL 2.29, wire-contract.md § Historial). `before` y `after` llevan el valor con
+ * las reglas del cable del campo que nombra `field`, así que su esquema es cualquier valor JSON. Las rutas personales de
+ * esa raíz van en `x-personal-fields`: sus valores siguen el régimen de la raíz (se anonimizan o se borran con ella).
+ */
+function historyEntrySchema(context, root) {
+  const change = context.schema('HistoryChange', () => {
+    const types = {
+      field: { type: 'string', description: 'La ruta del contrato: `price.amount`, `lines[<id>].quantity`.' },
+      before: { description: 'El valor anterior con las reglas del cable de su campo; null si no había.' },
+      after: { description: 'El valor nuevo con las reglas del cable de su campo; null si ya no hay.' }
+    };
+    return {
+      type: 'object',
+      properties: Object.fromEntries(HISTORY_CHANGE_FIELDS.map((name) => [name, types[name]])),
+      required: [...HISTORY_CHANGE_FIELDS],
+      additionalProperties: false
+    };
+  });
+  return context.schema(`${root}HistoryEntry`, () => {
+    const entity = (context.model.entities ?? []).find((candidate) => candidate.name === root);
+    const personal = historyPersonalPaths(entity?.historyShape);
+    const types = {
+      at: { type: 'string', format: 'date-time', description: 'Cuándo se confirmó la escritura.' },
+      author: { type: 'string', description: 'El sub del token, el cliente de la clave de API o `system` (`system:<correlationId>`) fuera de una petición.' },
+      change: { type: 'string', enum: [...HISTORY_CHANGES] },
+      changes: {
+        type: 'array',
+        items: change,
+        description: 'Solo los campos que cambiaron; vacía en `deleted` y `restored`.',
+        ...(personal.length > 0 ? { 'x-personal-fields': personal } : {})
+      }
+    };
+    return {
+      type: 'object',
+      properties: Object.fromEntries(HISTORY_ENTRY_FIELDS.map((name) => [name, types[name]])),
+      required: [...HISTORY_ENTRY_FIELDS],
       additionalProperties: false
     };
   });

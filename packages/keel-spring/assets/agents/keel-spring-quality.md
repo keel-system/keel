@@ -401,6 +401,11 @@ leer la fila de otro: es del agente de código → `remaining`.
 «Restauración», la llamada es la del puerto que dice la nota, sin un filtro de lo borrado ni una comprobación de la
 ventana a mano (duplicarlo compila y desincroniza el total de la página o el error) → si lo hay, `remaining`.
 
+**El historial de cambios** (DSL 2.29) no tiene script: en cada handler cuya nota diga «Historial», la página sale
+de la llamada al puerto que dice la nota, sin otra lectura del almacén ni un orden o un filtro a mano, y el vacío que
+devuelve es el error de no encontrado; ningún handler escribe una entrada (las escribe el adaptador) → si lo hay,
+`remaining`.
+
 **Ejecuta `bash infra/check-logging.sh`.** Se genera siempre y tiene cuatro reglas, más una quinta si el diseño marca
 campos `personal`:
 

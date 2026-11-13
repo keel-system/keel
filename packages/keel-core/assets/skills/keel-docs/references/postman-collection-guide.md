@@ -189,6 +189,14 @@ Si el diseño declara `api.concurrency`, las escrituras listadas comparan la ver
 - La restauración se prueba dentro de su ventana (la fila vuelve a leerse) y, si el Then lo pide, con la clave ocupada por otra viva (**409** de esa unicidad). Fuera de la ventana no se puede llegar por HTTP sin esperar días: si un escenario lo exige, repórtalo en vez de falsear el reloj desde la colección.
 - Un campo `x-personal` del `openapi.yaml` lleva en el body de ejemplo un valor **inventado** y reconocible (`ana.ejemplo@example.com`), nunca uno que pueda ser de una persona real.
 
+### Historial de cambios (`output: { history }`)
+
+- La query de historial se pide **después** de las escrituras del flujo, con el mismo token del titular, y se asertan las entradas por su posición: la más reciente primero (`items[0].change === 'updated'` tras crear y editar, `items[1].change === 'created'`). Nunca se manda `sort`: el orden es fijo.
+- `changes` se aserta por `field`, `before` y `after` del campo que el flujo cambió, y que no aparece ninguno que no cambió. `author` se compara con el `sub` del token con el que se escribió, que el script obtiene del propio token, no a mano.
+- Los filtros se prueban por separado: `field` con el nombre de un campo de la raíz (casa también sus rutas internas, `price` con `price.amount`), y `from`/`to` con el `at` de una entrada leída antes (los dos son inclusivos).
+- Tras borrar la raíz, el historial da el mismo **404** que su ficha, no una página vacía; una raíz ajena, el error de su `readMiss`.
+- Un valor de una ruta de `x-personal-fields` en un ejemplo es **inventado** y reconocible, como el de un campo `x-personal`.
+
 ### Carpeta «Operaciones»
 
 Una request por endpoint de `api` (explícito o derivado de `auto`) que ningún
