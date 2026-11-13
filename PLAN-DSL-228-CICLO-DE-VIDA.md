@@ -441,7 +441,7 @@ Cada corrida se lanza con `cd D:\keel-example\<workspace>\services\profile-direc
 
 | Workspace (`D:\keel-example\`) | Generador | Stack | Lo que añade |
 |---|---|---|---|
-| `cards-228-spring-postgre` | keel-spring | PostgreSQL · Keycloak | sin correr |
+| `cards-228-spring-postgre` | keel-spring | PostgreSQL · Keycloak | hecha (24/24, 2026-11-12, a la primera; huella 5, todo TODO; FL-CRD-007 envejecido con `db(...)`) |
 | `cards-228-nest-postgre` | keel-nest | PostgreSQL · Keycloak | sin correr |
 | `cards-228-dotnet-postgre` | keel-dotnet | PostgreSQL · Keycloak | sin correr |
 | `cards-228-go-postgre` | keel-go | PostgreSQL · Keycloak | sin correr |
