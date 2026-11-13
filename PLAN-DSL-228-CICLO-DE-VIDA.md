@@ -430,7 +430,7 @@ incremento termina con su «Para retomar» y un commit.
 
 **7. Corridas de control.** Las lanza el usuario, dos a la vez como mucho:
 
-- `profile-directory` y `verification-codes` en los cuatro generadores.
+- `profile-directory` en los cuatro generadores (verification-codes queda fuera: ver abajo).
 - Una corrida con MySQL, para la columna generada (T2).
 - Se registran en `docs/corridas/`.
 
@@ -448,7 +448,8 @@ Cada corrida se lanza con `cd D:\keel-example\<workspace>\services\profile-direc
 | `cards-228-dotnet-mysql` | keel-dotnet | MySQL · Keycloak | T2: las columnas generadas `uk_contact_cards_{natural,email}_flag` (`CASE WHEN deleted_at IS NULL THEN 1 END`) |
 
 verification-codes no tiene `validation-scenarios.md`: una corrida suya no tendría flujos que puntuar, así que su retención
-con `anonymize` no la vería ningún escenario. Por eso no se preparó; queda a decisión del usuario. Para FL-CRD-007 los
+con `anonymize` no la vería ningún escenario. Por eso no se preparó, y el usuario decidió dejarla fuera (2026-11-12): las corridas de profile-directory cubren el
+borrado lógico, la restauración y la purga, y `anonymize` ya está medido en vivo con los sujetos `codes-anonymize[-mongo]`. Para FL-CRD-007 los
 cuatro arneses traen ya con qué ejecutar SQL contra la base (`dbSql` en keel-spring, `Db` en keel-dotnet y la consulta por
 `psql` de keel-nest y keel-go). El helper `ageDeletion` solo hará falta si el agente no se las arregla con eso.
 
