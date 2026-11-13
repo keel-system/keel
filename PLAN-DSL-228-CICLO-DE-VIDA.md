@@ -443,7 +443,7 @@ Cada corrida se lanza con `cd D:\keel-example\<workspace>\services\profile-direc
 |---|---|---|---|
 | `cards-228-spring-postgre` | keel-spring | PostgreSQL · Keycloak | hecha (24/24, 2026-11-12, a la primera; huella 5, todo TODO; FL-CRD-007 envejecido con `db(...)`) |
 | `cards-228-nest-postgre` | keel-nest | PostgreSQL · Keycloak | hecha (24/24, 2026-11-12, a la primera; huella 6: 5 TODO y el README; FL-CRD-007 con `db(...)`) |
-| `cards-228-dotnet-postgre` | keel-dotnet | PostgreSQL · Keycloak | sin correr |
+| `cards-228-dotnet-postgre` | keel-dotnet | PostgreSQL · Keycloak | hecha (24/24, 2026-11-12, en la segunda puntuación: el Given de FL-CRD-007 nombraba mal la tabla; huella 6: 5 TODO y el README) |
 | `cards-228-go-postgre` | keel-go | PostgreSQL · Keycloak | sin correr |
 | `cards-228-dotnet-mysql` | keel-dotnet | MySQL · Keycloak | T2: las columnas generadas `uk_contact_cards_{natural,email}_flag` (`CASE WHEN deleted_at IS NULL THEN 1 END`) |
 
