@@ -44,6 +44,7 @@ import { DRAIN_SABOTAGES, PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, drainBreaksCov
 import { RELAY_WAKE_SABOTAGES } from './lib/relay-wake-probes.js';
 import { READ_SCOPE_SABOTAGE_SPECS, READ_SCOPE_SUBJECTS, isReadScopeSabotage, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
 import { LIFECYCLE_ALSO, LIFECYCLE_SABOTAGE_SPECS, LIFECYCLE_SUBJECTS, isLifecycleSabotage, lifecycleProbeFile, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
+import { HISTORY_ALSO, HISTORY_SABOTAGE_SPECS, HISTORY_SUBJECTS, historyProbeFile, historySabotageVerdict, isHistorySabotage } from './lib/history-probes.js';
 import { resolveRuntime, startDatabase, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 import { ENGINE_LABELS, STORE_PACKAGES } from '../src/lib/relational-engine.js';
 import { SUPPORTED_DATABASES } from '../src/lib/supported-features.js';
@@ -71,7 +72,9 @@ const SABOTAGES = {
   ...RELAY_WAKE_SABOTAGES,
   ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational])),
   // Los del ciclo de vida del dato (DSL 2.28) caen en EXACTAMENTE sus casos LC, RT y PD (scripts/lib/lifecycle-probes.js).
-  ...Object.fromEntries(Object.entries(LIFECYCLE_SABOTAGE_SPECS).filter(([, spec]) => spec.relational).map(([id, spec]) => [id, spec.relational]))
+  ...Object.fromEntries(Object.entries(LIFECYCLE_SABOTAGE_SPECS).filter(([, spec]) => spec.relational).map(([id, spec]) => [id, spec.relational])),
+  // Los del historial de cambios (DSL 2.29) caen en EXACTAMENTE sus casos HI (scripts/lib/history-probes.js).
+  ...Object.fromEntries(Object.entries(HISTORY_SABOTAGE_SPECS).filter(([, spec]) => spec.relational).map(([id, spec]) => [id, spec.relational]))
 };
 
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -136,10 +139,14 @@ try {
     ...UNCOVERED_BRANCHES.filter((design) => READ_SCOPE_SUBJECTS.relational.includes(design.name) && (!only || design.name === only)).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) })),
     // El ciclo de vida del dato (DSL 2.28, LC-*, RT-* y PD-2): los MISMOS diseños que miden los otros tres
     // (keel-core/test/helpers/data-lifecycle-designs.js). `--only` admite una lista separada por comas.
-    ...UNCOVERED_BRANCHES.filter((design) => LIFECYCLE_SUBJECTS.relational.includes(design.name) && (!only || only.split(',').includes(design.name))).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) }))
+    ...UNCOVERED_BRANCHES.filter((design) => LIFECYCLE_SUBJECTS.relational.includes(design.name) && (!only || only.split(',').includes(design.name))).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) })),
+    // El historial de cambios (DSL 2.29, HI-1 a HI-10): los MISMOS diseños que miden los otros tres
+    // (keel-core/test/helpers/history-designs.js).
+    ...UNCOVERED_BRANCHES.filter((design) => HISTORY_SUBJECTS.relational.includes(design.name) && (!only || only.split(',').includes(design.name))).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) }))
   ]
     .filter((subject) => only || !isReadScopeSabotage(sabotage) || READ_SCOPE_SUBJECTS.relational.includes(subject.name))
-    .filter((subject) => only || !isLifecycleSabotage(sabotage) || LIFECYCLE_SUBJECTS.relational.includes(subject.name));
+    .filter((subject) => only || !isLifecycleSabotage(sabotage) || LIFECYCLE_SUBJECTS.relational.includes(subject.name))
+    .filter((subject) => only || !isHistorySabotage(sabotage) || HISTORY_SUBJECTS.relational.includes(subject.name));
 
   // ─── El esquema ─────────────────────────────────────────────────────────────────────────────────
   if (!sabotage) {
@@ -185,10 +192,12 @@ try {
     const timerProbe = timerProbeFile(plan.model);
     // El ciclo de vida del dato (DSL 2.28): su archivo aparte, que comparte la base y el paquete con las demás sondas.
     const lifecycleProbe = lifecycleProbeFile(plan.model);
+    // El historial de cambios (DSL 2.29): su archivo aparte, también en el paquete del almacén.
+    const historyProbe = historyProbeFile(plan.model);
     // Las purgas en modo clúster (DSL 2.26, inc. 7): dos réplicas sobre la misma base.
     const purgeTimerProbe = purgeTimerProbeFile(plan.model);
     const dir = path.join(root, name);
-    for (const file of [...files, probe, ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : []), ...(lifecycleProbe ? [lifecycleProbe] : [])]) {
+    for (const file of [...files, probe, ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : []), ...(lifecycleProbe ? [lifecycleProbe] : []), ...(historyProbe ? [historyProbe] : [])]) {
       const target = path.join(dir, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, file.content);
@@ -228,6 +237,18 @@ try {
       const detail = ok ? (skipped.length > 0 ? `se saltan ${skipped.join(', ')}` : '') : failed.join(', ') || tested.output.slice(-3000);
       step(`${name}: los adaptadores guardan, leen y traducen contra ${label} (${passed.length} sondas)`, ok, detail);
       if (!ok && failed.length > 0) console.error(failureLines(tested.output));
+      return;
+    }
+    if (isHistorySabotage(sabotage)) {
+      const verdict = historySabotageVerdict(failed, sabotage, model);
+      // Y ninguna otra sonda: el sabotaje rompe el historial, no el resto del adaptador.
+      const stray = failed.filter((test) => !/_HI\d+_/.test(test) && !HISTORY_ALSO[sabotage]?.test(test));
+      step(
+        `falsado: ${sabotage} en ${name} cae en exactamente sus casos`,
+        ran > 0 && verdict.exact && stray.length === 0,
+        `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]${stray.length > 0 ? `; además ${stray.join(', ')}` : ''}`
+      );
+      if (verdict.exact && verdict.want.length > 0) results.at(-1).caught = true;
       return;
     }
     if (isLifecycleSabotage(sabotage)) {

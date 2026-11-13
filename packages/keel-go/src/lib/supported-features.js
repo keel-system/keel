@@ -16,7 +16,6 @@ import { persistedMembers } from '@keel-system/keel-core/gen';
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
 import { optionalAuthFrontierErrors } from '@keel-system/keel-core/gen/read-scope';
-import { historyPendingErrors } from '@keel-system/keel-core/gen/history';
 import { declaredDeadlines, modelDeadlines } from '@keel-system/keel-core/gen/deadlines';
 import { repositoryRoots } from '@keel-system/keel-core/gen/features';
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
@@ -79,9 +78,8 @@ export function checkSupportedFeatures(manifest, layers) {
   // construcción (T7, T8) lo rechaza planService con la frontera neutral, que necesita el modelo. level: optional también
   // (permitAll y optionalCallerIdentity), salvo sobre una identidad que no es un token: la frontera neutral.
   errors.push(...optionalAuthFrontierErrors(layers, 'keel-go'));
-  // El historial de cambios consultable (DSL 2.29: audit.history y output: { history }) llega en el incremento 4 de
-  // PLAN-DSL-229-HISTORIAL.md: hasta entonces se rechaza entero, con el mismo mensaje en los cuatro.
-  errors.push(...historyPendingErrors(layers, 'keel-go', 4));
+  // El historial de cambios consultable (DSL 2.29: audit.history y output: { history }) se genera entero
+  // (scaffold/history.js); lo que depende del motor elegido lo rechaza planService (historyStackErrors).
   // El ciclo de vida del dato (DSL 2.28: personal, deletion: logical, restorableFor, retention) se genera entero
   // (scaffold/data-lifecycle.js, incremento 4 de PLAN-DSL-228-CICLO-DE-VIDA.md); lo que no sabe anonimizar lo rechaza
   // planService (lifecycleStackErrors), que necesita el modelo.

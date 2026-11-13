@@ -707,7 +707,26 @@ export const MECHANISMS = {
     }
   },
   history: {
-    pending: 'el historial de cambios (DSL 2.29) llega en el incremento 4 de PLAN-DSL-229-HISTORIAL.md: hasta entonces supported-features.js lo rechaza entero (historyPendingErrors)'
+    parity: {
+      skip: 'ninguna fixture declara el historial hasta el incremento 6 de PLAN-DSL-229-HISTORIAL.md: los sujetos son los diseños derivados de keel-core/test/helpers/history-designs.js (cards-history y cards-history-mongo, el mismo diseño salvo el modelo; cards-history-anonymize y cards-history-anonymize-mongo; vault-history-scoped y vault-history-scoped-mongo), los MISMOS que miden los otros tres; test/history-parity.test.js fija la forma y la compara con ellos (los casos, las sentencias, las tablas, los patrones personales y la nota)',
+      test: 'test/history-parity.test.js'
+    },
+    emitter: 'src/scaffold/history.js (los tipos del dominio, y en el paquete del almacén el diff, la anonimización, la instantánea de cada raíz y el almacén como funciones sobre la transacción en curso) · repositories.js y document-repositories.js (Save, DeleteByID y la lectura HistoryOf) · data-lifecycle.js (la baja lógica, la restauración y la retención) · persistence.js y document-persistence.js (las tablas, el índice) · audit-actor.js · services.js y endpoints.js',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        falsified: true,
+        why:
+          'cards-history (alta, cambio, baja lógica, restauración y purga de lo borrado), cards-history-anonymize y vault-history-scoped (hijas por su id y la lectura acotada) contra el adaptador de database/sql y las sentencias de keel-core TAL CUAL por la transacción en curso (scripts/lib/history-probes.js, una prueba por caso en history_probe_test.go): HI-1 a HI-10, con las dos tablas, su índice y su FK en la baseline de goose (el esquema lo compara db-check con el del motor). T1: la instantánea «antes» es una lectura del agregado dentro de la transacción y antes de escribir. Falsado en los dos motores, cada sabotaje en exactamente sus casos: hi-outside-tx en HI-1 (la entrada por la conexión del pool, fuera de la transacción), hi-full-snapshot en HI-2, hi-sensitive en HI-4, hi-author en HI-5, hi-order en HI-6, hi-unscoped en HI-7, hi-anonymize-miss en HI-8 y hi-purge-miss en HI-9'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        falsified: true,
+        why: 'cards-history-mongo, cards-history-anonymize-mongo y vault-history-scoped-mongo contra el driver de MongoDB en un replica set real, con las MISMAS sondas que la rama relacional: la entrada en la sesión de la transacción, el orden por at y _id, el filtro sobre fields.path y fields.top y el índice de la lectura en indexes.go, que la sonda de los índices vivos compara con CHANGE_HISTORY_COLLECTION de keel-core, direcciones incluidas. La hora es de milisegundos, así que el desempate es el id: uuid.NewV7 de google/uuid crece también dentro del mismo milisegundo, medido por la prueba emitida history_test.go. Las tres pasan además las sondas generales de doc-check. Falsado con los mismos sabotajes (hi-outside-tx escribe fuera de la sesión), cada uno en exactamente sus casos'
+      }
+    }
   }
 };
 

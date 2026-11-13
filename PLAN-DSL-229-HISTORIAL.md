@@ -1,8 +1,8 @@
 # DSL 2.29: el historial de cambios consultable (R12)
 
-**Estado: en curso.** Los incrementos 0 (keel-core), 1 (keel-spring), 2 (keel-nest) y 3 (keel-dotnet) están hechos; el
-siguiente es el 4 (keel-go). Ver
-§ Estado y § Para retomar.
+**Estado: en curso.** Los incrementos 0 (keel-core), 1 (keel-spring), 2 (keel-nest), 3 (keel-dotnet) y 4 (keel-go) están
+hechos: los cuatro generadores emiten el historial. El siguiente es el 5 (derivados y documentación). Ver § Estado y § Para
+retomar.
 
 Origen: R12 de `docs/evaluacion-dsl-2.24.md`. Este plan la lleva al DSL y a los cuatro generadores con la regla de
 siempre: **el mismo diseño genera servidores equivalentes**, y cada pieza nueva tiene una red que la ejecuta y un
@@ -163,6 +163,21 @@ personales?»), solo si el diseño ya declara algún `history`.
   la declara; la invalidación con cualquier escritura de la raíz se decide cuando uno la pida. HI-11 es de
   `telemetry-check` (inc. 2-4 y la corrida de control).
 
+**Decidido al escribir el incremento 4 (keel-go, 2026-11-13):**
+
+- **El almacén son funciones, no un tipo inyectado**: `recordHistory`, `recordSave`, `historyPage`, `anonymizeHistory` y
+  `purgeHistory` en `history.go` del paquete del almacén, que reciben la transacción en curso (`q DBTX` en relacional, `tx
+  *Transactions` con la sesión en ctx en documental). Ningún constructor de adaptador cambia, y no hay forma de escribir una
+  entrada fuera de la transacción de la escritura salvo saboteándolo.
+- **El diff vive en el paquete del almacén**, no en el dominio: hay uno solo por proyecto, la instantánea lee los getters del
+  agregado y compara el texto de `wire.Marshal`. El dominio solo lleva la entrada, el cambio y el filtro.
+- **El id de la entrada es `uuid.NewV7()`**: medido que el de google/uuid crece también dentro del mismo milisegundo (la prueba
+  emitida pide diez mil seguidos), así que no hace falta el `NextId()` monótono de keel-dotnet.
+- **`hi-full-snapshot` cae también en la prueba emitida del diff** (`TestHistoryDiff*`), que vive en el mismo paquete que la
+  sonda: declarado en `HISTORY_ALSO`, como `LIFECYCLE_ALSO`.
+- **La sonda de los índices vivos de doc-check** compara ahora `clave:dirección`, y el índice de `change_history` lo pide
+  keel-core (`CHANGE_HISTORY_COLLECTION`), no lo emitido.
+
 ## Núcleo neutral (`keel-core/src/lib/gen`)
 
 - **`history.js`**: qué raíces llevan historial, el **diff** de dos instantáneas del agregado como referencia ejecutable
@@ -271,34 +286,21 @@ generador que no llegue rechaza la capacidad con su motivo en `supported-feature
 | 1. keel-spring | hecho (2026-11-13) | `timer-sql-check` (36 pasos, `history-order` e `history-filter` cada uno en su caso); `compile-check` de los cinco sujetos; `npm run history-check` en verde en los cinco (cards-history en PostgreSQL y MySQL, cards-history-mongo, cards-history-anonymize, vault-history-scoped[-mongo]); los 19 sabotajes `hi-*` cada uno en exactamente su caso, también en MySQL y MongoDB; `test/history.test.js` y fila `history` de la matriz, verificada y falsada en sus dos ramas |
 | 2. keel-nest | hecho (2026-11-13) | la suite de keel-nest (1108) y la de la raíz; `test/history-parity.test.js` (11: casos, sentencias, tablas, patrones personales y nota contra keel-spring, y el diff y la anonimización emitidos EJECUTADOS contra keel-core); `db-check` en PostgreSQL (92, 107, 237) y MySQL (94, 109, 237) sobre cards-history, cards-history-anonymize y vault-history-scoped; `doc-check` (61, 75, 141) sobre las tres variantes `-mongo`; los 8 sabotajes `hi-*` cada uno en exactamente sus casos en los tres almacenes; fila `history` de la matriz verificada y falsada en sus dos ramas. `cards-history-anonymize-mongo`, nuevo, también medido con `history-check` de keel-spring (8/8 y `hi-anonymize-miss` en HI-8) |
 | 3. keel-dotnet | hecho (2026-11-13) | la suite de keel-dotnet (982) y `test/history-parity.test.js` (10: casos, sentencias, tablas, patrones personales y nota contra keel-spring y keel-nest); `cs-check --fixtures` sobre los seis sujetos (36 ensamblados sin warnings, 855 pruebas) con la prueba emitida `HistorySupportTests` (diff, anonimización e id contra keel-core), falsada con `history-diff` e `history-next-id`; `db-check` en PostgreSQL y MySQL sobre cards-history, cards-history-anonymize y vault-history-scoped, y `doc-check` sobre las tres variantes `-mongo`, catálogo e índices vivos incluidos; los 8 sabotajes `hi-*` cada uno en exactamente sus casos en los tres almacenes; fila `history` de la matriz verificada y falsada en sus dos ramas |
-| 4. keel-go | pendiente | |
+| 4. keel-go | hecho (2026-11-13) | la suite de keel-go (1572) y `test/history-parity.test.js` (12: casos, sentencias, tablas, patrones personales y nota contra los otros tres, y que cada sabotaje se siga aplicando); `go-check --history` (la prueba emitida `history_test.go`, falsada con `history-diff` e `history-next-id`); los seis sujetos con gofmt, vet, staticcheck y pruebas en PostgreSQL, MySQL y MongoDB; `db-check` en PostgreSQL y MySQL y `doc-check` sobre los tres sujetos de cada almacén, índices vivos incluidos; los 8 sabotajes `hi-*` cada uno en exactamente sus casos en los tres almacenes; lo emitido para las fixtures sin historial, idéntico byte a byte (7618 archivos); fila `history` de la matriz verificada y falsada en sus dos ramas |
 | 5. Derivados y documentación | pendiente | |
 | 6. Fixtures | pendiente | |
 | 7. Corridas de control | pendiente | |
 
 ## Para retomar
 
-- **Siguiente: incremento 4, keel-go.** Igual que en keel-nest y keel-dotnet: quitar su `historyPendingErrors` de
-  `supported-features.js` (y su fila de `README.md` § La frontera, si la tiene), su fila `pending` de
-  `src/lib/engine-support.js` (y la excepción de `test/engine-support.test.js`), y actualizar (no borrar: sigue sin fixture
-  hasta el inc. 6) la fila `persistence.audit.history` de su `capability-coverage`.
-- **Lo que dejaron keel-nest y keel-dotnet y sirve de guía** (`src/scaffold/history.js` de cada uno y § Historial de
-  `.claude/rules/nest-generador.md` y `dotnet-generador.md`):
-  - el diff y la anonimización comparan el TEXTO del cable de cada ruta; viven en infraestructura en los dos, porque el
-    serializador del cable no es del dominio. En Go, decidir dónde vive antes de copiar a nadie;
-  - T1 con SQL propio: no hay entidad gestionada, así que la instantánea «antes» es una lectura del agregado dentro de la
-    transacción (como keel-nest). En documental, leer el documento antes de escribirlo;
-  - el desempate de D10 es el id de la entrada: en keel-dotnet se MIDIÓ que `Guid.CreateVersion7()` no crece dentro del mismo
-    milisegundo, y hubo que hacer un `NextId()` monótono (en MongoDB la hora es de milisegundos). Medir el generador de UUID v7
-    de keel-go con una prueba emitida igual (`HistorySupportTests` de keel-dotnet) antes de suponerlo;
-  - los cambios guardados se leen a mano si el lector del cable trata una cadena como JSON serializado (keel-dotnet);
-  - el almacén es el ÚLTIMO argumento del adaptador: las sondas que lo construyen a mano tienen que pasarlo;
-  - `RT-4` de las sondas de la 2.28 daba por hecho que `from: deleted` purga: con `then: anonymize` anonimiza. Revisar el
-    `lifecycle-probes.js` de keel-go por lo mismo;
-  - los `cards-history*-mongo` derivan de profile-directory: si la sonda general de doc-check tropieza con su raíz (como en
-    keel-dotnet), juzgar en ellos solo los casos HI y los del ciclo de vida, y decirlo;
-  - la comprobación de los índices vivos de doc-check no conoce `change_history` (documentIndexes de keel-core no lo lleva):
-    compararlo contra `CHANGE_HISTORY_COLLECTION`, direcciones incluidas.
-- **La red**: HI-1 a HI-10 en `scripts/lib/history-probes.js` dentro de `db-check`/`doc-check`, sobre los seis sujetos,
-  con `HISTORY_SABOTAGES`. HI-11 (logs y spans) sigue sin medir en ningún generador: keel-spring, keel-nest y keel-dotnet lo
-  dejan a la corrida de control; decidir en el inc. 5 si entra en `telemetry-check`.
+- **Siguiente: incremento 5, derivados y documentación.** Los cuatro generadores emiten el historial y lo miden contra los tres
+  almacenes; ninguno lo rechaza ya (`historyPendingErrors` no lo llama nadie: decidir en el 5 si se borra de keel-core o se
+  queda como frontera para un generador nuevo). Lo que pide el 5, en § Incrementos: `openapi.js` (`ChangeEntry`, la página,
+  `x-personal`) con los tres oráculos de `keel-nest/test/openapi.test.js` y `redocly lint`, `personal-data.md`, las skills
+  (`/keel-docs`, las preguntas de `/keel-design`, la evidencia de `/keel-recover`), los agentes de código y de calidad de los
+  cuatro, y la fila en `CLAUDE.md` § Dónde se añade cada cosa.
+- **Un helper de arnés** (`historyOf(<Entidad>, id)`) se decide en el 5, tras el careo, como `ageDeletion` en la 2.28.
+- **HI-11** (logs y spans) sigue sin medir en ningún generador; decidir en el 5 si entra en `telemetry-check` o se queda en la
+  corrida de control.
+- **Las filas `persistence.audit.history` de los cuatro `capability-coverage`** siguen hasta que profile-directory v1.2.0 lo
+  declare (incremento 6); entonces se borran.

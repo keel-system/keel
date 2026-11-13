@@ -41,6 +41,7 @@ import { SCOPE_SABOTAGES, SCOPE_SUBJECT, applyScopeSabotage } from '../test/help
 import { STORAGE_SABOTAGES, STORAGE_SUBJECT, applySabotage as applyStorageSabotage } from '../test/helpers/storage-sabotages.js';
 import { CONDITIONAL_SABOTAGES, applySabotage as applyConditionalSabotage } from '../test/helpers/conditional-sabotages.js';
 import { READ_SCOPE_EDGE_SABOTAGES, applyReadScopeSabotage } from '../test/helpers/read-scope-sabotages.js';
+import { HISTORY_EMITTED_SABOTAGES, HISTORY_SUBJECT, applyHistorySabotage } from '../test/helpers/history-sabotages.js';
 import { TOKEN_PACKAGES, TOKEN_SABOTAGES, TOKEN_SUBJECTS, applyTokenEdit } from '../test/helpers/token-sabotages.js';
 import { tokenCases } from '@keel-system/keel-core/gen/token-cases';
 import { tokenCaseTest } from '../src/scaffold/token-contract-test.js';
@@ -192,6 +193,14 @@ if (process.argv.includes('--read-scope')) {
   readScopeFalsification();
   const failed = results.filter((result) => !result.ok).length;
   console.log(failed === 0 ? `\ngo-check --read-scope: ${results.length}/${results.length} en verde.` : `\ngo-check --read-scope: ${failed} paso(s) en rojo.`);
+  process.exit(failed === 0 ? 0 : 1);
+}
+
+// --history: solo el historial de cambios (DSL 2.29), su prueba emitida y sus sabotajes.
+if (process.argv.includes('--history')) {
+  historyFalsification();
+  const failed = results.filter((result) => !result.ok).length;
+  console.log(failed === 0 ? `\ngo-check --history: ${results.length}/${results.length} en verde.` : `\ngo-check --history: ${failed} paso(s) en rojo.`);
   process.exit(failed === 0 ? 0 : 1);
 }
 
@@ -634,6 +643,43 @@ for (const sabotage of API_SABOTAGES) {
 }
 
 readScopeFalsification();
+historyFalsification();
+
+/**
+ * El historial de cambios (DSL 2.29) se falsa sobre cards-history (keel-core/test/helpers/history-designs.js): la prueba
+ * emitida history_test.go (el diff, la anonimización y el id de la entrada contra keel-core) en verde, y cada sabotaje en
+ * rojo con sus pruebas, y solo ellas. HI-1 a HI-10 son de db-check y doc-check.
+ */
+function historyFalsification() {
+  const branch = UNCOVERED_BRANCHES.find((candidate) => candidate.name === HISTORY_SUBJECT);
+  const dir = path.join(makeWorkspace('keel-go-history-'), HISTORY_SUBJECT);
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, branch.from));
+  branch.mutate(manifest, layers);
+  for (const file of planService({ manifest, layers, workspace: dir }).files) {
+    const out = path.join(dir, file.path);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, file.content);
+  }
+  const packages = [...new Set(HISTORY_EMITTED_SABOTAGES.map((sabotage) => sabotage.packages))];
+  const tidied = go(dir, ['mod', 'tidy']);
+  const baseline = tidied.ok ? go(dir, ['test', '-count=1', '-run', 'TestHistory', ...packages]) : tidied;
+  if (!step(`historial: la prueba emitida history_test.go de ${HISTORY_SUBJECT} en verde`, baseline.ok, baseline.ok ? '' : baseline.output.slice(0, 600))) return;
+  for (const sabotage of HISTORY_EMITTED_SABOTAGES) {
+    const file = path.join(dir, sabotage.file);
+    const original = fs.readFileSync(file, 'utf8');
+    const mutated = applyHistorySabotage(sabotage, original);
+    if (!mutated) {
+      step(`historial falsado: ${sabotage.id}`, false, `el sabotaje ya no se aplica a ${sabotage.file}`);
+      continue;
+    }
+    fs.writeFileSync(file, mutated);
+    const sabotaged = go(dir, ['test', '-count=1', sabotage.packages]);
+    fs.writeFileSync(file, original);
+    const failed = [...sabotaged.output.matchAll(/--- FAIL: (\S+)/g)].map((match) => match[1].split('/')[0]);
+    const exact = [...new Set(failed)].sort().join(' ') === sabotage.fails;
+    step(`historial falsado: ${sabotage.id} (${sabotage.what}) → ${sabotage.fails} en rojo, y solo eso`, !sabotaged.ok && exact, failed.join(' ').slice(0, 200) || sabotaged.output.slice(0, 300));
+  }
+}
 
 /**
  * La lectura acotada (DSL 2.27) se falsa sobre sus diseños (keel-core/test/helpers/read-scope-designs.js): las pruebas

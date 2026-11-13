@@ -27,6 +27,7 @@
 // une a la transacción sin verla, como la propagación por defecto de Spring. Lo que tiene que confirmar APARTE (el relay
 // del outbox, la guarda de un mensaje, un reclamo) usa `outside(ctx)`, que la quita.
 
+import { historyIndexEntry } from './history.js';
 import { usesDeclaredAuthorship } from './audit-actor.js';
 import { CONCURRENT_MODIFICATION_MESSAGE, UNKNOWN_INTEGRITY_MESSAGE, constraintErrors, declaredConcurrencyError } from '@keel-system/keel-core/gen/constraint-errors';
 import { WRITE_CONFLICT_ATTEMPTS } from '@keel-system/keel-core/gen/transactions';
@@ -236,7 +237,7 @@ function filterLiteral(value) {
 
 /** Los índices del servidor como datos: lo que emite indexes.go y lo que relee doc-check. */
 export function indexEntries(model) {
-  const entries = documentIndexes(model, model.warnings);
+  const entries = withHistory(model, documentIndexes(model, model.warnings));
   // El índice de due_at del cronómetro (DSL 2.26, KEEL_TIMER_DOCUMENT de keel-core): lo que reclama el sondeador. keel-core
   // todavía no lo cuenta entre los almacenes del generador (storeDocumentIndexes), así que se añade aquí.
   if (!usesTimer(model) || entries.some((entry) => entry.collection === KEEL_TIMER_DOCUMENT.collection)) return entries;
@@ -249,10 +250,16 @@ export function indexEntries(model) {
   ];
 }
 
+/** Con el índice del historial (DSL 2.29), que keel-core tampoco cuenta entre los almacenes del generador. */
+function withHistory(model, entries) {
+  const index = historyIndexEntry(model);
+  return index && !entries.some((entry) => entry.collection === index.collection) ? [...entries, index] : entries;
+}
+
 function indexesBody(model) {
   const entries = indexEntries(model).map(({ collection, specs }) => {
     const models = specs.map((spec) => {
-      const keys = spec.paths.map((path) => `{Key: ${goString(path)}, Value: 1}`).join(', ');
+      const keys = spec.paths.map((path, i) => `{Key: ${goString(path)}, Value: ${spec.directions?.[i] ?? 1}}`).join(', ');
       const options = [`SetName(${goString(spec.name)})`];
       if (spec.unique) options.push('SetUnique(true)');
       // La condición del diseño y, con borrado lógico (DSL 2.28, T1), la vida: deletedAt nulo o ausente.

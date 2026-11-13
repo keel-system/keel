@@ -56,6 +56,8 @@ import { usesRequestIdempotency } from './request-idempotency.js';
 import { GENERATOR_TABLES, schemaStepFiles } from '@keel-system/keel-core/gen/schema-steps';
 import { KEEL_TIMER } from '@keel-system/keel-core/gen/timer-store';
 import { usesTimer } from '@keel-system/keel-core/gen/timer-plan';
+import { CHANGE_HISTORY, CHANGE_HISTORY_FIELD } from '@keel-system/keel-core/gen/history-store';
+import { usesHistory } from '@keel-system/keel-core/gen/history';
 
 export { usesRelational };
 
@@ -395,7 +397,9 @@ export function schemaTables(model) {
   // (messaging-stores.js: outbox_event y processed_event) y la marca del reclamo de reconciliación
   // (reconciliation-claim.js, tramo 11c): las tablas neutrales de keel-core, las mismas de los otros tres generadores,
   // con su clave primaria, su unicidad y los índices de la purga. Las mismas que crea un paso de esquema de build.
-  const stores = [...(usesRequestIdempotency(model) ? [IDEMPOTENCY_RECORD] : []), ...storeTables(model), ...reconciliationTables(model), ...(usesTimer(model) ? [KEEL_TIMER] : [])];
+  // El historial de cambios (DSL 2.29, D6 y D11): la entrada y los campos que tocó, con la FK en cascada de keel-core.
+  const history = usesHistory(model) ? [CHANGE_HISTORY, CHANGE_HISTORY_FIELD] : [];
+  const stores = [...(usesRequestIdempotency(model) ? [IDEMPOTENCY_RECORD] : []), ...storeTables(model), ...reconciliationTables(model), ...(usesTimer(model) ? [KEEL_TIMER] : []), ...history];
   for (const store of stores) {
     tables.push({
       name: store.table,
@@ -405,6 +409,10 @@ export function schemaTables(model) {
       notes: []
     });
     for (const index of store.indexes) indexes.push({ name: index.name, table: store.table, columns: index.columns, unique: false });
+    for (const column of store.columns.filter((candidate) => candidate.references)) {
+      const { references } = column;
+      foreignKeys.push({ name: references.name, table: store.table, column: column.name, refTable: references.table, refColumn: references.column, cascade: references.onDelete === 'cascade' });
+    }
   }
   return { tables, foreignKeys, indexes };
 }

@@ -159,7 +159,8 @@ function renderEndpoint(model, operation, plan) {
   if (entryGateField(model, operation.name, 'HTTP')) lines.push(`\t${variable}.EntryGate = application.${entryGateConstant('HTTP')}`);
   // Con escritura condicional el handler devuelve Versioned[T] (D6): la versión va al ETag y el valor al cuerpo.
   const versioned = returnsVersioned(model, operation);
-  if (operation.responseDto) {
+  // La query de historial (DSL 2.29) responde la página de entradas, como cualquier otra respuesta.
+  if (operation.responseDto || operation.historyOf) {
     lines.push(`\t${versioned ? 'versioned' : 'response'}, err := ${call}`, '\tif err != nil {', '\t\treturn err', '\t}');
     if (versioned) lines.push('\tw.Header().Set("ETag", etagOf(versioned.Version))', '\tresponse := versioned.Value');
     if (returnsLocation(model, operation)) {

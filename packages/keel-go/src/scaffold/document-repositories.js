@@ -30,6 +30,7 @@ import { docComment, goFileName, isOptional, layout, localName, packageFile } fr
 import { declaredAuthorship, usesDeclaredAuthorship } from './audit-actor.js';
 import { emitsEvents, usesGoOutbox } from './messaging.js';
 import { DOCUMENT_ALIVE, DOCUMENT_LIVE_LINE, documentAdapterMethods, lifecycleDependencies } from './data-lifecycle.js';
+import * as history from './history.js';
 import { isLogicallyDeleted } from '@keel-system/keel-core/gen';
 import { claimDependencies, claimMethod, storedState } from './claim.js';
 import { deadlineDependencies, documentArming, sweepPassSignal } from './timer.js';
@@ -508,12 +509,21 @@ func (r *${type}) DeleteByID(ctx context.Context, ${id.name} ${id.type}) error {
 		if err != nil {
 			return err
 		}
-		_, err = documents.DeleteOne(ctx, bson.D{{Key: "_id", Value: ${idWrite}}})
-		return err
+${history.recordsHistory(entity)
+    ? `		removed, err := documents.DeleteOne(ctx, bson.D{{Key: "_id", Value: ${idWrite}}})
+		if err != nil || removed.DeletedCount == 0 {
+			return err
+		}
+${history.recordLines(entity, 'deleted', id.name, { store: 'r.tx' })}
+		return nil`
+    : `		_, err = documents.DeleteOne(ctx, bson.D{{Key: "_id", Value: ${idWrite}}})
+		return err`}
 	})
 }`
     ])
   );
+  // El historial de cambios (DSL 2.29): la lectura (D7), con la misma carga que la ficha.
+  parts.push(...history.historyReadMethods(model, entity, { type, port: portName(entity), document: true }));
 
   // ─── La lectura del agregado
   parts.push(`// find lee los documentos que casan con filter y rehidrata cada agregado.
@@ -608,7 +618,7 @@ func (r *${type}) Save(ctx context.Context, ${local} *domain.${name}) (*domain.$
 		if e.err != nil {
 			return e.err
 		}
-${arming ? `${arming.before}\n` : ''}${prelude.join('\n')}${prelude.length > 0 ? '\n' : ''}${statement}${outbox ? `
+${arming ? `${arming.before}\n` : ''}${history.recordsHistory(entity) ? `${history.documentBeforeLines(entity, { idExpr: filterId }).replace(/^\n/, '')}\n` : ''}${prelude.join('\n')}${prelude.length > 0 ? '\n' : ''}${statement}${outbox ? `
 		records, err := r.events.Route(ctx, events)
 		if err != nil {
 			return err
@@ -623,7 +633,7 @@ ${arming ? `${arming.before}\n` : ''}${prelude.join('\n')}${prelude.length > 0 ?
 		if len(found) == 0 {
 			return fmt.Errorf("%s: el documento guardado no se pudo releer", ${constant})
 		}
-		saved = found[0]${arming ? `\n${arming.after}` : ''}
+		saved = found[0]${arming ? `\n${arming.after}` : ''}${history.saveRecordLines(entity, { store: 'r.tx' })}
 		return nil
 	})
 	if err != nil {

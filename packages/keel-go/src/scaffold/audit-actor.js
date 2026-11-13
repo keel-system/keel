@@ -15,6 +15,7 @@
 
 import { SYSTEM_ACTOR } from '@keel-system/keel-core/gen/relational';
 import { usesPersistence } from '@keel-system/keel-core/gen/features';
+import { usesHistory } from '@keel-system/keel-core/gen/history';
 import { goString } from '../lib/go-source.js';
 import { usesCorrelation } from './correlation.js';
 import { usesHttpSecurity } from './security.js';
@@ -38,7 +39,8 @@ export function usesDeclaredAuthorship(model) {
 }
 
 export function generate(model) {
-  if (!usesAuthorship(model)) return [];
+  // El historial (DSL 2.29) reutiliza este actor aunque el diseño no pida autoría en las filas: D5.
+  if (!usesAuthorship(model) && !(usesPersistence(model) && usesHistory(model))) return [];
   const { store } = layout(model);
   const security = usesHttpSecurity(model);
   const correlation = usesCorrelation(model);

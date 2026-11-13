@@ -38,6 +38,7 @@ import { callMethod, clientParam, usesGoHttpClients } from './http-clients.js';
 import { projectionNotes, replicaNote } from './projections.js';
 import { mailNote } from './mail.js';
 import { deadlineNotes } from './timer.js';
+import * as history from './history.js';
 import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { cacheHandlerNote } from './cache.js';
 import { uploadHandlerNotes } from './storage.js';
@@ -211,6 +212,8 @@ export function useCaseField(operation) {
  * el compilador obliga al agente a darla.
  */
 export function resultType(operation, model = null) {
+  // La query de historial (DSL 2.29) devuelve la página de entradas de wire-contract.md, no un DTO del diseño.
+  if (operation.historyOf) return history.HISTORY_RESULT;
   if (!operation.responseDto) return null;
   const dto = goTypeName(operation.responseDto.name);
   if (model && returnsVersioned(model, operation)) return versionedType(dto);
@@ -455,6 +458,11 @@ function handlerNotes(model, operation) {
   const finderText = finderNote(operation, { call: finder ? finderCall(finder, repositoryParam(entity)) : '' });
   if (finderText) notes.push(finderText);
   // La lectura acotada (DSL 2.27): el adaptador ya filtra; la nota neutral dice qué pasar y que no se filtre a mano.
+  // El historial (DSL 2.29): la nota neutral, con la llamada al puerto de la raíz.
+  if (operation.historyOf) {
+    const historyRead = history.handlerNote(model, operation, repositoryParam({ name: operation.historyOf }));
+    if (historyRead) notes.push(historyRead);
+  }
   const scopedRead = readScopeHandlerNote(model, operation, finder ? finderCall(finder, repositoryParam(entity)) : '');
   if (scopedRead) notes.push(scopedRead);
   if (!finder) for (const note of textFilterNotes(model, operation)) notes.push(note);

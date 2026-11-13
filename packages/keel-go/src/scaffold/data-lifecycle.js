@@ -16,6 +16,7 @@
 //     cada agregado en su transacción) y su `Run`, que el arranque monta como recurrente del cronómetro en modo clúster
 //     (D8, `timer.NewRecurring`), con su lote y su cron en `retention.yaml`.
 
+import * as history from './history.js';
 import { ANONYMIZED_AT, DELETED_AT, LOCK_VERSION, backReferenceTo, isLogicallyDeleted, joinColumnOf, parentColumnOf, persistedMembers } from '@keel-system/keel-core/gen';
 import { AGE_DELETION_ENGINES, AGE_DELETION_MISS, ANONYMOUS_PREFIX, ageDeletionStatement, deletedLookupOf, deletionAgingTargets, lifecycleRoots, retentionParameters } from '@keel-system/keel-core/gen/data-lifecycle';
 import { ageDeletionScript } from '@keel-system/keel-core/gen/mongo-probes';
@@ -171,8 +172,18 @@ export function relationalAdapterMethods(model, entity, { type, port, root, id, 
 // ya borrada no se vuelve a marcar: la ventana de restauración cuenta desde el primer borrado.
 func (r *${type}) DeleteByID(ctx context.Context, ${id.name} ${id.type}) error {
 	return r.tx.write(ctx, func(q DBTX) error {
-		_, err := q.ExecContext(ctx, ${goString(`UPDATE ${root.table} SET ${deletedAt} = ${d.param(1)}${bump} WHERE ${root.idColumn} = ${d.param(2)} AND ${deletedAt} IS NULL`)}, time.Now().UTC(), ${id.name})
-		return err
+${history.recordsHistory(entity)
+    ? `		result, err := q.ExecContext(ctx, ${goString(`UPDATE ${root.table} SET ${deletedAt} = ${d.param(1)}${bump} WHERE ${root.idColumn} = ${d.param(2)} AND ${deletedAt} IS NULL`)}, time.Now().UTC(), ${id.name})
+		if err != nil {
+			return err
+		}
+		if marked, err := result.RowsAffected(); err != nil || marked == 0 {
+			return err
+		}
+${history.recordLines(entity, 'deleted', id.name, { store: 'q' })}
+		return nil`
+    : `		_, err := q.ExecContext(ctx, ${goString(`UPDATE ${root.table} SET ${deletedAt} = ${d.param(1)}${bump} WHERE ${root.idColumn} = ${d.param(2)} AND ${deletedAt} IS NULL`)}, time.Now().UTC(), ${id.name})
+		return err`}
 	})
 }`];
   if (!lifecycle.restore) return methods;
@@ -215,7 +226,7 @@ func (r *${type}) Restore(ctx context.Context, ${id.name} ${id.type}) (*domain.$
 		if _, err := q.ExecContext(ctx, ${goString(`UPDATE ${root.table} SET ${deletedAt} = NULL${bump} WHERE ${root.idColumn} = ${d.param(1)}`)}, ${id.name}); err != nil {
 			return err
 		}
-		states, err := query${entity.name}(ctx, q, ${goString(`WHERE ${root.idColumn} = ${d.param(1)}`)}, ${id.name})
+${history.recordsHistory(entity) ? `${history.recordLines(entity, 'restored', id.name, { store: 'q' })}\n` : ''}		states, err := query${entity.name}(ctx, q, ${goString(`WHERE ${root.idColumn} = ${d.param(1)}`)}, ${id.name})
 		if err != nil {
 			return err
 		}
@@ -253,8 +264,15 @@ func (r *${type}) DeleteByID(ctx context.Context, ${id.name} ${id.type}) error {
 		if err != nil {
 			return err
 		}
-		_, err = documents.UpdateOne(ctx, bson.D{{Key: "_id", Value: ${idWrite}}, ${DOCUMENT_ALIVE}}, bson.D{{Key: "$set", Value: bson.D{{Key: ${field}, Value: instantValue(time.Now().UTC())}}}${bump}})
-		return err
+${history.recordsHistory(entity)
+    ? `		marked, err := documents.UpdateOne(ctx, bson.D{{Key: "_id", Value: ${idWrite}}, ${DOCUMENT_ALIVE}}, bson.D{{Key: "$set", Value: bson.D{{Key: ${field}, Value: instantValue(time.Now().UTC())}}}${bump}})
+		if err != nil || marked.ModifiedCount == 0 {
+			return err
+		}
+${history.recordLines(entity, 'deleted', id.name, { store: 'r.tx' })}
+		return nil`
+    : `		_, err = documents.UpdateOne(ctx, bson.D{{Key: "_id", Value: ${idWrite}}, ${DOCUMENT_ALIVE}}, bson.D{{Key: "$set", Value: bson.D{{Key: ${field}, Value: instantValue(time.Now().UTC())}}}${bump}})
+		return err`}
 	})
 }`];
   if (!lifecycle.restore) return methods;
@@ -297,7 +315,7 @@ func (r *${type}) Restore(ctx context.Context, ${id.name} ${id.type}) (*domain.$
 		if _, err := documents.UpdateOne(ctx, bson.D{{Key: "_id", Value: ${idWrite}}}, bson.D{{Key: "$set", Value: bson.D{{Key: ${field}, Value: nil}}}${bump}}); err != nil {
 			return err
 		}
-		found, err := r.find(ctx, bson.D{{Key: "_id", Value: ${idWrite}}})
+${history.recordsHistory(entity) ? `${history.recordLines(entity, 'restored', id.name, { store: 'r.tx' })}\n` : ''}		found, err := r.find(ctx, bson.D{{Key: "_id", Value: ${idWrite}}})
 		if err != nil {
 			return err
 		}
@@ -532,8 +550,14 @@ function relationalRetention(model, entity, root) {
   if (retention.then === 'delete') {
     apply = `	// then: delete. Las filas de las hijas y de las listas caen con la raíz (ON DELETE CASCADE, T3).
 	return r.tx.write(ctx, func(q DBTX) error {
-		_, err := q.ExecContext(ctx, ${goString(`DELETE FROM ${table} WHERE ${idColumn} = ${d.param(1)}`)}, id)
-		return err
+${history.recordsHistory(entity)
+    ? `		if _, err := q.ExecContext(ctx, ${goString(`DELETE FROM ${table} WHERE ${idColumn} = ${d.param(1)}`)}, id); err != nil {
+			return err
+		}
+${history.retentionLines(entity, retention, { store: 'q' })}
+		return nil`
+    : `		_, err := q.ExecContext(ctx, ${goString(`DELETE FROM ${table} WHERE ${idColumn} = ${d.param(1)}`)}, id)
+		return err`}
 	})`;
   } else {
     const plan = anonymizePlan(model, root, { document: false });
@@ -566,7 +590,7 @@ function relationalRetention(model, entity, root) {
     apply = `	// then: anonymize (D9). Un campo personal opcional queda a NULL y uno obligatorio recibe ${ANONYMOUS_PREFIX}<id>, que no deriva
 	// del valor y conserva la unicidad. La marca ${ANONYMIZED_AT.column} lo saca del siguiente barrido (D11).
 	return r.tx.write(ctx, func(q DBTX) error {
-${lines.join('\n')}
+${lines.join('\n')}${history.recordsHistory(entity) ? `\n${history.retentionLines(entity, retention, { store: 'q' })}` : ''}
 		return nil
 	})`;
   }
@@ -615,8 +639,14 @@ function documentRetention(model, entity, root) {
   let apply;
   if (retention.then === 'delete') {
     apply = `		// then: delete. El agregado es el documento: sus entidades internas se van con él.
-		_, err = documents.DeleteOne(ctx, bson.D{{Key: "_id", Value: ${idValue}}})
-		return err`;
+${history.recordsHistory(entity)
+    ? `		if _, err := documents.DeleteOne(ctx, bson.D{{Key: "_id", Value: ${idValue}}}); err != nil {
+			return err
+		}
+${history.retentionLines(entity, retention, { store: 'r.tx' })}
+		return nil`
+    : `		_, err = documents.DeleteOne(ctx, bson.D{{Key: "_id", Value: ${idValue}}})
+		return err`}`;
   } else {
     const plan = anonymizePlan(model, root, { document: true });
     const version = entity.usesOptimisticLocking ? (entity.declaresLockVersion ? keyOf(LOCK_VERSION.field) : LOCK_VERSION.column) : null;
@@ -641,7 +671,7 @@ function documentRetention(model, entity, root) {
 ${substitutes ? `		substitute := ${substituteExpression(entity, 'id')}\n` : ''}		if _, err := documents.UpdateOne(ctx, bson.D{{Key: "_id", Value: ${idValue}}}, bson.D{{Key: "$set", Value: bson.D{${rootSet.join(', ')}}}${inc}}); err != nil {
 			return err
 		}
-${children.length > 0 ? `${children.join('\n')}\n` : ''}		return nil`;
+${children.length > 0 ? `${children.join('\n')}\n` : ''}${history.recordsHistory(entity) ? `${history.retentionLines(entity, retention, { store: 'r.tx' })}\n` : ''}		return nil`;
   }
   return `
 ${retentionHead(model, entity, root)}

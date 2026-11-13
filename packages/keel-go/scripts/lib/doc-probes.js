@@ -16,6 +16,8 @@
 // Lo que no depende del motor (las muestras, los volcados, la ida y vuelta, la versión, las unicidades con su code y su
 // mensaje, la fusión de hijas, la página, los finders) es lo MISMO que mide db-check: sale de db-probes.js.
 
+import { CHANGE_HISTORY_COLLECTION } from '@keel-system/keel-core/gen/history-store';
+import { usesGoHistory } from '../../src/scaffold/history.js';
 import { DOCUMENT_ID, documentShape, valueObjectShape } from '@keel-system/keel-core/gen/document';
 import { claimsForEntity, snakeCase } from '@keel-system/keel-core/gen';
 import { repositoryRoots } from '@keel-system/keel-core/gen/features';
@@ -343,13 +345,30 @@ func Test${root.name}_RawDocumentIsTheContract(t *testing.T) {
 
 // ─── Los índices vivos ───────────────────────────────────────────────────────────────────────────
 
+/**
+ * Los índices que pide el contrato. El del historial (DSL 2.29) sale de keel-core (`CHANGE_HISTORY_COLLECTION`), direcciones
+ * incluidas, y no de lo que emite indexes.go: si no, la sonda compararía lo emitido consigo mismo.
+ */
+function contractIndexes(model) {
+  const entries = indexEntries(model).filter(({ collection }) => collection !== CHANGE_HISTORY_COLLECTION.collection);
+  if (!usesGoHistory(model)) return entries;
+  return [
+    ...entries,
+    {
+      collection: CHANGE_HISTORY_COLLECTION.collection,
+      specs: CHANGE_HISTORY_COLLECTION.indexes.map((index) => ({ name: index.name, paths: index.keys.map(([key]) => key), directions: index.keys.map(([, direction]) => direction), unique: false }))
+    }
+  ];
+}
+
 function indexProbe(model) {
-  const rows = indexEntries(model).map(({ collection, specs }) => {
+  const rows = contractIndexes(model).map(({ collection, specs }) => {
     const items = specs.map((spec) => {
       // La condición del diseño y, con borrado lógico (DSL 2.28, T1), la vida, en el orden en que los escribe indexes.go.
       const partial = { ...(spec.partialFilter ? { [spec.partialFilter.path]: spec.partialFilter.equals } : {}), ...(spec.live ? { [spec.live.path]: null } : {}) };
       const filter = Object.keys(partial).length > 0 ? JSON.stringify(partial) : '';
-      return `{name: ${goString(spec.name)}, keys: []string{${spec.paths.map(goString).join(', ')}}, unique: ${Boolean(spec.unique)}, filter: ${goString(filter)}}`;
+      // Cada clave con su dirección: el índice de la lectura del historial va descendente en at y _id.
+      return `{name: ${goString(spec.name)}, keys: []string{${spec.paths.map((path, i) => goString(`${path}:${spec.directions?.[i] ?? 1}`)).join(', ')}}, unique: ${Boolean(spec.unique)}, filter: ${goString(filter)}}`;
     });
     return `\t${goString(collection)}: {${items.join(', ')}},`;
   });
@@ -387,7 +406,8 @@ func TestIndexes_LiveAreTheContract(t *testing.T) {
 			index := wantIndex{name: name}
 			keys, _ := cursor.Current.Lookup("key").Document().Elements()
 			for _, key := range keys {
-				index.keys = append(index.keys, key.Key())
+				direction, _ := key.Value().AsInt64OK()
+				index.keys = append(index.keys, fmt.Sprintf("%s:%d", key.Key(), direction))
 			}
 			index.unique, _ = cursor.Current.Lookup("unique").BooleanOK()
 			if filter, ok := cursor.Current.Lookup("partialFilterExpression").DocumentOK(); ok {

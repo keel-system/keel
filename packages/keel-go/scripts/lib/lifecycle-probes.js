@@ -465,12 +465,18 @@ ${lines.join('\n')}
           '	}'
         ]);
         const old = ['vieja1', 'vieja2', 'vieja3'];
-        test('RT-4', 'LoBorradoHaceMasDeLaRetencionSePurga', [
+        // Lo que `from: deleted` hace con lo vencido es su `then`: purgarlo o, con anonymize, anonimizarlo (no lo borra).
+        const anonymizes = retention.then === 'anonymize';
+        test('RT-4', anonymizes ? 'LoBorradoHaceMasDeLaRetencionSeAnonimiza' : 'LoBorradoHaceMasDeLaRetencionSePurga', [
           '	// Tres, con el lote de dos: el tick repite mientras salga lleno.',
           ...old.flatMap((variable) => fresh(variable)),
           ...old.flatMap((variable) => [...remove(variable), `	lc${name}Backdate(t, ${variable}.${id}, ${span.days + 1})`]),
           ...run,
-          ...old.flatMap((variable) => [`	if ${present(variable)} {`, `		t.Error("${variable}: lo borrado hace más de la retención se purga, también más allá del primer lote")`, '	}'])
+          ...old.flatMap((variable) =>
+            anonymizes
+              ? [`	if !${marked(variable)} {`, `		t.Error("${variable}: lo borrado hace más de la retención se anonimiza, también más allá del primer lote")`, '	}']
+              : [`	if ${present(variable)} {`, `		t.Error("${variable}: lo borrado hace más de la retención se purga, también más allá del primer lote")`, '	}']
+          )
         ]);
       } else {
         const from = memberOf(retention.from);

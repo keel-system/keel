@@ -139,3 +139,14 @@ for (const name of ['cards-logical', 'cards-logical-mongo', 'codes-anonymize', '
     assert.ok(files.some((file) => /_retention\.go$/.test(file.path) && file.content.includes('func (r *') && file.content.includes(') Recurring(spec string) (timer.Recurring, error)')), `${name}: sin la retención`);
   });
 }
+
+// El historial de cambios (DSL 2.29): persistence audit.history y use-cases *.output.history, que ninguna fixture declara
+// hasta el incremento 6 de PLAN-DSL-229-HISTORIAL.md. Los sujetos son los de keel-core (los mismos que miden los otros
+// tres); la forma entera la fija history-parity.test.js, y db-check y doc-check lo ejecutan.
+for (const name of ['cards-history', 'cards-history-mongo', 'cards-history-anonymize', 'cards-history-anonymize-mongo', 'vault-history-scoped', 'vault-history-scoped-mongo']) {
+  test(`${name}: el historial de cambios entero (persistence audit.history y use-cases *.output.history)`, () => {
+    const files = emitted(name);
+    assert.ok(files.some((file) => /^internal\/infrastructure\/(postgres|mysql|mongo)\/history\.go$/.test(file.path) && file.content.includes('func recordHistory(')), `${name}: sin el almacén del historial`);
+    assert.ok(files.some((file) => /history_query_handler\.go$/.test(file.path) && file.content.includes('PagedResponse[domain.HistoryEntry]')), `${name}: la query no devuelve la página de entradas`);
+  });
+}

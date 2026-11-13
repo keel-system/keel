@@ -32,6 +32,7 @@ import { DRAIN_SABOTAGES, PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, drainBreaksCov
 import { RELAY_WAKE_SABOTAGES } from './lib/relay-wake-probes.js';
 import { READ_SCOPE_SABOTAGE_SPECS, READ_SCOPE_SUBJECTS, isReadScopeSabotage, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
 import { LIFECYCLE_ALSO, LIFECYCLE_SABOTAGE_SPECS, LIFECYCLE_SUBJECTS, isLifecycleSabotage, lifecycleProbeFile, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
+import { HISTORY_ALSO, HISTORY_SABOTAGE_SPECS, HISTORY_SUBJECTS, historyProbeFile, historySabotageVerdict, isHistorySabotage } from './lib/history-probes.js';
 
 // Los del cronómetro y los plazos (DSL 2.26) caen en EXACTAMENTE sus casos DL (scripts/lib/timer-probes.js).
 // Los de la lectura acotada (DSL 2.27) caen en EXACTAMENTE sus casos RS (scripts/lib/read-scope-probes.js).
@@ -43,7 +44,9 @@ const SABOTAGES = {
   ...RELAY_WAKE_SABOTAGES,
   ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document])),
   // Los del ciclo de vida del dato (DSL 2.28) que tienen qué romper sobre documentos (scripts/lib/lifecycle-probes.js).
-  ...Object.fromEntries(Object.entries(LIFECYCLE_SABOTAGE_SPECS).filter(([, spec]) => spec.document).map(([id, spec]) => [id, spec.document]))
+  ...Object.fromEntries(Object.entries(LIFECYCLE_SABOTAGE_SPECS).filter(([, spec]) => spec.document).map(([id, spec]) => [id, spec.document])),
+  // Los del historial de cambios (DSL 2.29) (scripts/lib/history-probes.js).
+  ...Object.fromEntries(Object.entries(HISTORY_SABOTAGE_SPECS).filter(([, spec]) => spec.document).map(([id, spec]) => [id, spec.document]))
 };
 import { resolveRuntime, startMongo, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 
@@ -91,10 +94,13 @@ try {
     // La lectura acotada (DSL 2.27, RS-1 a RS-8): los MISMOS diseños que miden los otros tres (keel-core/test/helpers/read-scope-designs.js).
     ...UNCOVERED_BRANCHES.filter((design) => READ_SCOPE_SUBJECTS.document.includes(design.name)),
     // El ciclo de vida del dato (DSL 2.28): los MISMOS diseños que miden los otros tres.
-    ...UNCOVERED_BRANCHES.filter((design) => LIFECYCLE_SUBJECTS.document.includes(design.name))
+    ...UNCOVERED_BRANCHES.filter((design) => LIFECYCLE_SUBJECTS.document.includes(design.name)),
+    // El historial de cambios (DSL 2.29): los MISMOS diseños que miden los otros tres.
+    ...UNCOVERED_BRANCHES.filter((design) => HISTORY_SUBJECTS.document.includes(design.name))
   ]
     .filter((design) => only || !isReadScopeSabotage(sabotage) || READ_SCOPE_SUBJECTS.document.includes(design.name))
-    .filter((design) => only || !isLifecycleSabotage(sabotage) || LIFECYCLE_SUBJECTS.document.includes(design.name));
+    .filter((design) => only || !isLifecycleSabotage(sabotage) || LIFECYCLE_SUBJECTS.document.includes(design.name))
+    .filter((design) => only || !isHistorySabotage(sabotage) || HISTORY_SUBJECTS.document.includes(design.name));
   for (const { name, from, mutate } of designs) {
     // `--only` admite una lista separada por comas.
     if (only && !only.split(',').includes(name)) continue;
@@ -120,8 +126,10 @@ try {
     const purgeTimerProbe = purgeTimerProbeFile(plan.model);
     // El ciclo de vida del dato (DSL 2.28): su archivo aparte, que comparte la base y el paquete con las demás sondas.
     const lifecycleProbe = lifecycleProbeFile(plan.model);
+    // El historial de cambios (DSL 2.29): su archivo aparte, también en el paquete del almacén.
+    const historyProbe = historyProbeFile(plan.model);
     const dir = path.join(root, name);
-    for (const file of [...files, probe, ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : []), ...(lifecycleProbe ? [lifecycleProbe] : [])]) {
+    for (const file of [...files, probe, ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : []), ...(lifecycleProbe ? [lifecycleProbe] : []), ...(historyProbe ? [historyProbe] : [])]) {
       const target = path.join(dir, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, file.content);
@@ -149,6 +157,18 @@ try {
       const ok = tested.ok && ran > 0;
       step(`${name}: los adaptadores documentales guardan, leen y traducen contra MongoDB (${passed.length} sondas)`, ok, ok ? '' : failed.join(', ') || tested.output.slice(-3000));
       if (!ok && failed.length > 0) console.error(failureLines(tested.output));
+      return;
+    }
+    if (isHistorySabotage(sabotage)) {
+      const verdict = historySabotageVerdict(failed, sabotage, model);
+      // Y ninguna otra sonda: el sabotaje rompe el historial, no el resto del adaptador.
+      const stray = failed.filter((test) => !/_HI\d+_/.test(test) && !HISTORY_ALSO[sabotage]?.test(test));
+      step(
+        `falsado: ${sabotage} en ${name} cae en exactamente sus casos`,
+        ran > 0 && verdict.exact && stray.length === 0,
+        `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]${stray.length > 0 ? `; además ${stray.join(', ')}` : ''}`
+      );
+      if (verdict.exact && verdict.want.length > 0) results.at(-1).caught = true;
       return;
     }
     if (isLifecycleSabotage(sabotage)) {

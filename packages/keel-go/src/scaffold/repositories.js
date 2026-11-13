@@ -52,6 +52,7 @@ import { DEADLINES_VAR, deadlineDependencies, relationalArming } from './timer.j
 import { loadExpectingAdapter, loadExpectingPort, loadsExpecting } from './conditional-writes.js';
 import { portGuardMethods, relationalGuardMethods } from './mail.js';
 import { deletePortDoc, lifecycleDependencies, liveCondition, liveSuffix, relationalAdapterMethods, restorePortMethods } from './data-lifecycle.js';
+import * as history from './history.js';
 
 // Un identificador en el SQL del adaptador, citado como en el baseline si es una palabra reservada (`"primary"` en
 // PostgreSQL, `` `primary` `` en MySQL).
@@ -312,6 +313,8 @@ function portBody(model, entity) {
   method(deletePortDoc(model, entity), `DeleteByID(ctx context.Context, ${id.name} ${id.type}) error`);
   // La restauración de un borrado lógico (DSL 2.28, D6): la borrada por su clave y la restauración por id.
   for (const [doc, signature] of restorePortMethods(model, entity, id, naturalKeyFinder(model, entity))) method(doc, signature);
+  // El historial de cambios (DSL 2.29, D7): su lectura carga la raíz como su ficha.
+  for (const [doc, signature] of history.historyPortMethods(model, entity)) method(doc, signature);
   const filters = filterStructs(model, entity).map((struct) => `${struct}
 
 `).join('');
@@ -771,12 +774,24 @@ ${batchLoad(model, batch.column, null, batch.plural, uses, batch.cast, alive)}
       `// DeleteByID implementa domain.${portName(entity)}. Las filas de las hijas y de las listas caen con la raíz (ON DELETE CASCADE).
 func (r *${type}) DeleteByID(ctx context.Context, ${id.name} ${id.type}) error {
 	return r.tx.write(ctx, func(q DBTX) error {
-		_, err := q.ExecContext(ctx, ${goString(`DELETE FROM ${root.table} WHERE ${root.idColumn} = ${ph(model, 1)}`)}, ${id.name})
-		return err
+${history.recordsHistory(entity)
+    ? `		result, err := q.ExecContext(ctx, ${goString(`DELETE FROM ${root.table} WHERE ${root.idColumn} = ${ph(model, 1)}`)}, ${id.name})
+		if err != nil {
+			return err
+		}
+		if removed, err := result.RowsAffected(); err != nil || removed == 0 {
+			return err
+		}
+${history.recordLines(entity, 'deleted', id.name, { store: 'q' })}
+		return nil`
+    : `		_, err := q.ExecContext(ctx, ${goString(`DELETE FROM ${root.table} WHERE ${root.idColumn} = ${ph(model, 1)}`)}, ${id.name})
+		return err`}
 	})
 }`
     ])
   );
+  // El historial de cambios (DSL 2.29): la lectura (D7), con la misma carga que la ficha.
+  parts.push(...history.historyReadMethods(model, entity, { type, port: portName(entity), document: false }));
 
   // ─── La carga del agregado
   parts.push(loadMethod(model, root, type));
@@ -1168,7 +1183,7 @@ func (r *${type}) Save(ctx context.Context, ${local} *domain.${name}) (*domain.$
 	var saved *domain.${name}
 	${isReplica(model, entity) ? `// La copia local de una dependencia replicada se guarda en su PROPIA transacción, aunque ctx traiga una abierta: el
 	// REQUIRES_NEW de keel-spring. Sobrevive a la de quien la escribe, y una consulta de solo lectura también puede guardarla.
-	err := r.tx.apart(ctx, sql.TxOptions{}, func(q DBTX) error {` : 'err := r.tx.write(ctx, func(q DBTX) error {'}${arming ? `\n${arming.before}` : ''}
+	err := r.tx.apart(ctx, sql.TxOptions{}, func(q DBTX) error {` : 'err := r.tx.write(ctx, func(q DBTX) error {'}${arming ? `\n${arming.before}` : ''}${history.relationalBeforeLines(model, entity, { where: `WHERE ${root.idColumn} = ${ph(model, 1)}`, idExpr: `${local}.${id}()` })}
 		if err := write${name}(ctx, q, ${local}); err != nil {
 			return err
 		}${outbox ? `
@@ -1186,7 +1201,7 @@ func (r *${type}) Save(ctx context.Context, ${local} *domain.${name}) (*domain.$
 		if len(states) == 0 {
 			return fmt.Errorf("${root.table}: la fila guardada no se pudo releer")
 		}
-		saved = domain.Rehydrate${name}(states[0])${arming ? `\n${arming.after}` : ''}
+		saved = domain.Rehydrate${name}(states[0])${arming ? `\n${arming.after}` : ''}${history.saveRecordLines(entity, { store: 'q' })}
 		return nil
 	})
 	if err != nil {

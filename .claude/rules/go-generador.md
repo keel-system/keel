@@ -58,3 +58,33 @@ reconciliación excluyen lo borrado. PD-1 es la regla `personal` de `logging-che
 borde solo el catch-all 500. Lo miden `test/data-lifecycle-parity.test.js` (paridad con keel-spring y PD-1 con bash) y
 `db-check`/`doc-check` con `scripts/lib/lifecycle-probes.js` (`lifecycle_probe_test.go`, una prueba por caso, que comparte
 base con las demás sondas: el total de una página se mide como diferencia); `--only` admite una lista.
+
+## Historial de cambios (DSL 2.29, incremento 4 de `PLAN-DSL-229-HISTORIAL.md`)
+
+`src/scaffold/history.js` emite la entrada, el cambio y el filtro en `internal/domain/history.go` (los valores de un cambio son
+`jsontext.Value`: ya van en la forma del cable), y todo lo demás en `history.go` del paquete del almacén (`postgres`, `mysql` o
+`mongo`): el diff (D2) sobre el TEXTO que escribe `wire.Marshal`, la anonimización (D8), las rutas personales y la instantánea de
+cada raíz (`<raíz>HistorySnapshot`, de sus getters) y el almacén. Ahí y no en el dominio porque hay un solo paquete del almacén
+por proyecto y el almacén necesita la transacción en curso. El almacén son FUNCIONES que la reciben (`recordHistory(ctx, q DBTX,
+…)` en relacional, `(ctx, tx *Transactions, …)` en documental, con la sesión en ctx), no un tipo que inyectar: ningún
+constructor de adaptador cambia, y la entrada va siempre en la transacción de la escritura que la origina (D1). El relacional
+ejecuta las sentencias de keel-core tal cual, con su propio `historySQL` (el `timerSQL` solo existe con cronómetro); las dos
+tablas van en la baseline de goose (`persistence.js`, con la FK en cascada de `CHANGE_HISTORY_FIELD`); en documental el índice
+va en `indexes.go` con sus direcciones (`indexEntries` acepta `directions`).
+
+T1: con SQL propio no hay entidad gestionada, así que `Save` LEE el agregado (`query<Raíz>`) dentro de la transacción y antes de
+escribirlo; en documental, `r.find` con la sesión de ctx. La baja, la restauración y la retención escriben o se llevan su entrada
+desde `data-lifecycle.js`; la baja física y la lógica solo escriben la entrada si tocaron una fila. `HistoryOf` carga la raíz
+con `FindByID` o con `LoadScoped`/`LoadScopedBy<Clave>` (D7) y devuelve `(Page[HistoryEntry], bool, error)` como los finders.
+Los cambios guardados se leen con `encoding/json/v2` a pelo y no con `wire.Unmarshal`, cuyo lector de `jsontext.Value` toma una
+cadena por un documento serializado. El id de la entrada es `uuid.NewV7()`: **medido** que el de google/uuid crece también dentro
+del mismo milisegundo (al revés que `Guid.CreateVersion7()` de .NET). gofmt: dentro de una lista de argumentos el `+` va sin
+espacios (`s.put(prefix+"note", …)`), y un literal de una línea alinea sus claves (`name:     "Asset"`).
+
+Lo miden `test/history-parity.test.js` (casos, sentencias, tablas, patrones personales y nota contra los otros tres, y que cada
+sabotaje se siga aplicando), la prueba emitida `history_test.go` (diff, anonimización e id contra keel-core) con `go-check
+--history` (`history-diff`, `history-next-id`, `test/helpers/history-sabotages.js`), y `db-check`/`doc-check` con
+`scripts/lib/history-probes.js` (HI-1 a HI-10 en `history_probe_test.go`, `--sabotage=hi-*`). `hi-outside-tx` relacional escribe
+por la conexión del pool (`r.tx.conn(context.Background())`); en documental, con `outside(ctx)`. La sonda de los índices vivos de
+doc-check compara ahora `clave:dirección`, y el índice de `change_history` lo pide keel-core (`CHANGE_HISTORY_COLLECTION`), no
+`indexes.go`. RT-4 de `lifecycle-probes.js` daba por hecho que `from: deleted` purga; con `then: anonymize` anonimiza.

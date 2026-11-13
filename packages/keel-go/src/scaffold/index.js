@@ -63,6 +63,7 @@ import * as purge from './purge.js';
 import * as scheduling from './scheduling.js';
 import * as timer from './timer.js';
 import * as dataLifecycle from './data-lifecycle.js';
+import * as history from './history.js';
 import * as deadlinesCheck from './deadlines-check.js';
 import * as correlation from './correlation.js';
 import * as logging from './logging.js';
@@ -145,6 +146,8 @@ const GENERATORS = [
   // El cronómetro del servicio y los plazos de negocio (DSL 2.26): se gatea a sí mismo por el diseño.
   timer,
   dataLifecycle,
+  // El historial de cambios (DSL 2.29): la entrada, el diff y su almacén; lo escriben los adaptadores de las raíces.
+  history,
   endpoints,
   restSupport,
   security,
@@ -195,6 +198,9 @@ export function planService({ manifest, layers, fixtures = null, workspace, stac
   // El ciclo de vida del dato (DSL 2.28) que keel-go no sabe generar: lo que no sabe anonimizar.
   const lifecycleErrors = dataLifecycle.lifecycleStackErrors(model);
   if (lifecycleErrors.length > 0) throw new Error(lifecycleErrors.join('\n'));
+  // El historial (DSL 2.29): sentencias medidas para PostgreSQL y MySQL, y MongoDB.
+  const historyErrors = history.historyStackErrors(model);
+  if (historyErrors.length > 0) throw new Error(historyErrors.join('\n'));
   // La lectura acotada (DSL 2.27) que no se puede generar por construcción (T7, T8 y compañía): la frontera neutral.
   const scopeErrors = readScopeGenerationErrors(model);
   if (scopeErrors.length > 0) throw new Error(scopeErrors.join('\n'));
