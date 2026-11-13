@@ -333,6 +333,11 @@ generador que no llegue rechaza la capacidad con su motivo en `supported-feature
 
 - **Siguiente: incremento 7, corridas de control**, que lanza el usuario (dos a la vez como mucho): profile-directory
   v1.2.0 en los cuatro generadores sobre PostgreSQL y una con MySQL (T2), registradas en `docs/corridas/`.
+  **Preparadas el 2026-11-13** desde `9be8b08d` (`keel init`, el diseño y su `DESIGN.md`, `ready.log` 13/13 y
+  `build.log`, con el stack sembrado en `keel-stack.json`): `D:\keel-example\cards-229-{spring,nest,dotnet,go}-postgre`
+  y `D:\keel-example\cards-229-go-mysql`. El MySQL es de keel-go y no de keel-dotnet, como en la 2.28: así lo pisa
+  otro generador, y uno que escribe su propio SQL. Cada una se lanza con `cd services/profile-directory-<tech>`, el paso
+  previo de su `build.log` (`npm install`, `dotnet restore`, `go mod tidy`) y `/keel-generate-<tech>` sin argumentos.
 - Lo que se mira en ellas: HI-11 con la app arrancada y telemetría, si el agente de pruebas lee bien `change_history` en
   FL-CRD-007-C (si no, entra el helper `historyOf` en el arnés de los cuatro, como `ageDeletion`), y que los filtros por
   fecha con el `at` leído (FL-CRD-009-C) salgan verdes en los dos motores.
