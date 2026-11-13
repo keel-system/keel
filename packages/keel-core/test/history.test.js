@@ -29,7 +29,17 @@ import {
   topFieldOf,
   usesHistory
 } from '../src/lib/gen/history.js';
-import { CHANGE_HISTORY, CHANGE_HISTORY_FIELD, historyFieldRows } from '../src/lib/gen/history-store.js';
+import {
+  CHANGE_HISTORY,
+  CHANGE_HISTORY_FIELD,
+  HISTORY_ENGINES,
+  historyCountSql,
+  historyFieldRows,
+  historyPageSql,
+  historyStatements
+} from '../src/lib/gen/history-store.js';
+import { anonymizeHistoryChanges, anonymizedEntryChanges, historyNote, historyPersonalPatterns } from '../src/lib/gen/history.js';
+import { GENERATOR_TABLES, schemaStepSql } from '../src/lib/gen/schema-steps.js';
 import { HISTORY_DESIGNS } from './helpers/history-designs.js';
 import { PROBE } from './helpers/probe-projection.js';
 
@@ -86,10 +96,21 @@ test('la forma de lo que se registra: rutas del contrato, hijas por relación y 
     root: 'ContactCard',
     idField: 'id',
     paths: ['subject', 'displayName', 'email'],
+    // Las personales, con lo que reciben al anonimizar: subject es obligatorio (el sustituto), los otros dos, null.
+    personal: [
+      { path: 'subject', required: true },
+      { path: 'displayName', required: false },
+      { path: 'email', required: false }
+    ],
     children: []
   });
+  // El modelo lleva la misma forma en la raíz que la guarda, y ninguna en las demás.
+  assert.deepEqual(derived('cards-history').model.entities.find((entity) => entity.name === 'ContactCard').historyShape, historyShape(layers, 'ContactCard'));
+  assert.equal(designOf('profile-directory').model.entities.find((entity) => entity.name === 'ContactCard').historyShape, null);
   const vault = historyShape(derived('vault-history-scoped').layers, 'Asset');
   assert.deepEqual(vault.children.map((child) => [child.relation, child.entity, child.list]), [['revisions', 'AssetRevision', true]]);
+  // La hija no registra su vuelta a la raíz: no es una referencia a otro agregado.
+  assert.deepEqual(vault.children[0].paths, ['revisionNumber', 'note']);
   // La referencia al propietario (otro agregado) viaja por su id.
   assert.ok(vault.paths.includes('ownerId'), vault.paths.join(', '));
   // Un value object compuesto con dot-path, y fuera lo sensitive y lo generated.
@@ -169,6 +190,9 @@ test('el almacén: una entrada por escritura y una fila de campo por ruta, con e
   assert.equal(CHANGE_HISTORY.table, 'change_history');
   assert.deepEqual(CHANGE_HISTORY.indexes[0].columns, ['root_type', 'root_id', 'at', 'id']);
   assert.equal(CHANGE_HISTORY_FIELD.columns[0].references.onDelete, 'cascade');
+  // CHANGE es palabra reservada en MySQL: la columna del `change` del cable es change_kind.
+  assert.ok(CHANGE_HISTORY.columns.some((column) => column.name === 'change_kind'));
+  assert.ok(!CHANGE_HISTORY.columns.some((column) => column.name === 'change'));
   assert.deepEqual(
     historyFieldRows([{ field: 'price.amount' }, { field: 'lines[7].quantity' }, { field: 'price.amount' }]),
     [{ path: 'price.amount', top: 'price' }, { path: 'lines[7].quantity', top: 'lines' }]
@@ -222,4 +246,71 @@ test('cada sabotaje cae en casos que existen, y cada caso lo derriba algún sabo
   // lo derriba el pd-log-value de la 2.28, que es la misma fuga por otro camino.
   const unsabotaged = [...ids].filter((id) => !covered.has(id)).sort();
   assert.deepEqual(unsabotaged, ['HI-10', 'HI-11', 'HI-3']);
+});
+
+test('la anonimización del historial: los patrones de las rutas personales, la reescritura y la entrada anonymized', () => {
+  const shape = {
+    root: 'Order',
+    idField: 'id',
+    paths: ['buyer', 'note', 'address.street', 'status'],
+    personal: [{ path: 'buyer', required: true }, { path: 'note', required: false }, { path: 'address.street', required: false }],
+    children: [{ relation: 'lines', entity: 'OrderLine', idField: 'id', list: true, paths: ['recipient', 'quantity'], personal: [{ path: 'recipient', required: false }] }]
+  };
+  const patterns = historyPersonalPatterns(shape);
+  assert.deepEqual(patterns.map((entry) => entry.pattern), ['^buyer$', '^note$', '^address\\.street$', '^lines\\[[^\\]]*\\]\\.recipient$']);
+  const changes = [
+    { field: 'buyer', before: 'ana', after: 'eva' },
+    { field: 'status', before: 'open', after: 'paid' },
+    { field: 'address.street', before: null, after: 'Mayor 1' },
+    { field: 'lines[7].recipient', before: null, after: 'luis' },
+    { field: 'lines[7].quantity', before: null, after: 2 },
+    // `buyerX` no es `buyer`: el patrón va anclado.
+    { field: 'buyerX', before: 'a', after: 'b' }
+  ];
+  const { changes: rewritten, touched } = anonymizeHistoryChanges(changes, patterns, 'o1');
+  assert.equal(touched, true);
+  assert.deepEqual(rewritten, [
+    { field: 'buyer', before: 'anon-o1', after: 'anon-o1' },
+    { field: 'status', before: 'open', after: 'paid' },
+    { field: 'address.street', before: null, after: null },
+    { field: 'lines[7].recipient', before: null, after: null },
+    { field: 'lines[7].quantity', before: null, after: 2 },
+    { field: 'buyerX', before: 'a', after: 'b' }
+  ]);
+  // Reescribirla otra vez no cambia nada (el barrido puede repetirse).
+  assert.equal(anonymizeHistoryChanges(rewritten, patterns, 'o1').touched, false);
+  assert.deepEqual(anonymizedEntryChanges([rewritten, [{ field: 'note', before: 'x', after: null }]], patterns, 'o1'), [
+    { field: 'address.street', before: null, after: null },
+    { field: 'buyer', before: 'anon-o1', after: 'anon-o1' },
+    { field: 'lines[7].recipient', before: null, after: null },
+    { field: 'note', before: null, after: null }
+  ]);
+  // Las expresiones valen como expresión regular (y son las que copia cada generador tal cual).
+  for (const { pattern } of patterns) assert.doesNotThrow(() => new RegExp(pattern));
+});
+
+test('las sentencias del almacén: la página se compone con los filtros presentes, en orden, y las dos tablas van en el paso de esquema', () => {
+  for (const engine of HISTORY_ENGINES) {
+    const S = historyStatements(engine);
+    assert.equal(historyPageSql(S, {}), S.pageHead + S.pageTail);
+    assert.equal(historyPageSql(S, { to: 't', field: 'email' }), S.pageHead + S.filters.field + S.filters.to + S.pageTail);
+    assert.equal(historyCountSql(S, { from: 'f' }), S.countHead + S.filters.from);
+    assert.match(S.pageTail, /ORDER BY h\.at DESC, h\.id DESC/);
+    assert.match(S.insertEntry, engine === 'mysql' ? /utc_timestamp\(6\)/ : /current_timestamp/);
+    const sql = schemaStepSql(engine, GENERATOR_TABLES);
+    assert.match(sql, /CREATE TABLE IF NOT EXISTS change_history \(/);
+    assert.match(sql, /CONSTRAINT fk_change_history_field_entry FOREIGN KEY \(entry_id\) REFERENCES change_history \(id\) ON DELETE CASCADE/);
+    // La tabla referenciada va antes que la que la referencia.
+    assert.ok(sql.indexOf('TABLE IF NOT EXISTS change_history (') < sql.indexOf('TABLE IF NOT EXISTS change_history_field ('));
+  }
+  assert.throws(() => historyStatements('oracle'), /no tiene sentencias/);
+});
+
+test('la nota del handler: la llamada del generador, el vacío como no encontrado y los filtros del input', () => {
+  const { model } = derived('cards-history');
+  const note = historyNote(operationOf(model, 'getMyCardHistory'), { historyCall: 'repo.historyOf(...)' });
+  assert.match(note, /^Historial \(output\.history: ContactCard, DSL 2\.29\): repo\.historyOf\(\.\.\.\) carga ContactCard/);
+  assert.match(note, /Ese vacío es el error de no encontrado del diseño/);
+  assert.match(note, /Filtros del input: field \(field\), from \(from\), to \(to\); uno nulo no filtra\.$/);
+  assert.equal(historyNote(operationOf(model, 'getMyCard'), { historyCall: 'x' }), null);
 });

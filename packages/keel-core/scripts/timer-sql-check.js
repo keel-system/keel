@@ -11,7 +11,10 @@
 // fila YA borrada y devuelve cuántas envejeció, que el arnés exige que sea 1. Va aquí porque es SQL de keel-core que los
 // cuatro arneses ejecutan tal cual, con los mismos dos motores.
 //
-// Uso: node scripts/timer-sql-check.js [--database=postgresql|mysql] [--sabotage=no-skip-locked|no-fence|park-order|lag-all-kinds|age-deletion-live|age-deletion-sign]
+// Y las del HISTORIAL (DSL 2.29, gen/history-store.js): la página con su orden y sus filtros, la reescritura, el borrado
+// por raíz y la cascada de la FK.
+//
+// Uso: node scripts/timer-sql-check.js [--database=postgresql|mysql] [--sabotage=no-skip-locked|no-fence|park-order|lag-all-kinds|age-deletion-live|age-deletion-sign|history-order|history-filter]
 //   (podman o docker; ~1 min). Con sabotaje, verde = el sabotaje cae en exactamente sus casos.
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -21,6 +24,7 @@ import { DATABASES } from '../src/lib/gen/infra-catalog.js';
 import { timerStatements, expandList, NIL_ENTITY_ID, TIMER_ENGINES } from '../src/lib/gen/timer-store.js';
 import { GENERATOR_TABLES, schemaStepSql } from '../src/lib/gen/schema-steps.js';
 import { ageDeletionStatement } from '../src/lib/gen/data-lifecycle.js';
+import { historyCountSql, historyFieldRows, historyPageSql, historyStatements } from '../src/lib/gen/history-store.js';
 
 const only = process.argv.find((arg) => arg.startsWith('--database='))?.slice('--database='.length);
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.slice('--sabotage='.length) ?? null;
@@ -32,6 +36,10 @@ const SABOTAGES = {
   // despliegue que retire uno.
   'lag-all-kinds': { breaks: ['retraso'], apply: (s) => ({ ...s, lagMs: s.lagMs.replace('kind IN (:kinds) AND ', '') }) },
   'no-fence': { breaks: ['valla'], apply: (s) => ({ ...s, complete: s.complete.replace(' AND claim_token = :token', '') }) },
+  // La página del historial sin el desempate del id (DSL 2.29): a igual hora el orden lo decide el motor.
+  'history-order': { breaks: ['historial-orden'], apply: (s) => s, history: (h) => ({ ...h, pageTail: h.pageTail.replace(', h.id DESC', ', h.id ASC') }) },
+  // El filtro por campo solo con la ruta entera: `price` ya no casa `price.amount`.
+  'history-filter': { breaks: ['historial-filtro'], apply: (s) => s, history: (h) => ({ ...h, filters: { ...h.filters, field: h.filters.field.replace(' OR f.top = :field', '') } }) },
   // ageDeletion sin «solo si está borrada»: en PostgreSQL cuenta como envejecida una fila VIVA (NULL - intervalo sigue NULL,
   // pero RETURNING la devuelve). En MySQL no cae: ROW_COUNT() no cuenta una fila que no cambió.
   'age-deletion-live': { breaks: ['ageDeletion'], onlyIn: 'postgresql', apply: (s) => s, aging: (q) => q.replace(' AND deleted_at IS NOT NULL', '') },
@@ -311,6 +319,61 @@ async function check(engine) {
       agedGone === '1' && agedLive === '0' && agedNone === '0' && days > 30.9 && days < 31.1 && stillLive,
       `borrada ${agedGone}, viva ${agedLive}, otro id ${agedNone}; la borrada lo está hace ${days.toFixed(2)} días`
     );
+
+    // El historial (DSL 2.29, gen/history-store.js): las dos tablas las creó el paso de esquema de arriba.
+    const H = sabotage && SABOTAGES[sabotage].history ? SABOTAGES[sabotage].history(historyStatements(engine)) : historyStatements(engine);
+    const ROOT = { rootType: 'ContactCard', rootId: 'card-42' };
+    const entry = (id, change, changes, at) => {
+      run(H.insertEntry, { id, ...ROOT, author: 'sub-1', change, changes: JSON.stringify(changes) });
+      for (const field of historyFieldRows(changes)) run(H.insertField, { entryId: id, path: field.path, top: field.top });
+      sql(engine, name, `UPDATE change_history SET at = ${literal(engine, at)} WHERE id = ${literal(engine, id)};`);
+    };
+    const e = (n) => `01900000-0000-7000-8000-00000000000${n}`;
+    const t0 = new Date('2026-11-13T10:00:00.000Z');
+    const at = (minutes) => new Date(t0.getTime() + minutes * 60_000);
+    entry(e(1), 'created', [{ field: 'email', before: null, after: 'a@x.com' }, { field: 'address.city', before: null, after: 'Lima' }], at(0));
+    entry(e(2), 'updated', [{ field: 'displayName', before: null, after: 'Ana' }], at(5));
+    entry(e(3), 'updated', [{ field: 'email', before: 'a@x.com', after: 'b@x.com' }], at(5));
+    entry(e(4), 'deleted', [], at(9));
+    // Otra raíz con el mismo tipo: no se cuela en la página.
+    run(H.insertEntry, { id: e(9), rootType: 'ContactCard', rootId: 'card-43', author: 'sub-2', change: 'created', changes: '[]' });
+    const page = (filters, limit = 10, offset = 0) =>
+      run(historyPageSql(H, filters).replace('SELECT h.id,', `SELECT ${hex('h.id')},`), { ...ROOT, ...filters, limit, offset }).map((row) => row[0].slice(-1));
+    const total = (filters) => Number(run(historyCountSql(H, filters), { ...ROOT, ...filters })[0][0]);
+    // El orden: el más reciente primero y, a igual hora, el id mayor (UUIDv7) delante; la página siguiente sigue donde acabó.
+    const all = page({}).join('');
+    const second = page({}, 2, 2).join('');
+    step(engine, 'historial-orden', all === '4321' && second === '21' && total({}) === 4, `orden ${all}, segunda página ${second}, total ${total({})}`);
+    // El filtro por campo: la ruta entera o el campo de la raíz que la contiene; las fechas, con sus extremos. Como
+    // conjunto: el orden es del paso anterior, y aquí no se mide dos veces.
+    const matching = (filters) => page(filters).sort().join('');
+    const byTop = matching({ field: 'address' });
+    const byPath = matching({ field: 'email' });
+    const byLeaf = matching({ field: 'address.city' });
+    const prefix = matching({ field: 'addr' });
+    const ranged = matching({ from: at(5), to: at(9) });
+    const combined = matching({ field: 'email', from: at(1) });
+    step(
+      engine,
+      'historial-filtro',
+      byTop === '1' && byPath === '13' && byLeaf === '1' && prefix === '' && ranged === '234' && combined === '3' && total({ field: 'email' }) === 2,
+      `address ${byTop}, email ${byPath}, address.city ${byLeaf}, addr ${prefix || '∅'}, rango ${ranged}, email desde ${combined}`
+    );
+    // La anonimización reescribe `changes` de una entrada; el borrado se lleva las entradas y sus campos, y nada más.
+    const rewritten = JSON.stringify([{ field: 'email', before: null, after: null }]);
+    run(H.updateChanges, { id: e(1), changes: rewritten });
+    const stored = run(`SELECT changes FROM change_history WHERE id = :id`, { id: e(1) })[0][0];
+    const kept = run(H.entriesOfRoot.replace('SELECT id,', `SELECT ${hex('id')},`), ROOT).length;
+    run(H.deleteFields, ROOT);
+    run(H.deleteEntries, ROOT);
+    const left = Number(sql(engine, name, `SELECT count(*) FROM change_history WHERE root_id = '${ROOT.rootId}';`)[0][0]);
+    const fieldsLeft = Number(sql(engine, name, 'SELECT count(*) FROM change_history_field;')[0][0]);
+    const others = Number(sql(engine, name, 'SELECT count(*) FROM change_history;')[0][0]);
+    step(engine, 'historial-borrado', stored === rewritten && kept === 4 && left === 0 && fieldsLeft === 0 && others === 1, `reescrita ${stored === rewritten}, de la raíz ${kept} → ${left}, campos ${fieldsLeft}, otras raíces ${others}`);
+    // La cascada de la FK: borrar una entrada a mano se lleva sus campos.
+    entry(e(5), 'created', [{ field: 'email', before: null, after: 'c@x.com' }], at(20));
+    sql(engine, name, `DELETE FROM change_history WHERE id = ${literal(engine, e(5))};`);
+    step(engine, 'historial-cascada', Number(sql(engine, name, 'SELECT count(*) FROM change_history_field;')[0][0]) === 0);
   } catch (error) {
     step(engine, 'sentencias', false, error.message.replace(/\s+/g, ' ').slice(0, 600));
   } finally {

@@ -33,9 +33,21 @@ import { OUTBOX_EVENT, PROCESSED_EVENT, storeColumns } from './messaging-stores.
 import { IDEMPOTENCY_RECORD } from './request-idempotency.js';
 import { RECONCILIATION_CLAIM } from './reconciliation-stores.js';
 import { KEEL_TIMER } from './timer-store.js';
+import { CHANGE_HISTORY, CHANGE_HISTORY_FIELD } from './history-store.js';
 
-/** Las tablas del generador: mecánica de multi-instancia, no algo que el diseño declare. En orden de creación. */
-export const GENERATOR_TABLES = Object.freeze([OUTBOX_EVENT, PROCESSED_EVENT, IDEMPOTENCY_RECORD, RECONCILIATION_CLAIM, KEEL_TIMER]);
+/**
+ * Las tablas del generador: mecánica de multi-instancia (y, desde la 2.29, el almacén del historial), no algo que el
+ * diseño declare. En orden de creación: una tabla referenciada va antes que la que la referencia.
+ */
+export const GENERATOR_TABLES = Object.freeze([
+  OUTBOX_EVENT,
+  PROCESSED_EVENT,
+  IDEMPOTENCY_RECORD,
+  RECONCILIATION_CLAIM,
+  KEEL_TIMER,
+  CHANGE_HISTORY,
+  CHANGE_HISTORY_FIELD
+]);
 
 /** El prefijo del nombre de un paso del generador: lo que lo distingue de los del agente. */
 export const STEP_PREFIX = 'keel';
@@ -86,6 +98,10 @@ export function schemaStepSql(engine, tables) {
     const lines = columns.map((column) => `    ${column.name} ${storeColumnType(column, engine)}${column.nullable ? '' : ' NOT NULL'}`);
     lines.push(`    PRIMARY KEY (${columns.filter((column) => column.primary).map((column) => column.name).join(', ')})`);
     for (const unique of table.uniques ?? []) lines.push(`    CONSTRAINT ${unique.name} UNIQUE (${unique.columns.join(', ')})`);
+    for (const column of columns.filter((candidate) => candidate.references)) {
+      const { name, table: target, column: targetColumn, onDelete } = column.references;
+      lines.push(`    CONSTRAINT ${name} FOREIGN KEY (${column.name}) REFERENCES ${target} (${targetColumn})${onDelete === 'cascade' ? ' ON DELETE CASCADE' : ''}`);
+    }
     if (mysql) for (const index of table.indexes ?? []) lines.push(`    INDEX ${index.name} (${index.columns.join(', ')})`);
     statements.push(`CREATE TABLE IF NOT EXISTS ${table.table} (\n${lines.join(',\n')}\n)${mysql ? ' ENGINE=InnoDB' : ''};`);
     if (!mysql) {

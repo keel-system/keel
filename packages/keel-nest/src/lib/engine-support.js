@@ -804,6 +804,9 @@ export const MECHANISMS = {
         why: 'cards-logical-mongo y codes-anonymize-mongo contra el driver de MongoDB en un replica set real, con las MISMAS sondas que la rama relacional; el índice parcial lleva deletedAt: null (T1). Medido: el mensaje E11000 SÍ lleva el valor duplicado, así que pd-log-value cae aquí. Falsado: lc-get-leak en LC-3 y LC-4, lc-unique-all-rows en LC-5, lc-restore-window en LC-7, rt-early en RT-1, rt-anonymize-miss en RT-2, rt-every-replica en RT-3 y pd-log-value en PD-2. LC-1, LC-2, LC-9 y LC-10 no tienen sujeto documental (ningún diseño derivado lista, embebe ni acota con borrado lógico sobre documentos): su código es el mismo filtro deletedAt: null que miden LC-3 y LC-4, pero sin ejecutar'
       }
     }
+  },
+  history: {
+    pending: 'el historial de cambios (DSL 2.29) llega en el incremento 2 de PLAN-DSL-229-HISTORIAL.md: hasta entonces supported-features.js lo rechaza entero (historyPendingErrors)'
   }
 };
 

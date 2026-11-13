@@ -45,6 +45,8 @@ export const NETS = {
     'npm run read-scope-check — la LECTURA ACOTADA (DSL 2.27) contra el motor y en el borde: el listado y su total acotados, el camino de relaciones, loadScoped con su readMiss, el conjunto vacío, la composición con los filtros, la clave de caché, ReadScopes desde el token y el 403 (RS-1 a RS-11)',
   'lifecycle-check':
     'npm run lifecycle-check — el CICLO DE VIDA DEL DATO (DSL 2.28) contra el motor con el contexto del perfil local: las lecturas vivas y su total, la clave que se libera, la restauración con su ventana, la lectura por referencia, la vida sumada al alcance, la retención y sus dos réplicas, y el valor personal fuera de los logs (LC-1 a LC-10, RT-1 a RT-4, PD-2)',
+  'history-check':
+    'npm run history-check — el HISTORIAL DE CAMBIOS (DSL 2.29) contra el motor con el contexto del perfil local: la entrada en la transacción de la escritura, el diff, lo que no entra, el autor, la página con su orden y sus filtros, la lectura acotada como la ficha, la restauración y la retención que se lleva o anonimiza el historial (HI-1 a HI-10)',
   corrida: 'una corrida en vivo: no es determinista ni repetible en CI, así que nombra cuál',
   ninguna: 'nadie lo ejecuta'
 };
@@ -175,6 +177,10 @@ export const MECHANISM_CATALOG = {
   },
   'data-lifecycle': {
     title: 'Ciclo de vida del dato (DSL 2.28): el borrado lógico con sus lecturas vivas y su unicidad entre vivas, la restauración con su ventana, la retención sobre el cronómetro y los datos personales fuera de los logs',
+    axis: 'model'
+  },
+  history: {
+    title: 'Historial de cambios (DSL 2.29): una entrada por escritura confirmada en su misma transacción, con el diff del agregado, el autor, la página ordenada y filtrada, la lectura acotada como la ficha y la retención que se lo lleva o lo anonimiza',
     axis: 'model'
   }
 };

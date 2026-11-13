@@ -109,7 +109,7 @@ test('schemaStepFiles: escribe el paso que falta, después lo vuelve a emitir TA
 
   // Una tabla nueva del generador después: el siguiente número, tras el paso del agente.
   const third = schemaStepFiles({ projectDir: dir, tables: [...tables, ...GENERATOR_TABLES], engine: 'postgresql', ...RECIPE });
-  assert.deepEqual(third.added, [`${DIR}/V5__keel_idempotency_record_reconciliation_claim.sql`]);
+  assert.deepEqual(third.added, [`${DIR}/V5__keel_idempotency_record_reconciliation_claim_change_history_change_history_field.sql`]);
 });
 
 test('schemaStepFiles: sin baseline no escribe nada, y con un motor sin pasos deja el trabajo escrito', () => {

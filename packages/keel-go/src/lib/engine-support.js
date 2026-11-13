@@ -705,6 +705,9 @@ export const MECHANISMS = {
         why: 'cards-logical-mongo y codes-anonymize-mongo contra el driver de MongoDB en un replica set real, con las MISMAS sondas que la rama relacional; el índice parcial lleva deletedAt: null (T1) y la sonda de los índices vivos lo mira contra keel-core. Falsado: lc-get-leak en LC-3 y LC-4, lc-unique-all-rows en LC-5 (y en los índices vivos), lc-restore-window en LC-7, rt-early en RT-1, rt-anonymize-miss en RT-2 y rt-every-replica en RT-3. LC-1, LC-2, LC-9 y LC-10 no tienen sujeto documental (ningún diseño derivado lista, embebe ni acota con borrado lógico sobre documentos): su código es el mismo filtro deletedAt nulo que miden LC-3 y LC-4, pero sin ejecutar, y sus cuatro sabotajes no tienen qué romper. PD-2 no se mide aquí: el driver no escribe en el log ni translate copia su mensaje'
       }
     }
+  },
+  history: {
+    pending: 'el historial de cambios (DSL 2.29) llega en el incremento 4 de PLAN-DSL-229-HISTORIAL.md: hasta entonces supported-features.js lo rechaza entero (historyPendingErrors)'
   }
 };
 

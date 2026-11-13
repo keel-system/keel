@@ -76,6 +76,7 @@ import * as payments from './payments.js';
 import * as services from './services.js';
 import * as timer from './timer.js';
 import * as dataLifecycle from './data-lifecycle.js';
+import * as history from './history.js';
 import { enginesWithPartialIndex } from './migrations.js';
 import * as readme from './readme.js';
 import * as contextMd from './context-md.js';
@@ -175,6 +176,8 @@ const GENERATORS = [
   timer,
   // La retención de los agregados (DSL 2.28): qué ha vencido y qué se hace con ello; la dispara el cronómetro.
   dataLifecycle,
+  // El historial de cambios (DSL 2.29): el puerto, el diff y su almacén; lo escriben los adaptadores de las raíces.
+  history,
   // Después de services: su matriz cita clases que los generadores de arriba nombran,
   // aunque el script solo las busque en tiempo de ejecución.
   idempotencyCheck,
@@ -245,6 +248,9 @@ export function planService({ manifest, layers, fixtures = null, workspace, stac
   // El ciclo de vida del dato (DSL 2.28) que este motor no puede sostener: la unicidad entre vivas, lo que se anonimiza.
   const lifecycleErrors = dataLifecycle.lifecycleStackErrors(model, enginesWithPartialIndex());
   if (lifecycleErrors.length > 0) throw new Error(lifecycleErrors.join('\n'));
+  // El historial (DSL 2.29): sentencias medidas para PostgreSQL y MySQL, y MongoDB.
+  const historyErrors = history.historyStackErrors(model);
+  if (historyErrors.length > 0) throw new Error(historyErrors.join('\n'));
   const scopeErrors = readScopeGenerationErrors(model);
   if (scopeErrors.length > 0) throw new Error(scopeErrors.join('\n'));
   return { model, stack: resolved, files: GENERATORS.flatMap((generator) => generator.generate(model)) };

@@ -35,6 +35,7 @@ import { attachQueryFinders } from './query-filters.js';
 import { readScopesOfLayers, readScopeOfOperation, isOptionalAuth } from './read-scope.js';
 import { guardedByNaturalKey } from './natural-key-guard.js';
 import { domainGuardKind } from './domain-guard.js';
+import { historyShape } from './history.js';
 
 const CRUD_PREFIXES = ['create', 'get', 'list', 'update', 'delete'];
 
@@ -102,6 +103,8 @@ function interpret({ manifest, layers, stack = null }) {
   const formatTypes = collectFormatTypes(domainTypes);
   const entities = collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPersistence, warnings, stack);
   attachTransitionExecutors(entities, layers['use-cases']?.operations ?? {});
+  // Lo que registra el historial de cada raíz que lo lleva (DSL 2.29): rutas del contrato, hijas y rutas personales.
+  for (const entity of entities) entity.historyShape = entity.history ? historyShape(layers, entity.name) : null;
 
   // Un VO usado en un campo colección (list) de una entidad persistida necesita
   // su espejo @Embeddable (XxxJpa): @ElementCollection<List<XxxJpa>>. Se marca

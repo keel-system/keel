@@ -16,6 +16,7 @@ import { ANONYMOUS_PREFIX, deletedLookupOf, lifecycleRoots, retentionParameters 
 import { operationError } from '@keel-system/keel-core/gen/declared-errors';
 import { retentionCaches } from '@keel-system/keel-core/gen/cache-plan';
 import { javaFile, javaPath, subPackage } from './render.js';
+import { historyImport, historyRecordLine, recordsHistory, rootTypeConstant } from './history.js';
 
 export const RETENTION_PKG = 'infrastructure.persistence.retention';
 
@@ -188,7 +189,12 @@ export function jpaAdapterMethods(model, entity, id, jpaField, keyFinder, import
     public void deleteById(${id.javaType} ${id.name}) {
         // Borrado lógico (DSL 2.28, D1): se marca y no se elimina. La fila deja de verse en toda lectura del puerto y
         // su clave única queda libre (los índices únicos de la tabla solo cuentan las filas vivas).
-        ${jpaField}.findById${LIVE_SUFFIX}(${id.name}).ifPresent(jpa -> jpa.set${capital(DELETED_AT.field)}(Instant.now()));
+${recordsHistory(entity)
+    ? `        ${jpaField}.findById${LIVE_SUFFIX}(${id.name}).ifPresent(jpa -> {
+            jpa.set${capital(DELETED_AT.field)}(Instant.now());
+            // El historial (DSL 2.29): la baja deja su entrada, sin cambios de campos.
+${historyRecordLine(model, entity, 'deleted', id.name, imports, '            ')}        });`
+    : `        ${jpaField}.findById${LIVE_SUFFIX}(${id.name}).ifPresent(jpa -> jpa.set${capital(DELETED_AT.field)}(Instant.now()));`}
     }`);
   if (lifecycle.restore) {
     const deleted = deletedFinder(entity, keyFinder);
@@ -232,7 +238,11 @@ function restoreMethod(model, entity, id, restore, imports, loadDeleted, saveFlu
             throw new ${error.exceptionClass}(${args.join(', ')});
         }
         row.set${capital(DELETED_AT.field)}(null);
-        return Optional.of(toDomain(${saveFlushed('row')}));
+${recordsHistory(entity)
+    ? `        ${entity.name} restored = toDomain(${saveFlushed('row')});
+        // El historial (DSL 2.29): la restauración deja su entrada, sin cambios de campos.
+${historyRecordLine(model, entity, 'restored', id.name, imports)}        return Optional.of(restored);`
+    : `        return Optional.of(toDomain(${saveFlushed('row')}));`}
     }`;
 }
 
@@ -301,6 +311,26 @@ export function generate(model) {
   return retentionRoots(model).map(({ entity, root }) => (document ? mongoRetention(model, entity, root) : jpaRetention(model, entity, root)));
 }
 
+/**
+ * Lo que la retención le hace al historial de la raíz (DSL 2.29, D8): `then: delete` se lo lleva y `then: anonymize`
+ * reescribe sus valores personales y deja la entrada `anonymized`. `{ line, field, param, assign }`, o null sin historial.
+ */
+function retentionHistory(model, entity, retention, id, imports) {
+  if (!recordsHistory(entity)) return null;
+  imports.add(historyImport(model, 'ChangeHistory'));
+  imports.add(historyImport(model, 'HistoryRoots'));
+  const call = retention.then === 'delete'
+    ? `changeHistory.purge(${rootTypeConstant(entity)}, String.valueOf(${id.name}));`
+    : `changeHistory.anonymize(${rootTypeConstant(entity)}, String.valueOf(${id.name}), ${rootTypeConstant(entity)}_PERSONAL);`;
+  return {
+    line: `        // El historial de la raíz sigue su régimen (DSL 2.29, D8), en la misma transacción.
+        ${call}`,
+    field: '\n\n    private final ChangeHistory changeHistory;',
+    param: ', ChangeHistory changeHistory',
+    assign: '\n        this.changeHistory = changeHistory;'
+  };
+}
+
 function jpaRetention(model, entity, root) {
   const className = retentionClass(entity.name);
   const jpaRepository = `${entity.name}JpaRepository`;
@@ -334,6 +364,7 @@ ${body}
         });`;
       })();
   const fromField = retention.from;
+  const recorded = retentionHistory(model, entity, retention, id, imports);
   const body = `/**
  * La retención de ${entity.name} (persistence.${entity.name}.retention, DSL 2.28): ${retention.fromDeleted ? 'desde el borrado lógico' : `desde ${fromField}`}, ${spanText(retention.span)}, y
  * después ${retention.then === 'delete' ? 'se BORRA' : 'se ANONIMIZA'}. La dispara {@code ${retentionTimerClass(entity.name)}}, un recurrente del
@@ -345,10 +376,10 @@ ${body}
 @Component
 public class ${className} {
 
-    private final ${jpaRepository} ${field};
+    private final ${jpaRepository} ${field};${recorded?.field ?? ''}
 
-    public ${className}(${jpaRepository} ${field}) {
-        this.${field} = ${field};
+    public ${className}(${jpaRepository} ${field}${recorded?.param ?? ''}) {
+        this.${field} = ${field};${recorded?.assign ?? ''}
     }
 
     /** Los ids que han vencido en {@code cutoff} (vence EN el corte), los más antiguos primero, como mucho {@code limit}. */
@@ -360,7 +391,8 @@ public class ${className} {
     /** Lo que la retención hace con un agregado vencido, en su propia transacción. */
     @Transactional
     public void apply(${id.javaType} ${id.name}) {
-${outcome}
+${outcome}${recorded ? `
+${recorded.line}` : ''}
     }
 }`;
   return { path: javaPath(model, RETENTION_PKG, className), content: javaFile(subPackage(model, RETENTION_PKG), [...imports], body) };
@@ -559,7 +591,7 @@ export function mongoAdapterMethods(model, entity, id, repoField, keyFinder, imp
         ${repoField}.findById${LIVE_SUFFIX}(${id.name}).ifPresent(document -> {
             document.set${capital(DELETED_AT.field)}(Instant.now());
             ${repoField}.save(document);
-        });
+${historyRecordLine(model, entity, 'deleted', id.name, imports, '            ')}        });
     }`];
   if (lifecycle.restore) {
     const deleted = deletedFinder(entity, keyFinder);
@@ -622,6 +654,7 @@ ${body}
         });`;
   }
   const pending = retention.then === 'anonymize' ? `.and("${ANONYMIZED_AT.field}").is(null)` : '';
+  const recorded = retentionHistory(model, entity, retention, id, imports);
   const body = `/**
  * La retención de ${entity.name} (persistence.${entity.name}.retention, DSL 2.28): ${retention.fromDeleted ? 'desde el borrado lógico' : `desde ${retention.from}`}, ${spanText(retention.span)}, y
  * después ${retention.then === 'delete' ? 'se BORRA' : 'se ANONIMIZA'}. La dispara {@code ${retentionTimerClass(entity.name)}}, un recurrente del
@@ -633,11 +666,11 @@ public class ${className} {
 
     private final MongoTemplate mongoTemplate;
 
-    private final ${repository} ${field};
+    private final ${repository} ${field};${recorded?.field ?? ''}
 
-    public ${className}(MongoTemplate mongoTemplate, ${repository} ${field}) {
+    public ${className}(MongoTemplate mongoTemplate, ${repository} ${field}${recorded?.param ?? ''}) {
         this.mongoTemplate = mongoTemplate;
-        this.${field} = ${field};
+        this.${field} = ${field};${recorded?.assign ?? ''}
     }
 
     /** Los ids que han vencido en {@code cutoff} (vence EN el corte), los más antiguos primero, como mucho {@code limit}. */
@@ -652,7 +685,8 @@ public class ${className} {
     /** Lo que la retención hace con un agregado vencido, en su propia transacción. */
     @Transactional
     public void apply(${id.javaType} ${id.name}) {
-${outcome}
+${outcome}${recorded ? `
+${recorded.line}` : ''}
     }
 }`;
   return { path: javaPath(model, RETENTION_PKG, className), content: javaFile(subPackage(model, RETENTION_PKG), [...imports], body) };

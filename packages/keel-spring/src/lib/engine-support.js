@@ -872,6 +872,31 @@ const SPRING_MECHANISMS = {
         why: 'cards-logical-mongo y codes-anonymize-mongo contra Spring Data MongoDB en un replica set real, con las MISMAS sondas que la rama relacional. Medido aquí (T1): el índice parcial con deletedAt: null casa con el campo ausente y con el nulo, y $exists: false lo rechaza el motor. Falsado: lc-get-leak, lc-unique-all-rows, lc-restore-window, rt-anonymize-miss y pd-log-value, cada uno en exactamente sus casos'
       }
     }
+  },
+  history: {
+    emitter: 'src/scaffold/history.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js · src/scaffold/data-lifecycle.js · src/scaffold/services.js · src/scaffold/auditing.js',
+    why: 'Una entrada que sobrevive al rollback, un diff que lo lista todo, un secreto copiado a otra tabla, un autor que siempre es system, una página que desempata al revés, el historial de una raíz ajena o borrada y un valor personal que sobrevive a su retención compilan igual de bien y no rompen ningún escenario feliz.',
+    parity: {
+      skip: 'ninguna fixture declara el historial hasta el incremento 6 de PLAN-DSL-229-HISTORIAL.md: los sujetos son los diseños derivados de keel-core/test/helpers/history-designs.js (cards-history y cards-history-mongo, el mismo diseño salvo el modelo; cards-history-anonymize; vault-history-scoped y vault-history-scoped-mongo), que medirán también keel-nest, keel-dotnet y keel-go; la forma la fija test/history.test.js',
+      test: 'test/history.test.js'
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'history-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'cards-history (alta, cambio, baja lógica, restauración y purga de lo borrado), cards-history-anonymize y vault-history-scoped (hijas por su id y la lectura acotada), con el contexto entero del perfil local contra el motor: HI-1 a HI-10, y las sentencias de keel-core medidas además en timer-sql-check (history-order, history-filter). T1 medido: la instantánea «antes» sale de la fila gestionada cargada antes de volcar el agregado. Falsado: hi-outside-tx en HI-1, hi-full-snapshot en HI-2, hi-sensitive en HI-4, hi-author en HI-5, hi-order en HI-6, hi-unscoped en HI-7, hi-anonymize-miss en HI-8 y hi-purge-miss en HI-9'
+      },
+      document: {
+        state: 'verificado',
+        net: 'history-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'cards-history-mongo y vault-history-scoped-mongo contra Spring Data MongoDB en un replica set real, con las MISMAS sondas que la rama relacional: la entrada en la transacción de MongoTransactionManager, el orden por at y _id, el filtro sobre fields.path y fields.top. Falsado con los mismos sabotajes, cada uno en exactamente sus casos'
+      }
+    }
   }
 };
 

@@ -23,6 +23,7 @@ import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import { partialUniqueIndexes } from './persistence-members.js';
 import { collectInternalEntities, keyShadow, naturalKeyBatchReason, uniqueFields } from '@keel-system/keel-core/gen/relational';
 import * as lifecycle from './data-lifecycle.js';
+import * as history from './history.js';
 
 export const PORT_PKG = 'domain.repository';
 export const REPO_PKG = 'infrastructure.persistence.repositories';
@@ -425,6 +426,8 @@ export function renderPort(model, entity, paginated, batchLookup) {
   methods.push(`    ${entity.name} save(${entity.name} entity);`, lifecycle.deletePortMethod(model, entity, id));
   // La restauración de un borrado lógico (DSL 2.28, D6): la borrada por su clave y la restauración por id.
   methods.push(...lifecycle.restorePortMethods(model, entity, id, finder, imports));
+  // El historial de cambios (DSL 2.29, D7): su lectura carga la raíz como su ficha.
+  methods.push(...history.historyPortMethods(model, entity, imports));
 
   const body = `/**
  * Puerto de persistencia del agregado ${entity.name}; el adaptador JPA vive en
@@ -759,18 +762,34 @@ ${arming ? `${arming.after}\n` : ''}${emitsEvents ? '        entity.pullDomainEv
     @Transactional(propagation = Propagation.REQUIRES_NEW)`
     : `    @Override
     @Transactional`;
-  methods.push(
-    `${saveTransaction}
+  // El historial (DSL 2.29): save escribe su entrada en la misma transacción, con lo que había leído de la fila gestionada.
+  const saveMethods = history.recordsHistory(entity)
+    ? history.wrapSave(model, entity, { annotations: saveTransaction, signature: `public ${entity.name} save(${entity.name} entity)`, body: saveBody, loadPrevious: `${jpaField}.findById(entity.${id.getter}()).map(this::toDomain)` }, imports)
+    : [
+        `${saveTransaction}
     public ${entity.name} save(${entity.name} entity) {
 ${saveBody}
-    }`,
+    }`
+      ];
+  methods.push(
+    ...saveMethods,
     ...(lifecycle.jpaAdapterMethods(model, entity, id, jpaField, finder, imports) ?? [
-      `    @Override
+      history.recordsHistory(entity)
+        ? `    @Override
+    @Transactional
+    public void deleteById(${id.javaType} ${id.name}) {
+        // Una baja deja su entrada (DSL 2.29), solo si había fila.
+        if (${jpaField}.existsById(${id.name})) {
+            ${jpaField}.deleteById(${id.name});
+${history.historyRecordLine(model, entity, 'deleted', id.name, imports, '            ')}        }
+    }`
+        : `    @Override
     @Transactional
     public void deleteById(${id.javaType} ${id.name}) {
         ${jpaField}.deleteById(${id.name});
     }`
-    ])
+    ]),
+    ...history.historyAdapterMethods(model, entity, imports)
   );
 
   // Entidades que alguien construye desde cero al mapear (relación one-to-one
@@ -822,6 +841,12 @@ ${saveBody}
     fields.push('    private final EntityManager entityManager;');
     ctorParams.push('EntityManager entityManager');
     ctorAssigns.push('        this.entityManager = entityManager;');
+  }
+  const historyStore = history.adapterCollaborator(model, entity, imports);
+  if (historyStore) {
+    fields.push(historyStore.field);
+    ctorParams.push(historyStore.param);
+    ctorAssigns.push(historyStore.assign);
   }
   if (emitsEvents) {
     fields.push('    private final ApplicationEventPublisher eventPublisher;');

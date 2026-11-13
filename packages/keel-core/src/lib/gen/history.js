@@ -54,15 +54,35 @@ function fieldPaths(name, spec, types, depth = 0) {
     .flatMap(([sub, subSpec]) => fieldPaths(`${name}.${sub}`, subSpec, types, depth + 1));
 }
 
-/** Las rutas que registra una entidad: sus campos y, de sus relaciones a OTRO agregado, `<relación>Id`. */
-function entityPaths(layers, entityName, internal) {
+/**
+ * Las rutas PERSONALES de una entidad (DSL 2.28): las de sus campos `personal`, con `required` de lo que vale al
+ * anonimizar (D9 de la 2.28): un escalar obligatorio recibe el sustituto y lo demás, null. Un value object compuesto se
+ * vacía entero, como en la retención: sus hojas van a null.
+ */
+function entityPersonalPaths(layers, entityName) {
+  const entity = layers.domain?.entities?.[entityName];
+  const types = layers.domain?.types;
+  return Object.entries(entity?.fields ?? {})
+    .filter(([, spec]) => recordedField(spec) && spec?.personal === true)
+    .flatMap(([name, spec]) => {
+      const paths = fieldPaths(name, spec, types);
+      const scalar = paths.length === 1 && paths[0] === name;
+      return paths.map((path) => ({ path, required: scalar && spec.required === true }));
+    });
+}
+
+/**
+ * Las rutas que registra una entidad: sus campos y, de sus relaciones a OTRO agregado, `<relación>Id`. `own` son las
+ * entidades de su propio agregado: una relación a ellas no es una referencia.
+ */
+function entityPaths(layers, entityName, own) {
   const entity = layers.domain?.entities?.[entityName];
   const types = layers.domain?.types;
   const paths = Object.entries(entity?.fields ?? {})
     .filter(([, spec]) => recordedField(spec))
     .flatMap(([name, spec]) => fieldPaths(name, spec, types));
   for (const [relation, spec] of Object.entries(entity?.relations ?? {})) {
-    if (internal.has(spec?.entity)) continue;
+    if (own.has(spec?.entity)) continue;
     if (spec?.cardinality === 'many-to-one' || spec?.cardinality === 'one-to-one') paths.push(`${relation}Id`);
   }
   return paths;
@@ -89,9 +109,78 @@ export function historyShape(layers, rootName) {
       entity: spec.entity,
       idField: idFieldOf(layers, spec.entity),
       list: spec.cardinality === 'one-to-many' || spec.cardinality === 'many-to-many',
-      paths: entityPaths(layers, spec.entity, internal)
+      // La hija no registra su vuelta a la raíz: es la raíz misma, no una referencia a otro agregado.
+      paths: entityPaths(layers, spec.entity, new Set([...internal, rootName])),
+      personal: entityPersonalPaths(layers, spec.entity)
     }));
-  return { root: rootName, idField: idFieldOf(layers, rootName), paths: entityPaths(layers, rootName, internal), children };
+  return {
+    root: rootName,
+    idField: idFieldOf(layers, rootName),
+    paths: entityPaths(layers, rootName, internal),
+    personal: entityPersonalPaths(layers, rootName),
+    children
+  };
+}
+
+// ─── La anonimización del historial (D8): referencia ejecutable ──────────────
+
+const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Las rutas personales del historial de una raíz como patrones: `[{ pattern, required }]`, con `pattern` una expresión
+ * regular ANCLADA que vale igual en JavaScript, Java, C# y Go (RE2): `^email$`, `^lines\[[^\]]*\]\.email$`. Un cambio
+ * cuyo `field` casa con alguna es un valor personal: la anonimización lo reescribe y ningún log lo lleva (D9).
+ */
+export function historyPersonalPatterns(shape) {
+  const out = shape.personal.map(({ path, required }) => ({ pattern: `^${escapeRegex(path)}$`, required }));
+  for (const child of shape.children) {
+    const prefix = child.list ? `${escapeRegex(child.relation)}\\[[^\\]]*\\]\\.` : `${escapeRegex(child.relation)}\\.`;
+    for (const { path, required } of child.personal) out.push({ pattern: `^${prefix}${escapeRegex(path)}$`, required });
+  }
+  return out;
+}
+
+/** Lo que vale un cambio personal anonimizado: el sustituto `anon-<id de la raíz>` si es obligatorio, null si no. */
+function anonymizedHistoryValue(required, rootId) {
+  return required ? `anon-${rootId}` : null;
+}
+
+/** El patrón que casa con una ruta, o null. */
+function personalMatch(patterns, field) {
+  return patterns.find(({ pattern }) => new RegExp(pattern).test(field)) ?? null;
+}
+
+/**
+ * Reescribe los valores personales de los cambios de UNA entrada (D8): `before` y `after` pasan al valor anonimizado. El
+ * resto queda igual. Devuelve los cambios nuevos y si alguno cambió (una entrada sin cambios no se reescribe).
+ */
+export function anonymizeHistoryChanges(changes, patterns, rootId) {
+  let touched = false;
+  const out = changes.map((change) => {
+    const match = personalMatch(patterns, change.field);
+    if (!match) return change;
+    const value = anonymizedHistoryValue(match.required, rootId);
+    if (sameValue(change.before, value) && sameValue(change.after, value)) return change;
+    touched = true;
+    return { field: change.field, before: value, after: value };
+  });
+  return { changes: out, touched };
+}
+
+/**
+ * Los cambios de la entrada `anonymized` que deja la retención (D8): una por ruta personal que aparece en el historial de
+ * la raíz, ya anonimizada, con el valor anonimizado en `before` y en `after` (el anterior ya no existe en ninguna parte).
+ * Ordenados por ruta, como los de `historyDiff`.
+ */
+export function anonymizedEntryChanges(entries, patterns, rootId) {
+  const seen = new Map();
+  for (const changes of entries) {
+    for (const change of changes) {
+      const match = personalMatch(patterns, change.field);
+      if (match && !seen.has(change.field)) seen.set(change.field, anonymizedHistoryValue(match.required, rootId));
+    }
+  }
+  return [...seen.keys()].sort().map((field) => ({ field, before: seen.get(field), after: seen.get(field) }));
 }
 
 /** ¿Es la raíz persistida de un agregado? Lo que puede llevar historial. */
@@ -236,6 +325,23 @@ export function historyOperations(model) {
     .flatMap((group) => group.operations ?? [])
     .filter((operation) => operation.historyOf)
     .map((operation) => ({ operation: operation.name, root: operation.historyOf, filters: operation.historyFilters }));
+}
+
+/**
+ * La nota del handler de una query de historial, la misma en los cuatro generadores. `historyCall` es la llamada al
+ * puerto de la raíz en el lenguaje del generador (`historyOf(...)`), que carga la raíz con la MISMA lectura que su ficha
+ * —viva y, si la raíz va acotada, con el alcance— antes de leer el almacén (D7).
+ */
+export function historyNote(operation, { historyCall }) {
+  if (!operation?.historyOf) return null;
+  const filters = Object.entries(operation.historyFilters ?? {}).filter(([, input]) => input).map(([role, input]) => `${input} (${role})`);
+  return (
+    `Historial (output.history: ${operation.historyOf}, DSL 2.29): ${historyCall} carga ${operation.historyOf} con la misma ` +
+    'lectura que su ficha —viva y, si va acotada, con el alcance del llamante— y devuelve la página de entradas ya ordenada ' +
+    '(la más reciente primero) y filtrada; vacío si la raíz no existe, está borrada o es ajena con readMiss: not-found. Ese ' +
+    'vacío es el error de no encontrado del diseño. Las entradas las escribe el adaptador en cada escritura: aquí no se ' +
+    `escribe ninguna, ni se lee el almacén por otra vía.${filters.length > 0 ? ` Filtros del input: ${filters.join(', ')}; uno nulo no filtra.` : ''}`
+  );
 }
 
 // ─── Casos y sabotajes ───────────────────────────────────────────────────────

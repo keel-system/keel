@@ -1,7 +1,7 @@
 # DSL 2.29: el historial de cambios consultable (R12)
 
-**Estado: en curso.** El incremento 0 (keel-core) está hecho; el siguiente es el 1 (keel-spring). Ver § Estado y § Para
-retomar.
+**Estado: en curso.** Los incrementos 0 (keel-core) y 1 (keel-spring) están hechos; el siguiente es el 2 (keel-nest). Ver
+§ Estado y § Para retomar.
 
 Origen: R12 de `docs/evaluacion-dsl-2.24.md`. Este plan la lleva al DSL y a los cuatro generadores con la regla de
 siempre: **el mismo diseño genera servidores equivalentes**, y cada pieza nueva tiene una red que la ejecuta y un
@@ -134,6 +134,34 @@ personales?»), solo si el diseño ya declara algún `history`.
 - **HI-3, HI-10 y HI-11 no tienen sabotaje propio**: son el camino feliz del diff y de la restauración, que
   `hi-full-snapshot` e `hi-outside-tx` ya rompen, y la fuga que derriba el `pd-log-value` de la 2.28.
 
+**Decidido al escribir el incremento 1 (2026-11-13):**
+
+- **La columna es `change_kind`, no `change`**: CHANGE es palabra reservada en MySQL. En el cable sigue siendo `change`.
+- **Las sentencias** están en `history-store.js` (`historyStatements(engine)`, PostgreSQL y MySQL): la entrada, sus campos,
+  la página por piezas (`pageHead` + los filtros presentes en el orden field, from, to + `pageTail`, compuesta con
+  `historyPageSql`: un filtro ausente no se escribe, porque PostgreSQL no tipa un parámetro que solo sale en `:x IS NULL`),
+  el total, la reescritura al anonimizar y el borrado por raíz (campos y entradas, sin depender de la cascada). La hora es
+  la del MOTOR y a igual hora desempata el id, un UUID v7. Las mide `timer-sql-check` (`historial-orden`,
+  `historial-filtro`, `historial-borrado`, `historial-cascada`), falsado con `history-order` e `history-filter`.
+- **Las dos tablas entran en `GENERATOR_TABLES`**, con la FK (`fk_change_history_field_entry`, ON DELETE CASCADE) en
+  `schemaStepSql`. El documental guarda `changes` como TEXTO, igual que el relacional (un decimal del cable no sobrevive a
+  BSON y vuelta), y `fields: [{ path, top }]` en vez de la segunda tabla; su hora es la del servidor de la aplicación.
+- **El modelo lleva `entity.historyShape`** (`historyShape` de las capas) y la forma gana `personal` (rutas personales con
+  `required`); `historyPersonalPatterns` las da como expresiones ANCLADAS que valen en JS, Java, C# y Go, y
+  `anonymizeHistoryChanges`/`anonymizedEntryChanges` son la referencia de D8. La entrada `anonymized` lleva una ruta por
+  campo personal que aparece en el historial de la raíz. Medido al compilar: la hija ya no registra su vuelta a la raíz
+  (`assetId`), que no es una referencia a otro agregado.
+- **D7 en el puerto**: la lectura es `historyOf(id[, scope], HistoryFilter, Pageable)` en el puerto de la RAÍZ (o
+  `historyOfBy<Clave>` si la carga acotada es por clave), y devuelve `Optional<Page<HistoryEntry>>`: carga la raíz con su
+  lectura de ficha (viva y, si va en `reads`, acotada) antes de leer el almacén. El handler no tiene otra puerta al
+  almacén. La nota neutral es `historyNote` (history.js).
+- **T1 en keel-spring**: la instantánea «antes» se toma de la fila cargada ANTES de que el cuerpo de `save` vuelque el
+  agregado sobre ella (la instancia gestionada, la misma que reutiliza el cuerpo); el cuerpo de antes queda en
+  `saveUnrecorded`. El actor es el `AuditorAware` de la autoría, que se emite también con `authorship: none` (D5).
+- **Lo que queda fuera del incremento 1**: T6 (la caché de una query de historial) no tiene sujeto, porque ningún diseño
+  la declara; la invalidación con cualquier escritura de la raíz se decide cuando uno la pida. HI-11 es de
+  `telemetry-check` (inc. 2-4 y la corrida de control).
+
 ## Núcleo neutral (`keel-core/src/lib/gen`)
 
 - **`history.js`**: qué raíces llevan historial, el **diff** de dos instantáneas del agregado como referencia ejecutable
@@ -238,7 +266,7 @@ generador que no llegue rechaza la capacidad con su motivo en `supported-feature
 | Incremento | Estado | Medido con |
 |---|---|---|
 | 0. keel-core | hecho (2026-11-13) | la suite de keel-core (1570), `design-matrix` (224 falsados, 4 co-disparados entre ellos `CHK-PERSIST-HISTORY-NO-SECURITY`, ninguno sin mutación), `test/history.test.js` sobre los cinco sujetos y la suite entera de los seis paquetes |
-| 1. keel-spring | pendiente | |
+| 1. keel-spring | hecho (2026-11-13) | `timer-sql-check` (36 pasos, `history-order` e `history-filter` cada uno en su caso); `compile-check` de los cinco sujetos; `npm run history-check` en verde en los cinco (cards-history en PostgreSQL y MySQL, cards-history-mongo, cards-history-anonymize, vault-history-scoped[-mongo]); los 19 sabotajes `hi-*` cada uno en exactamente su caso, también en MySQL y MongoDB; `test/history.test.js` y fila `history` de la matriz, verificada y falsada en sus dos ramas |
 | 2. keel-nest | pendiente | |
 | 3. keel-dotnet | pendiente | |
 | 4. keel-go | pendiente | |
@@ -248,12 +276,18 @@ generador que no llegue rechaza la capacidad con su motivo en `supported-feature
 
 ## Para retomar
 
-- **Siguiente: incremento 1, keel-spring.** Empieza por quitar su `historyPendingErrors` de `supported-features.js` y la
-  fila `persistence.audit.history` de su `capability-coverage`, y por diseñar en `gen/history-store.js` las sentencias que
-  el adaptador necesita: la página con los filtros (`path = ? OR top = ?` en `change_history_field`), el borrado por raíz y
-  la reescritura de los valores personales al anonimizar. Después la tabla en `GENERATOR_TABLES` de `schema-steps.js`.
-- **La trampa que primero hay que medir es T1**: en JPA la instantánea «antes» se toma al CARGAR la raíz (el `save` ya
-  recibe la entidad gestionada y modificada); `historyDiff`/`historyEntry` de `gen/history.js` son la referencia
-  ejecutable del diff con la que comparar.
+- **Siguiente: incremento 2, keel-nest.** Empieza por quitar su `historyPendingErrors` de `supported-features.js`, su fila
+  `pending` de `src/lib/engine-support.js` y la de `persistence.audit.history` de su `capability-coverage`. Lo neutral ya
+  está: las sentencias (`historyStatements`, `historyPageSql`/`historyCountSql`), las tablas en `GENERATOR_TABLES` (su
+  paso de esquema sale solo en cuanto el baseline las tenga), la forma en `entity.historyShape`, los patrones personales
+  (`historyPersonalPatterns`), la reescritura (`anonymizeHistoryChanges`/`anonymizedEntryChanges`) y la nota
+  (`historyNote`).
+- **El modelo a calcar es keel-spring** (`packages/keel-spring/src/scaffold/history.js`): el puerto `historyOf` en la raíz,
+  que carga como la ficha; el `save` envuelto con la instantánea «antes» tomada antes de volcar (T1: en TypeORM hay que
+  cargarla, no hay entidad gestionada); la baja, la restauración y la retención escriben o se llevan su historial; el
+  documental guarda `changes` como texto y `fields: [{ path, top }]`.
+- **La red** son las sondas HI-1 a HI-10 en `scripts/lib/history-probes.js` dentro de `db-check`/`doc-check`, con los
+  mismos sabotajes (`HISTORY_SABOTAGES`) y la paridad contra keel-spring en `test/history-parity.test.js`. HI-6 se mide por
+  el almacén, no por el adaptador, para que un diff roto no tumbe el orden: así quedó aislado en keel-spring.
 - Lo que dispara cada regla y sus mutaciones: extensiones `history` y `ownedHistory` de
   `keel-core/test/design-mutations/catalog.js`. Los sujetos: `keel-core/test/helpers/history-designs.js`.

@@ -13,6 +13,7 @@
 
 import { loadExpectingAdapter, loadsExpecting } from './conditional-writes.js';
 import { javaFile, javaPath, subPackage } from './render.js';
+import * as history from './history.js';
 import { domainMembers, domainSubPackage, capitalize } from './entities.js';
 import { persistedMembers, orderingFieldOf, usesAuditableEntity } from './persistence-members.js';
 import { orderingTieBreakerOf } from '@keel-system/keel-core/gen/relational';
@@ -307,17 +308,36 @@ ${arming ? `${arming.after}\n` : ''}${emitsEvents ? '        entity.pullDomainEv
   ];
   methods.push(...claimMethods);
 
-  methods.push(
-    `    @Override${emitsEvents || arming ? '\n    @Transactional' : ''}
+  // El historial (DSL 2.29): save escribe su entrada en la misma transacción, con lo que había leído del documento.
+  const recorded = history.recordsHistory(entity);
+  if (recorded) imports.add('org.springframework.transaction.annotation.Transactional');
+  const saveAnnotations = `    @Override${emitsEvents || arming || recorded ? '\n    @Transactional' : ''}`;
+  const saveMethods = recorded
+    ? history.wrapSave(model, entity, { annotations: saveAnnotations, signature: `public ${entity.name} save(${entity.name} entity)`, body: saveBody, loadPrevious: `${repoField}.findById(entity.${id.getter}()).map(this::toDomain)` }, imports)
+    : [
+        `${saveAnnotations}
     public ${entity.name} save(${entity.name} entity) {
 ${saveBody}
-    }`,
+    }`
+      ];
+  methods.push(
+    ...saveMethods,
     ...(lifecycle.mongoAdapterMethods(model, entity, id, repoField, finder, imports) ?? [
-      `    @Override
+      recorded
+        ? `    @Override
+    @Transactional
+    public void deleteById(${id.javaType} ${id.name}) {
+        // Una baja deja su entrada (DSL 2.29), solo si había documento.
+        if (${repoField}.existsById(${id.name})) {
+            ${repoField}.deleteById(${id.name});
+${history.historyRecordLine(model, entity, 'deleted', id.name, imports, '            ')}        }
+    }`
+        : `    @Override
     public void deleteById(${id.javaType} ${id.name}) {
         ${repoField}.deleteById(${id.name});
     }`
-    ])
+    ]),
+    ...history.historyAdapterMethods(model, entity, imports)
   );
 
   const mappers = involved.flatMap((involvedEntity) => [
@@ -362,6 +382,12 @@ ${saveBody}
     fields.push(`    private final ${claimStore.type} ${claimStore.field};`);
     ctorParams.push(`${claimStore.type} ${claimStore.field}`);
     ctorAssigns.push(`        this.${claimStore.field} = ${claimStore.field};`);
+  }
+  const historyStore = history.adapterCollaborator(model, entity, imports);
+  if (historyStore) {
+    fields.push(historyStore.field);
+    ctorParams.push(historyStore.param);
+    ctorAssigns.push(historyStore.assign);
   }
   if (emitsEvents) {
     fields.push('    private final ApplicationEventPublisher eventPublisher;');
