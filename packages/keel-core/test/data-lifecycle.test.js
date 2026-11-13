@@ -12,7 +12,10 @@ import { checkCrossRefs } from '../src/lib/crossrefs.js';
 import { buildModel } from '../src/lib/gen/model.js';
 import { STACK_DEFAULTS } from '../src/lib/gen/infra-catalog.js';
 import {
+  AGE_DELETION_ENGINES,
+  AGE_DELETION_MISS,
   ANONYMOUS_PREFIX,
+  ageDeletionStatement,
   DATA_LIFECYCLE_CASES,
   DATA_LIFECYCLE_SABOTAGES,
   anonymizedValue,
@@ -20,6 +23,7 @@ import {
   dataLifecyclePendingErrors,
   dataLifecycleRoots,
   deletedRoots,
+  deletionAgingTargets,
   incomingReferences,
   isRestorable,
   isRetentionDue,
@@ -29,6 +33,7 @@ import {
   retentionSpan,
   substituteProblem
 } from '../src/lib/gen/data-lifecycle.js';
+import { PRINT_WRAPPER, ageDeletionScript } from '../src/lib/gen/mongo-probes.js';
 import { implicitPredicates } from '../src/lib/gen/implicit-predicates.js';
 import { PERSONAL_DATA_FILE, personalDataInventory, personalFieldNames, usesPersonalData } from '../src/lib/gen/personal-data.js';
 import { DATA_LIFECYCLE_DESIGNS, withoutLifecycle } from './helpers/data-lifecycle-designs.js';
@@ -75,6 +80,28 @@ test('cards-logical: borrado lógico con su restauración, su purga desde el bor
   assert.deepEqual(deletedRoots(layers), ['ContactCard']);
   assert.deepEqual(dataLifecycleRoots(layers), ['ContactCard']);
   assert.equal(operationOf(model, 'restoreMyCard').restores, 'ContactCard');
+});
+
+test('ageDeletion: las raíces de borrado lógico, con la tabla y la colección del modelo, y la sentencia por motor', () => {
+  // La tabla sale del modelo, en plural: tres de cinco corridas del inc. 7 escribieron `contact_card` a mano.
+  assert.deepEqual(deletionAgingTargets(designOf('profile-directory').model), [
+    { entity: 'ContactCard', table: 'contact_cards', idColumn: 'id', collection: 'contact_cards' }
+  ]);
+  // La retención sin borrado lógico no tiene nada que envejecer: su `from` es un campo del dominio.
+  assert.deepEqual(deletionAgingTargets(derived('codes-anonymize').model), []);
+  const target = { table: 'contact_cards', idColumn: 'id' };
+  for (const engine of AGE_DELETION_ENGINES) {
+    const sql = ageDeletionStatement(engine, target);
+    assert.match(sql, /:days/, engine);
+    assert.match(sql, /WHERE id = :entityId AND deleted_at IS NOT NULL/, `${engine}: solo una fila YA borrada`);
+    assert.match(sql, /SELECT (count\(\*\)|ROW_COUNT\(\))/, `${engine}: devuelve cuántas envejeció`);
+  }
+  assert.equal(ageDeletionStatement('oracle', target), null);
+  const script = ageDeletionScript({ collection: 'contact_cards' });
+  assert.match(script, /UUID\("\{id\}"\), deletedAt: \{ \$ne: null \}/);
+  assert.match(script, /\$subtract: \["\$deletedAt", \{ms\}\]/);
+  assert.ok(script.startsWith(PRINT_WRAPPER.prefix), 'imprime cuántos envejeció');
+  assert.match(AGE_DELETION_MISS, /después del DELETE/);
 });
 
 test('codes-anonymize: la retención anonimiza el email, que es obligatorio, con el sustituto', () => {

@@ -7,7 +7,11 @@
 // La tabla se crea con el paso de esquema del generador (gen/schema-steps.js): timestamptz y uuid en PostgreSQL,
 // datetime(6) y binary(16) en MySQL. Los valores van como literales (la CLI del contenedor no liga parámetros), con `bindNamed` a la vista.
 //
-// Uso: node scripts/timer-sql-check.js [--database=postgresql|mysql] [--sabotage=no-skip-locked|no-fence|park-order|lag-all-kinds]
+// Y la sentencia de `ageDeletion` del arnés de flujos (DSL 2.28, gen/data-lifecycle.js): retrasa la marca de borrado de una
+// fila YA borrada y devuelve cuántas envejeció, que el arnés exige que sea 1. Va aquí porque es SQL de keel-core que los
+// cuatro arneses ejecutan tal cual, con los mismos dos motores.
+//
+// Uso: node scripts/timer-sql-check.js [--database=postgresql|mysql] [--sabotage=no-skip-locked|no-fence|park-order|lag-all-kinds|age-deletion-live|age-deletion-sign]
 //   (podman o docker; ~1 min). Con sabotaje, verde = el sabotaje cae en exactamente sus casos.
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -16,6 +20,7 @@ import crypto from 'node:crypto';
 import { DATABASES } from '../src/lib/gen/infra-catalog.js';
 import { timerStatements, expandList, NIL_ENTITY_ID, TIMER_ENGINES } from '../src/lib/gen/timer-store.js';
 import { GENERATOR_TABLES, schemaStepSql } from '../src/lib/gen/schema-steps.js';
+import { ageDeletionStatement } from '../src/lib/gen/data-lifecycle.js';
 
 const only = process.argv.find((arg) => arg.startsWith('--database='))?.slice('--database='.length);
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.slice('--sabotage='.length) ?? null;
@@ -27,6 +32,11 @@ const SABOTAGES = {
   // despliegue que retire uno.
   'lag-all-kinds': { breaks: ['retraso'], apply: (s) => ({ ...s, lagMs: s.lagMs.replace('kind IN (:kinds) AND ', '') }) },
   'no-fence': { breaks: ['valla'], apply: (s) => ({ ...s, complete: s.complete.replace(' AND claim_token = :token', '') }) },
+  // ageDeletion sin «solo si está borrada»: en PostgreSQL cuenta como envejecida una fila VIVA (NULL - intervalo sigue NULL,
+  // pero RETURNING la devuelve). En MySQL no cae: ROW_COUNT() no cuenta una fila que no cambió.
+  'age-deletion-live': { breaks: ['ageDeletion'], onlyIn: 'postgresql', apply: (s) => s, aging: (q) => q.replace(' AND deleted_at IS NOT NULL', '') },
+  // ageDeletion con el signo cambiado: la marca se va al futuro y la ventana no vence nunca.
+  'age-deletion-sign': { breaks: ['ageDeletion'], apply: (s) => s, aging: (q) => q.replace(' - make_interval', ' + make_interval').replace('DATE_SUB(', 'DATE_ADD(') },
   'park-order': {
     breaks: ['aparcado'],
     // PostgreSQL evalúa todas las asignaciones con los valores de antes: ahí el orden no importa, y no debe caer nada.
@@ -279,6 +289,28 @@ async function check(engine) {
     const waited = Date.now() - began;
     await holder;
     step(engine, 'skip-locked', other.length === 1 && waited < 3000, `la otra sesión tomó ${other.length} en ${waited} ms`);
+
+    // ageDeletion (DSL 2.28): sobre una tabla con la marca del generador, una fila viva y una borrada ahora mismo.
+    const cards = { table: 'contact_cards', idColumn: 'id' };
+    const reference = ageDeletionStatement(engine, cards);
+    const aging = sabotage && SABOTAGES[sabotage].aging ? SABOTAGES[sabotage].aging(reference) : reference;
+    sql(engine, name, engine === 'postgresql' ? 'CREATE TABLE contact_cards (id uuid PRIMARY KEY, deleted_at timestamptz NULL);' : 'CREATE TABLE contact_cards (id binary(16) PRIMARY KEY, deleted_at datetime(6) NULL);');
+    const live = uuid();
+    const gone = uuid();
+    run('INSERT INTO contact_cards (id, deleted_at) VALUES (:live, NULL), (:gone, :now)', { live, gone, now: dbNow() });
+    const age = (id) => run(aging, { entityId: id, days: 31 }).at(-1)?.[0];
+    const agedGone = age(gone);
+    const agedLive = age(live);
+    const agedNone = age(uuid());
+    const sinceDeleted = engine === 'postgresql' ? 'EXTRACT(EPOCH FROM (now() - deleted_at)) / 86400' : 'TIMESTAMPDIFF(SECOND, deleted_at, UTC_TIMESTAMP(6)) / 86400';
+    const days = Number(run(`SELECT ${sinceDeleted} FROM contact_cards WHERE id = :gone`, { gone })[0][0]);
+    const stillLive = run('SELECT count(*) FROM contact_cards WHERE id = :live AND deleted_at IS NULL', { live })[0][0] === '1';
+    step(
+      engine,
+      'ageDeletion',
+      agedGone === '1' && agedLive === '0' && agedNone === '0' && days > 30.9 && days < 31.1 && stillLive,
+      `borrada ${agedGone}, viva ${agedLive}, otro id ${agedNone}; la borrada lo está hace ${days.toFixed(2)} días`
+    );
   } catch (error) {
     step(engine, 'sentencias', false, error.message.replace(/\s+/g, ' ').slice(0, 600));
   } finally {

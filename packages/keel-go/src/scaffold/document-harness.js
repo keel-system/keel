@@ -13,6 +13,7 @@
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { usesDocument } from '@keel-system/keel-core/gen/features';
 import { documentDeadlineAgingMembers, fireAgedCall, fireAgedMember, fireScheduleCall, fireScheduleMember } from './timer.js';
+import { documentDeletionAgingMembers } from './data-lifecycle.js';
 import { CLOCK, OUTBOX, PRINT_WRAPPER, abandonOutboxScript, ageClockScript, clearAbandonedScript, holdClockScript, missingClockCountScript, setStateScript } from '@keel-system/keel-core/gen/mongo-probes';
 import { documentAgingTargets } from '@keel-system/keel-core/gen/aging-targets';
 import { rescueProbes } from '@keel-system/keel-core/gen/scheduling';
@@ -102,7 +103,9 @@ func (s *Scenario) MongoEval(script string) string {
   members.push(...fireAgedMember(model));
   // El plazo de negocio (DSL 2.26): AgeForDeadline envejece el since y el temporizador a la vez.
   members.push(...documentDeadlineAgingMembers(model));
-  // Quien mete un id en un script: el rescate y la reconciliación. Sin ninguno, sería una función sin usar.
+  // El borrado lógico (DSL 2.28): AgeDeletion retrasa la marca de borrado de un documento ya borrado.
+  members.push(...documentDeletionAgingMembers(model));
+  // Quien mete un id en un script: el rescate, la reconciliación, los plazos y el borrado. Sin ninguno, sería una función sin usar.
   if (members.length > 1) {
     members.push(String.raw`func (s *Scenario) documentID(id string) string {
 	s.Helper()

@@ -8,6 +8,7 @@
 // Origen y decisiones: PLAN-DSL-228-CICLO-DE-VIDA.md.
 
 import { operationTargetEntity } from './model.js';
+import { DELETED_AT } from './relational.js';
 
 /** Los modos de borrado. `physical` es el default del catálogo estructural. */
 export const DELETION_MODES = Object.freeze(['physical', 'logical']);
@@ -430,7 +431,50 @@ export function personalFields(model) {
     .filter((entry) => entry.fields.length > 0);
 }
 
-// ─── La medición ─────────────────────────────────────────────────────────────
+// ─── El arnés de flujos: ageDeletion ─────────────────────────────────────────
+
+/**
+ * Las raíces que el arnés de flujos puede ENVEJECER con `ageDeletion(entidad, id, días)`: las de borrado lógico, con su
+ * tabla, la columna de su id y su colección. Un escenario de la ventana de restauración o de la purga desde el borrado no
+ * puede esperar 30 días: retrasa la marca de borrado. Es el `ageForDeadline` de los plazos (DSL 2.26, D7), y nació de las
+ * corridas de control del inc. 7 del plan 2.28: con el SQL a mano, tres de cinco agentes nombraron mal la tabla.
+ */
+export function deletionAgingTargets(model) {
+  return (model.entities ?? [])
+    .filter((entity) => entity.persisted && entity.deletion === 'logical')
+    .map((entity) =>
+      Object.freeze({
+        entity: entity.name,
+        table: entity.tableName,
+        idColumn: entity.idField?.columns?.name ?? 'id',
+        collection: entity.collectionName
+      })
+    );
+}
+
+/** Los motores relacionales con sentencia de `ageDeletion`: los del cronómetro. */
+export const AGE_DELETION_ENGINES = Object.freeze(['postgresql', 'mysql']);
+
+/**
+ * La sentencia de `ageDeletion` sobre una tabla: retrasa la marca de borrado `:days` días SOLO si la fila está borrada, y
+ * devuelve cuántas filas envejeció. El arnés exige un 1: así un id equivocado o una llamada antes del borrado fallan con
+ * su motivo, en vez de dejar el escenario esperando un 409 que no llega. Marcadores `:days` y `:entityId` (el literal del
+ * id, el `uuidLiteral` del catálogo). Null en un motor sin ella.
+ */
+export function ageDeletionStatement(engine, { table, idColumn }) {
+  const mark = DELETED_AT.column;
+  const where = `WHERE ${idColumn} = :entityId AND ${mark} IS NOT NULL`;
+  if (engine === 'postgresql') {
+    return `WITH aged AS (UPDATE ${table} SET ${mark} = ${mark} - make_interval(days => :days) ${where} RETURNING 1) SELECT count(*) FROM aged`;
+  }
+  // ROW_COUNT() cuenta las filas CAMBIADAS (la CLI no pide CLIENT_FOUND_ROWS): con días > 0 la marca siempre cambia.
+  if (engine === 'mysql') return `UPDATE ${table} SET ${mark} = DATE_SUB(${mark}, INTERVAL :days DAY) ${where}; SELECT ROW_COUNT()`;
+  return null;
+}
+
+/** Lo que dice el arnés cuando `ageDeletion` no envejece nada: la misma frase en los cuatro, detrás de `<Entidad> <id>`. */
+export const AGE_DELETION_MISS = 'no está borrada (o no existe): ageDeletion envejece una fila YA borrada, así que va después del DELETE y con el id de esa fila';
+
 
 /** Los casos que los cuatro generadores ejecutan con el mismo id, y en qué red. */
 export const DATA_LIFECYCLE_CASES = Object.freeze([

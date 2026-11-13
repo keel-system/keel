@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadService } from '@keel-system/keel-core';
-import { logicalDeletionNote, retentionParameters, deletedRootOf } from '@keel-system/keel-core/gen/data-lifecycle';
+import { AGE_DELETION_ENGINES, AGE_DELETION_MISS, ageDeletionStatement, logicalDeletionNote, retentionParameters, deletedRootOf } from '@keel-system/keel-core/gen/data-lifecycle';
 import { DATA_LIFECYCLE_DESIGNS, withoutLifecycle } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { planService } from '../src/scaffold/index.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
@@ -206,3 +206,34 @@ function loadPlain(fixture) {
   withoutLifecycle(layers);
   return { manifest, layers };
 }
+
+// AgeDeletion (inc. 7 del plan 2.28): el helper del arnés con el que un escenario envejece un borrado. La sentencia y el
+// script son de keel-core, así que los cuatro arneses tienen que llevar sus trozos literales tal cual; lo que cada uno pone
+// es el envoltorio y el literal del id. La sentencia la EJECUTA `npm run timer-sql-check` de keel-core.
+const HARNESSES = [
+  { generator: planSpring, file: 'AbstractFlowIT.java', declares: /protected static void ageDeletion\(String entity, String id, int days\)/ },
+  { generator: planNest, file: 'support/flow.ts', declares: /export function ageDeletion\(entity: string, id: string, days: number\): void/ },
+  { generator: planDotnet, file: 'Support/FlowTest.cs', declares: /protected static void AgeDeletion\(string entity, string id, int days\)/ },
+  { generator: planService, file: 'flow_test.go', declares: /func \(s \*Scenario\) AgeDeletion\(entity, id string, days int\)/ }
+];
+
+test('AgeDeletion: los cuatro arneses lo llevan, con la sentencia o el script de keel-core y la tabla del modelo', () => {
+  const target = { table: 'contact_cards', idColumn: 'id' };
+  for (const database of AGE_DELETION_ENGINES) {
+    const pieces = ageDeletionStatement(database, target).split(/:days|:entityId/);
+    for (const { generator, file, declares } of HARNESSES) {
+      const text = fileOf(plan('cards-logical', { database, generator }).files, file);
+      assert.match(text, declares, `${file} sobre ${database}`);
+      for (const piece of pieces) assert.ok(text.includes(piece), `${file} sobre ${database}: falta «${piece}»`);
+      assert.ok(text.includes(AGE_DELETION_MISS), `${file}: el motivo cuando no envejece nada`);
+    }
+  }
+  for (const { generator, file, declares } of HARNESSES) {
+    const text = fileOf(plan('cards-logical-mongo', { generator }).files, file);
+    assert.match(text, declares, `${file} documental`);
+    for (const piece of ['contact_cards', 'deletedAt: { $ne: null } }', '{ms}', '.modifiedCount']) assert.ok(text.includes(piece), `${file} documental: falta «${piece}»`);
+    // Sin borrado lógico no hay nada que envejecer: el helper no se emite.
+    const plain = fileOf(plan('cards-logical', { generator, mutate: withoutLifecycle }).files, file);
+    assert.doesNotMatch(plain, declares, `${file} sin borrado lógico`);
+  }
+});

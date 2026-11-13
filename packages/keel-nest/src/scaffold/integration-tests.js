@@ -37,6 +37,7 @@ import { storageHarnessSection, usesMultipart } from './storage.js';
 import { usesStatementCount } from '@keel-system/keel-core/gen/features';
 import { ageDeadlineScript, fireTimerScript } from '@keel-system/keel-core/gen/mongo-probes';
 import { deadlineAgingSection, fireScheduleCall, firesTimer, timerFireSection } from './timer.js';
+import { deletionAgingSection } from './data-lifecycle.js';
 export { usesStatementCount };
 
 /** Dónde escribe Vitest el XML JUnit de la suite de integración: lo lee score-scenarios.sh. */
@@ -518,7 +519,7 @@ const DB_QUERY_ARGV: readonly string[] = ${JSON.stringify(probe.argv)};
 export function db(sql: string): string {
   return run(containerRuntime(), ['exec', DB_CONTAINER, ...DB_QUERY_ARGV, sql], '¿Está la base arriba (bash infra/up.sh)?');
 }
-${rescueSection(model)}${httpStubHarness.reconciliationAgingSection(model, { idLiteralDeclared: rescueSection(model) !== '' })}${deadlineAgingSection(model, { relational: true, uuidLiteral: DATABASES[engineOf(model)]?.uuidLiteral })}${timerFireSection(model, { relational: true })}` : ''}${statementCountSection(model)}${documentHarnessSection(model)}${documentProbe(model) ? deadlineAgingSection(model, { document: true, ageDeadlineScript }) + timerFireSection(model, { document: true, fireTimerScript }) : ''}${identitySection(model)}${messagingHarnessSection(model)}${cacheHarnessSection(model)}${storageHarnessSection(model)}
+${rescueSection(model)}${httpStubHarness.reconciliationAgingSection(model, { idLiteralDeclared: rescueSection(model) !== '' })}${deadlineAgingSection(model, { relational: true, uuidLiteral: DATABASES[engineOf(model)]?.uuidLiteral })}${deletionAgingSection(model, { relational: true, uuidLiteral: DATABASES[engineOf(model)]?.uuidLiteral })}${timerFireSection(model, { relational: true })}` : ''}${statementCountSection(model)}${documentHarnessSection(model)}${documentProbe(model) ? deadlineAgingSection(model, { document: true, ageDeadlineScript }) + deletionAgingSection(model, { document: true }) + timerFireSection(model, { document: true, fireTimerScript }) : ''}${identitySection(model)}${messagingHarnessSection(model)}${cacheHarnessSection(model)}${storageHarnessSection(model)}
 
 /** Espera hasta que \`condition\` se cumpla o se agote \`timeoutMs\`; lanza con \`message\` si no llega. */
 export async function eventually(condition: () => boolean | Promise<boolean>, timeoutMs = 10_000, message = 'la condición no se cumplió a tiempo'): Promise<void> {

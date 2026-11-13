@@ -15,6 +15,7 @@ import { documentAgingMembers, fireAgedCall, fireScheduleCall, fireTimerMembers 
 import { rescueProbes } from '@keel-system/keel-core/gen';
 import { documentShape } from '@keel-system/keel-core/gen/document';
 import { csString } from './render.js';
+import { documentDeletionAgingMembers } from './data-lifecycle.js';
 import { documentAgingTargets as agingTargets } from '@keel-system/keel-core/gen/aging-targets';
 
 /** Un par [prefijo, sufijo] de un script partido, como tupla C#. */
@@ -38,8 +39,10 @@ export function documentFlowMembers(model, probe) {
   // El plazo envejecido (DSL 2.26, D7): AgeForDeadline, con el script de keel-core.
   const deadlines = documentAgingMembers(model, ageDeadlineScript);
   // El cronómetro (inc. 8 del plan 2.26): FireTimer, y los helpers que adelantan el barrido tras fabricar su precondición.
-  members.push(...rescue, ...aging, ...deadlines, ...fireTimerMembers(model, fireTimerScript));
-  if (rescue.length > 0 || aging.length > 0 || deadlines.length > 0) {
+  // El borrado envejecido (DSL 2.28): AgeDeletion, con el script de keel-core.
+  const deletions = documentDeletionAgingMembers(model);
+  members.push(...rescue, ...aging, ...deadlines, ...deletions, ...fireTimerMembers(model, fireTimerScript));
+  if (rescue.length > 0 || aging.length > 0 || deadlines.length > 0 || deletions.length > 0) {
     members.push(`    /// <summary>Un id de documento para un script: valida la forma antes de meterlo dentro de <c>UUID("…")</c>.</summary>
     private static string DocumentId(string id) =>
         Guid.TryParseExact(id, "D", out _) ? id : throw new ArgumentException($"No es un id: '{id}'", nameof(id));`);

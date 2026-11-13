@@ -15,7 +15,8 @@
 //     recurrente del cronómetro que la dispara en modo clúster (D8), con su lote y su cron en `retention.yaml`.
 
 import { DELETED_AT, ANONYMIZED_AT, LOCK_VERSION, isLogicallyDeleted, persistedMembers } from '@keel-system/keel-core/gen/relational';
-import { ANONYMOUS_PREFIX, deletedLookupOf, lifecycleRoots, retentionParameters } from '@keel-system/keel-core/gen/data-lifecycle';
+import { AGE_DELETION_ENGINES, AGE_DELETION_MISS, ANONYMOUS_PREFIX, ageDeletionStatement, deletedLookupOf, deletionAgingTargets, lifecycleRoots, retentionParameters } from '@keel-system/keel-core/gen/data-lifecycle';
+import { ageDeletionScript } from '@keel-system/keel-core/gen/mongo-probes';
 import { operationError } from '@keel-system/keel-core/gen/declared-errors';
 import { retentionCaches } from '@keel-system/keel-core/gen/cache-plan';
 import { documentShape, DOCUMENT_ID } from '@keel-system/keel-core/gen/document';
@@ -695,6 +696,70 @@ export function retentionKindLines(model) {
     ({ entity, root }) => `  /** La retención de ${entity.name} (DSL 2.28): un recurrente en modo clúster. */
   ${retentionKindConstant(entity.name)}: ${tsString(root.retention.kind)},`
   );
+}
+
+// ─── El arnés: ageDeletion ───────────────────────────────────────────────────
+
+/**
+ * `ageDeletion(entidad, id, días)` en `test/integration/support/flow.ts`: un escenario de la ventana de restauración o de
+ * la purga desde el borrado no puede esperar 30 días. Retrasa la marca de borrado de una fila YA borrada y exige que haya
+ * envejecido una. La sentencia es la de keel-core (`ageDeletionStatement`) y el script documental, `ageDeletionScript`:
+ * la tabla sale del modelo. Relacional: sobre `db()`; documental: sobre `mongoEval()`. '' si no hay borrado lógico o el
+ * arnés no tiene con qué.
+ */
+export function deletionAgingSection(model, { relational = false, document = false, uuidLiteral = null } = {}) {
+  const targets = deletionAgingTargets(model);
+  if (targets.length === 0) return '';
+  const engine = model.stack?.database;
+  if (relational && (!AGE_DELETION_ENGINES.includes(engine) || !uuidLiteral)) return '';
+  if (!relational && !document) return '';
+  const arms = targets
+    .map((target) => {
+      if (!relational) {
+        const script = ageDeletionScript({ collection: target.collection });
+        return `      case ${tsString(target.entity)}:
+        return mongoEval(${tsString(script)}.replaceAll('{id}', deletionId(id)).replaceAll('{ms}', String(days * 86_400_000)));`;
+      }
+      const literal = `${uuidLiteral.prefix}\${deletionId(id)}${uuidLiteral.suffix}`;
+      const sql = ageDeletionStatement(engine, target).replace(':days', '${days}').replace(':entityId', literal);
+      return `      case ${tsString(target.entity)}:
+        return db(\`${sql}\`);`;
+    })
+    .join('\n');
+  const known = targets.map((target) => target.entity).join(', ');
+  return `
+/** Un id para la sentencia de ageDeletion: valida la forma antes de meterlo en el literal. */
+function deletionId(id: string): string {
+  if (!/^[0-9a-fA-F-]{36}$/.test(id)) throw new Error(\`No es un id: '\${id}'\`);
+  return id;
+}
+
+/**
+ * Envejece el borrado lógico de la fila \`id\` de \`entity\` (DSL 2.28): retrasa su marca de borrado \`days\` días, para que
+ * un escenario de la ventana de restauración o de la purga no espere a que pase el tiempo. Solo envejece una fila YA
+ * borrada, y falla si no envejeció ninguna: un id equivocado, o la llamada antes del DELETE. La tabla y la columna salen
+ * del modelo, no de un SQL escrito a mano.
+ *
+ * No purga nada: la purga la hace el barrido de la retención en su próxima pasada, que se adelanta con \`fireTimer\`.
+ *
+ *   ageDeletion('${targets[0].entity}', id, 31);
+ *
+ * Entidades con borrado lógico en este diseño: ${known}.
+ */
+export function ageDeletion(entity: string, id: string, days: number): void {
+  if (!Number.isSafeInteger(days) || days <= 0) throw new Error(\`Los días tienen que ser un entero positivo: \${days}\`);
+  const aged = ((): string => {
+    switch (entity) {
+${arms}
+      default:
+        throw new Error(\`No hay borrado lógico en la entidad '\${entity}'. Las que lo tienen: ${known}\`);
+    }
+  })();
+  if (aged.trim().split('\\n').at(-1)?.trim() !== '1') {
+    throw new Error(\`ageDeletion: \${entity} \${id} ${AGE_DELETION_MISS}.\`);
+  }
+}
+`;
 }
 
 export { capital };

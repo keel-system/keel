@@ -61,7 +61,7 @@ findings:
       escribe build (deleted_at / deletedAt), igual que en las sondas LC-7 y RT-4 de los cuatro generadores. Si una
       corrida lo tropieza, el helper se añade al arnés de los cuatro como ageForDeadline.
     resolution: accepted
-    reason: "Aceptado: la marca tiene nombre fijo en los cuatro generadores (DELETED_AT de relational.js) y el arnés ya expone el acceso a la base. Las corridas de control (incremento 7) dirán si hace falta el helper."
+    reason: "Aceptado. Las corridas de control (incremento 7) dijeron que hacía falta el helper: tres de cinco nombraron mal la tabla con el SQL a mano. Desde entonces el arnés de los cuatro trae ageDeletion(<Entidad>, id, días), que toma la tabla del modelo y falla si la fila no estaba borrada."
   - flow: FL-CRD-007-B
     step: "When"
     kind: unobservable

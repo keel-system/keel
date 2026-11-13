@@ -17,7 +17,10 @@
 //     recurrente del cronómetro que la dispara en modo clúster (D8), con su lote y su cron en `retention.yaml`.
 
 import { DELETED_AT, ANONYMIZED_AT, LOCK_VERSION, isLogicallyDeleted, persistedMembers } from '@keel-system/keel-core/gen/relational';
-import { ANONYMOUS_PREFIX, deletedLookupOf, lifecycleRoots, retentionParameters } from '@keel-system/keel-core/gen/data-lifecycle';
+import { AGE_DELETION_ENGINES, AGE_DELETION_MISS, ANONYMOUS_PREFIX, ageDeletionStatement, deletedLookupOf, deletionAgingTargets, lifecycleRoots, retentionParameters } from '@keel-system/keel-core/gen/data-lifecycle';
+import { ageDeletionScript } from '@keel-system/keel-core/gen/mongo-probes';
+import { usesDocument, usesRelational } from '@keel-system/keel-core/gen/features';
+import { usesMySql } from './relational-engine.js';
 import { operationError } from '@keel-system/keel-core/gen/declared-errors';
 import { retentionCaches } from '@keel-system/keel-core/gen/cache-plan';
 import { documentShape, DOCUMENT_ID } from '@keel-system/keel-core/gen/document';
@@ -747,4 +750,75 @@ export function retentionKindLines(model) {
     ({ entity, root }) => `    /// <summary>La retención de ${entity.name} (DSL 2.28): un recurrente en modo clúster.</summary>
     public const string ${retentionKindConstant(entity.name)} = ${csString(root.retention.kind)};`
   );
+}
+
+// ─── El arnés de flujos: AgeDeletion ─────────────────────────────────────────────────────────────
+
+const AGE_DELETION_DOC = (example) => `    /// <summary>
+    /// Envejece el borrado lógico de la fila <paramref name="id"/> de <paramref name="entity"/>: retrasa su marca de borrado
+    /// <paramref name="days"/> días, para que un escenario de la ventana de restauración o de la purga no espere a que pase el
+    /// tiempo. Solo envejece una fila YA borrada, y falla si no envejeció ninguna: un id equivocado, o la llamada antes del
+    /// DELETE. La tabla y la columna salen del modelo, no de un SQL escrito a mano.
+    /// </summary>
+    /// <remarks>
+    /// No purga nada: la purga la hace el barrido de la retención en su próxima pasada, que se adelanta con <c>FireTimer</c>.
+    /// <code>
+    /// AgeDeletion(${csString(example)}, id, 31);
+    /// </code>
+    /// </remarks>`;
+
+/** La firma y el cuerpo de AgeDeletion con un brazo por raíz; `call` da la expresión que envejece una. */
+function ageDeletionMember(targets, call) {
+  const known = targets.map((target) => target.entity).join(', ');
+  const arms = targets.map((target) => `            ${csString(target.entity)} => ${call(target)},`);
+  return `${AGE_DELETION_DOC(targets[0].entity)}
+    protected static void AgeDeletion(string entity, string id, int days)
+    {
+        if (days <= 0) throw new ArgumentOutOfRangeException(nameof(days), days, "Los días tienen que ser un entero positivo.");
+        var aged = entity switch
+        {
+${arms.join('\n')}
+            _ => throw new ArgumentException($"No hay borrado lógico en la entidad '{entity}'. Las que lo tienen: ${known}", nameof(entity)),
+        };
+        if (aged.Trim().Split('\\n')[^1].Trim() != "1")
+            throw new InvalidOperationException($"AgeDeletion: {entity} {id} ${AGE_DELETION_MISS}.");
+    }`;
+}
+
+const invariant = (expression) => `${expression}.ToString(System.Globalization.CultureInfo.InvariantCulture)`;
+
+/**
+ * `AgeDeletion(entidad, id, días)` en FlowTest sobre una base relacional, o []: la sentencia es la de keel-core
+ * (`ageDeletionStatement`) con sus marcadores puestos, y el id va por el `IdLiteral` del arnés.
+ */
+export function relationalDeletionAgingMembers(model) {
+  if (!usesRelational(model)) return [];
+  const engine = usesMySql(model) ? 'mysql' : 'postgresql';
+  const targets = deletionAgingTargets(model);
+  if (targets.length === 0 || !AGE_DELETION_ENGINES.includes(engine)) return [];
+  const values = { ':days': invariant('days'), ':entityId': 'IdLiteral(id)' };
+  return [
+    ageDeletionMember(targets, (target) => {
+      const sql = ageDeletionStatement(engine, target)
+        .split(/(:days|:entityId)/)
+        .filter((piece) => piece !== '')
+        .map((piece) => values[piece] ?? csString(piece))
+        .join(' + ');
+      return `Db(${sql})`;
+    })
+  ];
+}
+
+/** `AgeDeletion` sobre documentos: el script de keel-core (`ageDeletionScript`) con sus marcadores. */
+export function documentDeletionAgingMembers(model) {
+  if (!usesDocument(model)) return [];
+  const targets = deletionAgingTargets(model);
+  if (targets.length === 0) return [];
+  return [
+    ageDeletionMember(
+      targets,
+      (target) =>
+        `MongoEval(${csString(ageDeletionScript({ collection: target.collection }))}.Replace("{id}", DocumentId(id), StringComparison.Ordinal).Replace("{ms}", ${invariant('(days * 86_400_000L)')}, StringComparison.Ordinal))`
+    )
+  ];
 }

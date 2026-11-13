@@ -29,6 +29,7 @@ import {
   usesDeadLetter, subscriptionGroupId } from '@keel-system/keel-core/gen';
 import { needsMessagingProvisioning } from './messaging-provisioning.js';
 import { modelDeadlines } from '@keel-system/keel-core/gen/deadlines';
+import { AGE_DELETION_ENGINES, AGE_DELETION_MISS, ageDeletionStatement, deletionAgingTargets } from '@keel-system/keel-core/gen/data-lifecycle';
 import { TIMER_ENGINES, scheduleKind, timerStatements } from '@keel-system/keel-core/gen/timer-store';
 import { agingSweeps } from '@keel-system/keel-core/gen/aging-targets';
 import { clusterRecurrings, scheduledByTimer, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
@@ -37,6 +38,7 @@ import {
   ageClockScript,
   holdClockScript,
   ageDeadlineScript,
+  ageDeletionScript,
   fireTimerScript,
   missingClockCountScript,
   outboxPendingScript,
@@ -2101,7 +2103,7 @@ ${hasIdempotency(model) ? `
     }
 
     // ── Estado e infraestructura ─────────────────────────────────────────────
-${resetSection(model)}${inMemoryResetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${paymentHarnessSection(model)}${mailSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${storageControlSection(model)}${replicaSection(model)}${kafkaGroupsSection(model)}${dbSection(model)}${timerFireSection(model)}${deadlineAgingSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
+${resetSection(model)}${inMemoryResetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${paymentHarnessSection(model)}${mailSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${storageControlSection(model)}${replicaSection(model)}${kafkaGroupsSection(model)}${dbSection(model)}${timerFireSection(model)}${deadlineAgingSection(model)}${deletionAgingSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
 }
 
 // Proveedor de prueba de las integraciones salientes. Es infraestructura, no un
@@ -5116,6 +5118,68 @@ function deadlineAgingSection(model) {
     protected static void ageForDeadline(String entity, String id, long seconds) {
 ${branches}
         throw new IllegalArgumentException("No hay plazo para la entidad '" + entity + "'. Las que lo tienen: ${known}");
+    }
+`;
+}
+
+/**
+ * `ageDeletion(entidad, id, días)` (DSL 2.28): un escenario de la ventana de restauración o de la purga desde el borrado no
+ * puede esperar 30 días. Retrasa la marca de borrado de una fila YA borrada y exige que haya envejecido una: un id
+ * equivocado o una llamada antes del DELETE fallan con su motivo. La sentencia es la de keel-core
+ * (`ageDeletionStatement`), y el script documental, `ageDeletionScript` de mongo-probes.js: la tabla sale del modelo.
+ * Con el SQL a mano, tres de cinco corridas de control nombraron mal la tabla (inc. 7 del plan 2.28).
+ */
+function deletionAgingSection(model) {
+  const entry = dbEntry(model);
+  const targets = deletionAgingTargets(model);
+  if (!entry?.cliQueryArgv || targets.length === 0) return '';
+  const document = entry.kind === 'document';
+  const engine = model.stack?.database;
+  if (!document && (!AGE_DELETION_ENGINES.includes(engine) || !entry.uuidLiteral)) return '';
+  const dbName = model.service.name.replaceAll('-', '_');
+  const argv = entry
+    .cliQueryArgv({ user: entry.user ? entry.user(dbName) : '', pass: entry.password ?? '', db: dbName })
+    .map((part) => javaString(part))
+    .join(', ');
+  const arms = targets
+    .map((target) => {
+      if (document) {
+        const script = ageDeletionScript({ collection: target.collection });
+        return `            case ${javaString(target.entity)} -> mongoEval(${javaString(script)}.replace("{id}", id).replace("{ms}", String.valueOf(days * 86_400_000L)));`;
+      }
+      const sql = ageDeletionStatement(engine, target).replace(':days', '" + days + "').replace(':entityId', '" + uuidLiteral(id) + "');
+      return `            case ${javaString(target.entity)} -> ${statementCall(entry, argv, `"${sql}"`)};`;
+    })
+    .join('\n');
+  const known = targets.map((target) => target.entity).join(', ');
+  return `
+    /**
+     * Envejece el borrado lógico de la fila {@code id} de {@code entity}: retrasa su marca de borrado {@code days} días,
+     * para que un escenario de la ventana de restauración o de la purga no espere a que pase el tiempo. Solo envejece una
+     * fila YA borrada, y falla si no envejeció ninguna: un id equivocado, o la llamada antes del DELETE. La tabla y la
+     * columna salen del modelo, no de un SQL escrito a mano.
+     *
+     * <p>No purga nada: la purga la hace el barrido de la retención en su próxima pasada, que se adelanta con
+     * {@code fireTimer}.
+     *
+     * <pre>{@code
+     * ageDeletion("${targets[0].entity}", id, 31);
+     * }</pre>
+     *
+     * <p>Entidades con borrado lógico en este diseño: ${known}.
+     */
+    protected static void ageDeletion(String entity, String id, int days) {
+        if (days <= 0) {
+            throw new IllegalArgumentException("Los días tienen que ser un entero positivo: " + days);
+        }
+        String aged = switch (entity) {
+${arms}
+            default -> throw new IllegalArgumentException("No hay borrado lógico en la entidad '" + entity + "'. Las que lo tienen: ${known}");
+        };
+        String[] lines = aged.strip().split("\\n");
+        if (!"1".equals(lines[lines.length - 1].strip())) {
+            throw new IllegalStateException("ageDeletion: " + entity + " " + id + " ${AGE_DELETION_MISS}.");
+        }
     }
 `;
 }

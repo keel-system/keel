@@ -41,6 +41,7 @@ import { CREDENTIALS_FILE, CREDENTIALS_IMPORTS, closingCredentialExpression, cre
 import { MESSAGING_HARNESS_FILE, messagingHarnessBody, messagingHarnessImports, messagingSmokeCase, usesMessagingHarness } from './messaging-harness.js';
 import { PAYMENT_HARNESS_FILE, PAYMENT_HARNESS_IMPORTS, paymentHarnessBody } from './payment-harness.js';
 import { fireScheduleCall, fireScheduleMember, fireTimerMember, relationalDeadlineAgingMembers } from './timer.js';
+import { relationalDeletionAgingMembers } from './data-lifecycle.js';
 import { fireTimerScript } from '@keel-system/keel-core/gen/mongo-probes';
 import { HTTP_STUB_HARNESS_FILE, HTTP_STUB_HARNESS_IMPORTS, httpStubHarnessBody, httpStubSmokeCase, reconciliationAgingMembers, usesHttpStub } from './http-stub-harness.js';
 import { usesClusterScenarios } from '@keel-system/keel-core/gen/cluster-scenarios';
@@ -338,8 +339,10 @@ func (s *Scenario) Db(sql string) string {
   const aging = reconciliationAgingMembers(model);
   // El plazo de negocio (DSL 2.26): AgeForDeadline envejece el since y el temporizador a la vez.
   const deadlineAging = relationalDeadlineAgingMembers(model);
-  helpers.push(...rescue, ...aging, ...deadlineAging);
-  if (rescue.length > 0 || aging.length > 0 || deadlineAging.length > 0) helpers.push(idLiteralMember(model));
+  // El borrado lógico (DSL 2.28): AgeDeletion retrasa la marca de borrado de una fila ya borrada.
+  const deletionAging = relationalDeletionAgingMembers(model);
+  helpers.push(...rescue, ...aging, ...deadlineAging, ...deletionAging);
+  if (rescue.length > 0 || aging.length > 0 || deadlineAging.length > 0 || deletionAging.length > 0) helpers.push(idLiteralMember(model));
   if (inMemoryState(model)) helpers.push(restartMember());
   if (usesReplica(model)) helpers.push(...replicaMembers(model));
   helpers.push(...statementCountMembers(model));

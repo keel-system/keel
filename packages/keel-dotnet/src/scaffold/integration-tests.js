@@ -32,6 +32,7 @@ import { PRINT_WRAPPER } from '@keel-system/keel-core/gen/mongo-probes';
 import { fireScheduleCall, fireTimerMembers, firesTimer, relationalAgingMembers } from './timer.js';
 import { fireTimerScript } from '@keel-system/keel-core/gen/mongo-probes';
 import { documentFlowMembers, documentSmokeCase } from './document-harness.js';
+import { relationalDeletionAgingMembers } from './data-lifecycle.js';
 import { csFile, csString, solution } from './render.js';
 import { messagingHarnessCs, messagingSmokeCase, usesMessagingHarness } from './messaging-harness.js';
 import { usesKafka } from './messaging.js';
@@ -145,10 +146,12 @@ function flowTestCs(model) {
     const aging = reconciliationAgingMembers(model);
     // El plazo envejecido (DSL 2.26, D7): AgeForDeadline, con la sentencia del cronómetro de keel-core.
     const deadlines = relationalAgingMembers(model);
+    // El borrado envejecido (DSL 2.28): AgeDeletion, con la sentencia de keel-core.
+    const deletions = relationalDeletionAgingMembers(model);
     // El cronómetro (inc. 8 del plan 2.26): FireTimer, y los helpers que adelantan el barrido tras fabricar su precondición.
-    helpers.push(...rescue, ...aging, ...deadlines, ...fireTimerMembers(model, fireTimerScript));
-    // El id como literal del motor: lo comparten el rescate, la reconciliación y los plazos.
-    if (rescue.length > 0 || aging.length > 0 || deadlines.length > 0) helpers.push(idLiteralMember(model));
+    helpers.push(...rescue, ...aging, ...deadlines, ...deletions, ...fireTimerMembers(model, fireTimerScript));
+    // El id como literal del motor: lo comparten el rescate, la reconciliación, los plazos y el borrado.
+    if (rescue.length > 0 || aging.length > 0 || deadlines.length > 0 || deletions.length > 0) helpers.push(idLiteralMember(model));
   }
   // Sobre documentos (incremento 12d): MongoEval y los mismos ayudantes con los scripts de keel-core/gen/mongo-probes.js.
   const mongo = documentProbe(model);

@@ -256,6 +256,11 @@ solo: no se le abre ninguna puerta, se fabrica el silencio que el diseño dice q
 futuro (`holdFromReconciliation(...)`): con el umbral de prueba en segundos y el cron en minutos, sin eso esa fila
 también estaría rancia cuando llegue el ciclo.
 
+El **borrado lógico** (DSL 2.28) salió por el mismo camino. La ventana de restauración y la retención `from: deleted` se
+alcanzan envejeciendo la marca de borrado de esa fila con `ageDeletion(<Entidad>, id, días)` del arnés, en los cuatro
+generadores. El barrido de la retención se adelanta con `fireTimer`. La tabla y la columna las pone el helper desde el
+modelo: con el SQL a mano, tres de cinco corridas nombraron mal la tabla.
+
 Dos matices que esa salida deja escritos, porque es donde se tuerce:
 
 - **Se envejece la fila, no el umbral.** `unansweredAfterSeconds` es global: bajarlo en el perfil de prueba se

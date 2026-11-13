@@ -1,6 +1,6 @@
 # DSL 2.28: el ciclo de vida del dato (R4)
 
-**Estado: en curso.** Incremento 0 (keel-core) hecho el 2026-11-11, incrementos 1 (keel-spring), 2 (keel-nest), 3 (keel-dotnet), 4 (keel-go), 5 (derivados y documentación) y 6 (fixtures) el 2026-11-12. Siguiente: incremento 7 (corridas de control, las lanza el usuario).
+**Estado: CERRADO el 2026-11-12.** Los incrementos 0 a 7 están hechos. Las cinco corridas de control salieron en verde y la puerta de cierre se cumple; ver § Puerta de cierre y § Lo que queda fuera.
 
 Origen: R4 de `docs/evaluacion-dsl-2.24.md`. Este plan la lleva al DSL y a los cuatro generadores con la regla de
 siempre: **el mismo diseño genera servidores equivalentes**. Cada pieza nueva tiene una red que la ejecuta y un sabotaje
@@ -469,6 +469,30 @@ Pendiente de la decisión del usuario.
 
 Un generador que no llegue a la puerta rechaza la capacidad con su motivo.
 
+**Al cerrar (2026-11-12)**, los cuatro generadores pasan la puerta:
+
+- Las suites de los seis paquetes están en verde.
+- `design-matrix` da 217 ids falsados y ninguno `sin-mutacion`.
+- La fila `data-lifecycle` de las cuatro matrices está `verificado` y falsada en sus dos ramas.
+- Las cinco corridas de control de profile-directory v1.1.0 dieron 24/24, sin designGaps ni huecos del generador. La
+  huella fue de 5 o 6 archivos, todos TODO salvo el README.
+
+Lo único que destaparon las corridas fue el Given de FL-CRD-007. Con el SQL a mano, tres de cinco agentes nombraron la
+tabla `contact_card` en vez de `contact_cards`, y lo corrigió el propio pipeline en la segunda puntuación. Se cerró
+dentro del plan con el helper `ageDeletion(<Entidad>, id, días)` en el arnés de los cuatro, el `ageForDeadline` del
+borrado. La sentencia y el script son de keel-core (`deletionAgingTargets`, `ageDeletionStatement`, `ageDeletionScript`),
+devuelven cuántas filas envejecieron, y el helper falla si no es 1: un id equivocado o una llamada antes del DELETE fallan
+con su motivo. Lo miden:
+
+- `timer-sql-check` de keel-core en PostgreSQL y MySQL, con `--sabotage=age-deletion-live|age-deletion-sign`;
+- el caso MONGO-12 de `mongo-check` de keel-spring, falsado quitando la condición «solo si está borrado»;
+- la paridad de los cuatro arneses, en `keel-go/test/data-lifecycle-parity.test.js`, falsada quitando una rama;
+- `compile-check` de keel-spring sobre profile-directory, `go vet -tags integration` y el `dotnet build` de las pruebas
+  de integración. Para TypeScript, `ts-syntax`.
+
+La nota del careo de profile-directory sobre FL-CRD-007 apunta ya al helper. Ninguna corrida lo ha usado todavía: lo
+estrenará la siguiente sobre un diseño con borrado lógico.
+
 ## Verificación
 
 - `npm test`.
@@ -489,15 +513,13 @@ Un generador que no llegue a la puerta rechaza la capacidad con su motivo.
 | 4. keel-go | hecho (2026-11-12) | `db-check` (PostgreSQL y MySQL, 4 sujetos) y `doc-check` (2 sujetos) con los sabotajes que tienen qué romper, cada uno en exactamente sus casos; `test/data-lifecycle-parity.test.js` (PD-1 con bash, paridad con keel-spring); `go-check --fixtures`; lo emitido para las fixtures, idéntico byte a byte; la suite de keel-go |
 | 5. Derivados y documentación | hecho (2026-11-12) | `keel-nest/test/openapi.test.js` (seis sujetos, cuatro generadores) y `redocly lint`; el inventario igual en los cuatro; PD-3 en el `telemetry-check` de keel-nest, keel-dotnet y keel-go, en verde y cada uno falsado con `--sabotage=pd-log-value`; la suite entera |
 | 6. Fixtures | hecho (2026-11-12) | profile-directory 13/13 en `--ready` dentro de un workspace; verification-codes[-mongo] sin criterios nuevos; las cuatro `capability-coverage` sin filas de la 2.28; la suite entera; en vivo, con los sujetos derivados que cambiaron (cards-logical[-mongo], codes-*): `db-check`/`doc-check` de keel-nest, keel-dotnet y keel-go (PostgreSQL y MySQL), `timer-check` de keel-spring sobre el par, los cuatro `security-check` y el `telemetry-check` de keel-nest, keel-dotnet y keel-go, todo en verde (el de keel-dotnet arrancaba profile-directory sobre la base de job-dispatch y chocaba en `keel_timer`: ahora lleva la suya) |
-| 7. Corridas de control | pendiente | |
+| 7. Corridas de control | hecho (2026-11-12) | cinco corridas de profile-directory v1.1.0 (keel-spring, keel-nest, keel-dotnet y keel-go sobre PostgreSQL, y keel-dotnet sobre MySQL para T2), todas 24/24 y registradas en `docs/corridas/2026-11-12-profile-directory-228-*`; el helper `ageDeletion` que salió de ellas, medido con `timer-sql-check`, `mongo-check`, la paridad de los cuatro y la compilación de los arneses |
 
-## Para retomar
+## Lo que queda fuera
 
-Los incrementos 0 a 6 están hechos. Lo del 6 está en § «Decidido al escribir el incremento 6».
-
-Siguiente, el incremento 7: las corridas de control, que lanza el usuario (dos a la vez como mucho). Están preparadas en
-`D:\keel-example\cards-228-*`, con la tabla en el § 7. profile-directory
-v1.1.0 genera sin `--accept-unready`; verification-codes lo sigue necesitando. Lo que hay que mirar en ellas: si el
-agente de pruebas se las arregla con `dbSql`/`mongoEval` para envejecer el borrado de FL-CRD-007 (si no, el helper
-`ageDeletion` en los cuatro arneses), la columna generada de MySQL (T2) en una corrida con ese motor, y los designGaps,
-copiados a `docs/corridas/` antes de tirar el proyecto. Abierto aparte: la red en vivo de PD-3 en keel-spring.
+- **La red en vivo de PD-3 en keel-spring**: la app arrancada contra MySQL y el colector OTLP falso, como en el
+  `telemetry-check` de los otros tres.
+- **verification-codes[-mongo] en `--ready`**: no tienen `validation-scenarios.md`, y llevarlas ahí es otro trabajo.
+  El usuario decidió dejarlas fuera de las corridas, porque `anonymize` ya está medido en vivo con los sujetos derivados.
+- **`baselineTested: PENDING` en keel-spring**: la prueba del baseline sobre una base vacía sigue siendo del diseñador,
+  como en todas sus corridas.

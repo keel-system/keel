@@ -33,6 +33,8 @@
 // imagen o con la pasarela, no con un lenguaje. Los comentarios cuentan cómo la usa keel-spring,
 // que es la implementación de referencia; un arnés de otro lenguaje la renderiza igual.
 
+import { DELETED_AT } from './relational.js';
+
 /**
  * El envoltorio con el que TODO script de aquí se ejecuta, y sin el cual no vuelve nada.
  *
@@ -149,6 +151,17 @@ export function ageDeadlineScript({ collection, sinceField, kind }) {
     `db.getCollection("${collection}").updateOne({ _id: UUID("{id}") }, [{ $set: { ${sinceField}: { $subtract: ["$${sinceField}", {ms}] } } }]); ` +
     `db.getCollection("keel_timer").updateOne({ _id: "${kind}|{id}" }, [{ $set: { due_at: { $subtract: ["$due_at", {ms}] } } }])`
   );
+}
+
+/**
+ * Envejece el BORRADO lógico de un documento (DSL 2.28, `ageDeletion` del arnés): retrasa su `deletedAt` `{ms}`
+ * milisegundos, relativo y solo si está borrado, e IMPRIME cuántos envejeció (`printed`). El arnés exige un 1, como con la sentencia
+ * relacional (`ageDeletionStatement`, data-lifecycle.js). `deletedAt: { $ne: null }` deja fuera el campo ausente y el
+ * nulo, que es estar vivo. Marcadores `{id}` y `{ms}`.
+ */
+export function ageDeletionScript({ collection }) {
+  const mark = DELETED_AT.field;
+  return printed(`db.getCollection("${collection}").updateOne({ _id: UUID("{id}"), ${mark}: { $ne: null } }, [{ $set: { ${mark}: { $subtract: ["$${mark}", {ms}] } } }]).modifiedCount`);
 }
 
 /**

@@ -52,6 +52,7 @@ import {
   outboxPendingScript,
   abandonOutboxScript,
   clearAbandonedScript,
+  ageDeletionScript,
   printed
 } from '@keel-system/keel-core/gen/mongo-probes';
 
@@ -430,6 +431,40 @@ async function agingScenarios({ raw, probe }) {
   });
 }
 
+// ageDeletion (DSL 2.28): el script con el que el arnés de los cuatro generadores envejece un borrado lógico. Va sobre una
+// colección propia en el mismo Mongo: lo que se mide es el script, que no depende del diseño más que por el nombre de la
+// colección. Tiene que retrasar `deletedAt` solo en un documento YA borrado, de forma relativa, e IMPRIMIR cuántos tocó:
+// el arnés exige un 1, así que un 0 sobre lo borrado o un 1 sobre lo vivo serían un escenario mal fabricado sin fallar.
+async function deletionAgingScenarios({ raw, probe }) {
+  const script = (id, days) => ageDeletionScript({ collection: 'contact_cards' }).replace('{id}', id).replace('{ms}', String(days * 86_400_000));
+  const DAY = 86_400_000;
+  const readCard = (id) => jsonOf(probe(`JSON.stringify(db.getCollection("contact_cards").findOne({ _id: UUID("${id}") }))`));
+  const millis = (value) => new Date(value?.$date ?? value).getTime();
+
+  await check('MONGO-12', 'ageDeletion retrasa deletedAt solo en lo borrado, relativo, e imprime cuántos tocó', () => {
+    const seeded = raw(`
+      db.getCollection("contact_cards").deleteMany({});
+      db.getCollection("contact_cards").insertMany([
+        { _id: UUID("${ID}"), subject: "borrada", deletedAt: new Date() },
+        { _id: UUID("${OTHER_ID}"), subject: "viva" }
+      ]);
+      print("ok");
+    `);
+    if (seeded !== 'ok') throw new Error('la siembra no confirmó');
+    const before = millis(readCard(ID).deletedAt);
+    const gone = raw(script(ID, 31));
+    const live = raw(script(OTHER_ID, 31));
+    if (gone !== '1') throw new Error(`sobre la borrada imprimió ${JSON.stringify(gone)}, esperaba 1`);
+    if (live !== '0') throw new Error(`sobre la viva imprimió ${JSON.stringify(live)}, esperaba 0: envejecería lo que no está borrado`);
+    const after = millis(readCard(ID).deletedAt);
+    if (before - after !== 31 * DAY) throw new Error(`deletedAt se movió ${(before - after) / DAY} días, esperaba 31 hacia atrás`);
+    const untouched = readCard(OTHER_ID);
+    if (untouched.deletedAt !== undefined && untouched.deletedAt !== null) {
+      throw new Error(`la viva ganó un deletedAt: ${JSON.stringify(untouched.deletedAt)}`);
+    }
+  });
+}
+
 // El conflicto de escritura TRANSITORIO, que el UseCaseMediator del modelo documental reintenta
 // (hallazgo 7 de R9). Aquí no hay script del generador que probar: lo que se comprueba es la
 // PREMISA de la que depende ese Java, contra un mongod real y no contra la documentación, que no la
@@ -499,6 +534,7 @@ const PLAN = [
     scenarios: async (evaluate) => {
       await outboxScenarios(evaluate);
       await agingScenarios(evaluate);
+      await deletionAgingScenarios(evaluate);
     }
   }
 ];
