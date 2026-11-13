@@ -42,6 +42,7 @@ import { entityFinders, portFinderParts, relationalFinderMethods, sortConstants 
 import { readScopePortMethods, readScopeRelationalHelpers, readScopeRelationalMethods } from './read-scope.js';
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import * as lifecycle from './data-lifecycle.js';
+import * as history from './history.js';
 import { parametersClass, parametersPath } from './service-parameters.js';
 import { repositoryRoots, isPaginated, resolvedByOf } from '@keel-system/keel-core/gen/features';
 export { repositoryRoots, isPaginated };
@@ -378,6 +379,8 @@ function renderPort(model, entity) {
   );
   // La restauración de un borrado lógico (DSL 2.28, D6): la borrada por su clave y la restauración por id.
   methods.push(...lifecycle.restorePortMethods(model, entity, id?.name ?? 'id', idType, finder, imports));
+  // El historial de cambios (DSL 2.29, D7): su lectura carga la raíz como su ficha.
+  methods.push(...history.historyPortMethods(model, entity, imports));
   const body = `${finderParts.declarations.map((declaration) => `${declaration}\n\n`).join('')}/**
  * Puerto de persistencia del agregado ${entity.name}. Clase abstracta y no interfaz: sirve también de
  * token de inyección, sin que el dominio importe nada del framework. El adaptador vive en
@@ -541,14 +544,26 @@ function renderAdapter(model, entity) {
   const keyWhere = finder ? `{ ${finder.params.flatMap((param) => param.where.map(([prop, expr]) => (prop === expr ? prop : `${prop}: ${expr}`))).join(', ')} }` : null;
   methods.push(
     ...(lifecycle.relationalAdapterMethods(model, entity, { idName, idType, orm: ormClass(entity.name), relations: hasRelations, keyFinder: finder, imports, keyWhere }) ?? [
-      `  async deleteById(${idName}: ${idType}): Promise<void> {
+      history.recordsHistory(entity)
+        ? `  async deleteById(${idName}: ${idType}): Promise<void> {
+    await this.transactions.inTransaction(async (manager) => {
+      // Se carga y se borra el GRAFO: las filas de las hijas y de las listas van antes que la raíz.
+      const found = await manager.findOne(${ormClass(entity.name)}, ${findOptions(`{ ${idName} }`)});
+      if (found == null) return;
+      await manager.remove(found);
+${history.historyRecordLine(entity, 'deleted', idName, imports, '      ')}    });
+  }`
+        : `  async deleteById(${idName}: ${idType}): Promise<void> {
     await this.transactions.inTransaction(async (manager) => {
       // Se carga y se borra el GRAFO: las filas de las hijas y de las listas van antes que la raíz.
       const found = await manager.findOne(${ormClass(entity.name)}, ${findOptions(`{ ${idName} }`)});
       if (found != null) await manager.remove(found);
     });
   }`
-    ])
+    ]),
+    // El historial de cambios (DSL 2.29): la lectura (D7) y lo que save necesita para escribir su entrada (D2, D3).
+    ...history.historyReadMethods(model, entity, imports),
+    ...history.historyAdapterHelpers(model, entity, imports)
   );
 
   const sortable = sortableProperties(model, entity);
@@ -632,7 +647,8 @@ export function constructorOf(model, entity, imports) {
   // La ventana de una restauración que lee un parámetro del servicio (DSL 2.28), antes del cronómetro.
   const lifecycleDeps = lifecycle.lifecycleDependencies(model, entity, { parametersClass: parametersClass(model), parametersPath: parametersPath(model) })
     .filter((dep) => !claimDependencies(model, entity).some((other) => other.name === dep.name));
-  for (const dep of [...claimDependencies(model, entity), ...reconciliationDependencies(model, entity), ...lifecycleDeps, ...armingDependencies(model, entity)]) {
+  // El almacén del historial (DSL 2.29), detrás de todos: lo escriben save, deleteById y restore.
+  for (const dep of [...claimDependencies(model, entity), ...reconciliationDependencies(model, entity), ...lifecycleDeps, ...armingDependencies(model, entity), ...history.historyDependency(entity)]) {
     imports.push(...dep.imports);
     deps.push(dep);
   }
@@ -695,6 +711,13 @@ function saveMethod(model, entity, imports) {
   if (arming) {
     lines.push(`      const previous = await manager.findOne(${ormClass(entity.name)}, { where: { ${idName}: entity.${idName} }, select: { ${idName}: true, ${lifecycleField}: true } });`);
   }
+  // El historial (DSL 2.29, T1): lo que había, LEÍDO antes de escribir —TypeORM no tiene entidad gestionada—, tras subir
+  // la versión (la fila ya está bloqueada) y dentro de la misma transacción.
+  const recorded = history.recordsHistory(entity);
+  if (recorded) {
+    const relations = Object.keys(relationsTree(model, entity)).length > 0 ? `, relations: ${literal(relationsTree(model, entity))}` : '';
+    lines.push(`      const historyRow = await manager.findOne(${ormClass(entity.name)}, { where: { ${idName}: entity.${idName} }${relations} });`);
+  }
   lines.push(`      const saved = await manager.save(${ormClass(entity.name)}, orm);`);
   if (arming) lines.push(arming);
   if (emitsEvents && usesBridge(model)) {
@@ -705,7 +728,13 @@ function saveMethod(model, entity, imports) {
     // Sin capa de mensajería nadie los escucha, pero se vacían igual para que el buffer no crezca.
     lines.push('      entity.pullDomainEvents();');
   }
-  lines.push(`      return toDomain${entity.name}(saved);`);
+  if (recorded) {
+    lines.push(`      const result = toDomain${entity.name}(saved);
+      await this.recordSave(historyRow == null ? null : this.historySnapshot(toDomain${entity.name}(historyRow)), result);
+      return result;`);
+  } else {
+    lines.push(`      return toDomain${entity.name}(saved);`);
+  }
   // La copia local de una dependencia replicada se guarda en su PROPIA transacción (el REQUIRES_NEW de keel-spring):
   // a este save se llega también desde la hidratación del lector (onMiss: fetch), que corre dentro de una consulta
   // de solo lectura. Contrapartida deliberada: la copia queda confirmada aunque la lectura falle después.

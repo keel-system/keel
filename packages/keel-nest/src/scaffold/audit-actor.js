@@ -14,6 +14,7 @@ import { usesApi, CORRELATION_TS, usesCorrelation } from './rest-support.js';
 import { SECURITY_CONTEXT_TS, usesHttpSecurity } from './security.js';
 import { tsModule, tsString } from './render.js';
 import { SYSTEM_ACTOR } from '@keel-system/keel-core/gen/relational';
+import { usesHistory } from '@keel-system/keel-core/gen/history';
 
 export const AUDIT_ACTOR_TS = 'src/infrastructure/persistence/audit-actor.ts';
 
@@ -25,7 +26,8 @@ export function usesAuthorship(model) {
 }
 
 export function generate(model) {
-  if (!usesAuthorship(model)) return [];
+  // El historial (DSL 2.29) reutiliza este actor aunque el diseño no pida autoría en las filas: D5.
+  if (!usesAuthorship(model) && !(usesPersistence(model) && usesHistory(model))) return [];
   const security = usesHttpSecurity(model);
   const correlation = usesApi(model) || usesCorrelation(model);
   const imports = [

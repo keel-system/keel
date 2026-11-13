@@ -24,6 +24,7 @@ import { EXCEPTION_FILTER_TS } from '../../src/scaffold/rest-support.js';
 import { retentionCaches } from '@keel-system/keel-core/gen/cache-plan';
 import { classPath, DIRS } from '../../src/scaffold/render.js';
 import { MONGO_TIMER_STORE_TS, SQL_TIMER_STORE_TS, TIMER_STORE_TS, TIMER_POLLER_TS, TIMER_KINDS_TS } from '../../src/scaffold/timer.js';
+import { recordsHistory } from '../../src/scaffold/history.js';
 
 const js = (value) => JSON.stringify(value);
 const decap = (name) => `${name[0].toLowerCase()}${name.slice(1)}`;
@@ -169,7 +170,7 @@ export function lifecycleSabotageVerdict(checks, id, model, { engine }) {
 // ─── El bloque ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Las tablas de un agregado, hijas y listas antes que la raíz: lo que hay que vaciar para empezar limpio. */
-function aggregateTables(model, entity, seen = new Set()) {
+export function aggregateTables(model, entity, seen = new Set()) {
   const tables = [];
   for (const member of persistedMembers(model, entity)) {
     if (member.kind === 'elementCollection') tables.push(elementTable(entity, member).table);
@@ -391,10 +392,14 @@ export function lifecycleBlock(model, ctx, { document, engine, sampleEntity, ada
       dist(retentionClass(name), retentionPath(name));
       dist(retentionTimerClass(name), retentionTimerPath(name));
       const settings = `{ ${decap(name)}: { cron: '0 30 2 * * *', batchSize: 2 } }`;
-      const tick = `    await new ${retentionTimerClass(name)}(new ${retentionClass(name)}(tx), ${settings}${cacheArg(entity)}).tick();`;
+      // Con historial (DSL 2.29) la retención recibe también su almacén, que declara el preámbulo de la sonda.
+      const tick = `    await new ${retentionTimerClass(name)}(new ${retentionClass(name)}(tx${recordsHistory(entity) ? ', historyStore' : ''}), ${settings}${cacheArg(entity)}).tick();`;
       const present = (row) => `${rawRow(row)} != null`;
       const ago = (days) => `new Date(Date.now() - ${days} * 86_400_000)`;
       if (retention.fromDeleted) {
+        // Lo vencido se borra o, con then: anonymize (el primer sujeto que lo junta con from: deleted es el del historial,
+        // DSL 2.29), se queda anonimizado.
+        const gone = retention.then === 'delete' ? (row) => `!(${present(row)})` : (row) => `${rawRow(row)}?.anonymizedAt != null`;
         block(`RT-1: ${name}`, [
           fresh('viva'),
           fresh('reciente'),
@@ -411,7 +416,7 @@ export function lifecycleBlock(model, ctx, { document, engine, sampleEntity, ada
           fresh('vieja3'),
           ...['vieja1', 'vieja2', 'vieja3'].flatMap((row) => [`    await ${repo}.deleteById(${row}.${idName});`, backdate(row, span.days + 1)]),
           tick,
-          `    check(${label('RT-4', 'lo borrado hace más de la retención se purga, también más allá del primer lote')}, !(${present('vieja1')}) && !(${present('vieja2')}) && !(${present('vieja3')}));`
+          `    check(${label('RT-4', `lo borrado hace más de la retención se ${retention.then === 'delete' ? 'purga' : 'anonimiza'}, también más allá del primer lote`)}, ${gone('vieja1')} && ${gone('vieja2')} && ${gone('vieja3')});`
         ]);
       } else {
         const due = retention.then === 'delete' ? (row) => `!(${present(row)})` : (row) => `${rawRow(row)}?.anonymizedAt != null`;

@@ -19,6 +19,7 @@ import { pageableDefaults } from '@keel-system/keel-core/gen/pagination';
 import { DIRS, classPath, fieldImports, tsModule, tsdoc, tsString } from './render.js';
 import { ENTRY_GATE_TS, MEDIATOR_TS } from './mediator.js';
 import { entryGateAssignment, messageComponents, messagePath, returnTypeOf, isPartialUpdate } from './services.js';
+import { historyResponseImport } from './history.js';
 import { CONDITIONAL_REQUESTS_TS, carriesExpectedVersions, controllerLine, returnsVersioned } from './conditional-writes.js';
 import { READ_SCOPES_TS, readScopeImport, readScopesMethod } from './read-scope.js';
 import { PAGED_RESPONSE_TS, FILE_UPLOAD_TS } from './dtos.js';
@@ -210,6 +211,8 @@ function renderMethod(model, operation, imports, readers) {
   const resultType = returnTypeOf(operation);
   if (operation.responseDto) imports.push({ symbol: operation.responseDto.name, from: classPath(DIRS.dtos, operation.responseDto.name), type: true });
   if (operation.paginated) imports.push({ symbol: 'PagedResponse', from: PAGED_RESPONSE_TS, type: true });
+  // La query de historial (DSL 2.29): la página de entradas de wire-contract.md.
+  if (operation.historyOf) imports.push(historyResponseImport());
   const location = returnsLocation(model, operation);
   const readerName = `read${operation.messageClass}`;
   readers.push(renderReader(model, operation, readerName, imports));

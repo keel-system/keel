@@ -213,7 +213,8 @@ personales?»), solo si el diseño ya declara algún `history`.
 
 Sujetos en `keel-core/test/helpers/history-designs.js` (decididos en el incremento 0): `cards-history` y
 `cards-history-mongo` (profile-directory con historial: personal, borrado lógico, restauración, purga),
-`cards-history-anonymize` (la misma ficha con `then: anonymize`, HI-8) y `vault-history-scoped[-mongo]` (asset-vault
+`cards-history-anonymize[-mongo]` (la misma ficha con `then: anonymize`, HI-8; la variante documental se añadió en el
+incremento 2, cuando `hi-anonymize-miss` no tenía en qué caer en MongoDB en ninguno de los dos generadores) y `vault-history-scoped[-mongo]` (asset-vault
 con sus revisiones como hijas y su lectura acotada, HI-3 y HI-7).
 
 Fixture: `profile-directory` v1.2.0 con `history: [ContactCard]`, `authorship` sin cambiar, la query
@@ -267,7 +268,7 @@ generador que no llegue rechaza la capacidad con su motivo en `supported-feature
 |---|---|---|
 | 0. keel-core | hecho (2026-11-13) | la suite de keel-core (1570), `design-matrix` (224 falsados, 4 co-disparados entre ellos `CHK-PERSIST-HISTORY-NO-SECURITY`, ninguno sin mutación), `test/history.test.js` sobre los cinco sujetos y la suite entera de los seis paquetes |
 | 1. keel-spring | hecho (2026-11-13) | `timer-sql-check` (36 pasos, `history-order` e `history-filter` cada uno en su caso); `compile-check` de los cinco sujetos; `npm run history-check` en verde en los cinco (cards-history en PostgreSQL y MySQL, cards-history-mongo, cards-history-anonymize, vault-history-scoped[-mongo]); los 19 sabotajes `hi-*` cada uno en exactamente su caso, también en MySQL y MongoDB; `test/history.test.js` y fila `history` de la matriz, verificada y falsada en sus dos ramas |
-| 2. keel-nest | pendiente | |
+| 2. keel-nest | hecho (2026-11-13) | la suite de keel-nest (1108) y la de la raíz; `test/history-parity.test.js` (11: casos, sentencias, tablas, patrones personales y nota contra keel-spring, y el diff y la anonimización emitidos EJECUTADOS contra keel-core); `db-check` en PostgreSQL (92, 107, 237) y MySQL (94, 109, 237) sobre cards-history, cards-history-anonymize y vault-history-scoped; `doc-check` (61, 75, 141) sobre las tres variantes `-mongo`; los 8 sabotajes `hi-*` cada uno en exactamente sus casos en los tres almacenes; fila `history` de la matriz verificada y falsada en sus dos ramas. `cards-history-anonymize-mongo`, nuevo, también medido con `history-check` de keel-spring (8/8 y `hi-anonymize-miss` en HI-8) |
 | 3. keel-dotnet | pendiente | |
 | 4. keel-go | pendiente | |
 | 5. Derivados y documentación | pendiente | |
@@ -276,18 +277,19 @@ generador que no llegue rechaza la capacidad con su motivo en `supported-feature
 
 ## Para retomar
 
-- **Siguiente: incremento 2, keel-nest.** Empieza por quitar su `historyPendingErrors` de `supported-features.js`, su fila
-  `pending` de `src/lib/engine-support.js` y la de `persistence.audit.history` de su `capability-coverage`. Lo neutral ya
-  está: las sentencias (`historyStatements`, `historyPageSql`/`historyCountSql`), las tablas en `GENERATOR_TABLES` (su
-  paso de esquema sale solo en cuanto el baseline las tenga), la forma en `entity.historyShape`, los patrones personales
-  (`historyPersonalPatterns`), la reescritura (`anonymizeHistoryChanges`/`anonymizedEntryChanges`) y la nota
-  (`historyNote`).
-- **El modelo a calcar es keel-spring** (`packages/keel-spring/src/scaffold/history.js`): el puerto `historyOf` en la raíz,
-  que carga como la ficha; el `save` envuelto con la instantánea «antes» tomada antes de volcar (T1: en TypeORM hay que
-  cargarla, no hay entidad gestionada); la baja, la restauración y la retención escriben o se llevan su historial; el
-  documental guarda `changes` como texto y `fields: [{ path, top }]`.
-- **La red** son las sondas HI-1 a HI-10 en `scripts/lib/history-probes.js` dentro de `db-check`/`doc-check`, con los
-  mismos sabotajes (`HISTORY_SABOTAGES`) y la paridad contra keel-spring en `test/history-parity.test.js`. HI-6 se mide por
-  el almacén, no por el adaptador, para que un diff roto no tumbe el orden: así quedó aislado en keel-spring.
-- Lo que dispara cada regla y sus mutaciones: extensiones `history` y `ownedHistory` de
-  `keel-core/test/design-mutations/catalog.js`. Los sujetos: `keel-core/test/helpers/history-designs.js`.
+- **Siguiente: incremento 3, keel-dotnet.** Igual que en keel-nest: quitar su `historyPendingErrors` de
+  `supported-features.js`, su fila `pending` de `src/lib/engine-support.js` y actualizar (no borrar: sigue sin fixture
+  hasta el inc. 6) la fila `persistence.audit.history` de su `capability-coverage`.
+- **Lo que dejó keel-nest y sirve de guía** (`packages/keel-nest/src/scaffold/history.js` y
+  `.claude/rules/nest-generador.md` § Historial):
+  - el diff y la anonimización comparan el TEXTO del cable de cada ruta; en keel-nest viven en infraestructura porque el
+    dominio no puede importar `wire.ts`. En .NET, decidir dónde vive el serializador del cable antes de copiar a nadie;
+  - T1 en EF: hay entidad rastreada, así que la instantánea «antes» puede salir de la carga (como keel-spring), no de una
+    lectura extra (como keel-nest);
+  - el almacén es el ÚLTIMO argumento del constructor del adaptador: las sondas que lo construyen a mano tienen que pasarlo;
+  - la retención: `RT-4` de las sondas de la 2.28 daba por hecho que `from: deleted` purga; en keel-nest se generalizó
+    a «anonimizado» cuando `then: anonymize`. Revisar el `lifecycle-probes.js` de keel-dotnet por lo mismo;
+  - en MongoDB el `_id` de la entrada es texto: tiparlo como tal o no compila.
+- **La red**: HI-1 a HI-10 en `scripts/lib/history-probes.js` dentro de `db-check`/`doc-check`, sobre los seis sujetos
+  (`cards-history-anonymize-mongo` es nuevo), con `HISTORY_SABOTAGES`. HI-11 (logs y spans) sigue sin medir en ningún
+  generador: keel-spring y keel-nest lo dejan a la corrida de control; decidir en el inc. 5 si entra en `telemetry-check`.

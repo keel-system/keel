@@ -877,7 +877,7 @@ const SPRING_MECHANISMS = {
     emitter: 'src/scaffold/history.js · src/scaffold/repositories.js · src/scaffold/document-repositories.js · src/scaffold/data-lifecycle.js · src/scaffold/services.js · src/scaffold/auditing.js',
     why: 'Una entrada que sobrevive al rollback, un diff que lo lista todo, un secreto copiado a otra tabla, un autor que siempre es system, una página que desempata al revés, el historial de una raíz ajena o borrada y un valor personal que sobrevive a su retención compilan igual de bien y no rompen ningún escenario feliz.',
     parity: {
-      skip: 'ninguna fixture declara el historial hasta el incremento 6 de PLAN-DSL-229-HISTORIAL.md: los sujetos son los diseños derivados de keel-core/test/helpers/history-designs.js (cards-history y cards-history-mongo, el mismo diseño salvo el modelo; cards-history-anonymize; vault-history-scoped y vault-history-scoped-mongo), que medirán también keel-nest, keel-dotnet y keel-go; la forma la fija test/history.test.js',
+      skip: 'ninguna fixture declara el historial hasta el incremento 6 de PLAN-DSL-229-HISTORIAL.md: los sujetos son los diseños derivados de keel-core/test/helpers/history-designs.js (cards-history y cards-history-mongo, el mismo diseño salvo el modelo; cards-history-anonymize y cards-history-anonymize-mongo; vault-history-scoped y vault-history-scoped-mongo), que medirán también keel-nest, keel-dotnet y keel-go; la forma la fija test/history.test.js',
       test: 'test/history.test.js'
     },
     coverage: {
@@ -894,7 +894,7 @@ const SPRING_MECHANISMS = {
         net: 'history-check',
         engines: ['mongodb'],
         falsified: true,
-        why: 'cards-history-mongo y vault-history-scoped-mongo contra Spring Data MongoDB en un replica set real, con las MISMAS sondas que la rama relacional: la entrada en la transacción de MongoTransactionManager, el orden por at y _id, el filtro sobre fields.path y fields.top. Falsado con los mismos sabotajes, cada uno en exactamente sus casos'
+        why: 'cards-history-mongo, cards-history-anonymize-mongo y vault-history-scoped-mongo contra Spring Data MongoDB en un replica set real, con las MISMAS sondas que la rama relacional: la entrada en la transacción de MongoTransactionManager, el orden por at y _id, el filtro sobre fields.path y fields.top. Falsado con los mismos sabotajes, cada uno en exactamente sus casos (hi-anonymize-miss sobre cards-history-anonymize-mongo, añadido en el incremento 2)'
       }
     }
   }

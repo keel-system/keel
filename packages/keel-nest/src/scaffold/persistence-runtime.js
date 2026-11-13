@@ -21,6 +21,7 @@ import { MIGRATIONS_TABLE } from './infra.js';
 import { storeEntities } from './messaging-stores.js';
 import { timerEntities } from './timer.js';
 import { reconciliationBindings, reconciliationEntities } from './reconciliation-claim.js';
+import { historyBindings, historyEntities } from './history.js';
 import { SWEEP_SETTINGS_TS, usesSweepClaims } from './claim.js';
 import {
   usesRequestIdempotency,
@@ -155,6 +156,8 @@ function dataSourceOptionsFile(model) {
   entities.push(...reconciliationEntities(model));
   // La tabla del cronómetro (DSL 2.26): keel_timer, la misma que en keel-spring.
   entities.push(...timerEntities(model));
+  // Las dos tablas del historial de cambios (DSL 2.29): change_history y change_history_field, las mismas que en keel-spring.
+  entities.push(...historyEntities(model));
   const driverOptions =
     engine === 'postgresql'
       ? `    type: 'postgres',
@@ -668,6 +671,11 @@ function persistenceModuleFile(model) {
   imports.push(...reconciliation.imports);
   bindings.push(...reconciliation.bindings);
   ports.push(...reconciliation.exports);
+  // El almacén del historial de cambios (DSL 2.29): lo usan los adaptadores de las raíces y la retención.
+  const history = historyBindings(model);
+  imports.push(...history.imports);
+  bindings.push(...history.bindings);
+  ports.push(...history.exports);
   // La configuración de los barridos (el lote y el plazo de cada reclamo): la leen los adaptadores.
   if (usesSweepClaims(model)) {
     imports.push({ symbol: 'SWEEP_SETTINGS', from: SWEEP_SETTINGS_TS }, { symbol: 'sweepSettings', from: SWEEP_SETTINGS_TS });

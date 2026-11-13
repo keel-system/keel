@@ -11,7 +11,7 @@
 //   node packages/keel-spring/scripts/history-check.js [diseño] [--database=<motor>] [--sabotage=<id>] [--keep]
 //   npm run history-check --workspace packages/keel-spring
 //
-// Diseños: cards-history y cards-history-mongo (la ficha con borrado lógico, restauración y purga), cards-history-anonymize
+// Diseños: cards-history y cards-history-mongo (la ficha con borrado lógico, restauración y purga), cards-history-anonymize[-mongo]
 // (la retención que anonimiza) y vault-history-scoped[-mongo] (un agregado con hijas y su lectura acotada). Necesita
 // podman o docker, y JDK.
 //

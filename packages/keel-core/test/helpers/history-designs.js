@@ -40,15 +40,16 @@ function cardsHistory(layers, model) {
 export const HISTORY_DESIGNS = [
   { name: 'cards-history', from: 'profile-directory', mutate: (layers) => cardsHistory(layers, 'relational') },
   { name: 'cards-history-mongo', from: 'profile-directory', mutate: (layers) => cardsHistory(layers, 'document') },
-  // La retención que anonimiza (HI-8): los valores personales del historial se reescriben con el mismo sustituto.
-  {
-    name: 'cards-history-anonymize',
+  // La retención que anonimiza (HI-8): los valores personales del historial se reescriben con el mismo sustituto. En los
+  // dos modelos: el almacén documental reescribe su `changes` de texto por su cuenta.
+  ...['relational', 'document'].map((model) => ({
+    name: model === 'relational' ? 'cards-history-anonymize' : 'cards-history-anonymize-mongo',
     from: 'profile-directory',
     mutate(layers) {
-      cardsHistory(layers, 'relational');
+      cardsHistory(layers, model);
       layers.persistence.entities.ContactCard.retention = { from: 'deleted', keep: { days: 30 }, then: 'anonymize' };
     }
-  },
+  })),
   // Un agregado con hijas (las revisiones del archivo, HI-3) cuya lectura por id va acotada por el alcance (HI-7), en sus
   // dos modelos: la fixture es documental.
   ...['relational', 'document'].map((model) => ({

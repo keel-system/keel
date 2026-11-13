@@ -34,6 +34,7 @@ import { AUDIT_ACTOR_TS } from './audit-actor.js';
 import { DOCUMENT_SCOPE_LINE, readScopeDocumentHelpers, readScopeDocumentMethods, readScopeImport } from './read-scope.js';
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import * as lifecycle from './data-lifecycle.js';
+import * as history from './history.js';
 import { sortablePaths } from '@keel-system/keel-core/gen/document';
 
 // ─── Valores ─────────────────────────────────────────────────────────────────
@@ -323,6 +324,9 @@ function saveMethod(model, entity, use) {
   }
   lines.push(...declared.map((line) => `      ${line}`));
   lines.push(`      const { ${DOCUMENT_ID}: id, ...fields } = document;`);
+  // El historial (DSL 2.29, T1): lo que había, LEÍDO de la base antes de escribirlo y con la sesión de la transacción.
+  const recorded = history.recordsHistory(entity);
+  if (recorded) lines.push(`      const historyDocument = await this.collection.findOne({ ${DOCUMENT_ID}: id }, { session });`);
   // El armado del plazo (DSL 2.26): el estado que el documento tenía en la base dice si la entidad ENTRA en el estado.
   // Se lee antes de escribirlo, con la sesión de la transacción del caso de uso.
   const lifecycle = entity.lifecycle;
@@ -373,7 +377,13 @@ function saveMethod(model, entity, use) {
     // Sin mensajería nadie los escucha, pero se vacían igual para que el buffer no crezca.
     lines.push('      entity.pullDomainEvents();');
   }
-  lines.push(`      return toDomain${entity.name}({ ${DOCUMENT_ID}: id, ...fields });`);
+  if (recorded) {
+    lines.push(`      const result = toDomain${entity.name}({ ${DOCUMENT_ID}: id, ...fields });
+      await this.recordSave(historyDocument == null ? null : this.historySnapshot(toDomain${entity.name}(historyDocument)), result);
+      return result;`);
+  } else {
+    lines.push(`      return toDomain${entity.name}({ ${DOCUMENT_ID}: id, ...fields });`);
+  }
   // La copia local de una dependencia replicada se guarda en su PROPIA transacción (el REQUIRES_NEW de keel-spring):
   // a este save se llega también desde la hidratación del lector (onMiss: fetch), que corre dentro de una consulta
   // de solo lectura. Contrapartida deliberada: la copia queda confirmada aunque la lectura falle después.
@@ -523,11 +533,22 @@ export function renderDocumentAdapter(model, entity) {
   const keyFinder = naturalKeyFinder(model, entity);
   methods.push(
     ...(lifecycle.documentAdapterMethods(model, entity, { idName, idType, idFilter, keyFilter: keyFinder ? keyFilter(model, entity, keyFinder, use) : null, keyFinder, imports }) ?? [
-      `  async deleteById(${idName}: ${idType}): Promise<void> {
+      history.recordsHistory(entity)
+        ? `  async deleteById(${idName}: ${idType}): Promise<void> {
+    // El agregado es el documento: borrarlo borra también sus hijas, que van dentro.
+    await this.transactions.inTransaction(async (session) => {
+      const removed = await this.collection.deleteOne(${idFilter}, { session });
+      if (removed.deletedCount === 0) return;
+${history.historyRecordLine(entity, 'deleted', idName, imports, '      ')}    });
+  }`
+        : `  async deleteById(${idName}: ${idType}): Promise<void> {
     // El agregado es el documento: borrarlo borra también sus hijas, que van dentro.
     await this.transactions.inTransaction((session) => this.collection.deleteOne(${idFilter}, { session }));
   }`
-    ])
+    ]),
+    // El historial de cambios (DSL 2.29): la lectura (D7) y lo que save necesita para escribir su entrada (D2, D3).
+    ...history.historyReadMethods(model, entity, imports),
+    ...history.historyAdapterHelpers(model, entity, imports)
   );
 
   for (const name of helpers) imports.push({ symbol: name, from: BSON_VALUES_TS });

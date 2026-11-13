@@ -19,6 +19,7 @@
 //   purgas      lo caducado sale por lotes con tope, la pasada siguiente sigue, y lo vigente y lo PENDIENTE
 //               del outbox no se tocan.
 
+import { recordsHistory } from '../../src/scaffold/history.js';
 import { claimsForEntity, claimOrderField, screamingSnake, sweepClaims } from '@keel-system/keel-core/gen';
 import { claimDrains } from '@keel-system/keel-core/gen/timer-plan';
 import { scheduleTimerClass, scheduleTimerPath } from '../../src/scaffold/timer.js';
@@ -69,6 +70,8 @@ export function adapterArgs(model, root, { batch = 10, transactions = 'tx', reco
   // El cronómetro (DSL 2.26): el almacén y los plazos, los últimos (repositories.js, armingDependencies). Los declara
   // el preámbulo de timer-probes.js.
   if (modelDeadlines(model).some(({ entity }) => entity.name === root.name)) args.push(...TIMER_ADAPTER_ARGS);
+  // El almacén del historial (DSL 2.29), el último: lo declara el preámbulo de history-probes.js.
+  if (recordsHistory(root)) args.push('historyStore');
   return args.join(', ');
 }
 

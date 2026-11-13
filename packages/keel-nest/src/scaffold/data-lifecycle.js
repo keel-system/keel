@@ -23,6 +23,7 @@ import { documentShape, DOCUMENT_ID } from '@keel-system/keel-core/gen/document'
 import { cronWithDefault, envWithDefault } from '@keel-system/keel-core/gen/profile-values';
 import { snakeCase } from '@keel-system/keel-core/gen/naming';
 import { DIRS, classPath, tsModule, tsString } from './render.js';
+import { CHANGE_HISTORY_TS, HISTORY_SUPPORT_TS, historyRecordLine, recordsHistory, rootConstant } from './history.js';
 
 const RETENTION_DIR = 'infrastructure/persistence/retention';
 const TIMER_DIR = 'infrastructure/timer';
@@ -178,12 +179,17 @@ export function relationalAdapterMethods(model, entity, { idName, idType, orm, r
   if (!lifecycle?.logical) return null;
   imports.push({ symbol: 'IsNull', from: 'typeorm' });
   const withRelations = relations ? ', relations: RELATIONS' : '';
+  const marking = `manager.update(${orm}, { ${idName}, ${DELETED_AT.field}: IsNull() }, { ${DELETED_AT.field}: new Date()${relationalBump(entity)} })`;
   const methods = [`  async deleteById(${idName}: ${idType}): Promise<void> {
     await this.transactions.inTransaction(async (manager) => {
       // Borrado lógico (DSL 2.28, D1): se marca y no se elimina. La fila deja de verse en toda lectura del puerto y su
       // clave única queda libre (los índices únicos de la tabla solo cuentan las filas vivas).
-      await manager.update(${orm}, { ${idName}, ${DELETED_AT.field}: IsNull() }, { ${DELETED_AT.field}: new Date()${relationalBump(entity)} });
-    });
+${recordsHistory(entity)
+    ? `      const marked = await ${marking};
+      if (!marked.affected) return;
+${historyRecordLine(entity, 'deleted', idName, imports, '      ')}`
+    : `      await ${marking};
+`}    });
   }`];
   if (lifecycle.restore) {
     imports.push({ symbol: 'Not', from: 'typeorm' });
@@ -204,7 +210,7 @@ export function relationalAdapterMethods(model, entity, { idName, idType, orm, r
       }
       // Si una fila viva ocupa ya su clave, la unicidad entre vivas salta AQUÍ, con su nombre (el 409 que traduce el filtro).
       await manager.update(${orm}, { ${idName} }, { ${DELETED_AT.field}: null${relationalBump(entity)} });
-      const restored = await manager.findOne(${orm}, { where: { ${idName} }${withRelations} });
+${historyRecordLine(entity, 'restored', idName, imports, '      ')}      const restored = await manager.findOne(${orm}, { where: { ${idName} }${withRelations} });
       return restored == null ? null : toDomain${entity.name}(restored);
     });
   }`);
@@ -218,11 +224,21 @@ export function relationalAdapterMethods(model, entity, { idName, idType, orm, r
 export function documentAdapterMethods(model, entity, { idName, idType, idFilter, keyFilter, keyFinder, imports }) {
   const lifecycle = lifecycleOf(model, entity);
   if (!lifecycle?.logical) return null;
-  const methods = [`  async deleteById(${idName}: ${idType}): Promise<void> {
+  const marking = `this.collection.updateOne(${liveFilter(entity, idFilter)}, { $set: { ${DELETED_AT.field}: new Date() }${documentBump(entity)} }, { session })`;
+  const methods = [recordsHistory(entity)
+    ? `  async deleteById(${idName}: ${idType}): Promise<void> {
+    // Borrado lógico (DSL 2.28, D1): se marca y no se elimina. El documento deja de verse en toda lectura del puerto y su
+    // clave única queda libre (los índices únicos solo cuentan los documentos con deletedAt nulo).
+    await this.transactions.inTransaction(async (session) => {
+      const marked = await ${marking};
+      if (marked.modifiedCount === 0) return;
+${historyRecordLine(entity, 'deleted', idName, imports, '      ')}    });
+  }`
+    : `  async deleteById(${idName}: ${idType}): Promise<void> {
     // Borrado lógico (DSL 2.28, D1): se marca y no se elimina. El documento deja de verse en toda lectura del puerto y su
     // clave única queda libre (los índices únicos solo cuentan los documentos con deletedAt nulo).
     await this.transactions.inTransaction((session) =>
-      this.collection.updateOne(${liveFilter(entity, idFilter)}, { $set: { ${DELETED_AT.field}: new Date() }${documentBump(entity)} }, { session })
+      ${marking}
     );
   }`];
   if (lifecycle.restore) {
@@ -244,7 +260,7 @@ export function documentAdapterMethods(model, entity, { idName, idType, idFilter
       }
       // Si un documento vivo ocupa ya su clave, el índice único parcial salta AQUÍ, con su nombre (E11000).
       await this.collection.updateOne(${idFilter}, { $set: { ${DELETED_AT.field}: null }${documentBump(entity)} }, { session });
-      const restored = await this.collection.findOne(${idFilter}, { session });
+${historyRecordLine(entity, 'restored', idName, imports, '      ')}      const restored = await this.collection.findOne(${idFilter}, { session });
       return restored == null ? null : toDomain${entity.name}(restored);
     });
   }`);
@@ -427,10 +443,12 @@ ${lines.join('\n')}
       await manager.save(${orm}, found);`;
   }
   const pending = retention.then === 'anonymize' ? `, ${ANONYMIZED_AT.field}: IsNull()` : '';
+  const recorded = retentionHistory(entity, retention, idName, imports);
+  if (recorded) outcome += `\n${recorded.line}`;
   const body = `${retentionDoc(entity, retention)}
 @Injectable()
 export class ${className} {
-  constructor(@Inject(TransactionContext) private readonly transactions: TransactionContext) {}
+  constructor(${recorded ? recorded.ctor : '@Inject(TransactionContext) private readonly transactions: TransactionContext'}) {}
 
   /** Los ids que han vencido en \`cutoff\` (vence EN el corte), los más antiguos primero, como mucho \`limit\`. */
   async due(cutoff: Date, limit: number): Promise<${idType}[]> {
@@ -453,6 +471,23 @@ ${outcome}
   }
 }`;
   return { path: file, content: tsModule(file, imports, body) };
+}
+
+/**
+ * Lo que la retención le hace al historial de la raíz (DSL 2.29, D8): `then: delete` se lo lleva y `then: anonymize`
+ * reescribe sus valores personales y deja la entrada `anonymized`, en la misma transacción. `{ line, ctor }`, o null sin
+ * historial. El almacén va el segundo del constructor.
+ */
+function retentionHistory(entity, retention, idName, imports) {
+  if (!recordsHistory(entity)) return null;
+  imports.push({ symbol: 'ChangeHistory', from: CHANGE_HISTORY_TS }, { symbol: rootConstant(entity), from: HISTORY_SUPPORT_TS });
+  const call = retention.then === 'delete'
+    ? `await this.changeHistory.purge(${rootConstant(entity)}.type, String(${idName}));`
+    : `await this.changeHistory.anonymize(${rootConstant(entity)}.type, String(${idName}), ${rootConstant(entity)}.personal);`;
+  return {
+    line: `      // El historial de la raíz sigue su régimen (DSL 2.29, D8), en la misma transacción.\n      ${call}`,
+    ctor: '\n    @Inject(TransactionContext) private readonly transactions: TransactionContext,\n    @Inject(ChangeHistory) private readonly changeHistory: ChangeHistory\n  '
+  };
 }
 
 /** Las relaciones del agregado como literal (`{ items: true }`), o null: lo que se carga y se borra con la raíz. */
@@ -503,10 +538,12 @@ ${lines.join('\n')}
       await this.collection.replaceOne({ ${DOCUMENT_ID}: ${write} }, found, { session });`;
   }
   const pending = retention.then === 'anonymize' ? `, ${ANONYMIZED_AT.field}: null` : '';
+  const recorded = retentionHistory(entity, retention, idName, imports);
+  if (recorded) outcome += `\n${recorded.line}`;
   const body = `${retentionDoc(entity, retention)}
 @Injectable()
 export class ${className} {
-  constructor(@Inject(TransactionContext) private readonly transactions: TransactionContext) {}
+  constructor(${recorded ? recorded.ctor : '@Inject(TransactionContext) private readonly transactions: TransactionContext'}) {}
 
   private get collection(): Collection<StoredDocument> {
     return this.transactions.collection(${tsString(entity.collectionName)});

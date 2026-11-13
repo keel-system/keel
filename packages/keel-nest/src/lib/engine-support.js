@@ -806,7 +806,28 @@ export const MECHANISMS = {
     }
   },
   history: {
-    pending: 'el historial de cambios (DSL 2.29) llega en el incremento 2 de PLAN-DSL-229-HISTORIAL.md: hasta entonces supported-features.js lo rechaza entero (historyPendingErrors)'
+    parity: {
+      skip: 'ninguna fixture declara el historial hasta el incremento 6 de PLAN-DSL-229-HISTORIAL.md: los sujetos son los diseños derivados de keel-core/test/helpers/history-designs.js (cards-history y cards-history-mongo, el mismo diseño salvo el modelo; cards-history-anonymize y cards-history-anonymize-mongo; vault-history-scoped y vault-history-scoped-mongo), los MISMOS que mide keel-spring; test/history-parity.test.js fija la forma y la compara con keel-spring (las sentencias, las tablas, los patrones personales, la nota y los casos)',
+      test: 'test/history-parity.test.js'
+    },
+    emitter: 'src/scaffold/history.js (la entrada, el diff, la anonimización y el almacén) · repositories.js y document-repositories.js (save, deleteById y la lectura historyOf) · data-lifecycle.js (la baja lógica, la restauración y la retención) · persistence-runtime.js y document-persistence.js (las tablas, el índice y el enlace) · services.js, controllers.js y audit-actor.js',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'cards-history (alta, cambio, baja lógica, restauración y purga de lo borrado), cards-history-anonymize y vault-history-scoped (hijas por su id y la lectura acotada) contra el adaptador de TypeORM y el almacén por SQL a pelo con las sentencias de keel-core (scripts/lib/history-probes.js): HI-1 a HI-10. T1 medido: TypeORM no tiene entidad gestionada, así que la instantánea «antes» es una lectura del agregado entero dentro de la transacción, tras subir la versión. Falsado: hi-outside-tx en HI-1, hi-full-snapshot en HI-2, hi-sensitive en HI-4, hi-author en HI-5, hi-order en HI-6, hi-unscoped en HI-7, hi-anonymize-miss en HI-8 y hi-purge-miss en HI-9'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'cards-history-mongo, cards-history-anonymize-mongo y vault-history-scoped-mongo contra el driver de MongoDB en un replica set real, con las MISMAS sondas que la rama relacional: la entrada en la sesión de la transacción, el orden por at y _id, el filtro sobre fields.path y fields.top y el índice de la lectura en DOCUMENT_INDEXES. Medido aquí: con Collection<Document> el insertOne del _id de texto no compila, y solo doc-check lo ve. Falsado con los mismos sabotajes, cada uno en exactamente sus casos (hi-anonymize-miss sobre cards-history-anonymize-mongo)'
+      }
+    }
   }
 };
 

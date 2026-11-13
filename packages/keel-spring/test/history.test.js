@@ -44,6 +44,7 @@ test('los sujetos pasan la frontera de keel-spring y su sonda ejecuta los casos 
     'cards-history': ['HI-1', 'HI-2', 'HI-4', 'HI-5', 'HI-6', 'HI-7', 'HI-9', 'HI-10'],
     'cards-history-mongo': ['HI-1', 'HI-2', 'HI-4', 'HI-5', 'HI-6', 'HI-7', 'HI-9', 'HI-10'],
     'cards-history-anonymize': ['HI-1', 'HI-2', 'HI-4', 'HI-5', 'HI-6', 'HI-7', 'HI-8', 'HI-10'],
+    'cards-history-anonymize-mongo': ['HI-1', 'HI-2', 'HI-4', 'HI-5', 'HI-6', 'HI-7', 'HI-8', 'HI-10'],
     'vault-history-scoped': ['HI-1', 'HI-2', 'HI-3', 'HI-4', 'HI-5', 'HI-6', 'HI-7'],
     'vault-history-scoped-mongo': ['HI-1', 'HI-2', 'HI-3', 'HI-4', 'HI-5', 'HI-6', 'HI-7']
   };

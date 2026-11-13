@@ -37,6 +37,10 @@ import { READ_SCOPE_SABOTAGE_SPECS, isReadScopeSabotage, readScopeBlock, readSco
 import { READ_SCOPE_DESIGNS } from '../../keel-core/test/helpers/read-scope-designs.js';
 import { DATA_LIFECYCLE_DESIGNS } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { LIFECYCLE_SABOTAGE_SPECS, isLifecycleSabotage, lifecycleBlock, lifecycleCases, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
+import { HISTORY_DESIGNS } from '../../keel-core/test/helpers/history-designs.js';
+import { HISTORY_SABOTAGE_SPECS, isHistorySabotage, historyBlock, historyCases, historyPreamble, historySabotageVerdict } from './lib/history-probes.js';
+import { recordsHistory, usesHistory } from '../src/scaffold/history.js';
+import { CHANGE_HISTORY, CHANGE_HISTORY_FIELD } from '@keel-system/keel-core/gen/history-store';
 import { DELETED_AT, ANONYMIZED_AT } from '@keel-system/keel-core/gen/relational';
 import { lifecycleMarks } from '../src/scaffold/data-lifecycle.js';
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
@@ -135,7 +139,10 @@ const SABOTAGES = {
   ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational])),
   // El ciclo de vida del dato (DSL 2.28): con --subject=cards-logical, codes-anonymize, codes-delete o vault-logical-scoped,
   // cada uno cae en exactamente sus casos LC/RT/PD.
-  ...Object.fromEntries(Object.entries(LIFECYCLE_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational]))
+  ...Object.fromEntries(Object.entries(LIFECYCLE_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational])),
+  // El historial de cambios (DSL 2.29): con --subject=cards-history, cards-history-anonymize o vault-history-scoped, cada
+  // uno cae en exactamente sus casos HI.
+  ...Object.fromEntries(Object.entries(HISTORY_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational]))
 };
 const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -159,7 +166,7 @@ const only = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ??
 const onlySubject = args.find((arg) => arg.startsWith('--subject='))?.split('=')[1] ?? null;
 const ENGINES = (only ? [only] : ['postgresql', 'mysql']).filter((engine) => DATABASES[engine]);
 // Las formas del esquema que cubre cada sujeto (ver la cabecera).
-const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional', 'verification-codes', 'vault-scoped', 'shop-scoped', 'cards-logical', 'codes-anonymize', 'codes-delete', 'vault-logical-scoped'];
+const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional', 'verification-codes', 'vault-scoped', 'shop-scoped', 'cards-logical', 'codes-anonymize', 'codes-delete', 'vault-logical-scoped', 'cards-history', 'cards-history-anonymize', 'vault-history-scoped'];
 // Los sujetos DERIVADOS, por nombre: los finders de las búsquedas (DSL 2.22) en la forma de lista con un subcampo de value
 // object, el MISMO diseño que mide keel-dotnet (keel-core/test/helpers/finder-designs.js); y la autoría, que ninguna
 // fixture relacional declara: por política sobre product-catalog y DECLARADA sobre notification-mailer (raíz e hija),
@@ -178,7 +185,9 @@ const DERIVED = {
   // La lectura acotada (DSL 2.27, RS-1 a RS-8): los MISMOS diseños relacionales que mide keel-spring.
   ...Object.fromEntries(READ_SCOPE_DESIGNS.filter((design) => ['vault-scoped', 'shop-scoped'].includes(design.name)).map((design) => [design.name, design])),
   // El ciclo de vida del dato (DSL 2.28, LC-1 a LC-10, RT-1 a RT-4 y PD-2): los MISMOS diseños relacionales que mide keel-spring.
-  ...Object.fromEntries(DATA_LIFECYCLE_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design]))
+  ...Object.fromEntries(DATA_LIFECYCLE_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design])),
+  // El historial de cambios (DSL 2.29, HI-1 a HI-10): los MISMOS diseños relacionales que mide keel-spring.
+  ...Object.fromEntries(HISTORY_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design]))
 };
 const results = [];
 
@@ -268,6 +277,17 @@ function expectedSchema(model, engine) {
     for (const unique of KEEL_TIMER.uniques) t.uniques.add(unique.name);
     for (const index of KEEL_TIMER.indexes) t.indexes.add(index.name);
   }
+  // Las dos tablas del historial (DSL 2.29): las de keel-core, con el índice de la lectura y la FK en cascada.
+  if (usesHistory(model)) {
+    for (const spec of [CHANGE_HISTORY, CHANGE_HISTORY_FIELD]) {
+      const t = table(spec.table);
+      for (const column of spec.columns) {
+        t.columns.set(column.name, { nullable: column.nullable, length: column.base === 'string' ? column.length : null, scale: null, collation: null });
+        if (column.references) t.fks.add(column.references.name);
+      }
+      for (const index of spec.indexes) t.indexes.add(index.name);
+    }
+  }
   if (reconciliationClaims(model).length > 0) {
     const t = table(RECONCILIATION_CLAIM.table);
     for (const spec of RECONCILIATION_CLAIM.columns) {
@@ -294,6 +314,9 @@ function probeScript(model, engine, db, expected) {
   const timerCode = timerBlock(model, ctx, { adapterArgs: adapterCtorArgs(model, modelDeadlines(model)[0]?.entity, ctx), replicaTx: 'new TransactionContext(dataSource, settings)' });
   // El ciclo de vida del dato (DSL 2.28), también antes de los imports.
   const lifecycleCode = lifecycleBlock(model, ctx, { document: false, engine, sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterCtorArgs(model, owner, ctx)})` });
+  // El historial de cambios (DSL 2.29), también antes de los imports: el almacén lo reciben los adaptadores.
+  const historyLine = historyPreamble(model, ctx);
+  const historyCode = historyBlock(model, ctx, { document: false, engine, sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterCtorArgs(model, owner, ctx)})` });
   const imports = [...ctx.imports].map((entry) => {
     const [symbol, file] = entry.split('|');
     return `import { ${symbol} } from '${distOf(file)}';`;
@@ -337,6 +360,7 @@ const settings = databaseSettings({ get: (key) => values[key], application: { na
 const dataSource = await new DataSource(settings.options).initialize();
 await dataSource.synchronize(true);
 const tx = new TransactionContext(dataSource, settings);
+${historyLine}
 // Los adaptadores de una raíz que emite eventos los entregan al puente: aquí se miden la persistencia y
 // sus tablas, así que reciben un sumidero; el puente de verdad lo mide el bloque de mensajería.
 const eventSink = { publish: async () => {} };
@@ -394,6 +418,7 @@ ${timerCode}
 ${purgeBlock(model)}
 ${purgeTimerBlock(model)}
 ${lifecycleCode}
+${historyCode}
 
 await dataSource.destroy();
 console.log('@@RESULTS@@' + JSON.stringify(results));
@@ -417,7 +442,7 @@ ${PROBE_HELPERS}
  * sin mensajería no hay puente, así que el sumidero no va).
  */
 function adapterCtorArgs(model, root, ctx) {
-  if (!root || !modelDeadlines(model).some(({ entity }) => entity.name === root.name)) return 'tx, eventSink';
+  if (!root || (!modelDeadlines(model).some(({ entity }) => entity.name === root.name) && !recordsHistory(root))) return 'tx, eventSink';
   // En el orden del constructor emitido (constructorOf): la transacción, el puente, la configuración de los barridos,
   // la tienda y los números de la reconciliación, y el cronómetro el último. stock-reservation (v1.2.0) los lleva todos:
   // sin los de en medio, el almacén del cronómetro llegaba en el sitio de otro y el adaptador no armaba nada.
@@ -429,7 +454,9 @@ function adapterCtorArgs(model, root, ctx) {
     ...(emitsDomainEvents(model, root) && model.layersPresent?.messaging ? ['eventSink'] : []),
     ...(claimsForEntity(model, root.name).length > 0 ? ['{ batchSize: {}, stalledAfterSeconds: {} }'] : []),
     ...(reconciled.length > 0 ? ['new ReconciliationClaimStore(tx)', windows] : []),
-    ...TIMER_ADAPTER_ARGS
+    ...(modelDeadlines(model).some(({ entity }) => entity.name === root.name) ? TIMER_ADAPTER_ARGS : []),
+    // El almacén del historial (DSL 2.29), el último del constructor.
+    ...(recordsHistory(root) ? ['historyStore'] : [])
   ].join(', ');
 }
 
@@ -909,6 +936,8 @@ function claimBlock(model, engine, ctx) {
     // Los argumentos del constructor, en su orden: la transacción, el puente si la raíz emite, la
     // configuración de los barridos y los parámetros si un rescate lee de ellos su plazo. Plazo de un minuto.
     const args = ['context', emitsDomainEvents(model, root) ? 'eventSink' : null, 'sweeps(batch)', stalledParameters.length > 0 ? `{ ${stalledParameters.map((name) => `${name}: 1`).join(', ')} }` : null].filter(Boolean);
+    // Con historial (DSL 2.29), el almacén va el último: la reconciliación, que este bloque no mide, ocupa su sitio vacía.
+    if (recordsHistory(root)) args.push(...(reconciliationClaims(model).some((claim) => claim.entity === root.name) ? ['undefined', 'undefined'] : []), 'historyStore');
     const stalledSettings = claims.filter((claim) => claim.stalled && !claim.stalled.parameter).map((claim) => `${JSON.stringify(claim.stalled.configKey)}: 60`);
     const batchKeys = [...new Set(claims.map((claim) => claim.sweepKey))];
     // Las sentencias con las que el ARNÉS fabrica la precondición del rescate (stallInFlight, putInFlight,
@@ -1075,7 +1104,7 @@ function reconciliationBlock(model, ctx) {
     const samples = Array.from({ length: 24 }, (_, i) => `() => ${sampleEntity(model, root, ctx, `reconcile${i}`)}`);
     // El constructor del adaptador, en su orden: la transacción, el puente si la raíz emite, la configuración de
     // los barridos si alguno la reclama, y la tienda y los números de la reconciliación.
-    const args = ['context', emitsDomainEvents(model, root) ? 'eventSink' : null, claimsForEntity(model, root.name).length > 0 ? 'sweepsStub' : null, 'store', 'windows(batch, timeoutMs)'].filter(Boolean);
+    const args = ['context', emitsDomainEvents(model, root) ? 'eventSink' : null, claimsForEntity(model, root.name).length > 0 ? 'sweepsStub' : null, 'store', 'windows(batch, timeoutMs)', recordsHistory(root) ? 'historyStore' : null].filter(Boolean);
     const cases = claims.map((claim) => {
       const label = `${root.name}.${claim.method}`;
       const awaiting = `${enumType}.${screamingSnake(claim.states[0])}`;
@@ -1650,6 +1679,13 @@ for (const engine of ENGINES) {
       if (isLifecycleSabotage(sabotage) && lifecycleCases(model).length > 0) {
         const verdict = lifecycleSabotageVerdict(checks, sabotage, model, { engine });
         for (const check of checks.filter((entry) => !entry.ok && /^(LC|RT|PD)-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
+        step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+        continue;
+      }
+      // El historial de cambios (DSL 2.29): verde si caen EXACTAMENTE sus casos HI de este sujeto (y ningún otro).
+      if (isHistorySabotage(sabotage) && historyCases(model).length > 0) {
+        const verdict = historySabotageVerdict(checks, sabotage, model);
+        for (const check of checks.filter((entry) => !entry.ok && /^HI-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
         step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
         continue;
       }

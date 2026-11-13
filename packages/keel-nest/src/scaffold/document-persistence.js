@@ -38,6 +38,7 @@ import { usesDocument, usesTextFold, textFoldFile, TEXT_FOLD_TS } from './persis
 import { repositoryRoots, portClass, portPath, adapterClass, adapterPath, TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
 import { PERSISTENCE_MODULE_TS } from './persistence-runtime.js';
 import { reconciliationBindings } from './reconciliation-claim.js';
+import { historyBindings, historyDocumentIndexEntry } from './history.js';
 import { SWEEP_SETTINGS_TS, usesSweepClaims } from './claim.js';
 import { usesRequestIdempotency, IDEMPOTENCY_STORE_TS, IDEMPOTENCY_STORE_IMPL_TS } from './request-idempotency.js';
 import { localMongoUrl } from '@keel-system/keel-core/gen/infra-catalog';
@@ -298,6 +299,9 @@ function documentIndexesFile(model) {
     });
     return `  {\n    collection: ${tsString(collection)},\n    indexes: [\n${indexes.join(',\n')}\n    ]\n  }`;
   });
+  // El índice de la lectura del historial (DSL 2.29): una raíz, la entrada más reciente primero.
+  const historyIndex = historyDocumentIndexEntry(model);
+  if (historyIndex) entries.push(historyIndex);
   const body = `/**
  * Los índices de las colecciones del servicio, derivados de persistence.keel.yaml (clave natural,
  * campos únicos e índices declarados, con su filtro parcial si el diseño los condiciona al estado)
@@ -645,6 +649,11 @@ function persistenceModuleFile(model) {
   imports.push(...reconciliation.imports);
   bindings.push(...reconciliation.bindings);
   ports.push(...reconciliation.exports);
+  // El almacén del historial de cambios (DSL 2.29): lo usan los adaptadores de las raíces y la retención.
+  const history = historyBindings(model);
+  imports.push(...history.imports);
+  bindings.push(...history.bindings);
+  ports.push(...history.exports);
   if (usesSweepClaims(model)) {
     imports.push({ symbol: 'SWEEP_SETTINGS', from: SWEEP_SETTINGS_TS }, { symbol: 'sweepSettings', from: SWEEP_SETTINGS_TS });
     bindings.push('    { provide: SWEEP_SETTINGS, useValue: sweepSettings(configuration) }');

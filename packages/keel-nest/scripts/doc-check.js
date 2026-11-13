@@ -33,6 +33,8 @@ import { READ_SCOPE_SABOTAGE_SPECS, isReadScopeSabotage, readScopeBlock, readSco
 import { READ_SCOPE_DESIGNS } from '../../keel-core/test/helpers/read-scope-designs.js';
 import { DATA_LIFECYCLE_DESIGNS } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { LIFECYCLE_SABOTAGE_SPECS, isLifecycleSabotage, lifecycleBlock, lifecycleCases, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
+import { HISTORY_DESIGNS } from '../../keel-core/test/helpers/history-designs.js';
+import { HISTORY_SABOTAGE_SPECS, isHistorySabotage, historyBlock, historyCases, historyPreamble, historySabotageVerdict } from './lib/history-probes.js';
 import { partialFilterObject } from '../src/scaffold/data-lifecycle.js';
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import os from 'node:os';
@@ -94,7 +96,10 @@ const SABOTAGES = {
   ...Object.fromEntries(Object.entries(READ_SCOPE_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document])),
   // El ciclo de vida del dato (DSL 2.28): con --subject=cards-logical-mongo o codes-anonymize-mongo, cada uno cae en
   // exactamente sus casos LC/RT/PD.
-  ...Object.fromEntries(Object.entries(LIFECYCLE_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document]))
+  ...Object.fromEntries(Object.entries(LIFECYCLE_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document])),
+  // El historial de cambios (DSL 2.29): con --subject=cards-history-mongo o vault-history-scoped-mongo, cada uno cae en
+  // exactamente sus casos HI.
+  ...Object.fromEntries(Object.entries(HISTORY_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document]))
 };
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -173,6 +178,15 @@ const SUBJECTS = [
     label: design.name,
     withoutLayers: [],
     mutate: design.mutate
+  })),
+  // El historial de cambios sobre documentos (DSL 2.29, HI-1 a HI-10): los MISMOS diseños que mide keel-spring. El de
+  // vault, sin la autoría de política, como el sujeto asset-vault de arriba.
+  ...HISTORY_DESIGNS.filter((design) => design.name.endsWith('-mongo')).map((design) => ({
+    name: design.from,
+    label: design.name,
+    withoutLayers: [],
+    withoutAuthorship: design.from === 'asset-vault',
+    mutate: design.mutate
   }))
 ];
 const results = [];
@@ -227,6 +241,9 @@ function probeScript(model, db) {
   const timerCode = deadlineEntity ? timerBlock(model, ctx, { adapterArgs: adapterArgs(model, deadlineEntity), replicaTx: 'new TransactionContext(client, settings)' }) : '';
   // El ciclo de vida del dato (DSL 2.28), también antes de los imports.
   const lifecycleCode = lifecycleBlock(model, ctx, { document: true, engine: 'mongodb', sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterArgs(model, owner)})` });
+  // El historial de cambios (DSL 2.29), también antes de los imports: el almacén lo reciben los adaptadores.
+  const historyLine = historyPreamble(model, ctx);
+  const historyCode = historyBlock(model, ctx, { document: true, engine: 'mongodb', sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterArgs(model, owner)})` });
   const shapes = expectedShapes(model);
   const enums = new Set([
     ...Object.values(shapes.entities).flat(),
@@ -271,6 +288,7 @@ const database = client.db(settings.database);
 await database.dropDatabase();
 await ensureDocumentIndexes(database);
 const tx = new TransactionContext(client, settings);
+${historyLine}
 ${storePreamble(model)}
 ${timerPreamble(model)}
 
@@ -302,6 +320,7 @@ ${race}
 ${stores}
 ${timerCode}
 ${lifecycleCode}
+${historyCode}
 ${purgeTimerBlock(model)}
 
 await client.close();
@@ -628,6 +647,13 @@ try {
     if (isLifecycleSabotage(sabotage) && lifecycleCases(model).length > 0) {
       const verdict = lifecycleSabotageVerdict(checks, sabotage, model, { engine: 'mongodb' });
       for (const check of checks.filter((entry) => !entry.ok && /^(LC|RT|PD)-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
+      step(`${label}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
+    // El historial de cambios (DSL 2.29): verde si caen EXACTAMENTE sus casos HI de este sujeto (y ningún otro).
+    if (isHistorySabotage(sabotage) && historyCases(model).length > 0) {
+      const verdict = historySabotageVerdict(checks, sabotage, model);
+      for (const check of checks.filter((entry) => !entry.ok && /^HI-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
       step(`${label}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
       continue;
     }

@@ -40,6 +40,7 @@ import { COMMAND_DISPATCHER_TS } from './mediator.js';
 import { OPERATION_CACHE_TS } from './cache.js';
 import { cacheNote } from '@keel-system/keel-core/gen/cache-plan';
 import { deletedRootOf, logicalDeletionNote, restoreNote } from '@keel-system/keel-core/gen/data-lifecycle';
+import * as history from './history.js';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from '@keel-system/keel-core/gen/request-idempotency';
 import { IDEMPOTENCY_STORE_TS, usesRequestIdempotency } from './request-idempotency.js';
@@ -120,6 +121,8 @@ export function messageComponents(model, operation) {
 
 /** El tipo de retorno de la operación, o null si no devuelve nada. */
 export function returnTypeOf(operation, model = null) {
+  // La query de historial (DSL 2.29) devuelve la página de entradas de wire-contract.md, no un DTO del diseño.
+  if (operation.historyOf) return history.HISTORY_RESPONSE;
   if (!operation.responseDto) return null;
   // La lectura que da el ETag y la escritura condicional que devuelve su raíz devuelven también la versión (D6 de
   // PLAN-DSL-225-ESCRITURA-CONDICIONAL.md): el compilador obliga al agente a darla.
@@ -134,6 +137,7 @@ function returnImports(operation, model = null) {
   const imports = [];
   if (model && returnsVersioned(model, operation)) imports.push({ symbol: 'Versioned', from: VERSIONED_TS, type: true });
   if (operation.responseDto) imports.push({ symbol: operation.responseDto.name, from: classPath(DIRS.dtos, operation.responseDto.name), type: true });
+  if (operation.historyOf) imports.push(history.historyResponseImport());
   if (operation.paginated) imports.push({ symbol: 'PagedResponse', from: PAGED_RESPONSE_TS, type: true });
   return imports;
 }
@@ -517,6 +521,11 @@ function handlerNotes(model, operation) {
     const byKey = keyFinder ? `await ${port}.${keyFinder.name.replace(/^findBy/, 'findDeletedBy')}(...)` : '<el id de la borrada>';
     const restore = restoreNote(model, operation, { findCall: byKey, restoreCall: `await ${port}.restore(<su id>)` });
     if (restore) notes.push(restore);
+  }
+  // El historial (DSL 2.29): la nota neutral, con la llamada al puerto de la raíz.
+  if (operation.historyOf) {
+    const historyRead = history.handlerNote(model, operation);
+    if (historyRead) notes.push(historyRead);
   }
   const content = unsupportedContentTypeRaise(model);
   for (const note of uploadNotes(model, operation, { sizeCode: effectiveErrorCode(model, FRAMEWORK_ERRORS.fileTooLarge), contentCode: content?.code, contentError: content?.raise })) notes.push(note);
