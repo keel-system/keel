@@ -172,6 +172,21 @@ export const REVIEWS = {
       'aplicación» no puede ir antes de la que resuelve esa aplicación'
   },
 
+  'REV-BATCH-ITEM-ERRORS': {
+    scope: 'use-cases',
+    gapClass: 2,
+    severity: 'strong',
+    // Solo en un lote per-item: en all-or-nothing todo error revierte el lote y no hay elección que revisar. La CLI
+    // comprueba que itemErrors sea un subconjunto de errors (CHK-USECASES-BATCH-ITEM-ERRORS); cuáles DEBERÍAN estar es
+    // leer las rules de la operación.
+    appliesTo: (layers) => hasAny(layers['use-cases']?.operations, (op) => op.batch?.atomicity === 'per-item'),
+    title: 'un rechazo de negocio que solo afecta a su elemento y detiene el lote entero',
+    asks:
+      'por cada error de la operación fuera de itemErrors, ¿depende solo del elemento (su SKU ya existe, su precio no ' +
+      'cuadra) o del estado común a todos (el catálogo está bloqueado)? El primero detiene el lote y deja el resto ' +
+      'notAttempted por una fila; el segundo sí debe detenerlo'
+  },
+
   // ─── api ───────────────────────────────────────────────────────────────────
   'REV-API-DELETE-BODY': {
     scope: 'api',

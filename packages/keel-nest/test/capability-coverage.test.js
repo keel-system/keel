@@ -33,6 +33,11 @@ const MOTIVOS = {
 };
 
 const EXCEPCIONES = new Map([
+  ['use-cases.operations.*.batch', { motivo: MOTIVOS.hueco, porque: 'los lotes (DSL 2.30) los rechaza la frontera de keel-nest (batchPendingErrors) hasta el incremento 2 de PLAN-DSL-230-LOTES.md (7 para async), y ninguna fixture los declara hasta el 11; entonces esta fila se borra.' }],
+  ['use-cases.operations.*.batch.atomicity', { motivo: MOTIVOS.hueco, porque: 'los lotes (DSL 2.30) los rechaza la frontera de keel-nest (batchPendingErrors) hasta el incremento 2 de PLAN-DSL-230-LOTES.md (7 para async), y ninguna fixture los declara hasta el 11; entonces esta fila se borra.' }],
+  ['use-cases.operations.*.batch.execution', { motivo: MOTIVOS.hueco, porque: 'los lotes (DSL 2.30) los rechaza la frontera de keel-nest (batchPendingErrors) hasta el incremento 2 de PLAN-DSL-230-LOTES.md (7 para async), y ninguna fixture los declara hasta el 11; entonces esta fila se borra.' }],
+  ['use-cases.operations.*.batch.itemErrors', { motivo: MOTIVOS.hueco, porque: 'los lotes (DSL 2.30) los rechaza la frontera de keel-nest (batchPendingErrors) hasta el incremento 2 de PLAN-DSL-230-LOTES.md (7 para async), y ninguna fixture los declara hasta el 11; entonces esta fila se borra.' }],
+  ['use-cases.operations.*.batch.output', { motivo: MOTIVOS.hueco, porque: 'los lotes (DSL 2.30) los rechaza la frontera de keel-nest (batchPendingErrors) hasta el incremento 2 de PLAN-DSL-230-LOTES.md (7 para async), y ninguna fixture los declara hasta el 11; entonces esta fila se borra.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     { motivo: MOTIVOS.informativo, porque: 'solo entra en la línea «Formato: …» del comentario de la clase del mensaje (messaging.js): ningún lector depende de él.' }

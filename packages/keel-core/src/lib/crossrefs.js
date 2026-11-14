@@ -13,6 +13,7 @@ import { declaredDeadlines } from './gen/deadlines.js';
 import { readScopesOfLayers, optionalAuthRules } from './gen/read-scope.js';
 import { declaredLifecycles, restoringOperations, personalFieldsOfAggregate, incomingReferences, substituteProblem, aggregateIndex, FROM_DELETED } from './gen/data-lifecycle.js';
 import { historyRoots, historyQueries, historyFilterFields, isPersistedRoot, HISTORY_FILTERS } from './gen/history.js';
+import { batchOperations, batchExecutionOf, batchOverField, batchHttpEntry, batchForeignEntries, BATCH_SYNC_MAX_ITEMS, BATCH_MULTI_STATUS } from './gen/batch.js';
 
 const BASE_TYPES = new Set(['string', 'text', 'int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json', 'file']);
 
@@ -337,6 +338,97 @@ function checkHistory(layers, error, obligation) {
         'se escribe en cada cambio y nadie lo puede consultar por la API. Declara la query, o acéptalo en decisions.yaml con ' +
         'su motivo (lo consulta un auditor directamente en la base) — ver docs/dsl/persistence.md § El historial de cambios'
     );
+  }
+}
+
+// ─── Los lotes con resultado por elemento (DSL 2.30: use-cases.<op>.batch) ───────────────────────────────
+
+/**
+ * Un lote contra el resto del diseño. Lo mecanizable es la forma: que recorra un campo list del input de un tipo con
+ * campos, que sea un command que solo entra por HTTP (alguien tiene que recibir el resultado por elemento), que no
+ * declare otra respuesta que la del método, que sus itemErrors sean errores de la operación y que tenga tope. Y una
+ * pregunta sin contestar y sin default seguro: si un elemento que falla deshace los demás.
+ */
+function checkBatch(layers, error, obligation) {
+  const api = layers.api;
+  for (const { operation, op, batch } of batchOperations(layers)) {
+    const where = `use-cases: ${operation}.batch`;
+    const execution = batchExecutionOf(batch);
+
+    const entry = [];
+    if ((op.kind ?? 'command') !== 'command') entry.push('es una query: un lote escribe, y lo que se lee no falla por elemento');
+    if (!batchHttpEntry(layers, operation)) entry.push('no tiene endpoint HTTP: nadie espera el resultado por elemento');
+    const foreign = batchForeignEntries(layers, operation);
+    if (foreign.length > 0) entry.push(`también entra por ${foreign.join(', ')}, donde no hay a quién devolver el resultado por elemento`);
+    if (entry.length > 0) error('CHK-USECASES-BATCH-NOT-COMMAND', `${where}: ${entry.join('; ')}`);
+
+    if (op.output !== 'void') {
+      error('CHK-USECASES-BATCH-OUTPUT',
+        `use-cases: ${operation}.output: una operación por lotes responde con el resultado por elemento que fija wire-contract.md § Lotes — ` +
+          'pon output: void, y lo que devuelve cada elemento con éxito, en batch.output'
+      );
+    }
+    const status = api?.endpoints?.[operation]?.successStatus;
+    if (batch.atomicity === 'per-item' && status !== undefined && status !== BATCH_MULTI_STATUS) {
+      error('CHK-USECASES-BATCH-OUTPUT',
+        `api: endpoints.${operation}.successStatus: ${status}, y un lote per-item responde siempre ${BATCH_MULTI_STATUS}, también si todo salió bien — ` +
+          'quita successStatus o pon 207'
+      );
+    }
+
+    const over = batchOverField(op);
+    if (!over) {
+      error('CHK-USECASES-BATCH-OVER', `${where}.over: '${batch.over}' no es un campo del input de ${operation}`);
+    } else {
+      const problems = [];
+      if (over.spec.list !== true) problems.push('no es una lista (list: true)');
+      if (!layers.domain?.types?.[over.spec.type]?.fields) {
+        problems.push(`su elemento es ${over.spec.type}, y tiene que ser un value type con campos (domain.types.<T>.fields): es lo que valida y procesa cada elemento`);
+      }
+      if (problems.length > 0) error('CHK-USECASES-BATCH-OVER', `${where}.over: ${operation}.input.${over.name} ${problems.join('; ')}`);
+
+      const maxItems = over.spec.constraints?.maxItems;
+      if (maxItems === undefined) {
+        error('CHK-USECASES-BATCH-UNBOUNDED',
+          `use-cases: ${operation}.input.${over.name}: un lote sin constraints.maxItems — el tope es contrato (lo que excede es un 400 del lote) ` +
+            `y sin él un lote ${execution === 'sync' ? 'síncrono es un timeout esperando a pasar' : 'asíncrono no tiene cota de lo que guarda'}`
+        );
+      } else if (execution === 'sync' && maxItems > BATCH_SYNC_MAX_ITEMS) {
+        error('CHK-USECASES-BATCH-UNBOUNDED',
+          `use-cases: ${operation}.input.${over.name}: maxItems ${maxItems} en un lote síncrono — por encima de ${BATCH_SYNC_MAX_ITEMS} el 207 no cabe ` +
+            'en una petición; baja el tope o declara execution: async'
+        );
+      }
+    }
+
+    const declared = new Set((op.errors ?? []).map((item) => item.code));
+    const itemErrors = batch.itemErrors ?? [];
+    const unknown = itemErrors.filter((code) => !declared.has(code));
+    if (unknown.length > 0) {
+      error('CHK-USECASES-BATCH-ITEM-ERRORS',
+        `${where}.itemErrors: ${unknown.join(', ')} no está en errors de ${operation} — itemErrors elige cuáles de sus errores fallan solo su elemento, no declara otros`
+      );
+    }
+    if (batch.atomicity === 'all-or-nothing' && itemErrors.length > 0) {
+      error('CHK-USECASES-BATCH-ITEM-ERRORS',
+        `${where}.itemErrors: en un lote all-or-nothing cualquier error revierte el lote entero, así que ninguno falla solo su elemento — ` +
+          'quita itemErrors, o declara atomicity: per-item'
+      );
+    }
+
+    if (execution === 'async' && !layers.security) {
+      error('CHK-USECASES-BATCH-NO-AUTH',
+        `${where}.execution: async sin capa security — el trabajo y sus resultados solo los lee quien lo creó, y sin principal ` +
+          'autenticado cualquiera que adivine su URL los vería. Declara la capa security, o execution: sync'
+      );
+    }
+
+    if (batch.atomicity === undefined) {
+      obligation('OBL-BATCH-ATOMICITY-UNDECIDED', `use-cases.${operation}.batch`,
+        `${where}: sin atomicity — no está decidido si un elemento que falla deshace los demás (all-or-nothing) o solo falla él ` +
+          '(per-item, con un 207 por elemento). Es lo primero que el cliente lee del contrato y no tiene default seguro — ver docs/dsl/use-cases.md § Lotes'
+      );
+    }
   }
 }
 
@@ -1740,7 +1832,10 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     // distintas: nada las cruzaba, así que un 204 con output entity llegaba intacto al
     // controller generado (build combina ambos tal cual vienen del diseño) y producía una
     // respuesta que ningún cliente HTTP puede consumir.
-    const voidOutput = op.output === 'void';
+    // Un lote (DSL 2.30) lleva output: void y responde con cuerpo igualmente: el resultado por elemento de
+    // wire-contract.md § Lotes. Y uno per-item responde siempre 207, así que no tiene status que elegir.
+    const voidOutput = op.output === 'void' && !op.batch;
+    const perItemBatch = op.batch?.atomicity === 'per-item';
     if (STATUSES_WITHOUT_BODY.has(endpoint.successStatus) && !voidOutput) {
       errors.push(
         `${where}.successStatus: ${endpoint.successStatus} es un status sin cuerpo y la operación declara output — sube el status a uno que admita cuerpo (200) o pon output: "void" en use-cases`
@@ -1756,7 +1851,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     // Eso es CONTRATO PÚBLICO —lo que ve un integrador y lo que afirma un escenario—
     // decidido por una heurística sobre el nombre de la operación, y el diseño se escribe
     // igual lo haya decidido alguien o no. De once fixtures, seis caían aquí.
-    if (endpoint.successStatus === undefined && endpoint.method === 'POST') {
+    if (endpoint.successStatus === undefined && endpoint.method === 'POST' && !perItemBatch) {
       warnIn(
         scopeOf(where),
         'CHK-API-POST-NO-STATUS',
@@ -4442,6 +4537,23 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       );
     }
   }
+  // Los lotes (2.30): un lote que solo se prueba entero en verde no distingue un 207 de un 200, ni un elemento que falla
+  // solo de uno que se lleva el lote por delante. Aviso, como toda regla sobre el documento de escenarios.
+  if (scenarios !== null) {
+    for (const { operation, op, batch } of batchOperations(layers)) {
+      const perItem = batch.atomicity === 'per-item';
+      const codes = [...(perItem ? batch.itemErrors ?? [] : (op.errors ?? []).map((item) => item.code)), 'VALIDATION_ERROR'];
+      const covered = scenariosMentioning(operation).some(
+        (block) => codes.some((code) => new RegExp(`\\b${code}\\b`).test(block)) && (!perItem || /\b207\b/.test(block))
+      );
+      if (covered) continue;
+      warn('CHK-SCEN-BATCH-UNCOVERED',
+        `validation-scenarios.md: no encuentro ningún escenario FL- que nombre '${operation}' con un elemento que falla ` +
+          `(${perItem ? `el 207 con uno de ${codes.join(', ')}` : `uno de ${codes.join(', ')}`}) — sin él, nadie afirma qué le pasa al resto del lote ` +
+          'cuando uno falla, que es lo único que un lote añade a la operación'
+      );
+    }
+  }
   // Auditoría: cada eje ('timestamps', 'authorship') se declara de UNA sola forma.
   // Con 'all' las columnas las pone la infraestructura y no se nombran en domain; con
   // 'declared' se nombran ahí porque el diseño quiere proyectarlas en algún output.
@@ -5342,6 +5454,9 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
 
   // El historial de cambios consultable (DSL 2.29): de qué raíces se guarda, quién lo lee y con qué filtros.
   checkHistory(layers, error, obligation);
+
+  // Los lotes con resultado por elemento (DSL 2.30).
+  checkBatch(layers, error, obligation);
 
   // En el modelo documental una entidad interna del agregado NO es una colección propia:
   // va anidada dentro del documento de su raíz, y la auditoría automática puebla el objeto

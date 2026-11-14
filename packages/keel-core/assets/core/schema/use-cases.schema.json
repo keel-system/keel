@@ -113,6 +113,46 @@
             "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/idempotency",
             "description": "La operación debe poder repetirse sin efectos duplicados."
           },
+          "batch": {
+            "type": "object",
+            "required": ["over"],
+            "additionalProperties": false,
+            "description": "La operación recibe un LOTE y responde por elemento (DSL 2.30): recorre el campo list del input que nombra over y ejecuta la operación una vez por elemento. La forma de la respuesta (207 con summary e items) la fija wire-contract.md § Lotes, no el diseño, así que el output de la operación es void. Solo en un command con endpoint HTTP.",
+            "properties": {
+              "over": {
+                "type": "string",
+                "pattern": "^[a-z][A-Za-z0-9]*$",
+                "description": "El campo del input, con list: true y de un value type con campos, que se recorre. Los demás campos del input son comunes a todos los elementos."
+              },
+              "atomicity": {
+                "type": "string",
+                "enum": ["all-or-nothing", "per-item"],
+                "description": "all-or-nothing: todos los elementos en una transacción; el primero que falla la revierte entera y la respuesta es el error de la operación con el índice del culpable en details. per-item: una transacción por elemento, en orden de índice; cada uno acaba succeeded o failed y la respuesta es siempre 207. Sin default: es contrato (OBL-BATCH-ATOMICITY-UNDECIDED)."
+              },
+              "itemErrors": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/errorCode" },
+                "description": "Solo con per-item: los code de errors de la operación que fallan SOLO su elemento, y el lote sigue con el siguiente. Un fallo de forma de un elemento (VALIDATION_ERROR) también es solo suyo. Cualquier otro fallo detiene el lote: los elementos siguientes quedan notAttempted."
+              },
+              "execution": {
+                "type": "string",
+                "enum": ["sync", "async"],
+                "default": "sync",
+                "description": "sync: la petición espera y responde 207 con todos los resultados (exige maxItems ≤ 1000 en el campo over). async: responde 202 con la ubicación de un trabajo que procesa el lote por partes (fase B de PLAN-DSL-230-LOTES.md)."
+              },
+              "output": {
+                "type": "object",
+                "required": ["fields"],
+                "additionalProperties": false,
+                "description": "Lo que devuelve cada elemento con éxito, en el result de su entrada del 207 (un id creado, un estado). Sin él, result es null.",
+                "properties": {
+                  "fields": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/fieldMap" }
+                }
+              }
+            }
+          },
           "cache": {
             "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/cachePolicy",
             "description": "Solo para queries: política de caché del resultado."

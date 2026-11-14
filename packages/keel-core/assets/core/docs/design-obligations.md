@@ -45,6 +45,7 @@ donde «aceptado» significaría dejársela al generador. Están marcadas como t
 | `OBL-READ-SCOPE-UNDECIDED` | `security`: una query expuesta (required o admin) lee una entidad que scoping u ownership acota, en un bloque sin `reads` | no está decidido si una lectura sobre una entidad acotada se acota por construcción | 9 | sí |
 | `OBL-PERSONAL-RETENTION-UNDECIDED` | `persistence`: una raíz persistida cuyo agregado tiene campos `personal` y que no declara `retention` | no está decidido cuánto viven los datos personales de un agregado ni qué pasa después | 19 | sí |
 | `OBL-HISTORY-UNREAD` | `persistence`: una raíz en `audit.history` que ninguna query lee | no está decidido quién lee el historial de una raíz | 19 | sí |
+| `OBL-BATCH-ATOMICITY-UNDECIDED` | `use-cases`: una operación con `batch` sin `atomicity` | no está decidido si un elemento que falla deshace el lote entero | 15 | no |
 | `OBL-RESOURCE-SCOPE` | `use-cases`: una operación protegida por rol declara un error 403 | un 403 que nada de lo declarado puede producir | 9 | no |
 | `OBL-PAYMENTS-FOLLOWUP-REJECTED` | `payments`: una acción de seguimiento (`capture`, `void`, `refund`) sin `onRejected` | no está decidido qué pasa cuando la pasarela contesta que NO a una acción de seguimiento | 18 | no |
 | `OBL-PAYMENTS-REFERENCE-REUSED` | `payments` + `messaging`: una suscripción dispara el cobro y no declara `onFailure.acknowledgeOn` | no está decidido qué se hace con un mensaje distinto cuya referencia de cobro ya tiene cobro | 18 | sí |

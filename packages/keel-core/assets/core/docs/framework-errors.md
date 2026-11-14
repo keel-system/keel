@@ -43,6 +43,7 @@ La regla, entonces, es más precisa que «nunca inventes un code»:
 | `security`: la cadena de autenticación | `UNAUTHENTICATED` | 401 | no |
 | `security`: `access.rules` y la audiencia de `serviceAuth` | `ACCESS_DENIED` | 403 | no |
 | El tope de duración de toda transacción (lo fija el generador) | `TRANSACTION_TIMEOUT` | 503 | no |
+| `use-cases`: `operations.<op>.batch` per-item — un elemento falla sin `code` (va en su elemento del 207) | `BATCH_ABORTED` | 500 | no |
 
 Qué significa cada uno:
 
@@ -81,6 +82,12 @@ Qué significa cada uno:
   Sin ese tope, una espera de bloqueo —infinita por defecto en varios motores— retiene su
   conexión sin límite y el pool se agota para todas las demás peticiones. No es sustituible: no
   lo provoca ninguna operación concreta.
+- **`BATCH_ABORTED`** — un elemento de un lote `per-item` (DSL 2.30) falló por una causa que no
+  es suya —infraestructura, un defecto— y el lote se detuvo en él: lo confirmado antes se queda,
+  y los siguientes salen `notAttempted`. No es una respuesta, sino el `error` de ese elemento
+  dentro del `207` (`wire-contract.md` § Lotes); el 500 es el status que habría tenido la
+  operación sola. Un elemento que falla con un `code` propio fuera de `itemErrors` también
+  detiene el lote, pero lleva ese `code`.
 
 ## Sustituir uno por el del dominio
 

@@ -603,6 +603,50 @@ export const CHECKS = {
     title: 'un historyFilter fuera de una query de historial, con otro tipo o repetido, o un filter en una query de historial',
     closes: 'historyFilter solo en el input de la query de historial: field (string), from y to (timestamp), cada uno una vez'
   },
+  // Los lotes (2.30): errores, porque el generador escribe el bucle, la validación de cada elemento y la respuesta con
+  // ellos, y con una pieza que no existe los escribiría sobre nada.
+  'CHK-USECASES-BATCH-OVER': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'batch.over no nombra un campo list del input cuyo elemento sea un value type con campos',
+    closes: 'over: el campo list: true del input que se recorre, de un tipo de domain.types con fields'
+  },
+  'CHK-USECASES-BATCH-NOT-COMMAND': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'batch en una query, en una operación sin endpoint HTTP o que también entra por otra puerta',
+    closes: 'batch solo en un command con endpoint, y que no dispare ninguna suscripción, schedule ni dispatches: el resultado por elemento se devuelve a quien llamó'
+  },
+  'CHK-USECASES-BATCH-OUTPUT': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una operación por lotes con un output propio',
+    closes: 'output: void; lo que devuelve cada elemento va en batch.output (la respuesta del lote la fija wire-contract.md § Lotes)'
+  },
+  'CHK-USECASES-BATCH-ITEM-ERRORS': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'itemErrors con un code que la operación no declara, o en un lote all-or-nothing',
+    closes: 'declarar el code en errors de la operación, o quitar itemErrors de un lote all-or-nothing (donde todo error revierte el lote)'
+  },
+  'CHK-USECASES-BATCH-UNBOUNDED': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'un lote sin maxItems, o síncrono con más de 1000 elementos',
+    closes: 'constraints.maxItems en el campo over (≤ 1000 con execution: sync), o execution: async'
+  },
+  'CHK-USECASES-BATCH-NO-AUTH': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'un lote asíncrono sin capa security: no hay a quién atar el trabajo',
+    closes: 'declarar la capa security (el trabajo solo lo lee quien lo creó), o execution: sync'
+  },
   'CHK-FIELD-COMPARE-NOT-TEXT': {
     layer: 'domain',
     severity: 'error',
@@ -1274,6 +1318,13 @@ export const CHECKS = {
     nature: 'incoherence',
     title: 'una query de historial no tiene escenario `FL-`',
     closes: 'un escenario que escriba y después llame a la query, afirmando qué entradas deja cada cambio'
+  },
+  'CHK-SCEN-BATCH-UNCOVERED': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'una operación por lotes no tiene escenario `FL-` de fallo parcial',
+    closes: 'un escenario que nombre la operación con un elemento que falla: con per-item, el 207 con ese elemento failed y los demás confirmados; con all-or-nothing, el error y que no se confirmó ninguno'
   },
   'CHK-SCEN-DELETION-UNCOVERED': {
     layer: 'validation-scenarios',

@@ -200,6 +200,20 @@ export const FRAMEWORK_ERRORS = {
     when:
       'La transacción no terminó a tiempo: una consulta lenta o una espera de bloqueo agotó el tope y el motor la canceló. ' +
       'Revirtió entera, así que reintentar es seguro.'
+  },
+
+  // El lote `per-item` (DSL 2.30, D4 de PLAN-DSL-230-LOTES.md): un elemento que falla sin `code` —un fallo de
+  // infraestructura, un defecto— detiene el lote, y el cliente tiene que distinguir ese elemento de los que fallaron
+  // por sí mismos. No es una respuesta: va en el `error` de su elemento del 207, y su `http` es el que tendría la misma
+  // operación sola. No es sustituible: no lo provoca el dominio.
+  batchAborted: {
+    code: 'BATCH_ABORTED',
+    http: 500,
+    overridable: false,
+    mechanism: 'el lote per-item (`batch` de use-cases)',
+    when:
+      'Un elemento del lote falló por una causa que no es suya (infraestructura, un defecto): el lote se detuvo en él y ' +
+      'los siguientes quedaron notAttempted. Va en el elemento del 207, nunca como respuesta.'
   }
 };
 

@@ -1,6 +1,6 @@
 # DSL 2.30: lotes con resultado por elemento (R5)
 
-**Estado: APROBADO el 2026-11-14.** Ningún incremento empezado; el siguiente es el 0. Al cerrar pasa a `completed_plans/`.
+**Estado: APROBADO el 2026-11-14.** Incremento 0 cerrado el 2026-11-14; el siguiente es el 1 (keel-spring `sync`). Al cerrar pasa a `completed_plans/`.
 
 ## Contexto
 
@@ -41,6 +41,7 @@ importProducts:
   input:
     fields:
       items: { type: ProductDraft, list: true, required: true, constraints: { maxItems: 500 } }
+  output: void                     # la respuesta la fija el método (CHK-USECASES-BATCH-OUTPUT)
   batch:
     over: items                    # el campo list del input que se recorre
     atomicity: per-item            # all-or-nothing | per-item
@@ -53,8 +54,8 @@ La forma en el cable la fija `wire-contract.md` § Lotes (es del método, no de 
 
 ```json
 { "summary": { "total": 500, "succeeded": 497, "failed": 3, "notAttempted": 0 },
-  "items": [ { "index": 0, "status": "succeeded", "result": { "productId": "…" } },
-             { "index": 7, "status": "failed", "error": "SKU_ALREADY_EXISTS", "message": "…" } ] }
+  "items": [ { "index": 0, "status": "succeeded", "result": { "productId": "…" }, "error": null, "message": null },
+             { "index": 7, "status": "failed", "result": null, "error": "SKU_ALREADY_EXISTS", "message": "…" } ] }
 ```
 
 ## Decisiones (D1-D12)
@@ -136,6 +137,42 @@ Son secuenciales y desde main, sin worktrees. Cada uno se cierra con «Para reto
   lote. Es correcto con D2, pero lo tiene que afirmar una sonda.
 - **La caché** (`cache-plan.js`): un lote invalida una vez al final, no por elemento. Hay que confirmar que la tabla
   `CACHE_INVALIDATIONS` lo admite.
+
+## Decidido en los incrementos y no previsto en el plan original
+
+Incremento 0 (keel-core):
+
+- **`output: void`** en toda operación por lotes, con `CHK-USECASES-BATCH-OUTPUT`, que también rechaza un `per-item` con
+  un `successStatus` distinto de 207. Lo que devuelve cada elemento va en `batch.output`. En la capa api, un lote cuenta
+  como respuesta con cuerpo y un `per-item` no pide `successStatus` (no abre `CHK-API-POST-NO-STATUS`).
+- **Forma estable del elemento**: las cinco claves (`index`, `status`, `result`, `error`, `message`) siempre, con `null`
+  donde no aplica e independiente de `conventions.nulls`, como el cuerpo de error. Un solo lector en los cuatro.
+- **`all-or-nothing`** sin fallos responde el mismo cuerpo con el `successStatus` del endpoint; con un fallo, el error del
+  culpable con su ruta en `details` (`items[7]`). El cuerpo de error no gana ninguna clave.
+- **`BATCH_ABORTED`** entra en `framework-errors.js` (http 500, no sustituible): es el `error` del elemento que detiene el
+  lote sin `code` propio. Uno que lo detiene con un `code` fuera de `itemErrors` lleva ese `code`. El texto es
+  `BATCH_ABORTED_MESSAGE` de `gen/batch.js`.
+- **`CHK-USECASES-BATCH-NO-AUTH`** entra ya en el inc. 0, no en el 5: el schema admite `async` desde ahora. Sale
+  co-disparada con `CHK-API-NO-SECURITY` por construcción, como `CHK-PERSIST-HISTORY-NO-SECURITY`.
+- **`-NOT-COMMAND`** cubre también las otras puertas: `internal`, `schedule`, una suscripción que la dispara y un
+  `dispatches` que la nombra.
+- La pregunta de huecos va en la **clase 15** (Superficie HTTP), cuyas unidades ya son todas las operaciones expuestas:
+  ningún `gaps.yaml` queda huérfano. `REV-BATCH-ITEM-ERRORS` va en la clase 2 (guardas ↔ errores).
+- Frontera: `batchPendingErrors(layers, generador, { syncIncrement, asyncIncrement })`, con keel-spring 1/6, keel-nest
+  2/7, keel-dotnet 3/8 y keel-go 4/9. Cuando un generador trae un modo, pasa `null` en ese modo.
+- La respuesta tiene referencia ejecutable (`batchResponse`) y sus casos son datos del cable (`WIRE_BATCH_CASES`, tres
+  reglas `batch-*`). Los casos `BA-1`…`BA-9` y los cuatro sabotajes del inc. 1 están en `BATCH_CASES`/`BATCH_SABOTAGES`.
+- Sujetos: `catalog-batch` (relacional, `per-item`), `catalog-batch-mongo` y `catalog-batch-atomic` (`all-or-nothing`),
+  todos sobre product-catalog, en `keel-core/test/helpers/batch-designs.js`.
+
+## Para retomar
+
+Inc. 1, keel-spring `sync`. Primero el riesgo D3: que la validación por elemento use las mismas reglas que el borde
+(`inputRules` de `gen/constraints.js`) y que un elemento mal formado sea su `failed` con `VALIDATION_ERROR`, no un 400.
+Medirlo antes de escribir el resto. Después, el bucle y la respuesta con `batchResponse` como oráculo, la nota
+(`batchNote`), `syncIncrement: null` en `keel-spring/src/lib/supported-features.js` y `npm run batch-check` sobre los tres
+sujetos con los sabotajes de `BATCH_SABOTAGES`. Las filas de `capability-coverage` de los lotes se borran en el inc. 11,
+cuando una fixture los declare.
 
 ## Verificación
 

@@ -781,7 +781,51 @@ function withOwnedHistory(d) {
   );
 }
 
+/**
+ * Un lote con resultado por elemento (DSL 2.30): `importTickets` recorre una lista de borradores, cada uno en su
+ * transacción, y un solicitante bloqueado falla solo su elemento. Con su escenario de fallo parcial, así que el diseño
+ * sigue en silencio.
+ */
+function withBatch(d) {
+  d.layers.domain.types.TicketDraft = {
+    description: 'Lo que hace falta para abrir un ticket.',
+    fields: {
+      subject: { type: 'string', required: true, constraints: { maxLength: 120 } },
+      requesterEmail: { type: 'string', required: true }
+    }
+  };
+  ops(d).importTickets = {
+    description: 'Registra un lote de tickets, cada uno por su cuenta.',
+    kind: 'command',
+    input: {
+      fields: {
+        items: { type: 'TicketDraft', list: true, required: true, constraints: { maxItems: 200 }, description: 'Los tickets del lote.' }
+      }
+    },
+    output: 'void',
+    errors: [{ code: 'REQUESTER_BLOCKED', when: 'El solicitante tiene bloqueado el alta de tickets.', http: 422 }],
+    batch: {
+      over: 'items',
+      atomicity: 'per-item',
+      itemErrors: ['REQUESTER_BLOCKED'],
+      output: { fields: { ticketId: { type: 'uuid', description: 'El ticket que se abrió.' } } }
+    }
+  };
+  d.layers.api.endpoints.importTickets = { method: 'POST', path: '/tickets/batch', successStatus: 207 };
+  addMatrixRow(d, '| importTickets | FL-TCK-008 | usuarios |');
+  insertScenarioBefore(
+    d,
+    '### FL-ESC-001',
+    `### FL-TCK-008: un lote con un solicitante bloqueado
+
+**Given** tres borradores de ticket, el segundo de un solicitante bloqueado.
+**When** se llama a \`importTickets\` con los tres.
+**Then** responde 207: el primero y el tercero \`succeeded\` con su \`ticketId\`, y el segundo \`failed\` con \`REQUESTER_BLOCKED\`; los otros dos tickets existen.`
+  );
+}
+
 export const EXTENSIONS = {
+  batch: withBatch,
   history: withHistory,
   ownedHistory: withOwnedHistory,
   dataLifecycle: withDataLifecycle,
@@ -1985,6 +2029,100 @@ export const MUTATIONS = [
         '**When** se consultan los dos.\n**Then** responden 200.');
     },
     expect: ['CHK-SCEN-RETENTION-UNCOVERED']
+  },
+  // ── Los lotes con resultado por elemento (DSL 2.30) ──
+  {
+    id: 'M-USECASES-BATCH-OVER',
+    title: 'el lote recorre un campo que el input no tiene',
+    extends: 'batch',
+    mutate: (d) => {
+      ops(d).importTickets.batch.over = 'tickets';
+    },
+    expect: ['CHK-USECASES-BATCH-OVER']
+  },
+  {
+    id: 'M-USECASES-BATCH-OVER-SCALAR',
+    title: 'el lote recorre una lista de cadenas',
+    extends: 'batch',
+    mutate: (d) => {
+      ops(d).importTickets.input.fields.items.type = 'string';
+    },
+    expect: ['CHK-USECASES-BATCH-OVER']
+  },
+  {
+    id: 'M-USECASES-BATCH-NOT-COMMAND',
+    title: 'el lote también lo dispara otra operación',
+    extends: 'batch',
+    mutate: (d) => {
+      ops(d).closeTicket.dispatches = ['importTickets'];
+    },
+    expect: ['CHK-USECASES-BATCH-NOT-COMMAND']
+  },
+  {
+    id: 'M-USECASES-BATCH-OUTPUT',
+    title: 'el lote declara su propia respuesta',
+    extends: 'batch',
+    mutate: (d) => {
+      ops(d).importTickets.output = { fields: { imported: { type: 'int' } } };
+    },
+    expect: ['CHK-USECASES-BATCH-OUTPUT']
+  },
+  {
+    id: 'M-USECASES-BATCH-OUTPUT-STATUS',
+    title: 'un lote per-item que responde 200',
+    extends: 'batch',
+    mutate: (d) => {
+      d.layers.api.endpoints.importTickets.successStatus = 200;
+    },
+    expect: ['CHK-USECASES-BATCH-OUTPUT']
+  },
+  {
+    id: 'M-USECASES-BATCH-ITEM-ERRORS',
+    title: 'itemErrors nombra un error que la operación no declara',
+    extends: 'batch',
+    mutate: (d) => {
+      ops(d).importTickets.batch.itemErrors.push('TICKET_DUPLICATED');
+    },
+    expect: ['CHK-USECASES-BATCH-ITEM-ERRORS']
+  },
+  {
+    id: 'M-USECASES-BATCH-UNBOUNDED',
+    title: 'un lote síncrono de cinco mil elementos',
+    extends: 'batch',
+    mutate: (d) => {
+      ops(d).importTickets.input.fields.items.constraints.maxItems = 5000;
+    },
+    expect: ['CHK-USECASES-BATCH-UNBOUNDED']
+  },
+  {
+    id: 'M-USECASES-BATCH-NO-AUTH',
+    title: 'un lote asíncrono sin capa security',
+    extends: 'batch',
+    mutate: (d) => {
+      ops(d).importTickets.batch.execution = 'async';
+      delete d.layers.security;
+    },
+    // Co-disparada por construcción, como M-PERSIST-HISTORY-NO-SECURITY: el lote entra por la API, y una capa api sin
+    // security ya es CHK-API-NO-SECURITY.
+    expect: ['CHK-API-NO-SECURITY', 'CHK-USECASES-BATCH-NO-AUTH']
+  },
+  {
+    id: 'M-OBL-BATCH-ATOMICITY-UNDECIDED',
+    title: 'nadie decidió si un ticket que falla deshace el lote',
+    extends: 'batch',
+    mutate: (d) => {
+      delete ops(d).importTickets.batch.atomicity;
+    },
+    expect: ['OBL-BATCH-ATOMICITY-UNDECIDED']
+  },
+  {
+    id: 'M-SCEN-BATCH-UNCOVERED',
+    title: 'el escenario del lote solo lo prueba entero en verde',
+    extends: 'batch',
+    mutate: (d) => {
+      replaceIn(d, 'y el segundo \`failed\` con \`REQUESTER_BLOCKED\`', 'y el segundo también');
+    },
+    expect: ['CHK-SCEN-BATCH-UNCOVERED']
   },
   // ── El historial de cambios consultable (DSL 2.29) ──
   {

@@ -1180,6 +1180,11 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
       // El historial que lee esta query (DSL 2.29) y qué campo del input hace de cada filtro (field, from, to), o null.
       historyOf,
       historyFilters: historyFiltersOf(op),
+      // El lote (DSL 2.30): qué campo del input recorre, cómo se confirma y qué devuelve cada elemento, o null. Su
+      // respuesta es la de wire-contract.md § Lotes, no un DTO del diseño: el output de la operación es void.
+      batch: op.batch
+        ? batchModelOf(op, payloadFields(opName, op.batch.output ?? 'void', { direction: 'output', domainEntities, domainTypes, inlineEnumName, relations, warnings }))
+        : null,
       // La entidad sobre la que actúa (operationTargetEntity): la raíz que compara una escritura condicional.
       targetEntity,
       route,
@@ -3105,6 +3110,25 @@ function payloadEntity(payload) {
 export function operationTargetEntity(opName, op, domainEntities) {
   const history = typeof op.output === 'object' && op.output?.history ? op.output.history : null;
   return payloadEntity(op.output) ?? history ?? payloadEntity(op.input) ?? entityFromOperationName(opName, domainEntities);
+}
+
+/**
+ * El lote de una operación (DSL 2.30) tal como lo leen los generadores: el campo que se recorre y el value type de su
+ * elemento, la confirmación (`atomicity`, null si el diseño no la decidió: lo abre OBL-BATCH-ATOMICITY-UNDECIDED), los
+ * errores que fallan solo su elemento, la ejecución, el tope y lo que devuelve cada elemento con éxito.
+ */
+export function batchModelOf(op, resultFields) {
+  const batch = op.batch;
+  const over = typeof op.input === 'object' ? op.input?.fields?.[batch.over] : undefined;
+  return {
+    over: batch.over,
+    itemType: over?.type ?? null,
+    atomicity: batch.atomicity ?? null,
+    itemErrors: [...(batch.itemErrors ?? [])],
+    execution: batch.execution ?? 'sync',
+    maxItems: over?.constraints?.maxItems ?? null,
+    resultFields
+  };
 }
 
 /** Qué campo del input de una query de historial (DSL 2.29) hace de cada filtro: `{ field, from, to }`, null el que falte. */

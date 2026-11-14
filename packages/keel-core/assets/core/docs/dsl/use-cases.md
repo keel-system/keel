@@ -117,6 +117,7 @@ operations:
   **Qué se reproduce en la repetición.** El contrato no es rechazar el duplicado sino devolver la respuesta original, y lo que se guarda de la primera ejecución es el id del recurso creado. Con eso se reconstruye la ficha de una entidad; una **lista** o una **página**, no: dependen del estado del resto del sistema al responder, y para la segunda llamada ya cambió. `keel validate` lo avisa.
 - `cache: { ttlSeconds, keyFields, invalidatedBy: [Evento, ...] }` — solo para queries; `invalidatedBy` referencia eventos de messaging. Si el `output` declara `embed`, la caché proyecta **otro agregado** dentro de la respuesta y ese agregado también tiene que poder invalidarla: `keel validate` da **error** si ningún evento de la entidad embebida está en `invalidatedBy` (y avisa de los eventos de la entidad principal que falten). Sin esa regla, un cambio en la marca embebida en la ficha de producto no se ve hasta que expira el TTL, y nada en el diseño lo delata.
 - `schedule: { cron }` — trigger temporal, único trigger que se declara aquí.
+- `batch: { over, atomicity, itemErrors, execution, output }` — la operación recibe un **lote** y responde por elemento (2.30). Ver § Lotes.
 - `transitions: [{ entity, from: [estado, ...], to: estado }]` — las transiciones del `lifecycle` de `domain` que **esta** operación ejecuta. Solo en commands.
 
 ### `transitions` — qué mueve la operación en la máquina de estados
@@ -172,6 +173,62 @@ getMyCardHistory:
 ```
 
 **`restores` — una operación que deshace un borrado (2.28).** Un command con `restores: <Raíz>` deshace el borrado lógico de esa raíz dentro de su ventana (`persistence.entities.<Raíz>.restorableFor`), y los dos van siempre juntos. Con él, el puerto del repositorio gana la restauración: dentro de la ventana la fila vuelve a estar viva; fuera, el `error` de `restorableFor`, que esta operación declara; con su clave ocupada por una fila viva, el 409 de esa unicidad. Ver `persistence.md` § El ciclo de vida del dato.
+
+## Lotes (2.30)
+
+«Importo 500 productos y fallan 3»: sin `batch`, una operación con una lista en el input falla entera o termina
+entera, y responder por elemento obliga a inventar en `fields` una lista de resultados con un `code` fuera del catálogo
+de errores. Con `batch`, la operación se ejecuta **una vez por elemento** del campo que nombra `over`, y la respuesta
+dice qué pasó con cada uno.
+
+```yaml
+importProducts:
+  kind: command
+  input:
+    fields:
+      items: { type: ProductDraft, list: true, required: true, constraints: { maxItems: 500 } }
+  output: void
+  errors:
+    - { code: SKU_ALREADY_EXISTS, when: Ya existe un producto con ese SKU., http: 409 }
+    - { code: CATALOG_LOCKED, when: El catálogo está bloqueado por un cierre., http: 409 }
+  batch:
+    over: items                       # el campo list del input que se recorre
+    atomicity: per-item               # all-or-nothing | per-item
+    itemErrors: [SKU_ALREADY_EXISTS]  # fallan SOLO su elemento; CATALOG_LOCKED detiene el lote
+    output: { fields: { productId: { type: uuid } } }   # lo que devuelve cada elemento con éxito
+```
+
+- **`over`** nombra un campo `list: true` del input cuyo elemento es un value type con campos (`domain.types.<T>.fields`):
+  es lo que se valida y se procesa elemento a elemento (`CHK-USECASES-BATCH-OVER`). Los demás campos del input son
+  comunes a todo el lote.
+- **`atomicity`** no tiene default, porque es lo primero que el cliente lee del contrato
+  (`OBL-BATCH-ATOMICITY-UNDECIDED`, no se puede aceptar). Con **`per-item`** cada elemento va en su propia
+  transacción, en orden de índice: lo que falla no deshace lo anterior, y la respuesta es **siempre `207`**, también si
+  todo salió bien. Con **`all-or-nothing`** todos van en una: el primer fallo la revierte entera y la respuesta es el
+  error de ese elemento con su ruta en `details` (`items[7]`); sin fallos, el mismo cuerpo que el 207 con el
+  `successStatus` del endpoint. Dos elementos con la misma clave natural en un lote fallan siempre en el segundo.
+- **`itemErrors`** (solo con `per-item`) elige cuáles de los `errors` de la operación fallan **solo su elemento**, y el
+  lote sigue (`CHK-USECASES-BATCH-ITEM-ERRORS`). Un elemento que no cumple sus cotas o su formato falla también solo él,
+  con `VALIDATION_ERROR`: no es un 400 del lote. **Cualquier otro fallo detiene el lote**: ese elemento sale `failed`
+  con su `code` (o `BATCH_ABORTED` si no tiene: infraestructura, un defecto), lo anterior queda confirmado y lo
+  siguiente sale `notAttempted`, que es lo que el cliente tiene que reenviar. La pregunta que decide la lista: ¿el
+  error depende solo del elemento o del estado común a todos? (`REV-BATCH-ITEM-ERRORS`).
+- **`maxItems`** en el campo `over` es obligatorio, y con `execution: sync` no pasa de 1000
+  (`CHK-USECASES-BATCH-UNBOUNDED`): un 207 de 50 000 elementos es un *timeout*. Exceder el tope, o no mandar el campo, es
+  un 400 del lote entero sin procesar nada.
+- **`output`** de la operación es `void` (`CHK-USECASES-BATCH-OUTPUT`): la forma de la respuesta la fija
+  `wire-contract.md` § Lotes. Lo que devuelve cada elemento con éxito va en `batch.output`, y aparece en su `result`.
+- **Solo en un command que entra por HTTP** (`CHK-USECASES-BATCH-NOT-COMMAND`): por una suscripción, un `schedule` o
+  un `dispatches` no hay nadie a quien devolver el resultado por elemento.
+- **`execution`**: `sync` (por defecto) responde cuando termina. `async` responde `202` con la ubicación de un trabajo
+  que procesa el lote por partes, para importaciones de minutos; exige la capa `security`, porque el trabajo solo lo
+  lee quien lo creó (`CHK-USECASES-BATCH-NO-AUTH`). Los generadores traen primero `sync` (`PLAN-DSL-230-LOTES.md`).
+- `idempotency` de la operación se aplica al **lote entero**: la repetición devuelve el mismo resultado. Por elemento,
+  la guarda es la `naturalKey` de lo que escribe. Cada elemento confirmado publica lo que publicaría la operación sola
+  (`emits`); el lote no publica un evento propio.
+
+El handler de la operación procesa **un** elemento; el bucle, la transacción de cada uno, su validación y la
+respuesta los pone el generador.
 
 ## Triggers: quién activa cada operación
 

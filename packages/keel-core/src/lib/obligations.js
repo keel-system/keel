@@ -210,6 +210,19 @@ export const OBLIGATIONS = {
     doc: 'dsl/persistence.md'
   },
 
+  'OBL-BATCH-ATOMICITY-UNDECIDED': {
+    gapClass: 15,
+    when: 'use-cases: una operación con `batch` sin `atomicity`',
+    kind: 'decision',
+    // Sin default seguro: si un elemento que falla deshace los demás o no es lo primero que el cliente lee del contrato,
+    // y cualquiera de los dos elegido por el generador sería la mitad de las veces el contrario del que el negocio quería
+    // (una importación que deja medio catálogo cargado, o una que no carga nada por una fila).
+    waivable: false,
+    title: 'no está decidido si un elemento que falla deshace el lote entero',
+    closes: '`batch.atomicity: per-item` (cada elemento por su cuenta, 207) o `all-or-nothing` (una transacción para todos)',
+    doc: 'dsl/use-cases.md'
+  },
+
   'OBL-PAYMENTS-FOLLOWUP-REJECTED': {
     gapClass: 18,
     when: 'payments: una acción de seguimiento (`capture`, `void`, `refund`) sin `onRejected`',

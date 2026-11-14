@@ -50,6 +50,11 @@ const MOTIVOS = {
  * muertas, para que la tabla no se convierta en la lista de lo que hubo alguna vez.
  */
 const EXCEPCIONES = new Map([
+  ['use-cases.operations.*.batch', { motivo: MOTIVOS.hueco, porque: 'los lotes (DSL 2.30) los rechaza la frontera de keel-spring (batchPendingErrors) hasta el incremento 1 de PLAN-DSL-230-LOTES.md (6 para async), y ninguna fixture los declara hasta el 11; entonces esta fila se borra.' }],
+  ['use-cases.operations.*.batch.atomicity', { motivo: MOTIVOS.hueco, porque: 'los lotes (DSL 2.30) los rechaza la frontera de keel-spring (batchPendingErrors) hasta el incremento 1 de PLAN-DSL-230-LOTES.md (6 para async), y ninguna fixture los declara hasta el 11; entonces esta fila se borra.' }],
+  ['use-cases.operations.*.batch.execution', { motivo: MOTIVOS.hueco, porque: 'los lotes (DSL 2.30) los rechaza la frontera de keel-spring (batchPendingErrors) hasta el incremento 1 de PLAN-DSL-230-LOTES.md (6 para async), y ninguna fixture los declara hasta el 11; entonces esta fila se borra.' }],
+  ['use-cases.operations.*.batch.itemErrors', { motivo: MOTIVOS.hueco, porque: 'los lotes (DSL 2.30) los rechaza la frontera de keel-spring (batchPendingErrors) hasta el incremento 1 de PLAN-DSL-230-LOTES.md (6 para async), y ninguna fixture los declara hasta el 11; entonces esta fila se borra.' }],
+  ['use-cases.operations.*.batch.output', { motivo: MOTIVOS.hueco, porque: 'los lotes (DSL 2.30) los rechaza la frontera de keel-spring (batchPendingErrors) hasta el incremento 1 de PLAN-DSL-230-LOTES.md (6 para async), y ninguna fixture los declara hasta el 11; entonces esta fila se borra.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     {

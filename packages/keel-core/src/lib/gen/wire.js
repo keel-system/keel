@@ -32,6 +32,9 @@ export const WIRE_RULES = {
   'unknown-ignored': 'Una propiedad desconocida en la entrada se ignora.',
   'etag-strong': 'El `ETag` de un recurso con escritura condicional (`api.concurrency`) es su versión entre comillas dobles: fuerte, sin `W/` y opaco para el cliente, que solo lo devuelve tal cual en `If-Match`.',
   'if-match-strong': '`If-Match` se compara en fuerte: `*` se cumple si el recurso existe y una lista si coincide cualquiera de sus elementos; un `W/"…"`, un valor sin comillas o ilegible no coincide (412). Una cabecera vacía cuenta como ausente.',
+  'batch-multi-status': 'Un lote `per-item` síncrono (DSL 2.30) responde SIEMPRE 207 con `summary` e `items`, también si todo salió bien; uno `all-or-nothing` responde el mismo cuerpo con su `successStatus`, o el error del elemento culpable con su ruta (`items[7]`) en `details`.',
+  'batch-item-stable': 'Cada elemento de un lote lleva siempre `index`, `status`, `result`, `error` y `message`, con `null` donde no aplica: su forma es estable, como la del error, y no depende de `conventions.nulls`.',
+  'batch-stop': 'En un lote `per-item`, un fallo fuera de `itemErrors` (y que no es de forma del elemento) detiene el lote: ese elemento sale `failed` con su `code`, o con `BATCH_ABORTED` si no tiene, y los siguientes `notAttempted`.',
   'list-never-null': 'Una lista (`list: true`) nunca viaja como null: sin elementos sale `[]`, también con `conventions.nulls: omit`, y una lista que la entrada no informa se lee como `[]` (salvo la opcional de un PATCH, que ausente significa «no tocar»).'
 };
 
@@ -94,7 +97,11 @@ export const WIRE_SHAPES = {
   errorResponse: ['timestamp', 'status', 'error', 'code', 'message', 'details', 'correlationId'],
   pagedResponse: ['items', 'page', 'size', 'totalElements', 'totalPages'],
   eventEnvelope: ['metadata', 'data'],
-  eventMetadata: ['eventId', 'eventType', 'eventVersion', 'occurredAt', 'source', 'correlationId', 'traceparent']
+  eventMetadata: ['eventId', 'eventType', 'eventVersion', 'occurredAt', 'source', 'correlationId', 'traceparent'],
+  // El resultado de un lote (DSL 2.30): el cuerpo del 207 y cada elemento, con su forma estable.
+  batchResponse: ['summary', 'items'],
+  batchSummary: ['total', 'succeeded', 'failed', 'notAttempted'],
+  batchItem: ['index', 'status', 'result', 'error', 'message']
 };
 
 /**
@@ -125,4 +132,92 @@ export const WIRE_IF_MATCH_CASES = [
   { id: 'if-match-unquoted', rule: 'if-match-strong', header: '7', current: 7, expected: [], outcome: 'no-match' },
   { id: 'if-match-leading-zero', rule: 'if-match-strong', header: '"07"', current: 7, expected: [], outcome: 'no-match' },
   { id: 'if-match-unreadable', rule: 'if-match-strong', header: 'siete', current: 7, expected: [], outcome: 'no-match' }
+];
+
+/**
+ * Los LOTES (DSL 2.30, `use-cases.<op>.batch`): la respuesta que sale de una serie de desenlaces, en orden de índice.
+ * `outcomes` es lo que devolvió cada elemento (`ok` con su `result`, o el `code` con que falló; `code: null` es un fallo
+ * sin code). `response` es lo que tiene que responder el servidor; la referencia ejecutable es `batchResponse` de
+ * `batch.js`. Los cuatro generadores ejecutan estos casos con el mismo id.
+ */
+export const WIRE_BATCH_CASES = [
+  {
+    id: 'batch-all-succeeded',
+    rule: 'batch-multi-status',
+    plan: { over: 'items', atomicity: 'per-item', itemErrors: ['SKU_ALREADY_EXISTS'] },
+    outcomes: [{ ok: true, result: { productId: 'a' } }, { ok: true, result: { productId: 'b' } }],
+    response: {
+      status: 207,
+      body: {
+        summary: { total: 2, succeeded: 2, failed: 0, notAttempted: 0 },
+        items: [
+          { index: 0, status: 'succeeded', result: { productId: 'a' }, error: null, message: null },
+          { index: 1, status: 'succeeded', result: { productId: 'b' }, error: null, message: null }
+        ]
+      }
+    }
+  },
+  {
+    id: 'batch-item-error-skipped',
+    rule: 'batch-item-stable',
+    plan: { over: 'items', atomicity: 'per-item', itemErrors: ['SKU_ALREADY_EXISTS'] },
+    outcomes: [
+      { ok: true, result: null },
+      { ok: false, code: 'SKU_ALREADY_EXISTS', message: 'Ya existe un producto con ese SKU' },
+      { ok: false, code: 'VALIDATION_ERROR', message: 'price must be greater than 0' },
+      { ok: true, result: null }
+    ],
+    response: {
+      status: 207,
+      body: {
+        summary: { total: 4, succeeded: 2, failed: 2, notAttempted: 0 },
+        items: [
+          { index: 0, status: 'succeeded', result: null, error: null, message: null },
+          { index: 1, status: 'failed', result: null, error: 'SKU_ALREADY_EXISTS', message: 'Ya existe un producto con ese SKU' },
+          { index: 2, status: 'failed', result: null, error: 'VALIDATION_ERROR', message: 'price must be greater than 0' },
+          { index: 3, status: 'succeeded', result: null, error: null, message: null }
+        ]
+      }
+    }
+  },
+  {
+    id: 'batch-undeclared-stops',
+    rule: 'batch-stop',
+    plan: { over: 'items', atomicity: 'per-item', itemErrors: ['SKU_ALREADY_EXISTS'] },
+    outcomes: [{ ok: true, result: null }, { ok: false, code: null, message: 'connection reset' }, { ok: true, result: null }],
+    response: {
+      status: 207,
+      body: {
+        summary: { total: 3, succeeded: 1, failed: 1, notAttempted: 1 },
+        items: [
+          { index: 0, status: 'succeeded', result: null, error: null, message: null },
+          { index: 1, status: 'failed', result: null, error: 'BATCH_ABORTED', message: 'El elemento falló por una causa que no es suya y el lote se detuvo en él' },
+          { index: 2, status: 'notAttempted', result: null, error: null, message: null }
+        ]
+      }
+    }
+  },
+  {
+    id: 'batch-declared-outside-item-errors-stops',
+    rule: 'batch-stop',
+    plan: { over: 'items', atomicity: 'per-item', itemErrors: ['SKU_ALREADY_EXISTS'] },
+    outcomes: [{ ok: false, code: 'CATALOG_LOCKED', message: 'El catálogo está bloqueado' }, { ok: true, result: null }],
+    response: {
+      status: 207,
+      body: {
+        summary: { total: 2, succeeded: 0, failed: 1, notAttempted: 1 },
+        items: [
+          { index: 0, status: 'failed', result: null, error: 'CATALOG_LOCKED', message: 'El catálogo está bloqueado' },
+          { index: 1, status: 'notAttempted', result: null, error: null, message: null }
+        ]
+      }
+    }
+  },
+  {
+    id: 'batch-all-or-nothing-rolls-back',
+    rule: 'batch-multi-status',
+    plan: { over: 'items', atomicity: 'all-or-nothing', itemErrors: [] },
+    outcomes: [{ ok: true, result: null }, { ok: false, code: 'SKU_ALREADY_EXISTS', message: 'Ya existe un producto con ese SKU' }],
+    response: { status: 'error', committed: false, index: 1, code: 'SKU_ALREADY_EXISTS', details: ['items[1]'] }
+  }
 ];

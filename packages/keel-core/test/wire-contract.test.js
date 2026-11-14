@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WIRE_RULES, WIRE_OUTPUT_CASES, WIRE_INPUT_CASES, WIRE_REJECTED_INPUTS, WIRE_SHAPES, WIRE_ETAG_CASES, WIRE_IF_MATCH_CASES } from '../src/lib/gen/wire.js';
+import { WIRE_RULES, WIRE_OUTPUT_CASES, WIRE_INPUT_CASES, WIRE_REJECTED_INPUTS, WIRE_SHAPES, WIRE_ETAG_CASES, WIRE_IF_MATCH_CASES, WIRE_BATCH_CASES } from '../src/lib/gen/wire.js';
 import { etagOf, expectedVersionsFrom, ifMatchAbsent, versionMatches } from '../src/lib/gen/conditional-writes.js';
 import { BASE_TYPES } from '../src/lib/gen/types.js';
 
@@ -31,7 +31,7 @@ test('cada caso cita una regla que existe, de un tipo que existe, y los ids no s
 
 test('toda regla tiene al menos un caso, salvo las que son de forma y no de valor', () => {
   const structural = new Set(['nulls-include', 'nulls-omit', 'unknown-ignored', 'list-never-null']);
-  const cited = new Set([...allCases, ...WIRE_ETAG_CASES, ...WIRE_IF_MATCH_CASES].map((entry) => entry.rule));
+  const cited = new Set([...allCases, ...WIRE_ETAG_CASES, ...WIRE_IF_MATCH_CASES, ...WIRE_BATCH_CASES].map((entry) => entry.rule));
   for (const rule of Object.keys(WIRE_RULES)) {
     if (!structural.has(rule)) assert.ok(cited.has(rule), `la regla ${rule} no tiene ningún caso que la ejecute`);
   }
@@ -48,7 +48,7 @@ test('lo esperado es JSON válido y un decimal nunca sale en exponencial', () =>
 test('el documento cuenta las mismas formas, en el mismo orden', () => {
   const flat = doc.replace(/\s+/g, ' ');
   const listed = (keys) => keys.map((key) => `\`${key}\``).join(', ');
-  for (const shape of ['errorResponse', 'pagedResponse', 'eventMetadata']) {
+  for (const shape of ['errorResponse', 'pagedResponse', 'eventMetadata', 'batchResponse', 'batchSummary', 'batchItem']) {
     assert.ok(flat.includes(listed(WIRE_SHAPES[shape])), `el documento no lista ${shape} en su orden`);
   }
   const errorExample = JSON.parse(doc.match(/```json\n([\s\S]*?)\n```/)[1]);

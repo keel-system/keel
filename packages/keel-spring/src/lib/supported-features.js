@@ -12,6 +12,7 @@ import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-par
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
 import { optionalAuthFrontierErrors } from '@keel-system/keel-core/gen/read-scope';
+import { batchPendingErrors } from '@keel-system/keel-core/gen/batch';
 import { declaredDeadlines } from '@keel-system/keel-core/gen/deadlines';
 
 /**
@@ -228,6 +229,9 @@ export function checkSupportedFeatures(manifest, layers) {
   // construcción (T7, T8) lo rechaza planService con la frontera neutral, que necesita el modelo. level: optional también
   // (permitAll + CallerIdentity.resolveOptional), salvo sobre una identidad que no es un token: la frontera neutral.
   errors.push(...optionalAuthFrontierErrors(layers, 'keel-spring'));
+  // Los lotes con resultado por elemento (DSL 2.30: use-cases.<op>.batch) llegan en el incremento 1 de
+  // PLAN-DSL-230-LOTES.md (sync) y en el 6 (async): hasta entonces se rechazan enteros, con el mismo mensaje en los cuatro.
+  errors.push(...batchPendingErrors(layers, 'keel-spring', { syncIncrement: 1, asyncIncrement: 6 }));
   // El historial de cambios consultable (DSL 2.29: audit.history y output: { history }) se genera entero
   // (scaffold/history.js); lo que depende del motor elegido lo rechaza planService (historyStackErrors).
   // El ciclo de vida del dato (DSL 2.28: personal, deletion: logical, restorableFor, retention) se genera entero

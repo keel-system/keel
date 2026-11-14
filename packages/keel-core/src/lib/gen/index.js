@@ -65,6 +65,11 @@ export {
   HISTORY_CASES, HISTORY_SABOTAGES, historyPersonalPatterns, anonymizeHistoryChanges, anonymizedEntryChanges, historyNote
 } from './history.js';
 export {
+  BATCH_ATOMICITIES, BATCH_EXECUTIONS, BATCH_SYNC_MAX_ITEMS, BATCH_ITEM_STATUSES, BATCH_MULTI_STATUS, BATCH_ABORTED_MESSAGE,
+  batchOperations, batchExecutionOf, batchOverField, batchMaxItems, batchItemPath, isItemFailure, batchResponse, batchItem,
+  batchBody, batchPendingErrors, batchModelOperations, usesBatch, batchNote, BATCH_CASES, BATCH_SABOTAGES
+} from './batch.js';
+export {
   CHANGE_HISTORY,
   CHANGE_HISTORY_FIELD,
   CHANGE_HISTORY_COLLECTION,

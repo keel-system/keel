@@ -110,6 +110,38 @@ fuera de rango, aunque el listado tenga elementos en otras.
   valor con las reglas de § Tipos, y `null` cuando no había o ya no hay. En una entrada `anonymized` los dos son el
   valor anonimizado: el anterior ya no existe en ninguna parte.
 
+## Lotes
+
+Solo en las operaciones con `batch` (DSL 2.30, ver `docs/dsl/use-cases.md § Lotes`). El diseño no declara la forma
+de la respuesta: la operación lleva `output: void`, y cada elemento con éxito devuelve lo que diga `batch.output`.
+
+**Resultado del lote** — `summary`, `items`. El `summary`, en este orden: `total`, `succeeded`, `failed`,
+`notAttempted`. Cada elemento de `items`, en orden de índice: `index`, `status`, `result`, `error`, `message`.
+
+```json
+{
+  "summary": { "total": 500, "succeeded": 497, "failed": 3, "notAttempted": 0 },
+  "items": [
+    { "index": 0, "status": "succeeded", "result": { "productId": "0190f3c1-7b2e-7a4d-9c1e-3f5a6b7c8d9e" }, "error": null, "message": null },
+    { "index": 7, "status": "failed", "result": null, "error": "SKU_ALREADY_EXISTS", "message": "Ya existe un producto con ese SKU" }
+  ]
+}
+```
+
+- Con `atomicity: per-item` la respuesta es **siempre `207`**, también si todo salió bien: el status no depende del
+  desenlace, y el cliente tiene un solo lector. Con `all-or-nothing` el mismo cuerpo sale con el `successStatus` del
+  endpoint, o la respuesta es el error del elemento culpable, con su ruta en `details` (`"items[7]"`), y no queda
+  nada confirmado.
+- Cada elemento lleva **siempre** sus cinco claves, con `null` donde no aplica: su forma es estable, como la del
+  error, y no depende de `conventions.nulls`. `result` es `null` en un elemento que no tuvo éxito y en uno de una
+  operación sin `batch.output`.
+- `status` es `succeeded`, `failed` o `notAttempted`. Un elemento falla **solo él** con un `code` de `itemErrors` o
+  con `VALIDATION_ERROR` (sus cotas, su formato), y el lote sigue. Cualquier otro fallo **detiene** el lote: ese
+  elemento sale `failed` con su `code`, o con `BATCH_ABORTED` si no tiene (`framework-errors.md`), lo anterior queda
+  confirmado y lo siguiente sale `notAttempted`, que es lo que el cliente tiene que reenviar.
+- Son un `400` del lote entero, sin procesar ningún elemento, solo el sobre: el campo que se recorre ausente o con más
+  elementos que su `maxItems`.
+
 ## Escritura condicional
 
 Solo en las operaciones de `api.concurrency` (ver `docs/dsl/api.md § concurrency`).
