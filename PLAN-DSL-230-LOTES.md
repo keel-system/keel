@@ -1,6 +1,6 @@
 # DSL 2.30: lotes con resultado por elemento (R5)
 
-**Estado: APROBADO el 2026-11-14.** Incrementos 0 y 1 cerrados el 2026-11-14; el siguiente es el 2 (keel-nest `sync`). Al cerrar pasa a `completed_plans/`.
+**Estado: APROBADO el 2026-11-14.** Incrementos 0, 1 y 2 cerrados el 2026-11-14; el siguiente es el 3 (keel-dotnet `sync`). Al cerrar pasa a `completed_plans/`.
 
 ## Contexto
 
@@ -196,15 +196,40 @@ Incremento 1 (keel-spring `sync`):
 - Red: `npm run batch-check` (catalog-batch en PostgreSQL y MySQL, catalog-batch-mongo y catalog-batch-atomic), en
   verde, y los cinco sabotajes cayendo en exactamente sus casos (`ba-one-tx` medido también en MongoDB).
 
+Incremento 2 (keel-nest `sync`):
+
+- **`shapeBatchOperation` sube al modelo neutral** (`gen/model.js`): el `<Op>ItemResult` y el `returningCommand` del handler
+  de un elemento son los mismos en los cuatro. keel-spring deja de hacerlo en su `src/lib/model.js`.
+- **D3 en keel-nest**: el lector de la operación lee el SOBRE y devuelve `{ items: unknown[], message(item) }`; la lista se
+  lee con `json.listOf<unknown>((value) => value)` y solo se validan sus reglas (presencia y `maxItems`). `batch.ts` lee cada
+  elemento con el MISMO `read<Elemento>` del borde. Para que el `message` sea el de la guarda, `valueObject` conserva el
+  error del constructor como `cause` de `MalformedRequestError` (cambia `request-reading.ts` y `request-errors.ts` de
+  todos los proyectos; la respuesta HTTP no cambia).
+- **El fallo se traduce con `ApiExceptionFilter.translate`**, que el filtro solo emite cuando hay lotes. Per-item responde
+  con `@HttpCode(207)`, fijo; all-or-nothing abre la transacción en el controlador (`TransactionContext`) y pone el status
+  del culpable en el `reply`.
+- **`ba-one-tx` no cae donde en keel-spring.** En TypeORM y en el driver de MongoDB un error capturado no marca la
+  transacción para revertir, así que un lote en UNA transacción solo se distingue cuando el MOTOR la aborta tras un
+  duplicado. La sonda de keel-nest guarda sin buscar el sku antes (el duplicado lo rechaza la unicidad y lo traduce el
+  filtro al error declarado), y entonces `ba-one-tx` cae en BA-2 y BA-5 en PostgreSQL y MongoDB, y en MySQL no es
+  observable (`BATCH_ONE_TX` de `scripts/lib/batch-probes.js`; el veredicto lo dice en voz alta). Medido. keel-dotnet y
+  keel-go tendrán que medir lo suyo: EF Core y database/sql se parecen más a TypeORM que a Spring en esto.
+- **El status per-item lo lee solo BA-1** (del metadato del decorador): es fijo, no depende del desenlace.
+- Red: `test/batch-parity.test.js` (los mismos casos que keel-spring, la nota, el contrato byte a byte, y el bucle emitido
+  EJECUTADO contra `batchResponse`); `db-check --subject=catalog-batch,catalog-batch-atomic` en PostgreSQL y MySQL y
+  `doc-check --subject=catalog-batch-mongo`, en verde, con los cinco sabotajes cayendo en exactamente sus casos; `ts-check`
+  13/13 con los tres sujetos como siluetas derivadas.
+
 ## Para retomar
 
-Inc. 2, keel-nest `sync`. Calcar el inc. 1: el sobre con los elementos sin leer (en keel-nest el lector de peticiones
-valida el DTO entero, el mismo riesgo D3), el lector y las reglas de cada elemento iguales a las del borde, el despacho
-por elemento con su transacción, el fallo traducido con el mismo traductor que el borde y `batchResponse` como oráculo.
-`syncIncrement: null` en `keel-nest/src/lib/supported-features.js` y `batchFrontierErrors`. La red es `db-check` y
-`doc-check` con `scripts/lib/batch-probes.js` y los cinco sabotajes de `BATCH_SABOTAGES`, más `test/batch-parity.test.js`
-contra keel-spring (las notas, el contrato y la forma de la respuesta). Decidir antes si `shapeBatchOperation` sube al
-modelo neutral. Las filas de `capability-coverage` de los lotes se borran en el inc. 11.
+Inc. 3, keel-dotnet `sync`. Calcar el 2: el sobre con los elementos sin leer (en keel-dotnet el lector del DTO valida el
+cuerpo entero con DataAnnotations: el mismo riesgo D3), cada elemento con el mismo lector y las mismas reglas que el borde,
+el despacho por elemento con su transacción, el fallo traducido con el mismo traductor que el borde y `batchResponse` como
+oráculo. `syncIncrement: null` y `batchFrontierErrors` en `keel-dotnet/src/lib/supported-features.js`. La red es `db-check`
+y `doc-check` con `scripts/lib/batch-probes.js` y los cinco sabotajes, más `test/batch-parity.test.js` contra los otros dos.
+Medir primero dónde cae `ba-one-tx` con EF Core en cada motor (ver lo decidido en el inc. 2). La huella golden de keel-nest
+está atrasada desde antes de la 2.30 (`npm run golden --workspace packages/keel-nest -- --check`): regenerarla en su propio
+commit. Las filas de `capability-coverage` de los lotes se borran en el inc. 11.
 
 ## Verificación
 

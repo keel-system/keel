@@ -38,6 +38,8 @@ import { READ_SCOPE_DESIGNS } from '../../keel-core/test/helpers/read-scope-desi
 import { DATA_LIFECYCLE_DESIGNS } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { LIFECYCLE_SABOTAGE_SPECS, isLifecycleSabotage, lifecycleBlock, lifecycleCases, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
 import { HISTORY_DESIGNS } from '../../keel-core/test/helpers/history-designs.js';
+import { BATCH_DESIGNS } from '../../keel-core/test/helpers/batch-designs.js';
+import { BATCH_SABOTAGE_SPECS, isBatchSabotage, batchBlock, batchCases, batchProbePatch, batchSabotageVerdict } from './lib/batch-probes.js';
 import { HISTORY_SABOTAGE_SPECS, isHistorySabotage, historyBlock, historyCases, historyPreamble, historySabotageVerdict } from './lib/history-probes.js';
 import { recordsHistory, usesHistory } from '../src/scaffold/history.js';
 import { CHANGE_HISTORY, CHANGE_HISTORY_FIELD } from '@keel-system/keel-core/gen/history-store';
@@ -142,7 +144,9 @@ const SABOTAGES = {
   ...Object.fromEntries(Object.entries(LIFECYCLE_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational])),
   // El historial de cambios (DSL 2.29): con --subject=cards-history, cards-history-anonymize o vault-history-scoped, cada
   // uno cae en exactamente sus casos HI.
-  ...Object.fromEntries(Object.entries(HISTORY_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational]))
+  ...Object.fromEntries(Object.entries(HISTORY_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational])),
+  // Los lotes (DSL 2.30): con un sujeto catalog-batch*, cada uno cae en exactamente sus casos BA.
+  ...Object.fromEntries(Object.entries(BATCH_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational]))
 };
 const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -166,7 +170,7 @@ const only = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ??
 const onlySubject = args.find((arg) => arg.startsWith('--subject='))?.split('=')[1] ?? null;
 const ENGINES = (only ? [only] : ['postgresql', 'mysql']).filter((engine) => DATABASES[engine]);
 // Las formas del esquema que cubre cada sujeto (ver la cabecera).
-const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional', 'verification-codes', 'vault-scoped', 'shop-scoped', 'cards-logical', 'codes-anonymize', 'codes-delete', 'vault-logical-scoped', 'cards-history', 'cards-history-anonymize', 'vault-history-scoped'];
+const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional', 'verification-codes', 'vault-scoped', 'shop-scoped', 'cards-logical', 'codes-anonymize', 'codes-delete', 'vault-logical-scoped', 'cards-history', 'cards-history-anonymize', 'vault-history-scoped', 'catalog-batch', 'catalog-batch-atomic'];
 // Los sujetos DERIVADOS, por nombre: los finders de las búsquedas (DSL 2.22) en la forma de lista con un subcampo de value
 // object, el MISMO diseño que mide keel-dotnet (keel-core/test/helpers/finder-designs.js); y la autoría, que ninguna
 // fixture relacional declara: por política sobre product-catalog y DECLARADA sobre notification-mailer (raíz e hija),
@@ -187,7 +191,9 @@ const DERIVED = {
   // El ciclo de vida del dato (DSL 2.28, LC-1 a LC-10, RT-1 a RT-4 y PD-2): los MISMOS diseños relacionales que mide keel-spring.
   ...Object.fromEntries(DATA_LIFECYCLE_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design])),
   // El historial de cambios (DSL 2.29, HI-1 a HI-10): los MISMOS diseños relacionales que mide keel-spring.
-  ...Object.fromEntries(HISTORY_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design]))
+  ...Object.fromEntries(HISTORY_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design])),
+  // Los lotes (DSL 2.30, BA-1 a BA-7): los MISMOS diseños relacionales que mide keel-spring.
+  ...Object.fromEntries(BATCH_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design]))
 };
 const results = [];
 
@@ -317,6 +323,8 @@ function probeScript(model, engine, db, expected) {
   // El historial de cambios (DSL 2.29), también antes de los imports: el almacén lo reciben los adaptadores.
   const historyLine = historyPreamble(model, ctx);
   const historyCode = historyBlock(model, ctx, { document: false, engine, sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterCtorArgs(model, owner, ctx)})` });
+  // Los lotes (DSL 2.30), también antes de los imports.
+  const batchCode = batchBlock(model, ctx, { document: false, engine, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterCtorArgs(model, owner, ctx)})` });
   const imports = [...ctx.imports].map((entry) => {
     const [symbol, file] = entry.split('|');
     return `import { ${symbol} } from '${distOf(file)}';`;
@@ -419,6 +427,7 @@ ${purgeBlock(model)}
 ${purgeTimerBlock(model)}
 ${lifecycleCode}
 ${historyCode}
+${batchCode}
 
 await dataSource.destroy();
 console.log('@@RESULTS@@' + JSON.stringify(results));
@@ -1635,7 +1644,7 @@ for (const engine of ENGINES) {
         const out = path.join(dir, file.path);
         fs.mkdirSync(path.dirname(out), { recursive: true });
         // Lo que escribiría el agente para el plazo (el método semántico de la sonda), y después el sabotaje.
-        fs.writeFileSync(out, sabotaged({ ...file, content: typeof file.content === 'string' ? timerProbePatch(model, file) : file.content }));
+        fs.writeFileSync(out, sabotaged({ ...file, content: typeof file.content === 'string' ? batchProbePatch(model, { ...file, content: timerProbePatch(model, file) }) : file.content }));
       }
       fs.symlinkSync(path.join(projectDir, 'node_modules'), path.join(dir, 'node_modules'), 'junction');
       const compiled = run(process.execPath, [tsc, '-p', 'tsconfig.build.json'], { cwd: dir });
@@ -1680,6 +1689,13 @@ for (const engine of ENGINES) {
         const verdict = lifecycleSabotageVerdict(checks, sabotage, model, { engine });
         for (const check of checks.filter((entry) => !entry.ok && /^(LC|RT|PD)-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
         step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+        continue;
+      }
+      // Los lotes (DSL 2.30): verde si caen EXACTAMENTE sus casos BA de este sujeto (y ningún otro BA).
+      if (isBatchSabotage(sabotage) && batchCases(model).length > 0) {
+        const verdict = batchSabotageVerdict(checks, sabotage, model, engine);
+        for (const check of checks.filter((entry) => !entry.ok && /^BA-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
+        step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, verdict.unmeasured ? `no observable en ${engine}: ver BATCH_ONE_TX` : `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
         continue;
       }
       // El historial de cambios (DSL 2.29): verde si caen EXACTAMENTE sus casos HI de este sujeto (y ningún otro).

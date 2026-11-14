@@ -16,6 +16,8 @@
 // inyecta lo que existe.
 
 import { unsupportedContentTypeRaise } from './storage.js';
+import { BATCH_ITEM_COMPONENT } from './batch.js';
+import { batchNote } from '@keel-system/keel-core/gen/batch';
 import { DIRS, classPath, declType, fieldImports, isNullable, tsModule, tsdoc } from './render.js';
 import { textFilterNotes, hasPatternFilter } from '@keel-system/keel-core/gen/text-filters';
 import { finderNote } from '@keel-system/keel-core/gen/query-filters';
@@ -105,7 +107,16 @@ export function handlerPath(operation) {
  * paginación. Los comparte el controlador (incremento 5) para construir el mensaje.
  */
 export function messageComponents(model, operation) {
-  const components = [...(operation.pathParams ?? []), ...(operation.bodyFields ?? [])];
+  const components = [...(operation.pathParams ?? [])];
+  for (const field of operation.bodyFields ?? []) {
+    // Un lote (DSL 2.30): el mensaje lleva UN elemento del campo que se recorre, no la lista. Sin reglas propias: el
+    // elemento ya lo leyó y validó el bucle (batch.ts), y el mensaje no es el cuerpo de ninguna petición.
+    if (operation.batch?.over === field.name) {
+      components.push({ ...field, name: BATCH_ITEM_COMPONENT, tsType: field.elementTsType, list: false, inputValidation: [], elementInputValidation: [], inputRules: [], elementInputRules: [], batchItem: true });
+      continue;
+    }
+    components.push(field);
+  }
   if (operation.paginated) {
     if (repositoryRoots(model).length > 0) {
       // Con persistencia, la página viaja como un Pageable (página, tamaño y orden), el de Spring Data.
@@ -522,6 +533,8 @@ function handlerNotes(model, operation) {
     const restore = restoreNote(model, operation, { findCall: byKey, restoreCall: `await ${port}.restore(<su id>)` });
     if (restore) notes.push(restore);
   }
+  // El lote (DSL 2.30): la nota neutral. El handler procesa UN elemento; el bucle es de batch.ts.
+  if (operation.batch) notes.push(...batchNote(operation.batch));
   // El historial (DSL 2.29): la nota neutral, con la llamada al puerto de la raíz.
   if (operation.historyOf) {
     const historyRead = history.handlerNote(model, operation);

@@ -22,6 +22,7 @@ import { usesPersistence } from './persistence-entities.js';
 import { PERSISTENCE_ERRORS_TS } from './repositories.js';
 import { usesMessaging, usesSubscriptionMessages } from './messaging.js';
 import { usesApi } from '@keel-system/keel-core/gen/features';
+import { usesBatch } from '@keel-system/keel-core/gen/batch';
 import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
 export { usesApi };
 
@@ -73,7 +74,7 @@ export function generate(model) {
               ]
             : [])
         ],
-        filterBody(usesPersistence(model), usesPersonalData(model))
+        filterBody(usesPersistence(model), usesPersonalData(model), usesBatch(model))
       )
     }
   ];
@@ -188,8 +189,8 @@ function requestErrorsBody() {
 
 /** La petición no se puede leer: JSON roto, un tipo que no encaja, un value object inválido. */
 export class MalformedRequestError extends Error {
-  constructor(reason = '${FW.malformed.message}') {
-    super(reason);
+  constructor(reason = '${FW.malformed.message}', options?: ErrorOptions) {
+    super(reason, options);
     this.name = 'MalformedRequestError';
   }
 }
@@ -398,8 +399,8 @@ export function valueObject<T>(value: unknown, build: (fields: Record<string, un
   } catch (error) {
     if (error instanceof MalformedRequestError) throw error;
     // El constructor del value object rechazó el valor: en keel-spring eso pasa dentro de Jackson,
-    // y sale como petición malformada.
-    return malformed();
+    // y sale como petición malformada. La guarda viaja como causa: el elemento de un lote (DSL 2.30) la usa de mensaje.
+    throw new MalformedRequestError(undefined, { cause: error });
   }
 }
 
@@ -544,7 +545,21 @@ const PERSONAL_SAFE = [
   "      this.log.warn(`Violación de integridad no asociada a ninguna constraint conocida (${exception instanceof Error ? exception.name : 'error'})`);"
 ].join('\n');
 
-function filterBody(persistence = false, personal = false) {
+// El fallo de un elemento de un lote (DSL 2.30) se traduce con este mismo filtro: batch.ts pide el cuerpo de error que
+// respondería la operación sola.
+const BATCH_TRANSLATION = `
+
+  /**
+   * El cuerpo de error que respondería una operación sola ante este fallo. Lo usa el bucle de los lotes (batch.ts) para
+   * el \`code\` y el \`message\` de cada elemento; null si es una excepción HTTP del propio framework, que no es de ningún
+   * elemento.
+   */
+  translate(exception: unknown): ErrorResponse | null {
+    const body = this.toResponse(exception, null);
+    return body instanceof HttpException ? null : body;
+  }`;
+
+function filterBody(persistence = false, personal = false, batch = false) {
   const validation = FRAMEWORK_ERRORS.validation.code;
   const domainBranches = domainErrorResponses().map(({ name, http, error, fallback }) => {
     return `    if (exception instanceof ${name}) return this.domain(${http}, '${error}', exception, '${fallback}');`;
@@ -574,7 +589,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
     void reply.status(body.status).send(body);
   }
 
-  private toResponse(exception: unknown, request: FastifyRequest): ErrorResponse | HttpException {
+  private toResponse(exception: unknown, request: FastifyRequest${batch ? ' | null' : ''}): ErrorResponse | HttpException {
     // ── Validación: errores de FORMA de la petición, 400. El 422 queda para las reglas de negocio.
     if (exception instanceof RequestValidationError) {
       const message = exception.source === 'body' ? '${FW.invalidBody.message}' : '${FW.invalidParams.message}';
@@ -597,7 +612,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
     }
     if (exception instanceof RouteNotFound) {
       // Ninguna ruta casa con método y camino. Si el camino existe con otro método, es un 405.
-      if (allowsOtherMethod(request.method, request.url)) {
+      if (${batch ? 'request != null && ' : ''}allowsOtherMethod(request.method, request.url)) {
         return ErrorResponse.of(405, '${FW.methodNotAllowed.error}', null, '${FW.methodNotAllowed.message}');
       }
       return ErrorResponse.of(404, '${FW.notFound.error}', null, '${FW.notFound.message}');
@@ -615,7 +630,7 @@ ${persistence ? (personal ? PERSISTENCE_BRANCH.replace(PERSONAL_LEAK, PERSONAL_S
     // ── Catch-all
     this.log.error('Excepción no controlada', exception instanceof Error ? exception.stack : String(exception));
     return ErrorResponse.of(500, '${FW.internal.error}', null, '${FW.internal.message}');
-  }
+  }${batch ? BATCH_TRANSLATION : ''}
 
   private fromDomain(exception: DomainException): ErrorResponse {
 ${domainBranches}

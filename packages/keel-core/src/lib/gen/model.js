@@ -1246,6 +1246,7 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
         operations: []
       });
     }
+    if (operation.batch) shapeBatchOperation(operation);
     groups.get(groupName).operations.push(operation);
   }
 
@@ -3129,6 +3130,24 @@ export function batchModelOf(op, resultFields) {
     maxItems: over?.constraints?.maxItems ?? null,
     resultFields
   };
+}
+
+/**
+ * Una operación por lotes (DSL 2.30) tal como la escriben los cuatro generadores: su handler procesa UN elemento, así que
+ * devuelve lo que `batch.output` declara para cada elemento —`<Op>ItemResult`, un DTO más— y su mensaje es un
+ * ReturningCommand. El output de la operación es void (CHK-USECASES-BATCH-OUTPUT): la respuesta HTTP es la de
+ * wire-contract.md § Lotes, que pone cada generador.
+ */
+function shapeBatchOperation(operation) {
+  const { resultFields } = operation.batch;
+  if (resultFields.length === 0) return;
+  operation.responseDto = {
+    name: `${pascalCase(operation.name)}ItemResult`,
+    fields: resultFields,
+    entity: null,
+    description: `Lo que devuelve cada elemento del lote ${operation.name} que sale bien.`
+  };
+  operation.messageKind = 'returningCommand';
 }
 
 /** Qué campo del input de una query de historial (DSL 2.29) hace de cada filtro: `{ field, from, to }`, null el que falte. */

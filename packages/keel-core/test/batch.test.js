@@ -37,9 +37,12 @@ function designOf(fixture, mutate = null) {
   if (mutate) mutate(layers);
   return { manifest, layers, model: buildModel({ manifest, layers, stack: STACK_DEFAULTS, projection: PROBE }) };
 }
-const derived = (name) => {
+const derived = (name, then = null) => {
   const design = BATCH_DESIGNS.find((entry) => entry.name === name);
-  return designOf(design.from, design.mutate);
+  return designOf(design.from, (layers) => {
+    design.mutate(layers);
+    then?.(layers);
+  });
 };
 const operationOf = (model, name) => model.services.flatMap((group) => group.operations).find((operation) => operation.name === name);
 const BATCH_IDS = /BATCH/;
@@ -71,8 +74,17 @@ test('el modelo: el lote recorre su campo, con su elemento, su confirmación y l
       resultFields: ['productId']
     }
   );
-  // Un lote no declara respuesta propia: la del método no es un DTO del diseño.
-  assert.equal(operation.responseDto, null);
+  // El handler procesa UN elemento: devuelve el <Op>ItemResult de batch.output, y su mensaje es un ReturningCommand. La
+  // respuesta HTTP del lote no es un DTO del diseño: la pone cada generador.
+  assert.equal(operation.responseDto.name, 'ImportProductsItemResult');
+  assert.deepEqual(operation.responseDto.fields.map((field) => field.name), ['productId']);
+  assert.equal(operation.messageKind, 'returningCommand');
+  // Sin batch.output, ni DTO ni retorno.
+  const bare = derived('catalog-batch', (layers) => {
+    delete layers['use-cases'].operations.importProducts.batch.output;
+  });
+  assert.equal(operationOf(bare.model, 'importProducts').responseDto, null);
+  assert.equal(operationOf(bare.model, 'importProducts').messageKind, 'command');
   assert.deepEqual(batchModelOperations(model).map((entry) => entry.operation), ['importProducts']);
   // Las demás operaciones no son lotes, y sin lote declarado, nada.
   assert.equal(operationOf(model, 'createProduct').batch, null);

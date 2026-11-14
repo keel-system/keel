@@ -26,10 +26,14 @@ import { PAGED_RESPONSE_TS, FILE_UPLOAD_TS } from './dtos.js';
 import { MULTIPART_READING_TS } from './storage.js';
 import { REQUEST_READING_TS, ROUTES_TS, usesApi } from './rest-support.js';
 import { CALLER_IDENTITY_TS, callerResolution } from './security.js';
+import { controllerBatchCall, atomicTransaction } from './batch.js';
+import { TRANSACTION_CONTEXT_TS } from './repositories.js';
 
 export const VALUE_READERS_TS = 'src/infrastructure/rest/value-readers.ts';
 export const PAGEABLE_READING_TS = 'src/infrastructure/rest/pageable-reading.ts';
 const CONTROLLERS_DIR = 'infrastructure/rest/controllers';
+
+const BATCH_ITEM = 'item';
 
 const DECORATOR_BY_METHOD = { GET: 'Get', POST: 'Post', PUT: 'Put', PATCH: 'Patch', DELETE: 'Delete' };
 
@@ -190,9 +194,15 @@ function renderController(model, service, routed) {
   // Con resolvedBy, la identidad del llamante se resuelve al recurso antes de despachar (callerResolution).
   const resolving = callerResolution(model) != null && routed.some((operation) => resolvesCaller(model, operation) || scopeResolvesCaller(model, operation));
   if (resolving) imports.push({ symbol: 'CallerIdentityResolver', from: CALLER_IDENTITY_TS });
-  const constructor = resolving
-    ? `  constructor(\n    @Inject(UseCaseMediator) private readonly mediator: UseCaseMediator,\n    @Inject(CallerIdentityResolver) private readonly callerIdentity: CallerIdentityResolver\n  ) {}`
-    : '  constructor(@Inject(UseCaseMediator) private readonly mediator: UseCaseMediator) {}';
+  // El lote todo o nada (DSL 2.30) abre una transacción alrededor de sus despachos, que se unen a ella.
+  const atomic = atomicTransaction(model) && routed.some((operation) => operation.batch?.atomicity === 'all-or-nothing');
+  if (atomic) imports.push({ symbol: 'TransactionContext', from: TRANSACTION_CONTEXT_TS });
+  const injected = [
+    '@Inject(UseCaseMediator) private readonly mediator: UseCaseMediator',
+    ...(resolving ? ['@Inject(CallerIdentityResolver) private readonly callerIdentity: CallerIdentityResolver'] : []),
+    ...(atomic ? ['@Inject(TransactionContext) private readonly transactions: TransactionContext'] : [])
+  ];
+  const constructor = injected.length === 1 ? `  constructor(${injected[0]}) {}` : `  constructor(\n    ${injected.join(',\n    ')}\n  ) {}`;
   const body = `${tsdoc(`Operaciones HTTP de ${service.controllerClass.replace(/V1Controller$/, '')}. Solo traduce: lee la petición, despacha el caso de uso y devuelve su resultado.`)}@Controller(${tsString(model.api.routeBase.replace(/^\//, ''))})
 export class ${service.controllerClass} {
 ${constructor}
@@ -209,13 +219,16 @@ function renderMethod(model, operation, imports, readers) {
   const decorator = DECORATOR_BY_METHOD[route.method];
   imports.push({ symbol: decorator, from: '@nestjs/common' }, { symbol: operation.messageClass, from: messagePath(operation) });
   const resultType = returnTypeOf(operation);
-  if (operation.responseDto) imports.push({ symbol: operation.responseDto.name, from: classPath(DIRS.dtos, operation.responseDto.name), type: true });
+  if (operation.responseDto && !operation.batch) imports.push({ symbol: operation.responseDto.name, from: classPath(DIRS.dtos, operation.responseDto.name), type: true });
   if (operation.paginated) imports.push({ symbol: 'PagedResponse', from: PAGED_RESPONSE_TS, type: true });
   // La query de historial (DSL 2.29): la página de entradas de wire-contract.md.
   if (operation.historyOf) imports.push(historyResponseImport());
-  const location = returnsLocation(model, operation);
+  // Un lote (DSL 2.30) responde BatchResponse (o el error del culpable), no el DTO de la operación.
+  const batch = Boolean(operation.batch);
+  const location = !batch && returnsLocation(model, operation);
   const readerName = `read${operation.messageClass}`;
   readers.push(renderReader(model, operation, readerName, imports));
+  if (batch) return renderBatchMethod(model, operation, decorator, readerName, imports);
 
   const params = ['@Param() params: Record<string, string>', '@Query() query: Record<string, unknown>', '@Body() body: unknown'];
   // Lo que llama a la pasarela de pago va SIN transacción abarcadora (callsPaymentGateway, keel-core): su garantía
@@ -292,6 +305,31 @@ ${resolve}${statements}
   }`;
 }
 
+/**
+ * El método de un lote (DSL 2.30): el lector lee el SOBRE y devuelve los elementos sin leer y cómo construir el mensaje de
+ * cada uno; el bucle (batch.ts) los lee, valida y despacha uno a uno. Un lote por elemento responde siempre 207; uno todo
+ * o nada, su successStatus o el error del culpable, con el status que lleva.
+ */
+function renderBatchMethod(model, operation, decorator, readerName, imports) {
+  const params = ['@Param() params: Record<string, string>', '@Query() query: Record<string, unknown>', '@Body() body: unknown'];
+  const itemType = operation.batch.itemType;
+  imports.push({ symbol: `read${itemType}`, from: VALUE_READERS_TS });
+  const answer = controllerBatchCall(model, operation, {
+    envelope: `${readerName}(params, query, body)`,
+    reader: `read${itemType}`,
+    imports
+  });
+  if (answer.reply) {
+    imports.push({ symbol: 'Res', from: '@nestjs/common' }, { symbol: 'FastifyReply', from: 'fastify', type: true });
+    params.push('@Res({ passthrough: true }) reply: FastifyReply');
+  }
+  return `${tsdoc(operation.description, '  ')}  @${decorator}(${tsString(nestPath(operation.route.path))})
+  @HttpCode(${answer.status})
+  async ${operation.name}(${params.join(', ')}): Promise<${answer.returnType}> {
+${answer.statements}
+  }`;
+}
+
 /** Las reglas de un campo como literal TypeScript (datos neutrales de keel-core). */
 function rulesLiteral(rules) {
   const value = (v) => (typeof v === 'string' ? tsString(v) : JSON.stringify(v));
@@ -352,6 +390,16 @@ function renderReader(model, operation, name, imports) {
     }
     // La página no es un campo del diseño: la leen las líneas de abajo.
     if (component.pageable) continue;
+    // El elemento de un lote (DSL 2.30): el sobre trae la LISTA sin leer, y solo se validan su presencia y su maxItems
+    // (las reglas de la lista); cada elemento lo lee y valida el bucle, para que uno mal formado sea su resultado (D3).
+    if (component.batchItem) {
+      for (const imp of readerImports(model, component)) imports.push(imp);
+      const over = operation.bodyFields.find((field) => field.name === operation.batch.over);
+      use('json');
+      lines.push(`  const ${local(over.name)} = json.listOf<unknown>((value) => value)(fields[${tsString(over.name)}]);`);
+      if ((over.inputValidation ?? []).length > 0) bodyChecks.push(`    .check(${tsString(over.name)}, ${local(over.name)}, ${rulesLiteral(over.inputValidation)})`);
+      continue;
+    }
     if (operation.paginated && ['page', 'size'].includes(component.name) && !operation.bodyFields.some((f) => f.name === component.name)) continue;
     for (const imp of readerImports(model, component)) imports.push(imp);
     // El null de un PATCH sobre un campo que el dominio exige no vacía nada: es un 400 (keel-core/gen/model.js,
@@ -413,6 +461,9 @@ function renderReader(model, operation, name, imports) {
     } else if (component.pageable) {
       // La variable la escribe el propio lector (`const pageable = readPageable(...)`): no lleva sufijo.
       value = component.name;
+    } else if (component.batchItem) {
+      // El elemento lo pasa el bucle a la función que construye su mensaje.
+      value = BATCH_ITEM;
     } else if (partial && asBody && !fromPath.has(component.name) && !component.required) {
       // En un PATCH el opcional del cuerpo llega tal cual: undefined (ausente) conserva y null vacía.
       value = local(component.name);
@@ -475,6 +526,20 @@ function renderReader(model, operation, name, imports) {
   }
   const construct = assigns.length > 0 ? `new ${operation.messageClass}({\n${assigns.join(',\n')}\n  })` : `new ${operation.messageClass}()`;
   const versions = (conditional ? ', expectedVersions: readonly number[] | null' : '') + (operation.readScope ? ', readScope: ReadScope' : '');
+  if (operation.batch) {
+    // El sobre de un lote (DSL 2.30): los elementos sin leer y el mensaje de UNO, con todo lo demás ya leído y estampado.
+    const over = operation.batch.over;
+    const itemType = operation.batch.itemType;
+    const envelope = `{ readonly ${over}: readonly unknown[]; readonly message: (${BATCH_ITEM}: ${itemType}) => ${operation.messageClass} }`;
+    return `/** Lee el sobre del lote ${operation.route.method} ${operation.route.path} (${operation.name}): los elementos, sin leer, y el mensaje de cada uno. */
+function ${name}(params: Record<string, string>, query: Record<string, unknown>, body: unknown): ${envelope} {
+${ordered.join('\n')}${ordered.length > 0 ? '\n' : ''}  return {
+    ${over}: ${local(over)} ?? [],
+    message: (${BATCH_ITEM}: ${itemType}) =>
+      ${construct.replace(/\n/g, '\n    ')}
+  };
+}`;
+  }
   return `/** Lee ${operation.route.method} ${operation.route.path} (${operation.name}) al mensaje de su caso de uso. */
 function ${name}(params: Record<string, string>, query: Record<string, unknown>, body: unknown${versions}): ${operation.messageClass} {
 ${ordered.join('\n')}${ordered.length > 0 ? '\n' : ''}  return ${construct};
