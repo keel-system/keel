@@ -371,3 +371,22 @@ for (const [name, load] of Object.entries(BUILDS)) {
     assert.match(output, /security: scoping-user: Cognito solo pone el claim 'vaults' en el access token/, `${name}: sin el aviso de D6`);
   });
 }
+
+// ─── El README: up.sh y la siembra del proveedor ─────────────────────────────
+//
+// up.sh solo levanta contenedores; el realm de Keycloak lo siembra init-keycloak.sh, que el agente de infra ejecuta después.
+// Quien levanta la infraestructura a mano lo lee en el README, y en los cuatro faltaba (corrida de keel-nest de la 2.29: el
+// humo del arnés en KO con «Realm does not exist»). La orden sale de identitySeedCommand, y va DESPUÉS de up.sh.
+
+test('el README de los cuatro dice que tras infra/up.sh se siembra el realm, y solo cuando hay realm que sembrar', () => {
+  for (const [name, plan] of Object.entries(GENERATORS)) {
+    const readmeOf = (fixture, auth) => textOf(generate(plan, fixture, auth).files.find((file) => file.path === 'README.md'));
+    const keycloak = readmeOf('profile-directory', 'keycloak');
+    const up = keycloak.indexOf('bash infra/up.sh');
+    const seed = keycloak.indexOf('bash infra/init-keycloak.sh');
+    assert.ok(up >= 0, `${name}: el README no enseña infra/up.sh`);
+    assert.ok(seed > up, `${name}: el README no siembra el realm después de infra/up.sh`);
+    assert.doesNotMatch(readmeOf('profile-directory', 'cognito'), /init-keycloak/, `${name}: con el emulador de Cognito no hay realm`);
+    assert.doesNotMatch(readmeOf('catalog-extended', 'keycloak'), /init-keycloak/, `${name}: sin capa security no hay proveedor`);
+  }
+});

@@ -337,8 +337,11 @@ generador que no llegue rechaza la capacidad con su motivo en `supported-feature
   - los filtros por fecha con el `at` leído salen verdes en PostgreSQL y en MySQL, que era el control del arreglo del
     incremento 6.
 - **Antes de cerrar el plan, dos cosas:**
-  - el README que emiten los cuatro generadores enseña `bash infra/up.sh` sin el `bash infra/init-keycloak.sh` que siembra
-    el realm (hallado en la corrida de keel-nest); va en los cuatro, con su test;
+  - ~~el README de los cuatro sin `init-keycloak.sh`~~: **hecho (2026-11-13)**. La orden la da `identitySeedCommand`
+    (`keel-core/gen/identity-provisioning.js`, null sin script que ejecutar, como con el emulador de Cognito), y los cuatro
+    README la escriben justo después de `bash infra/up.sh`. Lo miden `keel-core/test/identity-provisioning.test.js` y
+    `keel-go/test/identity-providers.test.js`, que lee el README de los cuatro. Un proyecto ya generado lo recibe con
+    `build --refresh` solo si el agente no tocó su README, y en cuatro de las cinco corridas lo tocó;
   - HI-11 (ningún valor personal del historial en logs ni spans) no lo midió ninguna corrida, porque las cinco iban sin
     telemetría. O se mide con una corrida con `--telemetry otel`, o se cierra con la PD-3 de la 2.28 y el argumento de
     «Decidido al escribir el incremento 5» (`change_history` no tiene unicidad sobre valores). Lo decide el usuario.

@@ -2,6 +2,7 @@
 // de prueba y qué queda pendiente para el agente (/keel-generate-spring).
 
 import { identityProvider, tokenContract } from '@keel-system/keel-core/gen/identity-providers';
+import { identitySeedCommand } from '@keel-system/keel-core/gen/identity-provisioning';
 import { JAVA_VERSION, packageVersion } from '../lib/assets.js';
 import { selectedInfra } from '../lib/stack-catalog.js';
 import { needsDevtools } from './devtools.js';
@@ -14,6 +15,8 @@ export function generate(model) {
   const selected = selectedInfra(model);
   const infra = infraRows(selected);
   const hasDevtools = needsDevtools(selected);
+  // La siembra del proveedor de identidad de prueba va justo después de up.sh: up.sh solo levanta contenedores.
+  const seed = identitySeedCommand(model);
 
   const lines = [
     `# ${service.projectName}`,
@@ -27,6 +30,7 @@ export function generate(model) {
     '```bash'
   ];
   if (infra.length > 0) lines.push('bash infra/up.sh   # infraestructura de prueba');
+  if (infra.length > 0 && seed) lines.push(`${seed}   # siembra el realm de prueba (roles, usuarios, clientes); otra vez tras cada up.sh`);
   lines.push(
     './gradlew bootRun',
     './gradlew build -x test        # compilación y empaquetado (no ejecuta pruebas)',
@@ -70,6 +74,7 @@ export function generate(model) {
       '',
       '```bash',
       'bash infra/up.sh               # resuelve runtime y frontend de compose, y levanta',
+      ...(seed ? [`${seed}   # siembra el realm de prueba (roles, usuarios, clientes); otra vez tras cada up.sh`] : []),
       'bash infra/validate-infra.sh   # un check por tecnología; sale != 0 si algo falla',
       '```',
       '',

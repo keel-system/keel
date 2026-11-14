@@ -6,7 +6,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { identityProvisioningFiles } from '../src/lib/gen/identity-provisioning.js';
+import { identityProvisioningFiles, identitySeedCommand } from '../src/lib/gen/identity-provisioning.js';
 
 const PROBE = { generator: 'keel-probe', identity: { harness: 'PROBE-HARNESS', skill: 'keel-probe-keycloak' } };
 
@@ -49,6 +49,15 @@ test('con Keycloak: el script y las credenciales llevan los textos de la platafo
 // conduit (recuperado de RealWorld): sin roles, con la identidad en el `sub` y dos personas por escenario («solo el
 // autor edita su artículo»). Hasta el DSL 2.23 el realm salía sin cliente de usuario —así que sin `tokenAs`— y el
 // agente de pruebas del inc. 1 de keel-recover escribió su propio emisor de personas.
+test('la orden que siembra el proveedor: la del script que se emite, y ninguna sin script', () => {
+  const [script] = identityProvisioningFiles(modelFor('keycloak'), PROBE).filter((file) => file.path.endsWith('.sh'));
+  assert.equal(identitySeedCommand(modelFor('keycloak')), `bash ${script.path}`);
+  // El emulador de Cognito carga su configuración al arrancar: no hay nada que sembrar después de up.sh.
+  assert.equal(identitySeedCommand(modelFor('cognito')), null);
+  assert.equal(identitySeedCommand({ ...modelFor('keycloak'), layersPresent: { security: false } }), null);
+  assert.equal(identitySeedCommand(modelFor('keycloak', { protocol: 'api-key' })), null);
+});
+
 test('sin roles y con la identidad en el sub: cliente de usuario y personas, sin usuarios fijos', () => {
   const sinRoles = { roles: [], scopes: [], serviceAuth: undefined, serviceClients: [], scoping: undefined };
   const files = byPath(identityProvisioningFiles(modelFor('keycloak', sinRoles), PROBE));

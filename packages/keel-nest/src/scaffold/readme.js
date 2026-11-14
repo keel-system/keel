@@ -1,10 +1,13 @@
 // README del proyecto generado: de dónde sale, cómo se arranca y qué falta.
 
 import { describeStack } from '@keel-system/keel-core/gen/stack';
+import { identitySeedCommand } from '@keel-system/keel-core/gen/identity-provisioning';
 import { postmanEnvironmentPath, publishedUrls } from './deploy.js';
 
 export function generate(model) {
   const { service } = model;
+  // La siembra del proveedor de identidad de prueba va justo después de up.sh: up.sh solo levanta contenedores.
+  const seed = identitySeedCommand(model);
   return [
     {
       path: 'README.md',
@@ -42,6 +45,13 @@ Sondas: \`GET /livez\` y \`GET /readyz\` → \`{"status":"UP"}\`; durante el apa
 \`\`\`bash
 npm run typecheck
 npm test
+\`\`\`
+
+Los escenarios \`FL-*\` van aparte, contra la infraestructura de prueba de \`infra/\`:
+
+\`\`\`bash
+bash infra/up.sh                  # la infraestructura de prueba (docker o podman)
+${seed ? `${seed}       # siembra el realm de prueba (roles, usuarios, clientes); otra vez tras cada up.sh\n` : ''}bash infra/score-scenarios.sh     # compila, arranca el servidor, ejecuta los flujos y puntúa la matriz
 \`\`\`
 ${manualTestingSection(model)}`
     }

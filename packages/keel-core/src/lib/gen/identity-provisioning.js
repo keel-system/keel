@@ -71,6 +71,21 @@ export function identityProvisioningFiles(model, platform) {
   return files;
 }
 
+/** Dónde va el script que siembra el realm de prueba: lo ejecuta el agente de infra después de `infra/up.sh`. */
+const SEED_SCRIPT = 'infra/init-keycloak.sh';
+
+/**
+ * La orden que siembra el proveedor de identidad de prueba DESPUÉS de `infra/up.sh`, o null si no hay nada que sembrar
+ * (sin capa security, sin tokens, o un emulador que carga su configuración al arrancar). `up.sh` solo levanta
+ * contenedores: sin esta orden el proveedor arranca sin realm y ningún token sale. La escriben los README de los cuatro
+ * generadores junto a `up.sh`, que es donde la busca quien levanta la infraestructura a mano (corrida de keel-nest de la
+ * 2.29: el humo del arnés en KO con «Realm does not exist»).
+ */
+export function identitySeedCommand(model) {
+  if (!model.layersPresent.security || !usesTokens(model)) return null;
+  return identityProvider(model.stack.auth).provisioning.kind === 'realm-import' ? `bash ${SEED_SCRIPT}` : null;
+}
+
 // ─── infra/test-credentials.env ──────────────────────────────────────────────
 
 function credentialsEnv(model, platform) {
@@ -426,7 +441,7 @@ ${
 }
 `;
 
-  return { path: 'infra/init-keycloak.sh', content };
+  return { path: SEED_SCRIPT, content };
 }
 
 // ─── infra/cognito/mock-oauth2-config.json ───────────────────────────────────

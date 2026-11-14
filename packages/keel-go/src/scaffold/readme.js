@@ -2,12 +2,15 @@
 // conoce Go: cada comando dice qué hace.
 
 import { describeStack } from '@keel-system/keel-core/gen/stack';
+import { identitySeedCommand } from '@keel-system/keel-core/gen/identity-provisioning';
 import { GO_MIN_VERSION, GO_TOOLCHAIN, SKILL } from '../lib/assets.js';
 import { layout } from './render.js';
 
 export function generate(model) {
   const { service } = model;
   const pkgs = layout(model);
+  // La siembra del proveedor de identidad de prueba va justo después de up.sh: up.sh solo levanta contenedores.
+  const seed = identitySeedCommand(model);
   return [
     {
       path: 'README.md',
@@ -77,8 +80,7 @@ Los escenarios \`FL-*\` van aparte, contra la infraestructura de prueba: \`go te
 restricción de compilación \`integration\`).
 
 \`\`\`bash
-bash infra/up.sh && bash infra/validate-infra.sh   # levanta y sondea la infraestructura (docker o podman)
-bash infra/score-scenarios.sh                      # compila, arranca el servidor, ejecuta los flujos y puntúa la matriz
+${seed ? `bash infra/up.sh && ${seed}   # levanta la infraestructura y siembra el realm de prueba (otra vez tras cada up.sh)\nbash infra/validate-infra.sh                       # sondea la infraestructura (docker o podman)\n` : 'bash infra/up.sh && bash infra/validate-infra.sh   # levanta y sondea la infraestructura (docker o podman)\n'}bash infra/score-scenarios.sh                      # compila, arranca el servidor, ejecuta los flujos y puntúa la matriz
 bash infra/down.sh                                 # la baja
 \`\`\`
 

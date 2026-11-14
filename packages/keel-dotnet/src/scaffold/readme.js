@@ -2,6 +2,7 @@
 // no conoce .NET: cada comando dice qué hace.
 
 import { describeStack } from '@keel-system/keel-core/gen/stack';
+import { identitySeedCommand } from '@keel-system/keel-core/gen/identity-provisioning';
 import { SKILL } from '../lib/assets.js';
 import { solution } from './render.js';
 import { postmanEnvironmentPath, publishedUrls } from './deploy.js';
@@ -9,6 +10,8 @@ import { postmanEnvironmentPath, publishedUrls } from './deploy.js';
 export function generate(model) {
   const { service } = model;
   const sln = solution(model);
+  // La siembra del proveedor de identidad de prueba va justo después de up.sh: up.sh solo levanta contenedores.
+  const seed = identitySeedCommand(model);
   return [
     {
       path: 'README.md',
@@ -54,7 +57,7 @@ infraestructura, pruebas, arbitraje y calidad hasta el 100% de los escenarios \`
 \`\`\`bash
 dotnet test                       # xUnit v3 sobre Microsoft.Testing.Platform, bajo el perfil test (sin infraestructura)
 bash infra/up.sh                  # la infraestructura de prueba (docker o podman)
-bash infra/score-scenarios.sh     # compila, y ejecuta y puntúa las pruebas de flujo FL-* contra el servidor real
+${seed ? `${seed}       # siembra el realm de prueba (roles, usuarios, clientes); otra vez tras cada up.sh\n` : ''}bash infra/score-scenarios.sh     # compila, y ejecuta y puntúa las pruebas de flujo FL-* contra el servidor real
 \`\`\`
 
 Las pruebas de flujo (\`${sln.integrationTests.dir}\`) están fuera de \`dotnet test\` a propósito: necesitan la
