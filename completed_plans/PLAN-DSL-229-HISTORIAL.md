@@ -1,8 +1,7 @@
 # DSL 2.29: el historial de cambios consultable (R12)
 
-**Estado: en curso.** Los incrementos 0 (keel-core), 1 (keel-spring), 2 (keel-nest), 3 (keel-dotnet), 4 (keel-go), 5
-(derivados) y 6 (fixtures) están hechos: los cuatro generadores emiten el historial y su contrato, y profile-directory
-v1.2.0 lo declara en `--ready`. Falta el 7, las corridas de control, que lanza el usuario. Ver § Estado y § Para retomar.
+**Estado: CERRADO el 2026-11-13.** Los incrementos 0 a 7 están hechos. Las cinco corridas de control salieron en verde
+(37/37) y la puerta de cierre se cumple; ver § Puerta de cierre y § Lo que queda fuera.
 
 Origen: R12 de `docs/evaluacion-dsl-2.24.md`. Este plan la lleva al DSL y a los cuatro generadores con la regla de
 siempre: **el mismo diseño genera servidores equivalentes**, y cada pieza nueva tiene una red que la ejecuta y un
@@ -245,7 +244,7 @@ personales?»), solo si el diseño ya declara algún `history`.
 | HI-8 | `anonymize` reescribe los personales del historial y añade la entrada `anonymized` |
 | HI-9 | `delete`/purga de lo borrado se llevan las entradas |
 | HI-10 | Restaurar deja una entrada `restored` |
-| HI-11 | Ningún log ni span lleva un valor personal del historial (extiende PD-2/PD-3) |
+| HI-11 | Ningún log ni span lleva un valor personal del historial (extiende PD-2/PD-3). Cerrado con la PD-3 de la 2.28, sin red propia: ver § Puerta de cierre |
 
 **Sabotajes** (cada uno cae exactamente en sus casos): `hi-outside-tx` (HI-1), `hi-full-snapshot` (HI-2),
 `hi-sensitive` (HI-4), `hi-author` (HI-5), `hi-order` (HI-6), `hi-unscoped` (HI-7), `hi-anonymize-miss` (HI-8),
@@ -329,20 +328,34 @@ generador que no llegue rechaza la capacidad con su motivo en `supported-feature
 | 6. Fixtures | hecho (2026-11-13) | profile-directory v1.2.0 13/13 en `--ready` (escenarios FL-CRD-007-C a FL-CRD-010, careo de una pasada con dos hallazgos nuevos aceptados, revisión con `REV-HISTORY-SCOPE`, huecos de las clases 5, 15, 16 y 19, § 3.8 y `DESIGN.md`); `timer-sql-check` (38 pasos, `history-micros` solo en `historial-hora` en los dos motores); fuera las filas `persistence.audit.history` de las cuatro `capability-coverage`; la suite de los seis paquetes (keel-core 1574, keel-spring 1999, keel-nest 1115, keel-dotnet 982, keel-go 1572, keel-recover 190), que destapó las constantes `History*` sin comentario propio en el Go emitido (corregido); `go-check --fixtures` 146/146, `cs-check --fixtures --only=profile-directory`, `ts-check --only=profile-directory` 13/13 y `compile-check profile-directory` en sus cuatro variantes |
 | 7. Corridas de control | hecho (2026-11-13) | cinco corridas de profile-directory v1.2.0 (keel-spring, keel-nest, keel-dotnet y keel-go sobre PostgreSQL, y keel-go sobre MySQL para T2), todas 37/37 a la primera, sin `designGaps`, con una huella de 6 o 7 archivos y registradas en `docs/corridas/2026-11-13-profile-directory-229-*`. `ageDeletion` usado en las cinco; FL-CRD-007-C resuelto en las cinco sin helper, así que `historyOf` no entra; el rollback de la entrada (FL-CRD-008-D) lo pisó la de keel-dotnet, que no comprueba el correo antes de guardar; un hueco de documentación común a los cuatro (el README sin `init-keycloak.sh`) |
 
-## Para retomar
+## Puerta de cierre: cómo se cumplió
 
-- **Las cinco corridas de control están hechas** (ver § Estado). Lo que dijeron:
-  - el helper `historyOf` **no entra**: los cinco agentes leyeron `change_history` a la primera con el `db(...)` del arnés
-    y la tabla y las columnas de la convención;
-  - los filtros por fecha con el `at` leído salen verdes en PostgreSQL y en MySQL, que era el control del arreglo del
-    incremento 6.
-- **Antes de cerrar el plan, dos cosas:**
-  - ~~el README de los cuatro sin `init-keycloak.sh`~~: **hecho (2026-11-13)**. La orden la da `identitySeedCommand`
-    (`keel-core/gen/identity-provisioning.js`, null sin script que ejecutar, como con el emulador de Cognito), y los cuatro
-    README la escriben justo después de `bash infra/up.sh`. Lo miden `keel-core/test/identity-provisioning.test.js` y
-    `keel-go/test/identity-providers.test.js`, que lee el README de los cuatro. Un proyecto ya generado lo recibe con
-    `build --refresh` solo si el agente no tocó su README, y en cuatro de las cinco corridas lo tocó;
-  - HI-11 (ningún valor personal del historial en logs ni spans) no lo midió ninguna corrida, porque las cinco iban sin
-    telemetría. O se mide con una corrida con `--telemetry otel`, o se cierra con la PD-3 de la 2.28 y el argumento de
-    «Decidido al escribir el incremento 5» (`change_history` no tiene unicidad sobre valores). Lo decide el usuario.
-- Después, el plan pasa a `completed_plans/`.
+- **Suites** de los seis paquetes en verde; `design-matrix` sin `sin-mutacion` (incremento 0); la fila `history` de las
+  cuatro matrices `verificado` y falsada en sus dos ramas, y cada sabotaje `hi-*` en exactamente sus casos (incrementos 1
+  a 4).
+- **Corridas de control**: las cinco en verde a la primera (§ Estado, incremento 7), registradas en
+  `docs/corridas/2026-11-13-profile-directory-229-*`.
+- **El hueco que destaparon**, el README de los cuatro sin `bash infra/init-keycloak.sh` tras `infra/up.sh`, está arreglado
+  (`4534f0c2`). La orden la da `identitySeedCommand` (`keel-core/gen/identity-provisioning.js`, null sin script que
+  ejecutar, como con el emulador de Cognito). Lo miden `keel-core/test/identity-provisioning.test.js` y
+  `keel-go/test/identity-providers.test.js`, que lee el README de los cuatro. Un proyecto ya generado solo lo recibe con
+  `build --refresh` si el agente no tocó su README.
+- **HI-11 se cierra con la PD-3 de la 2.28** (decisión del usuario, 2026-11-13), sin corrida con telemetría:
+  - La PD-3 mide, con la app arrancada y un colector OTLP falso, el único camino por el que el motor copia un valor a un
+    log o a un span: el mensaje de una unicidad violada.
+  - `change_history` y `change_history_field` no tienen ninguna unicidad sobre valores, solo sus claves primarias (un
+    UUID y la pareja entrada-ruta). Nada del historial puede llegar por ese camino.
+  - Los valores de `changes` tampoco los registra el código emitido: la regla `personal` de `check-logging.sh` (PD-1)
+    veta los nombres de los campos personales en cualquier llamada de log.
+  - Así quedó razonado al escribir el incremento 5; las corridas, sin telemetría, no añaden ni quitan nada.
+
+## Lo que queda fuera
+
+- **La red en vivo de PD-3 en keel-spring**, que ya quedó fuera de la 2.28. Por eso el cierre de HI-11 descansa en
+  keel-nest, keel-dotnet y keel-go para la parte en vivo, y en la regla PD-1 y el argumento del esquema para los cuatro.
+- **El helper `historyOf` del arnés**: no entra. Los cinco agentes leyeron `change_history` a la primera con el `db(...)`
+  del arnés y la tabla y las columnas que nombra la convención de profile-directory.
+- **T6, la caché de una query de historial**: ningún diseño la declara. Se decide cuando uno la pida.
+- **`baselineTested: PENDING` en keel-spring**: la prueba del baseline sobre una base vacía sigue siendo del diseñador.
+- Lo que el plan dejó fuera de la 2.29 desde el principio: la reconstrucción `asOf`, el historial de entidades que no son
+  raíz, el de las tablas del generador, *event sourcing*, el encadenado criptográfico y la retención propia del historial.
