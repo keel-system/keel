@@ -14,7 +14,10 @@
 // Y las del HISTORIAL (DSL 2.29, gen/history-store.js): la página con su orden y sus filtros, la reescritura, el borrado
 // por raíz y la cascada de la FK.
 //
-// Uso: node scripts/timer-sql-check.js [--database=postgresql|mysql] [--sabotage=no-skip-locked|no-fence|park-order|lag-all-kinds|age-deletion-live|age-deletion-sign|history-order|history-filter]
+// Y las de los LOTES ASÍNCRONOS (DSL 2.30, fase B, gen/batch-store.js): el alta con su clave y su ventana (D13), la valla
+// del cursor (D9), la página de resultados, el final de una sola vez y la purga de lo terminado (D10).
+//
+// Uso: node scripts/timer-sql-check.js [--database=postgresql|mysql] [--sabotage=no-skip-locked|no-fence|park-order|lag-all-kinds|age-deletion-live|age-deletion-sign|history-order|history-filter|batch-fence|batch-key-expiry|batch-purge-live|batch-finish-twice]
 //   (podman o docker; ~1 min). Con sabotaje, verde = el sabotaje cae en exactamente sus casos.
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -25,6 +28,7 @@ import { timerStatements, expandList, NIL_ENTITY_ID, TIMER_ENGINES } from '../sr
 import { GENERATOR_TABLES, schemaStepSql } from '../src/lib/gen/schema-steps.js';
 import { ageDeletionStatement } from '../src/lib/gen/data-lifecycle.js';
 import { historyCountSql, historyFieldRows, historyPageSql, historyStatements } from '../src/lib/gen/history-store.js';
+import { batchStatements } from '../src/lib/gen/batch-store.js';
 
 const only = process.argv.find((arg) => arg.startsWith('--database='))?.slice('--database='.length);
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.slice('--sabotage='.length) ?? null;
@@ -47,6 +51,18 @@ const SABOTAGES = {
   'age-deletion-live': { breaks: ['ageDeletion'], onlyIn: 'postgresql', apply: (s) => s, aging: (q) => q.replace(' AND deleted_at IS NOT NULL', '') },
   // ageDeletion con el signo cambiado: la marca se va al futuro y la ventana no vence nunca.
   'age-deletion-sign': { breaks: ['ageDeletion'], apply: (s) => s, aging: (q) => q.replace(' - make_interval', ' + make_interval').replace('DATE_SUB(', 'DATE_ADD(') },
+  // El cursor sin la valla (D9): avanza aunque otra réplica ya lo moviera, y el elemento de quien perdió el trabajo se confirma.
+  'batch-fence': { breaks: ['lote-valla'], apply: (s) => s, batch: (b) => ({ ...b, advance: b.advance.replace(' AND next_index = :index', '') }) },
+  // La repetición sin mirar la ventana de la clave (D13): una clave caducada sigue devolviendo el trabajo viejo.
+  'batch-key-expiry': { breaks: ['lote-ventana'], apply: (s) => s, batch: (b) => ({ ...b, byKey: b.byKey.replace(/ AND \(key_expires_at IS NULL OR key_expires_at > (?:current_timestamp|utc_timestamp\(6\))\)/, '') }) },
+  // La purga por la hora del alta y no por la del final (D10): se lleva un trabajo viejo que sigue en marcha.
+  'batch-purge-live': {
+    breaks: ['lote-purga'],
+    apply: (s) => s,
+    batch: (b) => ({ ...b, purgeResults: b.purgeResults.replace('finished_at <', 'created_at <'), purgeJobs: b.purgeJobs.replace('finished_at <', 'created_at <') })
+  },
+  // El final sin «solo una vez»: un disparo repetido cambia el desenlace de un trabajo ya terminado.
+  'batch-finish-twice': { breaks: ['lote-final'], apply: (s) => s, batch: (b) => ({ ...b, finish: b.finish.replace(' AND finished_at IS NULL', '') }) },
   'park-order': {
     breaks: ['aparcado'],
     // PostgreSQL evalúa todas las asignaciones con los valores de antes: ahí el orden no importa, y no debe caer nada.
@@ -382,6 +398,82 @@ async function check(engine) {
     entry(e(5), 'created', [{ field: 'email', before: null, after: 'c@x.com' }], at(20));
     sql(engine, name, `DELETE FROM change_history WHERE id = ${literal(engine, e(5))};`);
     step(engine, 'historial-cascada', Number(sql(engine, name, 'SELECT count(*) FROM change_history_field;')[0][0]) === 0);
+
+    // Los lotes asíncronos (DSL 2.30, gen/batch-store.js): las dos tablas las creó el paso de esquema de arriba. En su bloque:
+    // sus nombres son los de los pasos anteriores.
+    {
+    const B = sabotage && SABOTAGES[sabotage].batch ? SABOTAGES[sabotage].batch(batchStatements(engine)) : batchStatements(engine);
+    const owned = { operation: 'importProducts', owner: 'sub-1' };
+    const job = (n) => `01900000-0000-7000-8000-0000000000b${n}`;
+    const alta = (id, key, signature, ttlMs = null) => run(B.insertJob, { id, ...owned, key, signature, ttlMs, input: '{"items":[]}', total: 5 });
+    const jobRow = (id) => run(`SELECT status, next_index, succeeded, failed, ${engine === 'postgresql' ? 'finished_at IS NOT NULL' : 'finished_at IS NOT NULL'} FROM batch_job WHERE id = :id`, { id })[0];
+    // El alta con su clave: la repetición la encuentra con su firma, y la misma clave no admite un segundo trabajo vivo.
+    alta(job(1), 'clave-1', 'firma-1');
+    const found = run(B.byKey.replace('SELECT id,', `SELECT ${hex('id')},`), { ...owned, key: 'clave-1' });
+    let duplicate = 'aceptado';
+    try {
+      alta(job(2), 'clave-1', 'firma-2');
+    } catch {
+      duplicate = 'rechazado';
+    }
+    const otherOwner = run(B.byKey, { ...owned, owner: 'sub-2', key: 'clave-1' }).length;
+    run(B.releaseKey, { ...owned, key: 'clave-1' });
+    const kept = run(B.byKey, { ...owned, key: 'clave-1' }).length;
+    step(
+      engine,
+      'lote-alta',
+      found.length === 1 && found[0][0] === job(1) && found[0][1] === 'firma-1' && duplicate === 'rechazado' && otherOwner === 0 && kept === 1,
+      `encontrada ${found.length}, la misma clave ${duplicate}, de otro dueño ${otherOwner}, sin ventana sigue ${kept}`
+    );
+    // La ventana (D13): pasada, la repetición no la ve, el alta la libera y otro trabajo puede usarla.
+    alta(job(3), 'clave-2', 'firma-3', 1);
+    await sleep(20);
+    const expired = run(B.byKey, { ...owned, key: 'clave-2' }).length;
+    run(B.releaseKey, { ...owned, key: 'clave-2' });
+    let reused = 'aceptado';
+    try {
+      alta(job(4), 'clave-2', 'firma-4', 60_000);
+    } catch {
+      reused = 'rechazado';
+    }
+    const live = run(B.byKey.replace('SELECT id,', `SELECT ${hex('id')},`), { ...owned, key: 'clave-2' });
+    step(engine, 'lote-ventana', expired === 0 && reused === 'aceptado' && live.length === 1 && live[0][0] === job(4), `caducada visible ${expired}, nueva ${reused}, viva ${live[0]?.[0] ?? '∅'}`);
+    // La valla del cursor (D9): avanzar desde el índice en que está mueve una fila; repetirlo desde el mismo índice, ninguna.
+    run(B.advance, { id: job(1), index: 0, succeeded: 1, failed: 0 });
+    run(B.advance, { id: job(1), index: 0, succeeded: 1, failed: 0 });
+    run(B.advance, { id: job(1), index: 1, succeeded: 0, failed: 1 });
+    const [status, nextIndex, succeeded, failed] = jobRow(job(1));
+    step(engine, 'lote-valla', status === 'running' && nextIndex === '2' && succeeded === '1' && failed === '1', `${status}, cursor ${nextIndex}, ${succeeded} bien y ${failed} mal`);
+    // Los resultados: en orden de índice, paginados, con su total, y solo los del trabajo.
+    for (const index of [3, 0, 4, 1, 2]) {
+      run(B.insertResult, { jobId: job(1), index, status: index === 1 ? 'failed' : 'succeeded', errorCode: index === 1 ? 'SKU_ALREADY_EXISTS' : null, message: null, result: index === 1 ? null : `{"productId":"p-${index}"}` });
+    }
+    run(B.insertResult, { jobId: job(4), index: 0, status: 'succeeded', errorCode: null, message: null, result: null });
+    const second = run(B.resultsPage, { jobId: job(1), limit: 2, offset: 2 }).map((row) => row[0]).join(',');
+    const results = Number(run(B.resultsCount, { jobId: job(1) })[0][0]);
+    let twice = 'aceptado';
+    try {
+      run(B.insertResult, { jobId: job(1), index: 2, status: 'succeeded', errorCode: null, message: null, result: null });
+    } catch {
+      twice = 'rechazado';
+    }
+    step(engine, 'lote-resultados', second === '2,3' && results === 5 && twice === 'rechazado', `segunda página ${second}, total ${results}, un segundo resultado del mismo elemento ${twice}`);
+    // El final, una sola vez: un disparo repetido no cambia el desenlace.
+    run(B.finish, { id: job(1), status: 'completed' });
+    run(B.finish, { id: job(1), status: 'aborted' });
+    step(engine, 'lote-final', jobRow(job(1))[0] === 'completed' && ['t', '1'].includes(jobRow(job(1))[4]), jobRow(job(1)).join(' '));
+    // La purga (D10): lo terminado hace más de la retención, con sus resultados; nunca uno en marcha, por viejo que sea.
+    const daysAgo = (days) => literal(engine, new Date(dbNow().getTime() - days * 86_400_000));
+    sql(engine, name, `UPDATE batch_job SET created_at = ${daysAgo(12)}, finished_at = ${daysAgo(10)} WHERE id = ${literal(engine, job(1))};`);
+    sql(engine, name, `UPDATE batch_job SET created_at = ${daysAgo(12)} WHERE id = ${literal(engine, job(4))};`);
+    run(B.finish, { id: job(3), status: 'completed' });
+    run(B.purgeResults, { retentionDays: 7 });
+    run(B.purgeJobs, { retentionDays: 7 });
+    const remaining = sql(engine, name, `SELECT ${hex('id')} FROM batch_job ORDER BY id;`).map(([id]) => id.slice(-2)).join(',');
+    const orphanResults = Number(sql(engine, name, `SELECT count(*) FROM batch_item_result WHERE job_id = ${literal(engine, job(1))};`)[0][0]);
+    const liveResults = Number(sql(engine, name, `SELECT count(*) FROM batch_item_result WHERE job_id = ${literal(engine, job(4))};`)[0][0]);
+    step(engine, 'lote-purga', remaining === 'b3,b4' && orphanResults === 0 && liveResults === 1, `quedan ${remaining}, resultados del purgado ${orphanResults}, del vivo ${liveResults}`);
+    }
   } catch (error) {
     step(engine, 'sentencias', false, error.message.replace(/\s+/g, ' ').slice(0, 600));
   } finally {

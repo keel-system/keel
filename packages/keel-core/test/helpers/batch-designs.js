@@ -44,9 +44,31 @@ function catalogBatch(layers, model, atomicity) {
   };
 }
 
+/**
+ * product-catalog con `importProducts` asíncrono (fase B): el trabajo por chunks, con la clave de idempotencia del lote
+ * (D13). Un trabajo se ata a quien lo crea (D11), así que el servicio gana una capa security con token.
+ */
+function catalogBatchAsync(layers, model) {
+  catalogBatch(layers, model, 'per-item');
+  const operation = layers['use-cases'].operations.importProducts;
+  operation.batch.execution = 'async';
+  operation.input.fields.items.constraints.maxItems = 5000;
+  operation.idempotency = { keySource: 'client-key', ttlSeconds: 86400 };
+  layers.security = {
+    authentication: { protocol: 'oidc', tokenLocation: 'header' },
+    access: { default: { level: 'required', description: 'Toda la API exige un token válido.' } }
+  };
+}
+
 export const BATCH_DESIGNS = [
   { name: 'catalog-batch', from: 'product-catalog', mutate: (layers) => catalogBatch(layers, 'relational', 'per-item') },
   { name: 'catalog-batch-mongo', from: 'product-catalog', mutate: (layers) => catalogBatch(layers, 'document', 'per-item') },
   // El lote que se confirma entero o no se confirma (BA-6).
   { name: 'catalog-batch-atomic', from: 'product-catalog', mutate: (layers) => catalogBatch(layers, 'relational', 'all-or-nothing') }
+];
+
+/** Los sujetos de la fase B (lotes asíncronos): no entran en BATCH_DESIGNS hasta que algún generador los genere. */
+export const BATCH_JOB_DESIGNS = [
+  { name: 'catalog-batch-async', from: 'product-catalog', mutate: (layers) => catalogBatchAsync(layers, 'relational') },
+  { name: 'catalog-batch-async-mongo', from: 'product-catalog', mutate: (layers) => catalogBatchAsync(layers, 'document') }
 ];

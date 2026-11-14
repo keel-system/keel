@@ -34,10 +34,11 @@ import { IDEMPOTENCY_RECORD } from './request-idempotency.js';
 import { RECONCILIATION_CLAIM } from './reconciliation-stores.js';
 import { KEEL_TIMER } from './timer-store.js';
 import { CHANGE_HISTORY, CHANGE_HISTORY_FIELD } from './history-store.js';
+import { BATCH_ITEM_RESULT, BATCH_JOB } from './batch-store.js';
 
 /**
- * Las tablas del generador: mecánica de multi-instancia (y, desde la 2.29, el almacén del historial), no algo que el
- * diseño declare. En orden de creación: una tabla referenciada va antes que la que la referencia.
+ * Las tablas del generador: mecánica de multi-instancia (y, desde la 2.29, el almacén del historial; desde la 2.30, el de
+ * los lotes asíncronos), no algo que el diseño declare. En orden de creación: una tabla referenciada va antes que la que la referencia.
  */
 export const GENERATOR_TABLES = Object.freeze([
   OUTBOX_EVENT,
@@ -46,7 +47,9 @@ export const GENERATOR_TABLES = Object.freeze([
   RECONCILIATION_CLAIM,
   KEEL_TIMER,
   CHANGE_HISTORY,
-  CHANGE_HISTORY_FIELD
+  CHANGE_HISTORY_FIELD,
+  BATCH_JOB,
+  BATCH_ITEM_RESULT
 ]);
 
 /** El prefijo del nombre de un paso del generador: lo que lo distingue de los del agente. */

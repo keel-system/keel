@@ -221,14 +221,52 @@ importProducts:
 - **Solo en un command que entra por HTTP** (`CHK-USECASES-BATCH-NOT-COMMAND`): por una suscripción, un `schedule` o
   un `dispatches` no hay nadie a quien devolver el resultado por elemento.
 - **`execution`**: `sync` (por defecto) responde cuando termina. `async` responde `202` con la ubicación de un trabajo
-  que procesa el lote por partes, para importaciones de minutos; exige la capa `security`, porque el trabajo solo lo
-  lee quien lo creó (`CHK-USECASES-BATCH-NO-AUTH`). Los generadores traen primero `sync` (`PLAN-DSL-230-LOTES.md`).
+  que procesa el lote por partes, para importaciones de minutos (§ Lotes asíncronos). Los generadores traen primero
+  `sync` (`PLAN-DSL-230-LOTES.md`).
 - `idempotency` de la operación se aplica al **lote entero**: la repetición devuelve el mismo resultado. Por elemento,
   la guarda es la `naturalKey` de lo que escribe. Cada elemento confirmado publica lo que publicaría la operación sola
   (`emits`); el lote no publica un evento propio.
 
 El handler de la operación procesa **un** elemento; el bucle, la transacción de cada uno, su validación y la
 respuesta los pone el generador.
+
+### Lotes asíncronos
+
+Cuándo `sync` y cuándo `async` es una pregunta de tamaño, y el tamaño es contrato: un lote que cabe en segundos
+(hasta 1000 elementos) responde `207` en la misma petición; uno de minutos responde **`202`** con un **trabajo** y su
+URL en `Location`, y el cliente sondea su estado y lee sus resultados por páginas (`wire-contract.md` § Lotes
+asíncronos). El diseño no declara entidades para el trabajo: es del método, como el historial.
+
+```yaml
+importCatalog:
+  kind: command
+  input:
+    fields:
+      items: { type: ProductDraft, list: true, required: true, constraints: { maxItems: 50000 } }
+  output: void
+  idempotency: { keySource: client-key, ttlSeconds: 86400 }   # repetir la clave devuelve el MISMO trabajo
+  errors:
+    - { code: SKU_ALREADY_EXISTS, when: Ya existe un producto con ese SKU., http: 409 }
+  batch:
+    over: items
+    atomicity: per-item                # obligatorio en async
+    itemErrors: [SKU_ALREADY_EXISTS]
+    execution: async
+```
+
+- **Solo `per-item`** (`CHK-USECASES-BATCH-ASYNC-ATOMIC`): el trabajo se procesa por partes, cada elemento en su
+  transacción, y no se puede revertir entero. Un lote todo o nada grande se parte en lotes `sync`.
+- **Exige la capa `security`** (`CHK-USECASES-BATCH-NO-AUTH`): el trabajo y sus resultados solo los lee quien lo
+  creó; a cualquier otro le responden `404`, como a un trabajo que no existe.
+- **`maxItems`** sigue siendo obligatorio, sin el tope de 1000: es lo que el servicio acepta guardar de una vez.
+- **Con `idempotency`** (`client-key` o `payload-hash`), repetir la clave devuelve el mismo `202` con el mismo trabajo,
+  en el estado en que esté, también mientras corre; la misma clave con otro cuerpo es `IDEMPOTENCY_KEY_REUSED`. La
+  clave se acota por quien creó el trabajo, y `ttlSeconds` dice cuánto vale.
+- El trabajo se procesa **fuera de la petición**, sin token: lo que el handler necesite tiene que venir en el input, y
+  la identidad del llamante no puede ser un campo del input (lo rechazan los generadores). El actor de la autoría de
+  cada elemento es quien creó el trabajo.
+- Si la réplica que lo procesa cae, otra **reanuda desde el último elemento confirmado**: ninguno se aplica dos veces
+  ni se pierde. Los trabajos terminados se purgan pasada su retención (un parámetro del generador, 7 días).
 
 ## Triggers: quién activa cada operación
 

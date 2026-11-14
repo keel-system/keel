@@ -44,6 +44,7 @@ La regla, entonces, es más precisa que «nunca inventes un code»:
 | `security`: `access.rules` y la audiencia de `serviceAuth` | `ACCESS_DENIED` | 403 | no |
 | El tope de duración de toda transacción (lo fija el generador) | `TRANSACTION_TIMEOUT` | 503 | no |
 | `use-cases`: `operations.<op>.batch` per-item — un elemento falla sin `code` (va en su elemento del 207) | `BATCH_ABORTED` | 500 | no |
+| `use-cases`: `operations.<op>.batch` con `execution: async` — el trabajo no existe o es de otro llamante | `BATCH_JOB_NOT_FOUND` | 404 | no |
 
 Qué significa cada uno:
 
@@ -88,6 +89,10 @@ Qué significa cada uno:
   dentro del `207` (`wire-contract.md` § Lotes); el 500 es el status que habría tenido la
   operación sola. Un elemento que falla con un `code` propio fuera de `itemErrors` también
   detiene el lote, pero lleva ese `code`.
+- **`BATCH_JOB_NOT_FOUND`** — las rutas del trabajo de un lote asíncrono (DSL 2.30) con un id que
+  no existe, que ya se purgó o que creó otro llamante. Los tres casos responden lo mismo: un
+  trabajo solo lo lee quien lo creó, y responder distinto a uno ajeno le diría al llamante que
+  existe (como `readMiss: not-found` en la lectura acotada).
 
 ## Sustituir uno por el del dominio
 

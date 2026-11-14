@@ -28,7 +28,8 @@ import {
 } from './conditional-writes.js';
 import { lifecycleContractClause } from './data-lifecycle.js';
 import { HISTORY_CHANGES, HISTORY_CHANGE_FIELDS, HISTORY_ENTRY_FIELDS, historyContractClause, historyPersonalPaths } from './history.js';
-import { BATCH_ITEM_STATUSES, BATCH_MULTI_STATUS, batchContractClause } from './batch.js';
+import { BATCH_ACCEPTED_STATUS, BATCH_ITEM_STATUSES, BATCH_JOB_PARAM, BATCH_MULTI_STATUS, batchContractClause, batchJobPaths } from './batch.js';
+import { BATCH_JOB_STATUSES } from './batch-store.js';
 
 const API_KEY_HEADER = 'X-API-Key';
 const OPENAPI_VERSION = '3.1.0';
@@ -59,6 +60,12 @@ export function openapiDocument(model) {
     const full = `${model.api.routeBase}${operation.route.path}`;
     paths[full] ??= {};
     paths[full][operation.route.method.toLowerCase()] = operationObject(context, operation);
+    // Un lote asíncrono (DSL 2.30, D8): las dos rutas de su trabajo, colgadas de la suya.
+    if (operation.batch?.execution === 'async') {
+      const jobPaths = batchJobPaths(full);
+      paths[jobPaths.status] = { get: batchJobStatusObject(context, operation) };
+      paths[jobPaths.results] = { get: batchJobResultsObject(context, operation) };
+    }
   }
 
   schema('ErrorResponse', () => errorResponseSchema());
@@ -174,10 +181,13 @@ function responses(context, operation, inputs) {
   // elemento. El output de la operación es void: lo que un generador ponga en su responseDto es lo de UN elemento.
   const batch = operation.batch;
   const perItem = batch?.atomicity === 'per-item';
-  const status = String(perItem ? BATCH_MULTI_STATUS : operation.route.status);
+  // Un lote asíncrono (D8) responde 202 con el trabajo y su URL: no procesa nada en la petición.
+  const asynchronous = batch?.execution === 'async';
+  const status = String(asynchronous ? BATCH_ACCEPTED_STATUS : perItem ? BATCH_MULTI_STATUS : operation.route.status);
   const success = { description: successDescription(context.model, operation) };
   const dto = batch ? null : operation.responseDto;
-  if (batch) success.content = { 'application/json': { schema: batchResponseSchema(context, operation) } };
+  if (batch) success.content = { 'application/json': { schema: asynchronous ? batchJobSchema(context) : batchResponseSchema(context, operation) } };
+  if (asynchronous) success.headers = { Location: { description: `URL del trabajo: ${batchJobPaths(operation.route.path).status}`, schema: { type: 'string' } } };
   if (dto && operation.route.status !== 204) {
     const item = context.schema(dto.name, () => dtoSchema(context, dto.fields));
     const body = operation.paginated ? pagedSchema(context, dto.name, item) : operation.returnsList ? { type: 'array', items: item } : item;
@@ -224,7 +234,9 @@ function responses(context, operation, inputs) {
     if (typed) add(FRAMEWORK_ERRORS.unsupportedContentType.http, effectiveErrorCode(model, FRAMEWORK_ERRORS.unsupportedContentType), 'el archivo no es de ningún tipo que admita su bucket.');
   }
   if (operation.idempotency && operation.idempotency.guard !== 'natural-key') {
-    for (const [entry, what] of [[FRAMEWORK_ERRORS.idempotencyRace, 'otra petición con la misma clave está en curso.'], [FRAMEWORK_ERRORS.idempotencyReuse, 'la misma clave con otro contenido.']]) {
+    // En un lote asíncrono (D13) la repetición durante la carrera espera a la ganadora y responde su trabajo: no hay 409 «en curso».
+    const outcomes = [[FRAMEWORK_ERRORS.idempotencyRace, 'otra petición con la misma clave está en curso.'], [FRAMEWORK_ERRORS.idempotencyReuse, 'la misma clave con otro contenido.']];
+    for (const [entry, what] of asynchronous ? outcomes.slice(1) : outcomes) {
       const row = idempotencyOutcomeCodes(model, entry).find((candidate) => candidate.operation === operation.name);
       if (row) add(entry.http, row.code, what);
     }
@@ -392,21 +404,101 @@ function historyEntrySchema(context, root) {
   });
 }
 
-/**
- * La respuesta de un lote (DSL 2.30, wire-contract.md § Lotes): el resumen, compartido, y los elementos de ESTA
- * operación, cuyo `result` es lo que declara `batch.output` (null si no declara nada o si el elemento no tuvo éxito).
- */
-function batchResponseSchema(context, operation) {
-  const name = capitalize(operation.name);
-  const summary = context.schema('BatchSummary', () => ({
+/** El resumen de un lote o de un trabajo (DSL 2.30), compartido. */
+function batchSummarySchema(context) {
+  return context.schema('BatchSummary', () => ({
     type: 'object',
     properties: Object.fromEntries(WIRE_SHAPES.batchSummary.map((field) => [field, { type: 'integer', minimum: 0 }])),
     required: [...WIRE_SHAPES.batchSummary],
     additionalProperties: false
   }));
+}
+
+/**
+ * El trabajo de un lote asíncrono (DSL 2.30, wire-contract.md § Lotes asíncronos), compartido por todas las operaciones:
+ * su forma no depende de la operación.
+ */
+function batchJobSchema(context) {
+  const summary = batchSummarySchema(context);
+  return context.schema('BatchJob', () => {
+    const types = {
+      id: { type: 'string', format: 'uuid' },
+      status: { type: 'string', enum: Object.values(BATCH_JOB_STATUSES) },
+      summary,
+      createdAt: { type: 'string', format: 'date-time' },
+      finishedAt: { type: ['string', 'null'], format: 'date-time', description: 'null mientras el trabajo no termina.' }
+    };
+    return {
+      type: 'object',
+      properties: Object.fromEntries(WIRE_SHAPES.batchJob.map((field) => [field, types[field]])),
+      required: [...WIRE_SHAPES.batchJob],
+      additionalProperties: false
+    };
+  });
+}
+
+/** Las respuestas de error de las dos rutas del trabajo (D11): el 404 que no distingue lo ajeno de lo inexistente. */
+function batchJobErrors(model, operation) {
+  const error = (description) => ({ description, content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } });
+  const responses = {};
+  if (operationSecurity(model, operation)?.length) {
+    responses['401'] = error('`UNAUTHENTICATED`: sin credencial, o la credencial no valida.');
+    responses['403'] = error('`ACCESS_DENIED`: la credencial no tiene el permiso de la operación del lote.');
+  }
+  responses[String(FRAMEWORK_ERRORS.batchJobNotFound.http)] = error(
+    `\`${FRAMEWORK_ERRORS.batchJobNotFound.code}\`: el trabajo no existe, ya se purgó o lo creó otro llamante.`
+  );
+  return responses;
+}
+
+const jobParameter = () => ({ name: BATCH_JOB_PARAM, in: 'path', required: true, schema: { type: 'string', format: 'uuid' } });
+
+/** `GET <ruta>/jobs/{jobId}`: el trabajo de un lote asíncrono, solo para quien lo creó (D11). */
+function batchJobStatusObject(context, operation) {
+  const { model } = context;
+  return {
+    operationId: `${operation.name}Job`,
+    summary: `El trabajo de ${operation.name}: su estado y su resumen.`,
+    tags: [tagOf(model, operation)],
+    parameters: [jobParameter()],
+    responses: {
+      200: { description: 'El trabajo. Solo lo lee quien lo creó.', content: { 'application/json': { schema: batchJobSchema(context) } } },
+      ...batchJobErrors(model, operation)
+    },
+    security: operationSecurity(model, operation)
+  };
+}
+
+/** `GET <ruta>/jobs/{jobId}/results`: los resultados de los elementos intentados, paginados en orden de índice. */
+function batchJobResultsObject(context, operation) {
+  const { model } = context;
+  const pagination = model.pagination ?? {};
+  return {
+    operationId: `${operation.name}JobResults`,
+    summary: `Los resultados de los elementos intentados del trabajo de ${operation.name}, en orden de índice.`,
+    tags: [tagOf(model, operation)],
+    parameters: [
+      jobParameter(),
+      { name: 'page', in: 'query', required: false, schema: { type: 'integer', minimum: 0, default: 0 } },
+      { name: 'size', in: 'query', required: false, schema: { type: 'integer', minimum: 1, ...(pagination.maxSize ? { maximum: pagination.maxSize } : {}), ...(pagination.defaultSize ? { default: pagination.defaultSize } : {}) } }
+    ],
+    responses: {
+      200: {
+        description: 'Una página de resultados, en orden de índice. Los elementos notAttempted de un trabajo aborted no salen: los cuenta su resumen.',
+        content: { 'application/json': { schema: pagedSchema(context, `${capitalize(operation.name)}BatchItem`, batchItemSchema(context, operation)) } }
+      },
+      ...batchJobErrors(model, operation)
+    },
+    security: operationSecurity(model, operation)
+  };
+}
+
+/** Un elemento del resultado de un lote de ESTA operación, con el `result` que declara `batch.output`. */
+function batchItemSchema(context, operation) {
+  const name = capitalize(operation.name);
   const fields = operation.batch.resultFields ?? [];
   const result = fields.length > 0 ? orNull(context.schema(`${name}ItemResult`, () => dtoSchema(context, fields))) : { type: 'null' };
-  const item = context.schema(`${name}BatchItem`, () => {
+  return context.schema(`${name}BatchItem`, () => {
     const types = {
       index: { type: 'integer', minimum: 0 },
       status: { type: 'string', enum: [...BATCH_ITEM_STATUSES] },
@@ -421,6 +513,16 @@ function batchResponseSchema(context, operation) {
       additionalProperties: false
     };
   });
+}
+
+/**
+ * La respuesta de un lote (DSL 2.30, wire-contract.md § Lotes): el resumen, compartido, y los elementos de ESTA
+ * operación, cuyo `result` es lo que declara `batch.output` (null si no declara nada o si el elemento no tuvo éxito).
+ */
+function batchResponseSchema(context, operation) {
+  const name = capitalize(operation.name);
+  const summary = batchSummarySchema(context);
+  const item = batchItemSchema(context, operation);
   return context.schema(`${name}BatchResponse`, () => {
     const types = { summary, items: { type: 'array', items: item, description: 'Un resultado por elemento, en orden de índice.' } };
     return {

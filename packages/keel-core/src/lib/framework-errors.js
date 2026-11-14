@@ -214,6 +214,19 @@ export const FRAMEWORK_ERRORS = {
     when:
       'Un elemento del lote falló por una causa que no es suya (infraestructura, un defecto): el lote se detuvo en él y ' +
       'los siguientes quedaron notAttempted. Va en el elemento del 207, nunca como respuesta.'
+  },
+
+  // El trabajo de un lote asíncrono (DSL 2.30, D11) que no existe, que ya se purgó o que creó OTRO llamante: las dos rutas
+  // del trabajo responden lo mismo en los tres casos, para no decirle a nadie que un trabajo ajeno existe. No es sustituible:
+  // no lo provoca el dominio, y el trabajo no es un recurso del diseño.
+  batchJobNotFound: {
+    code: 'BATCH_JOB_NOT_FOUND',
+    http: 404,
+    overridable: false,
+    mechanism: 'el lote asíncrono (`batch.execution: async` de use-cases)',
+    when:
+      'Las rutas del trabajo de un lote asíncrono con un id que no existe, que ya se purgó o que creó otro llamante: los ' +
+      'tres casos responden igual, y un trabajo ajeno no se distingue de uno inexistente.'
   }
 };
 

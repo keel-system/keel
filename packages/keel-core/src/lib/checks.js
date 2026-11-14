@@ -647,6 +647,13 @@ export const CHECKS = {
     title: 'un lote asíncrono sin capa security: no hay a quién atar el trabajo',
     closes: 'declarar la capa security (el trabajo solo lo lee quien lo creó), o execution: sync'
   },
+  'CHK-USECASES-BATCH-ASYNC-ATOMIC': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'un lote asíncrono todo o nada: un trabajo por partes no se revierte entero',
+    closes: 'atomicity: per-item, o partir el lote en lotes sync todo o nada (D14 de PLAN-DSL-230-LOTES.md)'
+  },
   'CHK-FIELD-COMPARE-NOT-TEXT': {
     layer: 'domain',
     severity: 'error',

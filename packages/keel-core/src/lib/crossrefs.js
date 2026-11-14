@@ -423,6 +423,15 @@ function checkBatch(layers, error, obligation) {
       );
     }
 
+    // D14: un trabajo por chunks no cabe en una transacción; el todo o nada de un lote de minutos sería una transacción de
+    // minutos, que el tope de transacción mata.
+    if (execution === 'async' && batch.atomicity === 'all-or-nothing') {
+      error('CHK-USECASES-BATCH-ASYNC-ATOMIC',
+        `${where}: execution: async con atomicity: all-or-nothing — un lote asíncrono se procesa por partes, cada elemento en ` +
+          'su transacción, y no puede revertirse entero. Declara atomicity: per-item, o parte el lote en lotes sync todo o nada'
+      );
+    }
+
     if (batch.atomicity === undefined) {
       obligation('OBL-BATCH-ATOMICITY-UNDECIDED', `use-cases.${operation}.batch`,
         `${where}: sin atomicity — no está decidido si un elemento que falla deshace los demás (all-or-nothing) o solo falla él ` +

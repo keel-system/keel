@@ -1,6 +1,6 @@
 # DSL 2.30: lotes con resultado por elemento (R5)
 
-**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 4 cerrados el 2026-11-14 (la fase A, `sync`, en los cuatro generadores); el siguiente es el 5 (fase B en keel-core). Al cerrar pasa a `completed_plans/`.
+**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 5 cerrados el 2026-11-14 (la fase A, `sync`, en los cuatro generadores, y la fase B neutral en keel-core); el siguiente es el 6 (keel-spring `async`). Al cerrar pasa a `completed_plans/`.
 
 ## Contexto
 
@@ -70,10 +70,12 @@ La forma en el cable la fija `wire-contract.md` § Lotes (es del método, no de 
 | D6 | `itemErrors` ⊆ `errors[]` de la operación. Un error de `itemErrors` en `all-or-nothing` es incoherente | Sin catálogo nuevo de codes: el contrato sigue cerrado |
 | D7 | Tope: `sync` exige `maxItems` y **≤1000**. `async` exige `maxItems` (sin tope fijo del método) | Un 207 de 50 000 elementos es un *timeout*. El tope obliga a elegir `async` a sabiendas |
 | D8 | **Fase B, el trabajo es del método.** `async` crea un registro en la tabla del generador `batch_job` (estado `queued → running → completed / failed / aborted`, cursor del último índice confirmado y la entrada serializada) y responde `202` + `Location: …/batch-jobs/{id}`. El generador emite dos rutas: el estado y los resultados paginados con el sobre de `wire.js`. El diseño no declara entidades | Como `change_history` de la 2.29, va fuera del DSL y es neutral como datos (`gen/batch-store.js`). Cada diseño se ahorra modelar su entidad de trabajo |
-| D9 | **Fase B, chunks sobre el cronómetro.** Un recurrente de `keel_timer` (`kind: batch`) reclama un trabajo con el arriendo de siempre y procesa un *chunk* de N elementos (`batch.chunk-size`, generador, default 100). Por elemento sigue D2. El cursor y los resultados del chunk se confirman en la transacción del último elemento. Si la réplica cae, otra reanuda desde el cursor | Es el *commit interval* + *restart* de Spring Batch sobre la pieza que ya está medida con dos réplicas (R1, RC-1, R2) y con `SKIP LOCKED` |
+| D9 | **Fase B, chunks sobre el cronómetro.** Cada trabajo arma al crearse, en la misma transacción, un temporizador de una vez en `keel_timer` (`kind: batch:<operación>`, `entity_id` = el id del trabajo), que se reclama con el arriendo y la valla de siempre. Cada disparo procesa un *chunk* de N elementos (`batch.chunk-size`, generador, default 100) y se rearma para ya si quedan, o se borra si no. Por elemento sigue D2, y **el resultado y el avance del cursor de cada elemento van en SU transacción**, con el cursor como valla (`WHERE cursor = :index`): si otra réplica le quitó el trabajo, el elemento revierte entero. Si la réplica cae, otra reanuda desde el cursor (ajustado en el inc. 5: confirmar el cursor solo con el último elemento del chunk reprocesaría lo confirmado antes) | Es el *commit interval* + *restart* de Spring Batch sobre la pieza que ya está medida con dos réplicas (R1, RC-1, R2) y con `SKIP LOCKED` |
 | D10 | Fase B: `batch_item_result` (job, índice, estado, code, mensaje, resultado como JSON) se borra con su trabajo por **retención** (parámetro del generador, default 7 días), con una purga del cronómetro como las demás tablas del generador | Igual que `outbox_event` o `processed_event`: sin purga crece sin límite |
 | D11 | Acceso: las rutas del trabajo exigen la misma regla de `security` que la operación, y solo las lee **quien lo creó** (el `sub` del llamante, como `authorship`). Otro llamante recibe 404 | Una URL de resultados no debe ser una fuga entre inquilinos. Es lo que hace 2.27 con `readMiss: not-found` |
 | D12 | Eventos: cada elemento confirmado publica lo que publicaría la operación sola. El lote **no** publica un evento propio en esta versión | Un «lote completado» sería sintaxis nueva sin un consumidor que lo pida |
+| D13 | **Idempotencia del lote (decidida el 2026-11-14).** En `async`, la clave (`client-key` o `payload-hash`) es una columna de `batch_job`, única por (operación, dueño, clave): la repetición responde el MISMO 202 con el mismo `Location` y el trabajo en el estado en que esté (no un 409 mientras corre); la misma clave con otro contenido es `IDEMPOTENCY_KEY_REUSED`, como en una operación sola, y `ttlSeconds` acota cuánto vale la clave (pasada la ventana, la libera el siguiente alta). `payload-field` y `partitionBy` siguen rechazados en un lote. En `sync`, la repetición devuelve el 207 entero guardado en el registro de idempotencia: entra tras la fase B en los cuatro, medida con BA-8 | Es el reintento que más daño hace en un lote (un corte de red tras 500 altas). En `async` el trabajo ya es la respuesta: guardar la clave en él es casi gratis, y la tabla se diseña con ella desde el principio |
+| D14 | `async` solo con `atomicity: per-item` (`CHK-USECASES-BATCH-ASYNC-ATOMIC`) | Un trabajo por chunks no cabe en una transacción: el todo o nada de un lote de minutos sería una transacción de minutos, que el tope de transacción mata. Spring Batch tampoco lo hace. Un lote todo o nada grande se parte en lotes `sync` |
 
 **Fuera de la 2.30:** subir un CSV o un archivo (R13, el lote viaja como JSON), paralelismo dentro de un lote,
 cancelar un trabajo en marcha, el evento de lote terminado, prioridades entre trabajos y lotes por suscripción.
@@ -265,17 +267,59 @@ Incremento 4 (keel-go `sync`):
   en verde, con los cinco sabotajes cayendo en exactamente sus casos; los tres sujetos con gofmt, vet y staticcheck vacíos y sus
   pruebas emitidas en verde.
 
+Incremento 5 (fase B en keel-core):
+
+- **D13, D14 y el ajuste de D9** (tabla de decisiones): la idempotencia del lote asíncrono vive en `batch_job`; `async` solo
+  con `per-item` (`CHK-USECASES-BATCH-ASYNC-ATOMIC`, con su mutación); y el resultado y el cursor de cada elemento van en
+  la transacción del elemento, con el cursor como valla.
+- **El reclamo es el del cronómetro.** Cada trabajo arma al crearse un temporizador de UNA VEZ en `keel_timer`
+  (`batch:<operación>`, `entity_id` = el id del trabajo), como un plazo: el arriendo, la valla, los reintentos, el aparcado
+  y el despertar del sondeador ya están medidos con dos réplicas, así que `batch-store.js` no tiene sentencia de reclamo
+  (el sabotaje `batch-skip-locked` del plan original no tiene a qué aplicarse). `timer-plan.js` gana `batchTimers` y la
+  purga de `batch_job`, y `usesTimer` cuenta los lotes asíncronos.
+- **`gen/batch-store.js`**: `batch_job` (`next_index` y no `cursor`, `item_index` y `error_code` en la otra: palabras
+  reservadas de MySQL) y `batch_item_result` con FK en cascada, las dos en `GENERATOR_TABLES`; sus colecciones documentales
+  (la unicidad de la clave es parcial: en MongoDB dos ausentes chocan); los parámetros `batch.chunk-size` (100),
+  `batch.retention-days` (7) y `batch.purge.cron`; y las sentencias por motor (alta con la ventana de la clave calculada
+  por el motor, repetición, liberación de la clave caducada, lectura del dueño, avance con valla, resultado, final de una
+  sola vez, página y purga de lo terminado).
+- **Referencias ejecutables** en `gen/batch.js`: `runBatchChunk` (un disparo desde el cursor, con caída simulada),
+  `batchJobView` (el trabajo en el cable: `notAttempted` solo en uno `aborted`), `batchJobRepeat` y
+  `batchRequestSignature` (D13: la firma es el sha256 de los BYTES del cuerpo; canonizar el JSON igual en los cuatro no
+  compensa, y un reintento manda los mismos bytes), `batchJobPaths` (`<ruta>/jobs/{jobId}` y `…/results`), la nota del
+  handler asíncrono (sin token; el actor de autoría es el dueño) y `BATCH_JOB_CASES` (BJ-1 a BJ-9) con
+  `BATCH_JOB_SABOTAGES` (`bj-no-resume`, `bj-cursor-outside-tx`, `bj-foreign-reader`).
+- **Estados**: `queued`, `running`, `completed` y `aborted` (detenido por un elemento, D4). El `failed` del plan original
+  desaparece con D14: un trabajo por elemento no se revierte. Un temporizador aparcado deja el trabajo `running`, y lo
+  delata la métrica de aparcados del cronómetro.
+- **Los resultados** paginados son los de los elementos intentados; los `notAttempted` de un trabajo `aborted` no se
+  escriben fila a fila, los cuenta su resumen.
+- **`BATCH_JOB_NOT_FOUND`** (404, no sustituible) en `framework-errors.js`: lo ajeno, lo purgado y lo inexistente
+  responden igual (D11).
+- **La frontera neutral** (`batchFrontierErrors`): en `sync` la idempotencia del lote sigue rechazada (D13: entra tras la
+  fase B); en cualquier modo, `payload-field` y `partitionBy`; en `async`, la identidad del llamante como campo del input
+  (el trabajo corre sin token y el sobre guardado no la lleva).
+- **El contrato**: `wire.js` (`batchJob`, dos reglas, `WIRE_BATCH_JOB_CASES`), `wire-contract.md` § Lotes asíncronos,
+  `docs/dsl/use-cases.md` § Lotes asíncronos (cuándo `sync` y cuándo `async`) y `gen/openapi.js` (el 202 con `Location`
+  y el esquema `BatchJob`, sin el 409 «en curso», y las dos rutas con su 404).
+- **Sujetos** de la fase B en `BATCH_JOB_DESIGNS` (`catalog-batch-async` y `-mongo`, con una capa security con token y
+  `client-key`): fuera de `BATCH_DESIGNS` hasta que un generador los genere. Hoy los cuatro los rechazan en su frontera
+  (`batchPendingErrors`), y `planService` sobre ellos falla en cada generador porque la purga de `batch_job` no tiene
+  todavía emisor: es lo esperado hasta su incremento.
+- Red: `test/batch.test.js` (20 casos) y `timer-sql-check` con seis pasos nuevos en PostgreSQL y MySQL (`lote-alta`,
+  `lote-ventana`, `lote-valla`, `lote-resultados`, `lote-final`, `lote-purga`) y cuatro sabotajes (`batch-fence`,
+  `batch-key-expiry`, `batch-purge-live`, `batch-finish-twice`), cada uno en exactamente su paso.
+
 ## Para retomar
 
-Inc. 5, fase B en keel-core: `execution: async` (el schema ya la admite y `CHK-USECASES-BATCH-NO-AUTH` existe desde el inc. 0),
-`gen/batch-store.js` con `batch_job` y `batch_item_result` como datos, sus sentencias por motor (reclamo con el arriendo y
-`SKIP LOCKED` de `timer-store.js`, cursor, página de resultados, purga), su entrada en `GENERATOR_TABLES` de `schema-steps.js`,
-los parámetros (`batch.chunk-size`, retención), el `kind: batch` y su purga en `timer-plan.js`, el 202 con `Location` y las dos
-rutas del trabajo en `gen/openapi.js`, y los casos `BJ-*` con sus sabotajes. Red: `timer-sql-check --sabotage=batch-*`. Antes de
-escribir nada, decidir con el usuario si la idempotencia del lote entero (D5, BA-8, hoy rechazada en los cuatro con
-`batchFrontierErrors`) entra en la fase B. La huella golden de keel-nest sigue atrasada desde antes de la 2.30
-(`npm run golden --workspace packages/keel-nest -- --check`): regenerarla en su propio commit. Las filas de
-`capability-coverage` de los lotes se borran en el inc. 11.
+Inc. 6, keel-spring `async`: el alta (la fila, el temporizador con `arm` y la clave de D13 en una transacción; 202 con
+`Location`), el procesador como `kind` del cronómetro (un chunk por disparo, cada elemento con su resultado y `advance` en
+su transacción, `reschedule` para ya si queda o `finish` y `complete` si no), las dos rutas con el dueño (`authorship`), la
+purga como recurrente y las tablas en la baseline y en el paso de esquema. Medirlo con BJ-1 a BJ-9 en `batch-check`
+(PostgreSQL, MySQL y MongoDB), la reanudación con dos réplicas matando una a mitad de chunk, y los tres sabotajes `bj-*`.
+Pasar los sujetos de `BATCH_JOB_DESIGNS` a la frontera de keel-spring (`asyncIncrement: null`). La huella golden de
+keel-nest sigue atrasada desde antes de la 2.30 (`npm run golden --workspace packages/keel-nest -- --check`): regenerarla
+en su propio commit. Las filas de `capability-coverage` de los lotes se borran en el inc. 11.
 
 ## Verificación
 

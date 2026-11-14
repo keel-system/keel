@@ -23,6 +23,8 @@ import { OUTBOX_EVENT, OUTBOX_PURGE, PROCESSED_EVENT, PROCESSED_EVENT_PURGE, use
 import { IDEMPOTENCY_RECORD, IDEMPOTENCY_RECORD_PURGE, usesRequestIdempotency } from './request-idempotency.js';
 import { RECONCILIATION_CLAIM, RECONCILIATION_PURGE, reconciliationClaims } from './reconciliation-stores.js';
 import { retentionKind, retentionParameters } from './data-lifecycle.js';
+import { asyncBatchOperations } from './batch.js';
+import { BATCH_JOB, BATCH_PARAMETERS, batchKind } from './batch-store.js';
 
 /** Los motores en los que hay cronómetro: los relacionales con sentencias medidas (timer-sql-check) y MongoDB. */
 export const TIMER_DATABASES = Object.freeze([...TIMER_ENGINES, 'mongodb']);
@@ -44,6 +46,8 @@ export function generatorPurges(model) {
   if (usesMessageDeduplication(model)) purges.push({ table: PROCESSED_EVENT.table, cron: PROCESSED_EVENT_PURGE.cron });
   if (usesRequestIdempotency(model)) purges.push({ table: IDEMPOTENCY_RECORD.table, cron: IDEMPOTENCY_RECORD_PURGE.cron });
   if (reconciliationClaims(model).length > 0) purges.push({ table: RECONCILIATION_CLAIM.table, cron: RECONCILIATION_PURGE.cron });
+  // Los trabajos de los lotes asíncronos (DSL 2.30, D10): los terminados hace más de su retención, con sus resultados.
+  if (asyncBatchOperations(model).length > 0) purges.push({ table: BATCH_JOB.table, cron: BATCH_PARAMETERS.purgeCron });
   return purges.map((purge) => Object.freeze({ ...purge, kind: purgeKind(purge.table) }));
 }
 
@@ -56,6 +60,7 @@ export function usesTimer(model) {
   return (
     usesDeadlines(model) ||
     generatorRetentions(model).length > 0 ||
+    batchTimers(model).length > 0 ||
     (timerEngine(model) && (generatorPurges(model).length > 0 || generatorSchedules(model).length > 0))
   );
 }
@@ -73,6 +78,17 @@ export function generatorRetentions(model) {
       const parameters = retentionParameters(entity.name);
       return Object.freeze({ entity: entity.name, kind: retentionKind(entity.name), cron: parameters.cron, batchSize: parameters.batchSize });
     });
+}
+
+/**
+ * Los lotes asíncronos (DSL 2.30, D9): un temporizador de UNA VEZ por trabajo, con su `kind` (`batch:<operación>`) y el id
+ * del trabajo en `entity_id`, como un plazo. Lo arma el alta en su transacción, cada disparo procesa un chunk y lo rearma
+ * mientras queden elementos. Como un plazo, no tiene reloj por réplica al que volver: sobre un motor sin cronómetro lo
+ * rechaza la frontera de cada generador.
+ */
+export function batchTimers(model) {
+  if (!model.layersPresent?.persistence) return [];
+  return asyncBatchOperations(model).map(({ operation }) => Object.freeze({ operation, kind: batchKind(operation) }));
 }
 
 /**

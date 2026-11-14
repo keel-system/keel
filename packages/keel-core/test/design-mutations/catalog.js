@@ -2107,6 +2107,18 @@ export const MUTATIONS = [
     expect: ['CHK-API-NO-SECURITY', 'CHK-USECASES-BATCH-NO-AUTH']
   },
   {
+    id: 'M-USECASES-BATCH-ASYNC-ATOMIC',
+    title: 'un lote asíncrono que pretende revertirse entero',
+    extends: 'batch',
+    mutate: (d) => {
+      const batch = ops(d).importTickets.batch;
+      batch.execution = 'async';
+      batch.atomicity = 'all-or-nothing';
+      delete batch.itemErrors;
+    },
+    expect: ['CHK-USECASES-BATCH-ASYNC-ATOMIC']
+  },
+  {
     id: 'M-OBL-BATCH-ATOMICITY-UNDECIDED',
     title: 'nadie decidió si un ticket que falla deshace el lote',
     extends: 'batch',

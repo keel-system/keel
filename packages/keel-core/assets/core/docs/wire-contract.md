@@ -142,6 +142,36 @@ de la respuesta: la operación lleva `output: void`, y cada elemento con éxito 
 - Son un `400` del lote entero, sin procesar ningún elemento, solo el sobre: el campo que se recorre ausente o con más
   elementos que su `maxItems`.
 
+### Lotes asíncronos
+
+Con `batch.execution: async` (siempre `per-item`), la operación responde **`202`** con el trabajo y su URL en
+`Location`, y no procesa nada en la petición. Cuelgan de su ruta dos más, con su misma regla de acceso, que solo
+contestan a **quien creó el trabajo** (cualquier otro, o un id que no existe, recibe `404` con
+`BATCH_JOB_NOT_FOUND`):
+
+- `GET <ruta>/jobs/{jobId}` — el trabajo: `id`, `status`, `summary`, `createdAt`, `finishedAt`.
+- `GET <ruta>/jobs/{jobId}/results` — los resultados de los elementos intentados, en orden de índice, con el sobre
+  de página de siempre (`page`, `size`) y la forma de cada elemento del `207`.
+
+```json
+{
+  "id": "0190f3c1-7b2e-7a4d-9c1e-3f5a6b7c8d9e",
+  "status": "aborted",
+  "summary": { "total": 500, "succeeded": 299, "failed": 2, "notAttempted": 199 },
+  "createdAt": "2026-11-14T10:00:00.000Z",
+  "finishedAt": "2026-11-14T10:03:12.400Z"
+}
+```
+
+- `status` es `queued` (nada procesado), `running`, `completed` (todos intentados) o `aborted` (un elemento que no
+  falla solo él lo detuvo). `finishedAt` es `null` mientras no termina.
+- `notAttempted` solo cuenta en un trabajo `aborted`: son los índices desde el último intentado, que no salen en
+  los resultados. Lo que queda por procesar de un trabajo en marcha no está descartado.
+- Con `idempotency` (`client-key` o `payload-hash`), repetir la clave responde el **mismo** `202`, con el mismo
+  `Location` y el trabajo en el estado en que esté, también mientras corre. La misma clave con otro cuerpo es
+  `409 IDEMPOTENCY_KEY_REUSED`. La clave se acota por quien creó el trabajo, y `ttlSeconds` dice cuánto vale.
+  Dos cuerpos son el mismo si son los mismos bytes.
+
 ## Escritura condicional
 
 Solo en las operaciones de `api.concurrency` (ver `docs/dsl/api.md § concurrency`).
