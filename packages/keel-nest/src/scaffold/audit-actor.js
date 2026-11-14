@@ -15,6 +15,7 @@ import { SECURITY_CONTEXT_TS, usesHttpSecurity } from './security.js';
 import { tsModule, tsString } from './render.js';
 import { SYSTEM_ACTOR } from '@keel-system/keel-core/gen/relational';
 import { usesHistory } from '@keel-system/keel-core/gen/history';
+import { asyncBatchOperations } from '@keel-system/keel-core/gen/batch';
 
 export const AUDIT_ACTOR_TS = 'src/infrastructure/persistence/audit-actor.ts';
 
@@ -26,8 +27,10 @@ export function usesAuthorship(model) {
 }
 
 export function generate(model) {
-  // El historial (DSL 2.29) reutiliza este actor aunque el diseño no pida autoría en las filas: D5.
-  if (!usesAuthorship(model) && !(usesPersistence(model) && usesHistory(model))) return [];
+  // El historial (DSL 2.29) reutiliza este actor aunque el diseño no pida autoría en las filas: D5. Y el dueño de un
+  // trabajo de un lote asíncrono (DSL 2.30, D11) también es este actor.
+  const reused = usesPersistence(model) && (usesHistory(model) || asyncBatchOperations(model).length > 0);
+  if (!usesAuthorship(model) && !reused) return [];
   const security = usesHttpSecurity(model);
   const correlation = usesApi(model) || usesCorrelation(model);
   const imports = [

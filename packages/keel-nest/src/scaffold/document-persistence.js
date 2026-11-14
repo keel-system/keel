@@ -39,6 +39,7 @@ import { repositoryRoots, portClass, portPath, adapterClass, adapterPath, TRANSA
 import { PERSISTENCE_MODULE_TS } from './persistence-runtime.js';
 import { reconciliationBindings } from './reconciliation-claim.js';
 import { historyBindings, historyDocumentIndexEntry } from './history.js';
+import { batchJobBindings, batchJobDocumentIndexEntries } from './batch-jobs.js';
 import { SWEEP_SETTINGS_TS, usesSweepClaims } from './claim.js';
 import { usesRequestIdempotency, IDEMPOTENCY_STORE_TS, IDEMPOTENCY_STORE_IMPL_TS } from './request-idempotency.js';
 import { localMongoUrl } from '@keel-system/keel-core/gen/infra-catalog';
@@ -302,6 +303,8 @@ function documentIndexesFile(model) {
   // El índice de la lectura del historial (DSL 2.29): una raíz, la entrada más reciente primero.
   const historyIndex = historyDocumentIndexEntry(model);
   if (historyIndex) entries.push(historyIndex);
+  // Los de los lotes asíncronos (DSL 2.30): la clave del lote, única y parcial, y la purga.
+  entries.push(...batchJobDocumentIndexEntries(model));
   const body = `/**
  * Los índices de las colecciones del servicio, derivados de persistence.keel.yaml (clave natural,
  * campos únicos e índices declarados, con su filtro parcial si el diseño los condiciona al estado)
@@ -654,6 +657,11 @@ function persistenceModuleFile(model) {
   imports.push(...history.imports);
   bindings.push(...history.bindings);
   ports.push(...history.exports);
+  // El almacén de los trabajos de los lotes asíncronos (DSL 2.30).
+  const batchJobs = batchJobBindings(model);
+  imports.push(...batchJobs.imports);
+  bindings.push(...batchJobs.bindings);
+  ports.push(...batchJobs.exports);
   if (usesSweepClaims(model)) {
     imports.push({ symbol: 'SWEEP_SETTINGS', from: SWEEP_SETTINGS_TS }, { symbol: 'sweepSettings', from: SWEEP_SETTINGS_TS });
     bindings.push('    { provide: SWEEP_SETTINGS, useValue: sweepSettings(configuration) }');

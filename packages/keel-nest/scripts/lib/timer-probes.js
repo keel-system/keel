@@ -464,7 +464,8 @@ export function purgeTimerSabotageVerdict(checks, id) {
 
 /** El bloque de R1, RC-1 y R2 sobre las purgas de este diseño, o '' si no corre ninguna en el cronómetro. */
 export function purgeTimerBlock(model) {
-  const purges = timerPurges(model);
+  // La purga de batch_job (DSL 2.30) no es de TablePurges: la mide BJ-8 en batch-job-probes.js.
+  const purges = timerPurges(model).filter((purge) => purge.table !== 'batch_job');
   const schedules = timerSchedules(model);
   if (purges.length === 0 && schedules.length === 0) return '';
   const document = usesDocument(model);

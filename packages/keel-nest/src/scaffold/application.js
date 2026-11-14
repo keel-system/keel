@@ -31,12 +31,13 @@ import { PAYMENT_NOTICE_PATH } from '@keel-system/keel-core/gen/payment-gateways
 import { usesCache } from './cache.js';
 import { usesMultipart, multipartFileLimitBytes, usesStorage } from './storage.js';
 import { mainTelemetry, usesTelemetry } from './telemetry.js';
+import { usesBatchJobs } from './batch-jobs.js';
 
 export function generate(model) {
   return [
     { path: 'src/main.ts', content: mainTs(model) },
     { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), [...controllerClasses(model), ...paymentControllers(model)], usesPersistence(model), usesSecurityModule(model), usesMessaging(model) && usesPersistence(model), usesScheduling(model), usesServiceParameters(model), usesHttpClients(model), usesMail(model), usesPayments(model), usesCache(model), usesStorage(model) && Boolean(model.stack?.storage), usesTelemetry(model), usesTimer(model)) },
-    { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model), usesApi(model) && usesIdempotencyHeader(model), usesHttpSecurity(model), usesPayments(model), usesMultipart(model) ? multipartFileLimitBytes(model) : null, usesTelemetry(model)) }
+    { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model), usesApi(model) && usesIdempotencyHeader(model), usesHttpSecurity(model), usesPayments(model), usesMultipart(model) ? multipartFileLimitBytes(model) : null, usesTelemetry(model), usesBatchJobs(model)) }
   ];
 }
 
@@ -135,7 +136,7 @@ export class AppModule {
 `;
 }
 
-function httpPlatformTs(withApi, withIdempotencyHeader = false, withSecurity = false, withPayments = false, multipartLimit = null, withTelemetry = false) {
+function httpPlatformTs(withApi, withIdempotencyHeader = false, withSecurity = false, withPayments = false, multipartLimit = null, withTelemetry = false, withRawBody = false) {
   // Con telemetría, la entrada HTTP abre el span SERVER y cuenta http_server_requests ANTES que la correlación, para
   // que todo lo que haga la petición quede dentro de su traza; y sirve el scrape (fuera de production).
   const telemetryImport = withTelemetry ? "\nimport { Telemetry } from '../telemetry/telemetry.js';" : '';
@@ -154,6 +155,11 @@ function httpPlatformTs(withApi, withIdempotencyHeader = false, withSecurity = f
   // multipart/form-data: lo lee @fastify/multipart, y cada operación de subida con readMultipart (rest/).
   void fastify.register(multipart, { limits: { fileSize: ${multipartLimit} }, throwFileSizeLimit: true });`
       : '';
+  // Un lote asíncrono (DSL 2.30) firma y guarda el TEXTO del cuerpo tal como llegó: se queda en la petición (rawBodyOf).
+  const rawBodyKeep = withRawBody
+    ? `
+    (request as { rawBody?: string }).rawBody = body as string;`
+    : '';
   // El aviso de la pasarela de pago se verifica sobre el texto TAL COMO LLEGÓ: la firma no sobrevive a un JSON
   // leído y vuelto a escribir. Esa ruta recibe el cuerpo sin leer (PaymentNoticeController).
   const noticeExemption = withPayments
@@ -225,7 +231,7 @@ export const HTTP_APPLICATION_OPTIONS = { bodyParser: false } as const;
 export function configureHttp(app: NestFastifyApplication): void {
   const fastify = app.getHttpAdapter().getInstance();${telemetrySetup}
   fastify.removeContentTypeParser('application/json');
-  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (${withPayments ? 'request' : '_request'}, body, done) => {${noticeExemption}
+  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (${withPayments || withRawBody ? 'request' : '_request'}, body, done) => {${noticeExemption}${rawBodyKeep}
     try {
       done(null, parseWireJson(body as string));
     } catch {

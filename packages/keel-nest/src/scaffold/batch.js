@@ -82,9 +82,9 @@ export async function allOrNothing<T>(
     for (let index = 0; index < items.length; index++) {
       let item: T;
       try {
-        item = readItem(items[index], read);
+        item = readBatchItem(items[index], read);
       } catch (error) {
-        throw new ItemFailure(index, invalidResponse(error as InvalidItem));
+        throw new ItemFailure(index, invalidResponse(error as InvalidBatchItem));
       }
       try {
         results.push(BatchItem.succeeded(index, await process(item)));
@@ -107,7 +107,7 @@ export async function allOrNothing<T>(
   }
 }
 
-function invalidResponse(invalid: InvalidItem): ErrorResponse {
+function invalidResponse(invalid: InvalidBatchItem): ErrorResponse {
   return ErrorResponse.of(400, 'Validation Error', VALIDATION_ERROR, invalid.message, null);
 }
 
@@ -220,32 +220,39 @@ export async function perItem<T>(
     }
     let item: T;
     try {
-      item = readItem(items[index], read);
+      item = readBatchItem(items[index], read);
     } catch (error) {
-      results.push(BatchItem.failed(index, VALIDATION_ERROR, (error as InvalidItem).message));
+      results.push(BatchItem.failed(index, VALIDATION_ERROR, (error as InvalidBatchItem).message));
       continue;
     }
     try {
       results.push(BatchItem.succeeded(index, await process(item)));
     } catch (error) {
-      const response = translate(error);
-      const code = response.code;
-      if (code != null && (code === VALIDATION_ERROR || itemErrors.has(code))) {
-        results.push(BatchItem.failed(index, code, response.message));
-      } else {
-        stopped = true;
-        results.push(code != null ? BatchItem.failed(index, code, response.message) : BatchItem.failed(index, BATCH_ABORTED, BATCH_ABORTED_MESSAGE));
-      }
+      const failure = itemFailure(index, error, itemErrors);
+      results.push(failure.item);
+      if (failure.stops) stopped = true;
     }
   }
   return BatchResponse.of(results);
+}
+
+/**
+ * Cómo acaba un elemento que falla al procesarse: \`failed\` con su code si es de \`itemErrors\` o ${validation} (falla solo
+ * él), y si no, \`failed\` con su code o con ${aborted}, deteniendo el lote (D4). Lo comparten el lote síncrono y el
+ * procesador de los asíncronos.
+ */
+export function itemFailure(index: number, error: unknown, itemErrors: ReadonlySet<string>): { readonly item: BatchItem; readonly stops: boolean } {
+  const response = translate(error);
+  const code = response.code;
+  if (code != null && (code === VALIDATION_ERROR || itemErrors.has(code))) return { item: BatchItem.failed(index, code, response.message), stops: false };
+  return { item: code != null ? BatchItem.failed(index, code, response.message) : BatchItem.failed(index, BATCH_ABORTED, BATCH_ABORTED_MESSAGE), stops: true };
 }${allOrNothing}
 
 /** Un elemento mal formado: su mensaje es el que viaja en el resultado. */
-class InvalidItem extends Error {
+export class InvalidBatchItem extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'InvalidItem';
+    this.name = 'InvalidBatchItem';
   }
 }
 
@@ -253,15 +260,15 @@ class InvalidItem extends Error {
  * El elemento como lo leería el borde: el lector de su value object, con las guardas de su constructor. Un null, o un
  * valor que no se puede leer como el tipo, es su ${validation} con el mensaje de la guarda que lo rechazó, o el genérico.
  */
-function readItem<T>(value: unknown, read: (value: unknown) => T | null): T {
-  if (value == null) throw new InvalidItem(MALFORMED_MESSAGE);
+export function readBatchItem<T>(value: unknown, read: (value: unknown) => T | null): T {
+  if (value == null) throw new InvalidBatchItem(MALFORMED_MESSAGE);
   try {
     const item = read(value);
-    if (item == null) throw new InvalidItem(MALFORMED_MESSAGE);
+    if (item == null) throw new InvalidBatchItem(MALFORMED_MESSAGE);
     return item;
   } catch (error) {
-    if (error instanceof InvalidItem) throw error;
-    if (error instanceof MalformedRequestError) throw new InvalidItem(guardMessage(error));
+    if (error instanceof InvalidBatchItem) throw error;
+    if (error instanceof MalformedRequestError) throw new InvalidBatchItem(guardMessage(error));
     throw error;
   }
 }

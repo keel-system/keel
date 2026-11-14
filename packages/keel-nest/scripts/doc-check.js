@@ -34,7 +34,8 @@ import { READ_SCOPE_DESIGNS } from '../../keel-core/test/helpers/read-scope-desi
 import { DATA_LIFECYCLE_DESIGNS } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { LIFECYCLE_SABOTAGE_SPECS, isLifecycleSabotage, lifecycleBlock, lifecycleCases, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
 import { HISTORY_DESIGNS } from '../../keel-core/test/helpers/history-designs.js';
-import { BATCH_DESIGNS } from '../../keel-core/test/helpers/batch-designs.js';
+import { BATCH_DESIGNS, BATCH_JOB_DESIGNS } from '../../keel-core/test/helpers/batch-designs.js';
+import { BATCH_JOB_SABOTAGE_SPECS, isBatchJobSabotage, batchJobBlock, batchJobCases, batchJobSabotageVerdict } from './lib/batch-job-probes.js';
 import { BATCH_SABOTAGE_SPECS, isBatchSabotage, batchBlock, batchCases, batchProbePatch, batchSabotageVerdict } from './lib/batch-probes.js';
 import { HISTORY_SABOTAGE_SPECS, isHistorySabotage, historyBlock, historyCases, historyPreamble, historySabotageVerdict } from './lib/history-probes.js';
 import { partialFilterObject } from '../src/scaffold/data-lifecycle.js';
@@ -103,7 +104,9 @@ const SABOTAGES = {
   // exactamente sus casos HI.
   ...Object.fromEntries(Object.entries(HISTORY_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document])),
   // Los lotes (DSL 2.30): con un sujeto catalog-batch*, cada uno cae en exactamente sus casos BA.
-  ...Object.fromEntries(Object.entries(BATCH_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document]))
+  ...Object.fromEntries(Object.entries(BATCH_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document])),
+  // Los lotes asíncronos (DSL 2.30, fase B): con --subject=catalog-batch-async-mongo, cada uno cae en exactamente sus casos BJ.
+  ...Object.fromEntries(Object.entries(BATCH_JOB_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document]))
 };
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -187,6 +190,8 @@ const SUBJECTS = [
   // vault, sin la autoría de política, como el sujeto asset-vault de arriba.
   // Los lotes sobre documentos (DSL 2.30, BA-1 a BA-5 y BA-7): el MISMO diseño que mide keel-spring.
   ...BATCH_DESIGNS.filter((design) => design.name.endsWith('-mongo')).map((design) => ({ name: design.from, label: design.name, withoutLayers: [], mutate: design.mutate })),
+  // Los lotes asíncronos sobre documentos (DSL 2.30, BJ-1 a BJ-9): el MISMO diseño que mide keel-spring.
+  ...BATCH_JOB_DESIGNS.filter((design) => design.name.endsWith('-mongo')).map((design) => ({ name: design.from, label: design.name, withoutLayers: [], mutate: design.mutate })),
   ...HISTORY_DESIGNS.filter((design) => design.name.endsWith('-mongo')).map((design) => ({
     name: design.from,
     label: design.name,
@@ -252,6 +257,7 @@ function probeScript(model, db) {
   const historyCode = historyBlock(model, ctx, { document: true, engine: 'mongodb', sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterArgs(model, owner)})` });
   // Los lotes (DSL 2.30), también antes de los imports.
   const batchCode = batchBlock(model, ctx, { document: true, engine: 'mongodb', adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterArgs(model, owner)})` });
+  const batchJobCode = batchJobBlock(model, ctx, { document: true, engine: 'mongodb', adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterArgs(model, owner)})` });
   const shapes = expectedShapes(model);
   const enums = new Set([
     ...Object.values(shapes.entities).flat(),
@@ -330,6 +336,7 @@ ${timerCode}
 ${lifecycleCode}
 ${historyCode}
 ${batchCode}
+${batchJobCode}
 ${purgeTimerBlock(model)}
 
 await client.close();
@@ -656,6 +663,13 @@ try {
     if (isLifecycleSabotage(sabotage) && lifecycleCases(model).length > 0) {
       const verdict = lifecycleSabotageVerdict(checks, sabotage, model, { engine: 'mongodb' });
       for (const check of checks.filter((entry) => !entry.ok && /^(LC|RT|PD)-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
+      step(`${label}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
+    // Los lotes asíncronos (DSL 2.30, fase B): verde si caen EXACTAMENTE sus casos BJ (y ningún otro BJ).
+    if (isBatchJobSabotage(sabotage) && batchJobCases(model).length > 0) {
+      const verdict = batchJobSabotageVerdict(checks, sabotage);
+      for (const check of checks.filter((entry) => !entry.ok && /^BJ-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
       step(`${label}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
       continue;
     }

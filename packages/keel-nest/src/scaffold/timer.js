@@ -58,6 +58,8 @@ import { schedulerClass, schedulerPath } from './scheduling.js';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
 import { ATTRIBUTES, OBSERVATIONS, TIMER_LAG, TIMER_PARKED } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { RETENTION_SETTINGS_TS, retentionKindLines, retentionProviders } from './data-lifecycle.js';
+import { batchKindLines, batchJobHandlers, batchJobTimerProviders, batchPurgeTimerBody } from './batch-jobs.js';
+import { BATCH_JOB } from '@keel-system/keel-core/gen/batch-store';
 
 export { usesDeadlines, usesTimer, deadlineOf, TIMER_DATABASES };
 
@@ -414,7 +416,9 @@ function timerKindsFile(model) {
   ${scheduleKindConstant(schedule.operation)}: ${tsString(schedule.kind)},`
     ),
     // Las retenciones (DSL 2.28, D8): un recurrente en modo clúster por raíz.
-    ...retentionKindLines(model)
+    ...retentionKindLines(model),
+    // Los lotes asíncronos (DSL 2.30): un temporizador de UNA vez por trabajo.
+    ...batchKindLines(model)
   ];
   return tsModule(
     TIMER_KINDS_TS,
@@ -472,6 +476,12 @@ export const TimerOutcome = {
  */
 export interface TimerHandler {
   readonly kind: string;
+  /**
+   * ¿Corre dentro de la transacción del sondeador? Un plazo sí (sin el campo). Un trabajo de un lote asíncrono (DSL 2.30)
+   * no: procesa un chunk en el que cada elemento abre la suya, y envolverlo en una sola volvería a ser el lote en una
+   * transacción. Entonces el sondeador borra o rearma el temporizador DESPUÉS, con la valla, y un fallo cuenta como siempre.
+   */
+  readonly inTransaction?: boolean;
   /** \`dbNow\` es la hora de la BASE (T1): la única que compara el cronómetro. */
   handle(timer: ClaimedTimer, dbNow: Date): Promise<TimerOutcome>;
 }
@@ -1102,6 +1112,7 @@ function timerPollerFile(model) {
       { symbol: 'ClaimedTimer', from: TIMER_STORE_TS, type: true },
       { symbol: 'RecurringTimerHandler', from: TIMER_STORE_TS, type: true },
       { symbol: 'TimerHandler', from: TIMER_STORE_TS, type: true },
+      { symbol: 'TimerOutcome', from: TIMER_STORE_TS, type: true },
       { symbol: 'TimerStore', from: TIMER_STORE_TS }
     ],
     `/**
@@ -1200,16 +1211,21 @@ export class TimerPoller implements OnApplicationBootstrap, BeforeApplicationShu
           continue;
         }
         if (handler == null) throw new Error(\`Sin handler para el temporizador \${timer.kind}\`);
-        await ${observed(`this.transactions.inTransaction(async () => {
-          const outcome = await handler.handle(timer, await this.store.dbNow());
-          if (outcome.done) await this.store.complete(timer.id, token);
-          else await this.store.reschedule(timer.id, token, outcome.dueAt);
-        })`)};
+        // Entre paréntesis: sin ellos, el await solo esperaría a la condición.
+        await ${observed(`(handler.inTransaction === false
+          ? this.store.dbNow().then((dbNow) => handler.handle(timer, dbNow)).then((outcome) => this.settle(timer, token, outcome))
+          : this.transactions.inTransaction(async () => this.settle(timer, token, await handler.handle(timer, await this.store.dbNow()))))`)};
       } catch (failure) {
         await this.failed(timer, token, failure);
       }
     }
     return sleepMs(await this.store.nextDueMs(this.kinds), this.settings.maxSleepMs);
+  }
+
+  /** Borra el temporizador o lo rearma, con la valla con la que se reclamó. */
+  private async settle(timer: ClaimedTimer, token: string, outcome: TimerOutcome): Promise<void> {
+    if (outcome.done) await this.store.complete(timer.id, token);
+    else await this.store.reschedule(timer.id, token, outcome.dueAt);
   }
 
   /** Un fallo: cuenta el intento y, al agotarlos, el temporizador queda aparcado (T5). */
@@ -1349,6 +1365,11 @@ export class KeelTimerPurge implements RecurringTimerHandler {
  * cron es el de siempre (su clave, su variable y su default de keel-core, en PURGE_SETTINGS), evaluado en UTC (T7).
  */
 function purgeTimerFile(model, purge) {
+  // Los trabajos de los lotes asíncronos (DSL 2.30, D10) no los purga TablePurges: su almacén sabe llevarse sus resultados.
+  if (purge.table === BATCH_JOB.table) {
+    const { imports, body } = batchPurgeTimerBody(purgeTimerClass(purge.table), purgeKindConstant(purge.table));
+    return tsModule(purgeTimerPath(purge.table), imports, body);
+  }
   const entry = tablePurges(model).find((candidate) => candidate.table === purge.table);
   if (!entry) throw new Error(`timer.js: ${purge.table} se purga con el cronómetro y TablePurges no la tiene`);
   const className = purgeTimerClass(purge.table);
@@ -1566,6 +1587,11 @@ function timerModuleFile(model) {
     from: deadlineHandlerPath(entity.name, deadline.stateName)
   }));
   const deadlines = usesDeadlines(model);
+  // Los trabajos de los lotes asíncronos (DSL 2.30): un handler por operación, que despacha por el mediator.
+  const batchHandlers = batchJobHandlers(model);
+  handlers.push(...batchHandlers);
+  const batch = batchJobTimerProviders(model);
+  const dispatches = deadlines || batchHandlers.length > 0;
   const handlerList = handlers.map((handler) => handler.symbol);
   const purgeTimers = timerPurges(model).map((purge) => ({ symbol: purgeTimerClass(purge.table), from: purgeTimerPath(purge.table) }));
   const scheduleTimers = timerSchedules(model).map((schedule) => ({ symbol: scheduleTimerClass(schedule.operation), from: scheduleTimerPath(schedule.operation) }));
@@ -1598,11 +1624,16 @@ function timerModuleFile(model) {
         ? [
             { symbol: CLOCK_PORT.name, from: CLOCK_TS },
             { symbol: deadlinesClass(model), from: deadlinesPath(model) },
-            { symbol: 'SystemClock', from: SYSTEM_CLOCK_TS },
+            { symbol: 'SystemClock', from: SYSTEM_CLOCK_TS }
+          ]
+        : []),
+      ...(dispatches
+        ? [
             { symbol: 'UseCaseModule', from: 'src/infrastructure/usecase/use-case-module.ts' },
             { symbol: 'TimerHandler', from: TIMER_STORE_TS, type: true }
           ]
         : []),
+      ...batch.imports,
       ...(usesParameters ? [{ symbol: parametersClass(model), from: parametersPath(model) }] : []),
       { symbol: 'KeelTimerPurge', from: TIMER_PURGE_TS },
       { symbol: 'TimerPoller', from: TIMER_POLLER_TS },
@@ -1633,9 +1664,9 @@ export class TimerModule {
       providers: [
         { provide: TIMER_SETTINGS, useValue: timerSettings(configuration) },${retains ? '\n        { provide: RETENTION_SETTINGS, useValue: retentionSettings(configuration) },' : ''}${deadlineProviders}
         TimerArmedSignal,
-        { provide: TimerStore, useClass: ${timerStoreImplClass(model)} }
+        { provide: TimerStore, useClass: ${timerStoreImplClass(model)} }${batch.providers.map((provider) => `,\n        ${provider}`).join('')}
       ],
-      exports: [TIMER_SETTINGS, ${retains ? 'RETENTION_SETTINGS, ' : ''}${deadlines ? `${CLOCK_PORT.name}, ${deadlinesClass(model)}, ` : ''}TimerArmedSignal, TimerStore]
+      exports: [TIMER_SETTINGS, ${retains ? 'RETENTION_SETTINGS, ' : ''}${deadlines ? `${CLOCK_PORT.name}, ${deadlinesClass(model)}, ` : ''}TimerArmedSignal, TimerStore${batch.exports.map((name) => `, ${name}`).join('')}]
     };
   }
 }
@@ -1644,10 +1675,10 @@ export class TimerModule {
  * El sondeador y sus handlers: ${deadlines ? 'uno por plazo, que revalida y despacha su operación por el mediator, y ' : ''}los recurrentes en modo
  * clúster (la purga de la tabla${purgeTimers.length > 0 ? ', las de las tablas del generador, que llaman a TablePurges' : ''}${scheduleTimers.length > 0 ? ' y los schedule de las operaciones, que llaman a su scheduler y drenan' : ''}). Va el último, después de los casos de uso.
  */
-@Module({${deadlines ? '\n  imports: [UseCaseModule],' : ''}
+@Module({${dispatches ? '\n  imports: [UseCaseModule],' : ''}
   providers: [
 ${[...handlerList, ...retentions.filter((provider) => !provider.recurring).map((provider) => provider.symbol), ...recurringList].map((symbol) => `    ${symbol},`).join('\n')}
-    { provide: TIMER_HANDLERS, useFactory: (${deadlines ? '...handlers: TimerHandler[]' : ''}) => ${deadlines ? 'handlers' : '[]'}, inject: [${handlerList.join(', ')}] },
+    { provide: TIMER_HANDLERS, useFactory: (${dispatches ? '...handlers: TimerHandler[]' : ''}) => ${dispatches ? 'handlers' : '[]'}, inject: [${handlerList.join(', ')}] },
     { provide: TIMER_RECURRINGS, useFactory: (...recurrings: RecurringTimerHandler[]) => recurrings, inject: [${recurringList.join(', ')}] },
     TimerPoller
   ]

@@ -22,6 +22,7 @@ import { storeEntities } from './messaging-stores.js';
 import { timerEntities } from './timer.js';
 import { reconciliationBindings, reconciliationEntities } from './reconciliation-claim.js';
 import { historyBindings, historyEntities } from './history.js';
+import { batchJobBindings, batchJobEntities } from './batch-jobs.js';
 import { SWEEP_SETTINGS_TS, usesSweepClaims } from './claim.js';
 import {
   usesRequestIdempotency,
@@ -158,6 +159,8 @@ function dataSourceOptionsFile(model) {
   entities.push(...timerEntities(model));
   // Las dos tablas del historial de cambios (DSL 2.29): change_history y change_history_field, las mismas que en keel-spring.
   entities.push(...historyEntities(model));
+  // Las dos tablas de los lotes asíncronos (DSL 2.30): batch_job y batch_item_result, las mismas que en keel-spring.
+  entities.push(...batchJobEntities(model));
   const driverOptions =
     engine === 'postgresql'
       ? `    type: 'postgres',
@@ -676,6 +679,11 @@ function persistenceModuleFile(model) {
   imports.push(...history.imports);
   bindings.push(...history.bindings);
   ports.push(...history.exports);
+  // El almacén de los trabajos de los lotes asíncronos (DSL 2.30): lo usan el alta, el procesador y su purga.
+  const batchJobs = batchJobBindings(model);
+  imports.push(...batchJobs.imports);
+  bindings.push(...batchJobs.bindings);
+  ports.push(...batchJobs.exports);
   // La configuración de los barridos (el lote y el plazo de cada reclamo): la leen los adaptadores.
   if (usesSweepClaims(model)) {
     imports.push({ symbol: 'SWEEP_SETTINGS', from: SWEEP_SETTINGS_TS }, { symbol: 'sweepSettings', from: SWEEP_SETTINGS_TS });

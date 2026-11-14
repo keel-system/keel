@@ -64,11 +64,11 @@ test('los sujetos pasan la frontera de keel-nest y su sonda ejecuta los MISMOS c
   }
 });
 
-test('la frontera: async llega en el incremento 7 y la idempotencia del lote entero no la genera nadie todavía', () => {
+test('la frontera: async pasa (batch-jobs.test.js) y la idempotencia del lote síncrono entero no la genera nadie todavía', () => {
   const asynchronous = load('catalog-batch', (layers) => {
     layers['use-cases'].operations.importProducts.batch.execution = 'async';
   });
-  assert.match(checkSupportedFeatures(asynchronous.manifest, asynchronous.layers).errors.join('\n'), /importProducts\.batch \(execution: async.*incremento 7/);
+  assert.deepEqual(checkSupportedFeatures(asynchronous.manifest, asynchronous.layers).errors, []);
   const idempotent = load('catalog-batch', (layers) => {
     layers['use-cases'].operations.importProducts.idempotency = { keySource: 'client-key', ttlSeconds: 3600 };
   });

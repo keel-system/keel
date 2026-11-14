@@ -27,6 +27,7 @@ import { MULTIPART_READING_TS } from './storage.js';
 import { REQUEST_READING_TS, ROUTES_TS, usesApi } from './rest-support.js';
 import { CALLER_IDENTITY_TS, callerResolution } from './security.js';
 import { controllerBatchCall, atomicTransaction } from './batch.js';
+import { controllerBatchJobMethods, usesBatchJobs } from './batch-jobs.js';
 import { TRANSACTION_CONTEXT_TS } from './repositories.js';
 
 export const VALUE_READERS_TS = 'src/infrastructure/rest/value-readers.ts';
@@ -35,7 +36,10 @@ const CONTROLLERS_DIR = 'infrastructure/rest/controllers';
 
 const BATCH_ITEM = 'item';
 
-const DECORATOR_BY_METHOD = { GET: 'Get', POST: 'Post', PUT: 'Put', PATCH: 'Patch', DELETE: 'Delete' };
+/** ¿Es la operación un lote asíncrono que se genera (DSL 2.30, fase B)? */
+const isAsyncBatch = (model, operation) => operation.batch?.execution === 'async' && usesBatchJobs(model);
+
+const DECORATOR_BY_METHOD ={ GET: 'Get', POST: 'Post', PUT: 'Put', PATCH: 'Patch', DELETE: 'Delete' };
 
 /** Los controladores con su archivo, para quien los registra (AppModule). */
 export function controllerClasses(model) {
@@ -53,9 +57,12 @@ export function generate(model) {
     if (routed.length > 0) files.push(renderController(model, service, routed));
   }
   if ((model.valueObjects ?? []).length > 0) files.push(valueReaders(model));
-  const pageable = (model.services ?? []).some((service) =>
-    (service.operations ?? []).some((operation) => operation.route && messageComponents(model, operation).some((c) => c.pageable))
-  );
+  // Los resultados de un trabajo de un lote asíncrono (DSL 2.30) se leen también por páginas.
+  const pageable =
+    usesBatchJobs(model) ||
+    (model.services ?? []).some((service) =>
+      (service.operations ?? []).some((operation) => operation.route && messageComponents(model, operation).some((c) => c.pageable))
+    );
   if (pageable) files.push({ path: PAGEABLE_READING_TS, content: pageableReading() });
   files.push(routesFile(model));
   return files;
@@ -200,7 +207,9 @@ function renderController(model, service, routed) {
   const injected = [
     '@Inject(UseCaseMediator) private readonly mediator: UseCaseMediator',
     ...(resolving ? ['@Inject(CallerIdentityResolver) private readonly callerIdentity: CallerIdentityResolver'] : []),
-    ...(atomic ? ['@Inject(TransactionContext) private readonly transactions: TransactionContext'] : [])
+    ...(atomic ? ['@Inject(TransactionContext) private readonly transactions: TransactionContext'] : []),
+    // Los lotes asíncronos (DSL 2.30, fase B): el alta y las rutas del trabajo.
+    ...(routed.some((operation) => isAsyncBatch(model, operation)) ? ['@Inject(BatchJobs) private readonly batchJobs: BatchJobs'] : [])
   ];
   const constructor = injected.length === 1 ? `  constructor(${injected[0]}) {}` : `  constructor(\n    ${injected.join(',\n    ')}\n  ) {}`;
   const body = `${tsdoc(`Operaciones HTTP de ${service.controllerClass.replace(/V1Controller$/, '')}. Solo traduce: lee la petición, despacha el caso de uso y devuelve su resultado.`)}@Controller(${tsString(model.api.routeBase.replace(/^\//, ''))})
@@ -228,6 +237,11 @@ function renderMethod(model, operation, imports, readers) {
   const location = !batch && returnsLocation(model, operation);
   const readerName = `read${operation.messageClass}`;
   readers.push(renderReader(model, operation, readerName, imports));
+  if (isAsyncBatch(model, operation)) {
+    // Un lote asíncrono (DSL 2.30, fase B): el alta firma el TEXTO del cuerpo (D13) y lo guarda; las dos rutas del trabajo
+    // cuelgan de la suya. El lector del sobre se exporta: el procesador lo vuelve a usar sobre lo guardado.
+    return controllerBatchJobMethods(model, operation, { decorator, readerName, imports, doc: tsdoc(operation.description, '  ') });
+  }
   if (batch) return renderBatchMethod(model, operation, decorator, readerName, imports);
 
   const params = ['@Param() params: Record<string, string>', '@Query() query: Record<string, unknown>', '@Body() body: unknown'];
@@ -532,7 +546,7 @@ function renderReader(model, operation, name, imports) {
     const itemType = operation.batch.itemType;
     const envelope = `{ readonly ${over}: readonly unknown[]; readonly message: (${BATCH_ITEM}: ${itemType}) => ${operation.messageClass} }`;
     return `/** Lee el sobre del lote ${operation.route.method} ${operation.route.path} (${operation.name}): los elementos, sin leer, y el mensaje de cada uno. */
-function ${name}(params: Record<string, string>, query: Record<string, unknown>, body: unknown): ${envelope} {
+${isAsyncBatch(model, operation) ? 'export ' : ''}function ${name}(params: Record<string, string>, query: Record<string, unknown>, body: unknown): ${envelope} {
 ${ordered.join('\n')}${ordered.length > 0 ? '\n' : ''}  return {
     ${over}: ${local(over)} ?? [],
     message: (${BATCH_ITEM}: ${itemType}) =>

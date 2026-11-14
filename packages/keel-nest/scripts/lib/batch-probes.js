@@ -26,8 +26,11 @@ const js = (value) => JSON.stringify(value);
 /** Lo que el nombre de un elemento pide al handler de la sonda: fallar con algo que el diseño no declara (BA-4). */
 export const UNDECLARED_FAILURE_NAME = 'BOOM';
 
-/** Las operaciones por lotes del modelo. */
-export const batchOperations = (model) => model.services.flatMap((service) => service.operations).filter((operation) => operation.batch);
+/** Las operaciones por lotes del modelo, síncronas y asíncronas. */
+export const allBatchOperations = (model) => model.services.flatMap((service) => service.operations).filter((operation) => operation.batch);
+
+/** Las operaciones por lotes SÍNCRONAS del modelo: las de los casos BA (las asíncronas son de batch-job-probes.js). */
+export const batchOperations = (model) => allBatchOperations(model).filter((operation) => operation.batch.execution !== 'async');
 
 /** Los casos que ejecuta este diseño: los mismos que keel-spring (batch-parity.test.js lo compara). */
 export function batchCases(model) {
@@ -51,9 +54,9 @@ export const BATCH_SABOTAGE_SPECS = {
   // El lote entero en UNA transacción: los despachos se unen a ella (el mediator no abre otra si hay una en curso).
   'ba-one-tx': SAME([CONTROLLER, /return perItem\((.*)\);/g, "return this.mediator['transactions'].inTransaction(() => perItem($1));"]),
   // Un elemento mal formado tumba el lote entero con un 400, como si el borde validara el DTO completo.
-  'ba-validate-whole': SAME([BATCH, 'results.push(BatchItem.failed(index, VALIDATION_ERROR, (error as InvalidItem).message));\n      continue;', 'throw new MalformedRequestError();']),
+  'ba-validate-whole': SAME([BATCH, 'results.push(BatchItem.failed(index, VALIDATION_ERROR, (error as InvalidBatchItem).message));\n      continue;', 'throw new MalformedRequestError();']),
   // Un fallo que no es de su elemento no detiene el lote.
-  'ba-continue-on-undeclared': SAME([BATCH, 'stopped = true;', 'stopped = false;']),
+  'ba-continue-on-undeclared': SAME([BATCH, 'if (failure.stops) stopped = true;', 'if (failure.stops) stopped = false;']),
   // El lote por elemento responde 200: el status deja de ser el del método.
   'ba-status': SAME([CONTROLLER, '@HttpCode(207)', '@HttpCode(200)']),
   // all-or-nothing sin la transacción que abarca el lote: cada elemento se confirma en la suya.
@@ -85,7 +88,7 @@ export function batchSabotageVerdict(checks, id, model, engine) {
 
 /** El handler de la sonda en el lugar del stub de `importProducts`; el resto de archivos, tal cual. */
 export function batchProbePatch(model, file) {
-  const operation = batchOperations(model)[0];
+  const operation = allBatchOperations(model)[0];
   if (!operation || file.path !== handlerPath(operation)) return file.content;
   const result = operation.batch.resultFields.length > 0;
   const returnType = result ? operation.responseDto.name : 'void';
@@ -97,6 +100,9 @@ import { Uuids } from '../../domain/identity/uuids.js';
 import { ApplicationComponent, Handles } from '../annotations/application-component.js';
 import { ${operation.messageClass} } from '../commands/${fileOf(operation.messageClass)}.js';
 ${dto}import type { ${result ? 'ReturningCommandHandler' : 'CommandHandler'} } from '../interfaces/handlers.js';
+
+/** El gancho de la sonda de los lotes asíncronos (BJ-5): lo que hace «otra réplica» justo después del efecto. */
+export const probeHooks: { afterEffect: (() => Promise<void>) | null } = { afterEffect: null };
 
 /** La sonda de db-check y doc-check: lo que escribiría el agente para UN elemento. */
 @ApplicationComponent()
@@ -113,6 +119,8 @@ export class ${operation.handlerClass} implements ${result ? `ReturningCommandHa
     const saved = await this.productRepository.save(
       new Product({ id: Uuids.v7(), sku: draft.sku, name: draft.name, notes: null, price: draft.price, apiToken: 'sonda', status: ProductStatus.DRAFT, lockVersion: null })
     );
+    const hook = probeHooks.afterEffect;
+    if (hook != null) await hook();
     ${result ? `return new ${returnType}({ productId: saved.id });` : 'void saved;'}
   }
 }

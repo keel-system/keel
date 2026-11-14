@@ -1,6 +1,6 @@
 # DSL 2.30: lotes con resultado por elemento (R5)
 
-**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 6 cerrados el 2026-11-14 (la fase A, `sync`, en los cuatro generadores, la fase B neutral en keel-core y la fase B en keel-spring); el siguiente es el 7 (keel-nest `async`). Al cerrar pasa a `completed_plans/`.
+**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 7 cerrados el 2026-11-14 (la fase A, `sync`, en los cuatro generadores, la fase B neutral en keel-core y la fase B en keel-spring y keel-nest); el siguiente es el 8 (keel-dotnet `async`). Al cerrar pasa a `completed_plans/`.
 
 ## Contexto
 
@@ -349,14 +349,55 @@ Incremento 6 (keel-spring `async`):
 - **Sin fila en la matriz de paridad**: los lotes no la tienen desde el inc. 1, y una fila nueva en el catálogo neutral
   (`gen/mechanisms.js`) obliga a los cuatro generadores. Entra en el inc. 10.
 
+Incremento 7 (keel-nest `async`):
+
+- **`src/scaffold/batch-jobs.js`** emite el almacén (`BatchJobStore` abstracto en `infrastructure/persistence/batch/`, con
+  `SqlBatchJobStore` sobre las sentencias de keel-core tal cual más las dos tablas mapeadas solo para el esquema, o
+  `MongoBatchJobStore` con sus índices en `DOCUMENT_INDEXES`, la clave única y parcial), `BatchSettings`, `BatchJobs` (el
+  alta y las dos rutas), `BatchJobRunner` (el chunk) y un `<Op>BatchJob` por operación, en `infrastructure/rest/batch/`.
+  No importa a ningún otro emisor: controllers.js, timer.js y application.js lo importan a él.
+- **El alta firma el TEXTO del cuerpo**: con lotes asíncronos, el lector JSON de `http-platform.ts` deja el texto tal como
+  llegó en la petición (`rawBody`), y `rawBodyOf` lo lee (sin él, `MalformedRequestError`, como el `byte[]` obligatorio de
+  keel-spring). El sobre se lee con el MISMO lector de la operación, que el controlador exporta para que el procesador lo
+  vuelva a usar sobre lo guardado; un cuerpo que no es JSON es malformado, y una cota de la lista, el `RequestValidationError`
+  rehecho con `source: 'params'` (el mensaje `invalidParams` de keel-spring).
+- **El sondeador gana `TimerHandler.inTransaction?: boolean`** (sin el campo, dentro): el trabajo lo pone a false, y el
+  sondeador borra o rearma después con la valla (`settle`). Con telemetría la expresión va dentro de una flecha no async:
+  la rama nueva va con `.then`, sin `await` (lo destapó `observability-assets.test.js`, que ejecuta el sondeador); y sin
+  telemetría va entre paréntesis, o el `await` solo espera a la condición y el fallo de un plazo sale como rechazo sin
+  capturar (lo destapó el sujeto `verification-codes` de db-check y doc-check, que hay que pasar al tocar el sondeador).
+  La rama fuera de transacción no la ejecuta ninguna sonda por el sondeador: BJ-* dispara el handler a mano, como keel-spring.
+- **`batch.ts` exporta `readBatchItem`, `InvalidBatchItem` e `itemFailure`**: una sola lectura y una sola traducción del
+  elemento para el lote síncrono y el procesador, como `read`/`failureOf` de keel-spring.
+- **Un fallo que no es la valla se traduce**: en TypeScript se captura todo, así que la caída simulada de BJ-4 sale primero
+  como un fallo del elemento y vuelve a caer al escribir su resultado de fallo, fuera ya del procesador; el cursor queda
+  donde estaba y el siguiente disparo sigue desde él. La valla perdida es `FenceLost`, que revierte la transacción del
+  elemento y para el disparo.
+- **El almacén documental calcula la hora con `$$NOW`** (como `MongoTimerStore`) y no inyecta `TimerStore`: el módulo de
+  persistencia va antes que el del cronómetro y las pruebas emitidas lo levantan sin él.
+- **El dueño** es `currentActor()` (`audit-actor.ts`, emitido también con lotes asíncronos) y el procesador corre con un
+  principal de token cuyo `sub` es el dueño (`SecurityContext.runWith`). `BatchJobs`, `BatchJobRunner` y `BATCH_SETTINGS`
+  van en `TimerModule` (global); el almacén, en `PersistenceModule`; los handlers, en `TimerPollerModule`, que importa
+  `UseCaseModule` con plazos o con lotes. La purga de `batch_job` es `BatchJobPurgeTimer` (timer.js delega su cuerpo en
+  `batchPurgeTimerBody`): no pasa por TablePurges, y `purgeTimerBlock` de las sondas la deja fuera.
+- **`batch.yaml`** se emite en los cuatro perfiles; los tres de keel-spring son iguales byte a byte (keel-spring no escribe
+  el de `test`).
+- Red: `test/batch-jobs.test.js` (frontera, casos, nota, configuración y contrato contra keel-spring, sentencias tal cual,
+  índice parcial, cronómetro, el alta, la valla antes del resultado, la frontera de planService y los sabotajes
+  aplicables); los sujetos de `BATCH_JOB_DESIGNS` en `DERIVED_SILHOUETTES` (ts-syntax y `ts-check` 13/13); y
+  `scripts/lib/batch-job-probes.js` en `db-check --subject=catalog-batch-async` (PostgreSQL y MySQL) y
+  `doc-check --subject=catalog-batch-async-mongo`: BJ-1 a BJ-9 en verde, y `bj-no-resume` en BJ-4, `bj-cursor-outside-tx`
+  en BJ-4 y BJ-5 y `bj-foreign-reader` en BJ-6, exactamente, en los tres motores. El handler de la sonda es el de la fase A
+  con un gancho (`probeHooks.afterEffect`), y la sonda de la fase A deja fuera las operaciones asíncronas.
+
 ## Para retomar
 
-Inc. 7, keel-nest `async`: lo mismo que el 6 con las decisiones de arriba (el modo fuera de transacción en su sondeador, el
-alta sobre los bytes, el avance antes del resultado, el dueño como actor) y su red en `db-check`/`doc-check` con
-`scripts/lib/batch-probes.js`, BJ-1 a BJ-9 y los tres sabotajes `bj-*`. Pasar los sujetos de `BATCH_JOB_DESIGNS` a la
-frontera de keel-nest (`asyncIncrement: null`). La huella golden de keel-nest sigue atrasada desde antes de la 2.30
-(`npm run golden --workspace packages/keel-nest -- --check`): regenerarla en su propio commit. Las filas de
-`capability-coverage` de los lotes se borran en el inc. 11.
+Inc. 8, keel-dotnet `async`: lo mismo que el 6 y el 7 con las decisiones de arriba (el modo fuera de transacción en su
+sondeador, el alta sobre los bytes del cuerpo, el avance antes del resultado, el dueño como actor, el almacén documental
+sin depender del cronómetro) y su red en `db-check`/`doc-check` con BJ-1 a BJ-9 y los tres sabotajes `bj-*`. Pasar los
+sujetos de `BATCH_JOB_DESIGNS` a la frontera de keel-dotnet (`asyncIncrement: null`). La huella golden de keel-nest sigue
+atrasada desde antes de la 2.30 (`npm run golden --workspace packages/keel-nest -- --check`): regenerarla en su propio
+commit. Las filas de `capability-coverage` de los lotes se borran en el inc. 11.
 
 ## Verificación
 

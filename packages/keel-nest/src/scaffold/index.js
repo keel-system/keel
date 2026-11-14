@@ -72,6 +72,7 @@ import * as architecture from './architecture.js';
 import * as restSupport from './rest-support.js';
 import * as controllers from './controllers.js';
 import * as batch from './batch.js';
+import * as batchJobs from './batch-jobs.js';
 import * as security from './security.js';
 import * as testCredential from './test-credential.js';
 import * as tokenContractTest from './token-contract-test.js';
@@ -189,6 +190,8 @@ const GENERATORS = [
   controllers,
   // Los lotes con resultado por elemento (DSL 2.30): la respuesta y el bucle que llama el controlador.
   batch,
+  // Los lotes asíncronos (DSL 2.30, fase B): el trabajo, su almacén y su procesador sobre el cronómetro.
+  batchJobs,
   // La seguridad (incremento 8): el hook de la entrada HTTP con el plan de acceso neutral, el JWT, las
   // claves, CORS, la identidad del llamante y el alcance por recurso.
   security,
@@ -237,6 +240,9 @@ export function planService({ manifest, layers, fixtures = null, workspace, stac
   // El historial (DSL 2.29): sentencias medidas para PostgreSQL y MySQL, y MongoDB.
   const historyErrors = history.historyStackErrors(model);
   if (historyErrors.length > 0) throw new Error(historyErrors.join('\n'));
+  // Los lotes asíncronos (DSL 2.30, fase B): el almacén de los trabajos y lo que el trabajo no puede llevarse de la petición.
+  const batchJobErrors = batchJobs.batchJobStackErrors(model, services.messageComponents);
+  if (batchJobErrors.length > 0) throw new Error(batchJobErrors.join('\n'));
   // La lectura acotada (DSL 2.27) que no se puede generar por construcción (T7, T8 y compañía): la frontera neutral.
   const scopeErrors = readScopeGenerationErrors(model);
   if (scopeErrors.length > 0) throw new Error(scopeErrors.join('\n'));
