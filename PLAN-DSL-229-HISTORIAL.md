@@ -341,4 +341,6 @@ generador que no llegue rechaza la capacidad con su motivo en `supported-feature
 - Lo que se mira en ellas: HI-11 con la app arrancada y telemetría, si el agente de pruebas lee bien `change_history` en
   FL-CRD-007-C (si no, entra el helper `historyOf` en el arnés de los cuatro, como `ageDeletion`), y que los filtros por
   fecha con el `at` leído (FL-CRD-009-C) salgan verdes en los dos motores.
+- Hallado en la corrida de keel-nest (2026-11-13): el README que emiten los cuatro generadores enseña `bash infra/up.sh`
+  sin el `bash infra/init-keycloak.sh` que siembra el realm. Arreglarlo en los cuatro antes de cerrar el plan.
 - Al cerrarlas, el plan pasa a `completed_plans/`.
