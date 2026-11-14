@@ -40,6 +40,8 @@ import { cacheNote } from '@keel-system/keel-core/gen/cache-plan';
 import { naturalKeyBatchFinder, naturalKeyFinder } from './repositories.js';
 import { deletedRootOf, logicalDeletionNote, restoreNote } from '@keel-system/keel-core/gen/data-lifecycle';
 import * as history from './history.js';
+import { BATCH_ITEM_COMPONENT } from './batch.js';
+import { batchNote } from '@keel-system/keel-core/gen/batch';
 import { stubNote as conditionalUniquenessNote } from './conditional-uniqueness.js';
 import { callerResolution } from './security.js';
 import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
@@ -62,7 +64,15 @@ import {
 export function messageComponents(model, operation) {
   const components = [];
   for (const param of operation.pathParams ?? []) components.push(param);
-  for (const field of operation.bodyFields) components.push(field);
+  for (const field of operation.bodyFields) {
+    // Un lote (DSL 2.30): el mensaje lleva UN elemento del campo que se recorre, no la lista. Sin validación propia: el
+    // elemento ya lo leyó y validó BatchRunner, y el mensaje no es el cuerpo de ninguna petición.
+    if (operation.batch?.over === field.name) {
+      components.push({ ...field, name: BATCH_ITEM_COMPONENT, javaType: field.elementJavaType, list: false, imports: [], validation: [], inputValidation: [], inputRules: [], inheritedPattern: null, batchItem: true });
+      continue;
+    }
+    components.push(field);
+  }
   if (operation.paginated) {
     if (model.layersPresent.persistence) {
       components.push({
@@ -353,7 +363,7 @@ function renderMessage(model, operation) {
           );
         }
       }
-      if (component.kind === 'composite') {
+      if (component.kind === 'composite' && !component.batchItem) {
         imports.add('jakarta.validation.Valid');
         annotations.push('@Valid');
       }
@@ -634,6 +644,8 @@ function renderHandler(model, service, operation) {
     const restore = restoreNote(model, operation, { findCall: byKey, restoreCall: `${port}.restore(<su id>)` });
     if (restore) notes.push(restore);
   }
+  // El lote (DSL 2.30): la nota neutral. El handler procesa UN elemento; el bucle es de BatchRunner.
+  if (operation.batch) notes.push(...batchNote(operation.batch));
   // El historial (DSL 2.29): la nota neutral, con la llamada al puerto de la raíz.
   if (operation.historyOf) {
     const historyRead = history.handlerNote(model, operation);

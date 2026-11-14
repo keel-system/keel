@@ -77,6 +77,7 @@ import * as services from './services.js';
 import * as timer from './timer.js';
 import * as dataLifecycle from './data-lifecycle.js';
 import * as history from './history.js';
+import * as batch from './batch.js';
 import { enginesWithPartialIndex } from './migrations.js';
 import * as readme from './readme.js';
 import * as contextMd from './context-md.js';
@@ -158,6 +159,8 @@ const GENERATORS = [
   scheduling,
   jackson,
   controllers,
+  // Los lotes con resultado por elemento (DSL 2.30): el sobre, el bucle y la respuesta que llama el controller.
+  batch,
   web,
   security,
   // La política de direcciones salientes: la inyectan los clientes de http-clients y la pasarela.

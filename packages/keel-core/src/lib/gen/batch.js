@@ -31,6 +31,12 @@ export const BATCH_MULTI_STATUS = 207;
  */
 export const BATCH_ABORTED_MESSAGE = 'El elemento falló por una causa que no es suya y el lote se detuvo en él';
 
+/**
+ * El `message` de un elemento que no se puede leer como su tipo (D3: un null, un tipo de JSON que no casa) cuando lo
+ * que falla no es una guarda con su propio mensaje. Su `error` es VALIDATION_ERROR y falla solo él.
+ */
+export const BATCH_ITEM_MALFORMED_MESSAGE = 'El elemento no tiene la forma que el contrato declara para él';
+
 // ─── Desde las capas ─────────────────────────────────────────────────────────
 
 /** Las operaciones que declaran `batch`: `{ operation, op, batch }`, en su orden. */
@@ -164,6 +170,45 @@ export function batchBody(items) {
   };
 }
 
+// ─── El contrato ─────────────────────────────────────────────────────────────
+
+/**
+ * Lo que la descripción de la respuesta de un lote dice en el contrato formal (`gen/openapi.js`): la forma no basta para
+ * saber qué falla solo su elemento, qué detiene el lote ni qué queda confirmado. null si la operación no es un lote.
+ */
+export function batchContractClause(batch) {
+  if (!batch) return null;
+  if (batch.atomicity === 'all-or-nothing') {
+    return (
+      `Lote todo o nada (DSL 2.30): un resultado por elemento de '${batch.over}', en orden de índice. Con un fallo no queda ` +
+      `nada confirmado y la respuesta es el error de ese elemento, con su ruta en details (${batchItemPath(batch.over, 0)}).`
+    );
+  }
+  const skipped = [...batch.itemErrors, FRAMEWORK_ERRORS.validation.code].join(', ');
+  return (
+    `Lote por elemento (DSL 2.30): siempre ${BATCH_MULTI_STATUS}, con un resultado por elemento de '${batch.over}' en orden de ` +
+    `índice, cada uno confirmado en su propia transacción. Fallan solo su elemento ${skipped}. Cualquier otro fallo ` +
+    `detiene el lote: ese elemento sale failed con su code (${FRAMEWORK_ERRORS.batchAborted.code} si no tiene), lo ` +
+    'anterior queda confirmado y lo siguiente sale notAttempted.'
+  );
+}
+
+/**
+ * Lo que ningún generador sabe generar todavía de un lote síncrono, con el mismo mensaje en los cuatro: la idempotencia
+ * del lote entero (D5, BA-8), cuya repetición devuelve el mismo 207. El handler procesa un elemento, así que la de la
+ * operación sola deduplicaría cada elemento y no el lote; generarla a medias respondería otra cosa en la repetición.
+ */
+export function batchFrontierErrors(layers, generator) {
+  return batchOperations(layers)
+    .filter(({ op }) => op.idempotency)
+    .map(
+      ({ operation }) =>
+        `use-cases: ${operation}.batch con idempotency (DSL 2.30, D5): ${generator} todavía no genera la idempotencia del ` +
+        'lote entero —la repetición tiene que devolver el mismo resultado sin volver a procesarlo—. Quita idempotency del ' +
+        'lote (la clave natural de cada elemento ya lo guarda de duplicarse) o espera a que se genere.'
+    );
+}
+
 // ─── La frontera de los generadores ──────────────────────────────────────────
 
 /**
@@ -244,8 +289,12 @@ export const BATCH_CASES = Object.freeze([
 
 /** Los sabotajes y los casos en los que tiene que caer cada uno: exactamente esos. */
 export const BATCH_SABOTAGES = Object.freeze({
-  'ba-one-tx': ['BA-2', 'BA-4'],
+  // En UNA transacción, el elemento que falla la marca para revertir y el commit del lote entero falla: también el del
+  // duplicado dentro del mismo lote (BA-5), medido en keel-spring.
+  'ba-one-tx': ['BA-2', 'BA-4', 'BA-5'],
   'ba-validate-whole': ['BA-3'],
   'ba-continue-on-undeclared': ['BA-4'],
-  'ba-status': ['BA-1']
+  'ba-status': ['BA-1'],
+  // all-or-nothing sin la transacción que abarca el lote: lo anterior al culpable queda confirmado.
+  'ba-atomic-no-tx': ['BA-6']
 });

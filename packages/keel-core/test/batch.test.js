@@ -17,6 +17,8 @@ import {
   BATCH_CASES,
   BATCH_ITEM_STATUSES,
   BATCH_SABOTAGES,
+  batchContractClause,
+  batchFrontierErrors,
   batchModelOperations,
   batchNote,
   batchOperations,
@@ -145,6 +147,23 @@ test('la frontera de los generadores: el mismo mensaje en los cuatro, por modo',
   assert.match(batchPendingErrors(layers, 'keel-nest', { syncIncrement: null, asyncIncrement: 7 })[0], /incremento 7/);
   // Sin lotes, nada.
   assert.deepEqual(batchPendingErrors(designOf('product-catalog').layers, 'keel-go', { syncIncrement: 4, asyncIncrement: 9 }), []);
+});
+
+test('la idempotencia del lote entero (D5) se rechaza en los cuatro con el mismo mensaje, y solo en el lote que la declara', () => {
+  const { layers } = derived('catalog-batch');
+  assert.deepEqual(batchFrontierErrors(layers, 'keel-spring'), []);
+  layers['use-cases'].operations.importProducts.idempotency = { keySource: 'client-key', ttlSeconds: 3600 };
+  const [message] = batchFrontierErrors(layers, 'keel-go');
+  assert.match(message, /^use-cases: importProducts\.batch con idempotency \(DSL 2\.30, D5\): keel-go todavía no genera/);
+  assert.equal(batchFrontierErrors(layers, 'keel-go').length, 1, 'createProduct declara idempotency y no es un lote');
+});
+
+test('la cláusula del contrato: qué falla solo su elemento y qué detiene el lote, o que no queda nada confirmado', () => {
+  assert.equal(batchContractClause(null), null);
+  const perItem = operationOf(derived('catalog-batch').model, 'importProducts').batch;
+  assert.match(batchContractClause(perItem), /siempre 207.*Fallan solo su elemento SKU_ALREADY_EXISTS, VALIDATION_ERROR\..*BATCH_ABORTED si no tiene.*notAttempted/);
+  const atomic = operationOf(derived('catalog-batch-atomic').model, 'importProducts').batch;
+  assert.match(batchContractClause(atomic), /^Lote todo o nada .*no queda nada confirmado .*details \(items\[0\]\)/);
 });
 
 test('los casos y sus sabotajes: ids únicos, y cada sabotaje cae en casos que existen', () => {

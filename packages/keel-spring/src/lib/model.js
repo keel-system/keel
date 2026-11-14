@@ -19,5 +19,22 @@ export {
 export { sharedExceptionFor, UUID_V7_CALL, LONG_ID_CALL } from './java-projection.js';
 
 export function buildModel({ manifest, layers, stack = null }) {
-  return interpretDesign({ manifest, layers, stack, projection: JAVA_PROJECTION });
+  const model = interpretDesign({ manifest, layers, stack, projection: JAVA_PROJECTION });
+  for (const operation of model.services.flatMap((service) => service.operations)) {
+    if (operation.batch) shapeBatchOperation(operation);
+  }
+  return model;
+}
+
+/**
+ * Una operación por lotes (DSL 2.30) en Java: su handler procesa UN elemento, así que devuelve lo que `batch.output`
+ * declara para cada elemento —`<Op>ItemResult`, un DTO más— y su mensaje es un ReturningCommand. El output de la
+ * operación es void (CHK-USECASES-BATCH-OUTPUT): la respuesta HTTP es la de BatchResponse (scaffold/batch.js).
+ */
+function shapeBatchOperation(operation) {
+  const { resultFields } = operation.batch;
+  if (resultFields.length === 0) return;
+  const name = `${operation.name[0].toUpperCase()}${operation.name.slice(1)}ItemResult`;
+  operation.responseDto = { name, fields: resultFields, description: `Lo que devuelve cada elemento del lote ${operation.name} que sale bien.` };
+  operation.messageKind = 'returningCommand';
 }

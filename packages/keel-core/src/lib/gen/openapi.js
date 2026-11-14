@@ -28,6 +28,7 @@ import {
 } from './conditional-writes.js';
 import { lifecycleContractClause } from './data-lifecycle.js';
 import { HISTORY_CHANGES, HISTORY_CHANGE_FIELDS, HISTORY_ENTRY_FIELDS, historyContractClause, historyPersonalPaths } from './history.js';
+import { BATCH_ITEM_STATUSES, BATCH_MULTI_STATUS, batchContractClause } from './batch.js';
 
 const API_KEY_HEADER = 'X-API-Key';
 const OPENAPI_VERSION = '3.1.0';
@@ -169,9 +170,14 @@ function requestBody(context, operation, inputs, shape) {
 function responses(context, operation, inputs) {
   const { model } = context;
   const result = {};
-  const status = String(operation.route.status);
+  // Un lote (DSL 2.30, wire-contract.md § Lotes): `per-item` responde siempre 207, y los dos modos con el resultado por
+  // elemento. El output de la operación es void: lo que un generador ponga en su responseDto es lo de UN elemento.
+  const batch = operation.batch;
+  const perItem = batch?.atomicity === 'per-item';
+  const status = String(perItem ? BATCH_MULTI_STATUS : operation.route.status);
   const success = { description: successDescription(context.model, operation) };
-  const dto = operation.responseDto;
+  const dto = batch ? null : operation.responseDto;
+  if (batch) success.content = { 'application/json': { schema: batchResponseSchema(context, operation) } };
   if (dto && operation.route.status !== 204) {
     const item = context.schema(dto.name, () => dtoSchema(context, dto.fields));
     const body = operation.paginated ? pagedSchema(context, dto.name, item) : operation.returnsList ? { type: 'array', items: item } : item;
@@ -181,7 +187,7 @@ function responses(context, operation, inputs) {
     const entry = historyEntrySchema(context, operation.historyOf);
     success.content = { 'application/json': { schema: pagedSchema(context, `${operation.historyOf}HistoryEntry`, entry) } };
   }
-  if (returnsLocation(model, operation)) {
+  if (!batch && returnsLocation(model, operation)) {
     const target = locationTarget(model, operation);
     success.headers = { Location: { description: `URL del recurso: ${target.path}`, schema: { type: 'string' } } };
   }
@@ -201,7 +207,8 @@ function responses(context, operation, inputs) {
     errors.get(key).push(code ? `\`${code}\`: ${description ?? ''}`.trim() : description);
   };
   const validated = inputs.length > 0 || (operation.pathParams ?? []).length > 0;
-  if (validated) add(400, 'VALIDATION_ERROR', 'la entrada no cumple el contrato.');
+  if (batch) add(400, 'VALIDATION_ERROR', `el sobre del lote: '${batch.over}' ausente o con más de ${batch.maxItems} elementos.`);
+  else if (validated) add(400, 'VALIDATION_ERROR', 'la entrada no cumple el contrato.');
   if (operation.optionalAuth && operationSecurity(model, operation)?.length) {
     // `level: optional` (DSL 2.27): sin credencial entra como anónima; solo una que no valida se rechaza, y no hay permiso que negar.
     add(401, 'UNAUTHENTICATED', 'la credencial no valida o caducó (sin credencial, la operación se ejecuta como anónima).');
@@ -227,7 +234,8 @@ function responses(context, operation, inputs) {
     if (conditionalWritePolicy(model) === 'required') add(required.status, required.code, 'la petición no trae If-Match.');
     add(failed.status, failed.code, 'If-Match no es la versión vigente: otro escribió después de tu lectura.');
   }
-  for (const code of operation.errors ?? []) {
+  // En un lote por elemento ningún error del diseño es la respuesta: viaja en el resultado de su elemento (D1, D4).
+  for (const code of perItem ? [] : operation.errors ?? []) {
     const error = (model.errors ?? []).find((candidate) => candidate.code === code);
     if (!error) continue;
     add(statusIn(error, operation.name), code, `${error.whenByOperation?.get(operation.name) ?? error.when}${readMissClause(operation, code)}`);
@@ -255,6 +263,9 @@ function successDescription(model, operation) {
   // El ciclo de vida del dato (DSL 2.28): un borrado lógico o una restauración, con su ventana.
   const lifecycle = lifecycleContractClause(model, operation);
   if (lifecycle) parts.push(lifecycle);
+  // El lote (DSL 2.30): qué falla solo su elemento, qué lo detiene y qué queda confirmado.
+  const batch = batchContractClause(operation.batch);
+  if (batch) parts.push(batch);
   // El historial (DSL 2.29): el orden fijo, qué casa con cada filtro y que la raíz se carga como su ficha.
   const history = historyContractClause(operation);
   if (history) parts.push(history);
@@ -376,6 +387,46 @@ function historyEntrySchema(context, root) {
       type: 'object',
       properties: Object.fromEntries(HISTORY_ENTRY_FIELDS.map((name) => [name, types[name]])),
       required: [...HISTORY_ENTRY_FIELDS],
+      additionalProperties: false
+    };
+  });
+}
+
+/**
+ * La respuesta de un lote (DSL 2.30, wire-contract.md § Lotes): el resumen, compartido, y los elementos de ESTA
+ * operación, cuyo `result` es lo que declara `batch.output` (null si no declara nada o si el elemento no tuvo éxito).
+ */
+function batchResponseSchema(context, operation) {
+  const name = capitalize(operation.name);
+  const summary = context.schema('BatchSummary', () => ({
+    type: 'object',
+    properties: Object.fromEntries(WIRE_SHAPES.batchSummary.map((field) => [field, { type: 'integer', minimum: 0 }])),
+    required: [...WIRE_SHAPES.batchSummary],
+    additionalProperties: false
+  }));
+  const fields = operation.batch.resultFields ?? [];
+  const result = fields.length > 0 ? orNull(context.schema(`${name}ItemResult`, () => dtoSchema(context, fields))) : { type: 'null' };
+  const item = context.schema(`${name}BatchItem`, () => {
+    const types = {
+      index: { type: 'integer', minimum: 0 },
+      status: { type: 'string', enum: [...BATCH_ITEM_STATUSES] },
+      result,
+      error: { type: ['string', 'null'], description: 'El code del fallo del elemento.' },
+      message: { type: ['string', 'null'] }
+    };
+    return {
+      type: 'object',
+      properties: Object.fromEntries(WIRE_SHAPES.batchItem.map((field) => [field, types[field]])),
+      required: [...WIRE_SHAPES.batchItem],
+      additionalProperties: false
+    };
+  });
+  return context.schema(`${name}BatchResponse`, () => {
+    const types = { summary, items: { type: 'array', items: item, description: 'Un resultado por elemento, en orden de índice.' } };
+    return {
+      type: 'object',
+      properties: Object.fromEntries(WIRE_SHAPES.batchResponse.map((field) => [field, types[field]])),
+      required: [...WIRE_SHAPES.batchResponse],
       additionalProperties: false
     };
   });

@@ -8,6 +8,7 @@
 // vía UseCaseMediator. Incluye @Tag/@Operation (springdoc) y el
 // @RestControllerAdvice central en infrastructure/rest.
 
+import { batchRequestClass, controllerBatchCall, BATCH_ITEM_COMPONENT } from './batch.js';
 import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
 import { callsPaymentGateway } from '../lib/payments-model.js';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
@@ -152,7 +153,9 @@ function renderController(model, service) {
   const collaborators = [
     ['UseCaseMediator', 'mediator'],
     ...(methods.some((method) => /\bcallerIdentity\.resolve(Optional)?\(\)/.test(method)) ? [['CallerIdentity', 'callerIdentity']] : []),
-    ...(methods.some((method) => method.includes('readScopes.')) ? [['ReadScopes', 'readScopes']] : [])
+    ...(methods.some((method) => method.includes('readScopes.')) ? [['ReadScopes', 'readScopes']] : []),
+    // El bucle de los lotes (DSL 2.30).
+    ...(methods.some((method) => method.includes('batchRunner.')) ? [['BatchRunner', 'batchRunner']] : [])
   ];
 
   const body = `@RestController
@@ -236,10 +239,12 @@ function defaultOrderHelper() {
 
 function renderMethod(model, operation, imports) {
   const route = operation.route;
-  const location = returnsLocation(model, operation);
+  // Un lote (DSL 2.30) responde BatchResponse con el status que fija BatchRunner, no el DTO de la operación.
+  const batch = Boolean(operation.batch);
+  const location = !batch && returnsLocation(model, operation);
   const dtoType = returnTypeOf(operation);
   const returnType = location ? `ResponseEntity<${dtoType}>` : dtoType;
-  returnTypeImports(model, operation, imports);
+  if (!batch) returnTypeImports(model, operation, imports);
   imports.add(`${subPackage(model, messagePackage(operation))}.${operation.messageClass}`);
 
   const mapping = MAPPING_BY_METHOD[route.method];
@@ -309,7 +314,7 @@ function renderMethod(model, operation, imports) {
     // se declararía dos veces la misma cosa.
     imports.add('org.springframework.http.ResponseEntity');
     imports.add('org.springframework.web.servlet.support.ServletUriComponentsBuilder');
-  } else if (route.status !== 200) {
+  } else if (route.status !== 200 && !batch) {
     imports.add('org.springframework.web.bind.annotation.ResponseStatus');
     imports.add('org.springframework.http.HttpStatus');
     const constant = HTTP_STATUS_CONSTANTS[route.status];
@@ -340,6 +345,23 @@ function renderMethod(model, operation, imports) {
     imports.add('org.springframework.web.bind.annotation.PathVariable');
     const validation = paramValidation(param, imports, { presence: false });
     params.push(`@PathVariable ${validation}${param.javaType} ${param.name}`);
+  }
+
+  if (batch) {
+    // El cuerpo es el SOBRE (<Op>BatchRequest), con los elementos sin leer: los lee y valida BatchRunner uno a uno (D3).
+    // El mensaje de cada elemento lleva el elemento, la ruta, lo estampado y el resto del sobre.
+    imports.add('jakarta.validation.Valid');
+    imports.add('org.springframework.web.bind.annotation.RequestBody');
+    params.push(`@Valid @RequestBody ${batchRequestClass(operation)} request`);
+    const args = components.map((component) =>
+      component.batchItem ? BATCH_ITEM_COMPONENT : stamped(component) ? stampArg(component) : fromPath.has(component.name) ? component.name : `request.${component.name}()`
+    );
+    const answer = controllerBatchCall(model, operation, { args, imports });
+    for (const name of answer.responseImports) imports.add(name);
+    return `${javadoc(operation.description, '    ')}${annotations.join('\n')}
+    public ${answer.returnType} ${operation.name}(${params.join(', ')}) {
+        ${answer.call}
+    }`;
   }
 
   if (operation.multipart) {

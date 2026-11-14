@@ -1,6 +1,6 @@
 # DSL 2.30: lotes con resultado por elemento (R5)
 
-**Estado: APROBADO el 2026-11-14.** Incremento 0 cerrado el 2026-11-14; el siguiente es el 1 (keel-spring `sync`). Al cerrar pasa a `completed_plans/`.
+**Estado: APROBADO el 2026-11-14.** Incrementos 0 y 1 cerrados el 2026-11-14; el siguiente es el 2 (keel-nest `sync`). Al cerrar pasa a `completed_plans/`.
 
 ## Contexto
 
@@ -165,14 +165,46 @@ Incremento 0 (keel-core):
 - Sujetos: `catalog-batch` (relacional, `per-item`), `catalog-batch-mongo` y `catalog-batch-atomic` (`all-or-nothing`),
   todos sobre product-catalog, en `keel-core/test/helpers/batch-designs.js`.
 
+Incremento 1 (keel-spring `sync`):
+
+- **D3 medido y resuelto así**: el cuerpo es un sobre `<Op>BatchRequest` cuyo campo `over` es `List<JsonNode>` con la
+  validación de la LISTA (`@NotEmpty @Size(max)`); con `List<<Elemento>>`, Jackson construye todos los value objects al
+  leer el cuerpo y la primera guarda que salta es un 400 del lote. `BatchRunner` lee cada elemento con el MISMO
+  `ObjectMapper` (las guardas del constructor incluidas) y el MISMO `Validator` que el borde, así que «mal formado»
+  significa lo mismo dentro del lote que fuera. Un elemento `null` también es su `failed` con `VALIDATION_ERROR`. Su
+  `message` es el de la guarda del value object, o `BATCH_ITEM_MALFORMED_MESSAGE` (nuevo en `gen/batch.js`) si no la hay.
+- **El fallo de un elemento se traduce con el propio `ApiExceptionHandler`** (`ExceptionHandlerMethodResolver` sobre la
+  excepción): el `code` y el `message` son los que daría la operación sola, también una unicidad que el motor viola y que
+  el handler traduce al error declarado. El catch-all no lleva `code`, y por eso sale `BATCH_ABORTED`.
+- **El handler procesa un elemento**: el mensaje lleva `item` en vez de la lista y devuelve `<Op>ItemResult` (un DTO más)
+  cuando hay `batch.output`. Lo hace el modelo de keel-spring (`shapeBatchOperation` en `src/lib/model.js`), no el
+  neutral. Valorar en el inc. 2 si se sube a `gen/model.js`.
+- **`per-item` despacha cada elemento por el mediator**: una transacción por elemento con su reintento del conflicto
+  transitorio, su log de frontera y su invalidación de caché (el riesgo de la caché: invalida por elemento, de más y no de
+  menos). `all-or-nothing` abre una transacción alrededor y los despachos se unen a ella; un fallo al confirmar no es de
+  ningún elemento y sale sin índice.
+- **`ba-one-tx` cae también en BA-5**: en una transacción, el duplicado del mismo lote la marca para revertir y el commit
+  del lote entero falla. `BATCH_SABOTAGES` lo dice. Y hay un quinto sabotaje, `ba-atomic-no-tx` (BA-6), que falsa el
+  `all-or-nothing`.
+- **BA-8 y BA-9 no se ejecutan todavía**: ningún sujeto declara `idempotency` ni eventos. La idempotencia del lote entero
+  (D5) se **rechaza** con `batchFrontierErrors` (neutral, el mismo mensaje en los cuatro): el handler procesa un elemento,
+  y la de la operación sola deduplicaría elementos y no el lote. Pendiente de decidir en qué incremento entra, con un
+  sujeto que la declare; BA-9 entra con el diseño de contraste del inc. 11 o con un sujeto con mensajería.
+- **El contrato** (`gen/openapi.js`): `per-item` responde `207` con `<Op>BatchResponse` (`BatchSummary`, `<Op>BatchItem`
+  con `result` de `<Op>ItemResult` o null) y el 400 del sobre; los errores del diseño no salen como respuestas del lote
+  porque viajan en su elemento. `batchContractClause` lo cuenta en la descripción.
+- Red: `npm run batch-check` (catalog-batch en PostgreSQL y MySQL, catalog-batch-mongo y catalog-batch-atomic), en
+  verde, y los cinco sabotajes cayendo en exactamente sus casos (`ba-one-tx` medido también en MongoDB).
+
 ## Para retomar
 
-Inc. 1, keel-spring `sync`. Primero el riesgo D3: que la validación por elemento use las mismas reglas que el borde
-(`inputRules` de `gen/constraints.js`) y que un elemento mal formado sea su `failed` con `VALIDATION_ERROR`, no un 400.
-Medirlo antes de escribir el resto. Después, el bucle y la respuesta con `batchResponse` como oráculo, la nota
-(`batchNote`), `syncIncrement: null` en `keel-spring/src/lib/supported-features.js` y `npm run batch-check` sobre los tres
-sujetos con los sabotajes de `BATCH_SABOTAGES`. Las filas de `capability-coverage` de los lotes se borran en el inc. 11,
-cuando una fixture los declare.
+Inc. 2, keel-nest `sync`. Calcar el inc. 1: el sobre con los elementos sin leer (en keel-nest el lector de peticiones
+valida el DTO entero, el mismo riesgo D3), el lector y las reglas de cada elemento iguales a las del borde, el despacho
+por elemento con su transacción, el fallo traducido con el mismo traductor que el borde y `batchResponse` como oráculo.
+`syncIncrement: null` en `keel-nest/src/lib/supported-features.js` y `batchFrontierErrors`. La red es `db-check` y
+`doc-check` con `scripts/lib/batch-probes.js` y los cinco sabotajes de `BATCH_SABOTAGES`, más `test/batch-parity.test.js`
+contra keel-spring (las notas, el contrato y la forma de la respuesta). Decidir antes si `shapeBatchOperation` sube al
+modelo neutral. Las filas de `capability-coverage` de los lotes se borran en el inc. 11.
 
 ## Verificación
 
