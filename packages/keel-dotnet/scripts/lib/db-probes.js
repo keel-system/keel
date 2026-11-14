@@ -50,6 +50,7 @@ import { purgeNamespace, tablePurges } from '../../src/scaffold/purge.js';
 import { DRAIN_SAMPLES, drainProbes, drainSubject, purgeTimerFixtureRegistration, purgeTimerProbeBlock, purgeTimerProbeUsings, timerFixtureRegistration, timerProbeBlock, timerProbeUsings } from './timer-probes.js';
 import { lifecycleFixtureRegistration, lifecycleProbeBlock, lifecycleProbeUsings } from './lifecycle-probes.js';
 import { historyProbeBlock, historyProbeUsings } from './history-probes.js';
+import { batchFixtureRegistration, batchProbeBlock, batchProbeUsings, batchProjectReference } from './batch-probes.js';
 import { claimOrderField, claimsForEntity, rescueProbes, screamingSnake, snakeCase, sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
@@ -171,7 +172,7 @@ export function probeProject(model, { files = [] } = {}) {
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\\..\\${sln.infrastructure.csproj.replaceAll('/', '\\')}" />
+    <ProjectReference Include="..\\..\\${sln.infrastructure.csproj.replaceAll('/', '\\')}" />${batchProjectReference(model)}
   </ItemGroup>
 
   <ItemGroup>
@@ -641,6 +642,9 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
   // El historial de cambios (DSL 2.29): HI-1 a HI-10 en ESTA clase, también antes de los Ensure.
   const history = historyProbeBlock(model, ctx, { document: false });
   if (history) blocks.push(history.methods);
+  // Los lotes (DSL 2.30): BA-1 a BA-7 en ESTA clase, con el endpoint emitido.
+  const batch = batchProbeBlock(model);
+  if (batch) blocks.push(batch.methods);
 
   // Las raíces a las que apunta una referencia obligatoria: se guarda UNA de cada, y su id vale para todas las sondas.
   const ensures = [];
@@ -683,6 +687,7 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
     ...purgeTimerProbeUsings(model),
     ...lifecycleProbeUsings(model, { document: false }),
     ...historyProbeUsings(model, { document: false }),
+    ...batchProbeUsings(model),
     'System.Text.Json',
     'System.Text.Json.Nodes',
     'Microsoft.EntityFrameworkCore',
@@ -720,7 +725,7 @@ ${usesMySql(model) ? MYSQL_SUBJECT_DATABASE : POSTGRESQL_SUBJECT_DATABASE}
         // Los barridos de reconciliación con lotes de DOS (con tres candidatos, dos pasadas); AddPersistence no los pisa.
         services.AddSingleton(${probeReconciliationSettings(model)});` : ''}${usesServiceParameters(model) ? `
         services.AddSingleton(${parametersTestInstance(model)});` : ''}
-        services.AddPersistence(new DatabaseSettings(true, target.ConnectionString, TimeSpan.FromSeconds(30), SchemaMode.Create));${usesBridge(model) ? `
+        services.AddPersistence(new DatabaseSettings(true, target.ConnectionString, TimeSpan.FromSeconds(30), SchemaMode.Create));${batchFixtureRegistration(model)}${usesBridge(model) ? `
         // Los adaptadores de las raíces que emiten eventos los entregan al puente (incremento 9).
         services.AddDomainEvents(MessagingSettings.Defaults);` : ''}${usesDotnetOutbox(model) ? `
         services.AddSingleton<OutboxRelayStore>();` : ''}${usesProcessedEvents(model) ? `

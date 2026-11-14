@@ -37,6 +37,7 @@ import { purgeNamespace, tablePurges } from '../../src/scaffold/purge.js';
 import { purgeTimerFixtureRegistration, purgeTimerProbeBlock, purgeTimerProbeUsings, timerFixtureRegistration, timerProbeBlock, timerProbeUsings } from './timer-probes.js';
 import { lifecycleFixtureRegistration, lifecycleProbeBlock, lifecycleProbeUsings } from './lifecycle-probes.js';
 import { historyProbeBlock, historyProbeUsings } from './history-probes.js';
+import { batchFixtureRegistration, batchProbeBlock, batchProbeUsings, batchProjectReference } from './batch-probes.js';
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
 import { parametersNamespace, parametersTestInstance, usesServiceParameters } from '../../src/scaffold/service-parameters.js';
@@ -71,7 +72,7 @@ export function docProbeProject(model) {
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\\..\\${sln.infrastructure.csproj.replaceAll('/', '\\')}" />
+    <ProjectReference Include="..\\..\\${sln.infrastructure.csproj.replaceAll('/', '\\')}" />${batchProjectReference(model)}
   </ItemGroup>
 
   <ItemGroup>
@@ -517,6 +518,9 @@ function probesCs(model, namespace) {
   // El historial de cambios (DSL 2.29): HI-1 a HI-10 en ESTA clase, también antes de los Ensure.
   const history = historyProbeBlock(model, ctx, { document: true });
   if (history) blocks.push(history.methods);
+  // Los lotes (DSL 2.30): BA-1 a BA-7 en ESTA clase, con el endpoint emitido.
+  const batch = batchProbeBlock(model);
+  if (batch) blocks.push(batch.methods);
 
   // Las raíces a las que apunta una referencia: se guarda UNA de cada, y su id vale para todas las sondas.
   const ensures = [];
@@ -559,6 +563,7 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
     ...purgeTimerProbeUsings(model),
     ...lifecycleProbeUsings(model, { document: true }),
     ...historyProbeUsings(model, { document: true }),
+    ...batchProbeUsings(model),
     'System.Text.Json',
     'System.Text.Json.Nodes',
     'Microsoft.Extensions.DependencyInjection',
@@ -597,7 +602,7 @@ public sealed class DocumentFixture : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddLogging();
 ${fixtureRegistrations(model)}${timerFixtureRegistration(model)}${purgeTimerFixtureRegistration(model)}${lifecycleFixtureRegistration(model, { document: true })}
-        services.AddPersistence(new DatabaseSettings(true, MongoUrl.Create(target), Database, "doc-check"));${usesBridge(model) ? `
+        services.AddPersistence(new DatabaseSettings(true, MongoUrl.Create(target), Database, "doc-check"));${batchFixtureRegistration(model)}${usesBridge(model) ? `
         // Los adaptadores de las raíces que emiten eventos los entregan al puente.
         services.AddDomainEvents(MessagingSettings.Defaults);` : ''}${usesDotnetOutbox(model) ? `
         services.AddSingleton<OutboxRelayStore>();` : ''}${usesProcessedEvents(model) ? `

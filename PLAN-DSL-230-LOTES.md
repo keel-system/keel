@@ -1,6 +1,6 @@
 # DSL 2.30: lotes con resultado por elemento (R5)
 
-**Estado: APROBADO el 2026-11-14.** Incrementos 0, 1 y 2 cerrados el 2026-11-14; el siguiente es el 3 (keel-dotnet `sync`). Al cerrar pasa a `completed_plans/`.
+**Estado: APROBADO el 2026-11-14.** Incrementos 0, 1, 2 y 3 cerrados el 2026-11-14; el siguiente es el 4 (keel-go `sync`). Al cerrar pasa a `completed_plans/`.
 
 ## Contexto
 
@@ -220,14 +220,37 @@ Incremento 2 (keel-nest `sync`):
   `doc-check --subject=catalog-batch-mongo`, en verde, con los cinco sabotajes cayendo en exactamente sus casos; `ts-check`
   13/13 con los tres sujetos como siluetas derivadas.
 
+Incremento 3 (keel-dotnet `sync`):
+
+- **D3 en keel-dotnet**: no hay DataAnnotations en el borde (el lector es generado), así que el riesgo era el mismo que en
+  keel-nest: el lector de la operación lee el SOBRE con `JsonBodyReader.List(…, element => element)` y devuelve un
+  `BatchEnvelope<Elemento, Mensaje>` (los `JsonElement` sin leer y `Message(item)`). `Api/Rest/Batch.cs` lee cada elemento
+  con el MISMO `ValueReaders.Read<Elemento>`; la guarda llega como `InnerException` de `MalformedRequestException`.
+- **El fallo se traduce con `ApiErrorMiddleware.Translate`**, que solo se emite con lotes y pasa antes el error por
+  `PersistenceErrors.Translate`: en una transacción abierta el adaptador se une a ella y no traduce. El todo o nada abre
+  `IUseCaseTransactions.Run` en el bucle (sin persistencia es el paso directo, siempre registrado), y su `ItemFailure` va
+  sin causa, o la traducción de la persistencia (que recorre la cadena de causas) se llevaría el índice.
+- **`ba-one-tx` medido**: en PostgreSQL y MySQL cae SOLO en BA-2. EF Core no marca la transacción por un error capturado
+  (BA-4 no cae) y abre un savepoint antes de cada `SaveChanges` dentro de una transacción ajena (BA-5 no cae); la fila
+  rechazada queda en el change tracker y el elemento siguiente choca con ella (BA-2). En MongoDB, BA-2 y BA-5, como en
+  keel-nest. Está en `BATCH_ONE_TX` de `keel-dotnet/scripts/lib/batch-probes.js`. keel-go tendrá que medir lo suyo:
+  database/sql no tiene savepoints automáticos y PostgreSQL aborta la transacción.
+- La sonda llama al endpoint emitido con un `DefaultHttpContext` y el `ApiErrorMiddleware` delante (el proyecto de sondas
+  referencia la API y registra `AddUseCases()` tras la persistencia); un `[Fact]` por caso en la clase de sondas compartida,
+  con sku propios (`ZZ<letra>-9xxx`), sin vaciar tablas. BA-7 manda 501 elementos VÁLIDOS y comprueba que ninguno entró.
+- Red: `test/batch-parity.test.js` (casos, nota y contrato contra keel-spring y keel-nest, la forma de lo emitido, los
+  sabotajes aplicables); `db-check --only=catalog-batch,catalog-batch-atomic` en PostgreSQL y MySQL y
+  `doc-check --only=catalog-batch-mongo`, en verde, con los cinco sabotajes cayendo en exactamente sus casos. Sin SDK no se
+  ejecuta el bucle; lo ejecutan esas dos redes.
+
 ## Para retomar
 
-Inc. 3, keel-dotnet `sync`. Calcar el 2: el sobre con los elementos sin leer (en keel-dotnet el lector del DTO valida el
-cuerpo entero con DataAnnotations: el mismo riesgo D3), cada elemento con el mismo lector y las mismas reglas que el borde,
-el despacho por elemento con su transacción, el fallo traducido con el mismo traductor que el borde y `batchResponse` como
-oráculo. `syncIncrement: null` y `batchFrontierErrors` en `keel-dotnet/src/lib/supported-features.js`. La red es `db-check`
-y `doc-check` con `scripts/lib/batch-probes.js` y los cinco sabotajes, más `test/batch-parity.test.js` contra los otros dos.
-Medir primero dónde cae `ba-one-tx` con EF Core en cada motor (ver lo decidido en el inc. 2). La huella golden de keel-nest
+Inc. 4, keel-go `sync`. Calcar el 3: el sobre con los elementos sin leer (el lector de Go lee el cuerpo entero: el mismo
+riesgo D3), cada elemento con el mismo lector y las mismas guardas que el borde, el despacho por elemento con su transacción,
+el fallo traducido con el mismo traductor que el borde. `syncIncrement: null` y `batchFrontierErrors` en
+`keel-go/src/lib/supported-features.js`, y su fila en el README § La frontera. La red es `db-check` y `doc-check` con
+`scripts/lib/batch-probes.js` y los cinco sabotajes, más `test/batch-parity.test.js` contra los otros tres. Medir primero
+dónde cae `ba-one-tx` con database/sql y el driver de MongoDB en cada motor (`BATCH_ONE_TX`). La huella golden de keel-nest
 está atrasada desde antes de la 2.30 (`npm run golden --workspace packages/keel-nest -- --check`): regenerarla en su propio
 commit. Las filas de `capability-coverage` de los lotes se borran en el inc. 11.
 

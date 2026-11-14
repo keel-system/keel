@@ -15,6 +15,7 @@ import { READ_SCOPE_DESIGNS } from '../../../keel-core/test/helpers/read-scope-d
 import { IDENTITY_DESIGNS } from '../../../keel-core/test/helpers/identity-designs.js';
 import { DATA_LIFECYCLE_DESIGNS } from '../../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { HISTORY_DESIGNS } from '../../../keel-core/test/helpers/history-designs.js';
+import { BATCH_DESIGNS } from '../../../keel-core/test/helpers/batch-designs.js';
 
 const here = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.join(here, '..', '..', '..');
@@ -205,6 +206,17 @@ export const UNCOVERED_BRANCHES = [
   // El historial de cambios (DSL 2.29, PLAN-DSL-229-HISTORIAL.md): los diseños de keel-core/test/helpers/history-designs.js,
   // los MISMOS que miden keel-spring y keel-nest. Ninguna fixture lo declara hasta el incremento 6.
   ...HISTORY_DESIGNS.map((design) => ({
+    name: design.name,
+    from: design.from,
+    mutate(manifest, layers, name) {
+      manifest.service.name = name;
+      design.mutate(layers);
+    }
+  })),
+  // Los lotes (DSL 2.30, PLAN-DSL-230-LOTES.md): los diseños de keel-core/test/helpers/batch-designs.js, los MISMOS que
+  // miden keel-spring y keel-nest (por elemento relacional y documental, y todo o nada). Ninguna fixture los declara hasta
+  // el incremento 11.
+  ...BATCH_DESIGNS.map((design) => ({
     name: design.name,
     from: design.from,
     mutate(manifest, layers, name) {

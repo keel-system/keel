@@ -14,6 +14,8 @@
 // salientes) llega con su incremento: el handler de hoy solo inyecta lo que existe.
 
 import { unsupportedContentTypeRaise } from './storage.js';
+import { BATCH_ITEM_COMPONENT } from './batch.js';
+import { batchNote } from '@keel-system/keel-core/gen/batch';
 import { carriesEntryGate, dispatchNote, entryGateNote, ownershipNotes, scheduleDispatch, usesEntryGate } from '@keel-system/keel-core/gen';
 import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
 import { finderNote } from '@keel-system/keel-core/gen/query-filters';
@@ -136,7 +138,16 @@ export function contractOf(operation, model = null) {
  * comparte el lector de la API (incremento 5) para construir el mensaje.
  */
 export function messageComponents(operation, model) {
-  const components = [...(operation.pathParams ?? []), ...(operation.bodyFields ?? [])];
+  const components = [...(operation.pathParams ?? [])];
+  for (const field of operation.bodyFields ?? []) {
+    // Un lote (DSL 2.30): el mensaje lleva UN elemento del campo que se recorre, no la lista. Sin reglas propias: el
+    // elemento ya lo leyó y validó el bucle (Batch.cs), y el mensaje no es el cuerpo de ninguna petición.
+    if (operation.batch?.over === field.name) {
+      components.push({ ...field, name: BATCH_ITEM_COMPONENT, csType: field.elementCsType, list: false, inputValidation: [], elementInputValidation: [], inputRules: [], elementInputRules: [], batchItem: true });
+      continue;
+    }
+    components.push(field);
+  }
   if (operation.paginated) {
     if (model && repositoryRoots(model).length > 0) {
       // Con persistencia, la página viaja como un Pageable (página, tamaño y orden), el de Spring Data.
@@ -463,6 +474,8 @@ function handlerNotes(model, operation) {
     const restore = restoreNote(model, operation, { findCall: byKey, restoreCall: `await ${port}.Restore(<su id>, cancellationToken)` });
     if (restore) notes.push(restore);
   }
+  // El lote (DSL 2.30): la nota neutral. El handler procesa UN elemento; el bucle es de Batch.cs.
+  if (operation.batch) notes.push(...batchNote(operation.batch));
   // El historial (DSL 2.29): la nota neutral, con la llamada al puerto de la raíz.
   if (operation.historyOf) {
     const historyRead = history.handlerNote(model, operation);

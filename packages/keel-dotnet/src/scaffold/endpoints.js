@@ -29,6 +29,7 @@ import { pageableDefaults } from '@keel-system/keel-core/gen/pagination';
 import { callerResolution, securityNamespace } from './security.js';
 import { EXPECTED_VERSIONS, carriesExpectedVersions, readerLine, returnsVersioned } from './conditional-writes.js';
 import { READ_SCOPE_PROPERTY, readScopeStamp } from './read-scope.js';
+import { BATCH_ITEM_COMPONENT } from './batch.js';
 
 // Los tipos base que en C# son tipos de VALOR: un ausente se escribe `T?` (Nullable<T>), no una referencia nula.
 const VALUE_BASES = new Set(['int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json']);
@@ -228,6 +229,8 @@ function renderEndpoint(model, operation, usings) {
   const dispatch = callsPaymentGateway(model, operation.name) ? 'DispatchWithoutTransaction' : 'Dispatch';
   const call = `await Mediator(http).${dispatch}(message, http.RequestAborted)`;
   const status = operation.route.status;
+  // Un lote (DSL 2.30) responde BatchResponse (o el error del culpable), no el DTO de la operación.
+  if (operation.batch) return renderBatchEndpoint(model, operation, read, usings);
   let statements;
   // La query de historial (DSL 2.29) responde la página de entradas, como cualquier otra respuesta.
   if (operation.responseDto || operation.historyOf) {
@@ -251,6 +254,59 @@ function renderEndpoint(model, operation, usings) {
   return `${xmlDoc([`${operation.route.method} ${operation.route.path} (${operation.name}).`, operation.description], '    ')}    public static async Task ${csMember(operation.name)}(HttpContext http)
     {
 ${statements}
+    }`;
+}
+
+/**
+ * El endpoint de un lote (DSL 2.30): el lector lee el SOBRE y devuelve los elementos sin leer y cómo construir el mensaje
+ * de cada uno; el bucle (Batch.cs) los lee, valida y despacha uno a uno. Un lote por elemento responde siempre 207; uno
+ * todo o nada, su successStatus o el error del culpable, con el status que lleva.
+ */
+function renderBatchEndpoint(model, operation, read, usings) {
+  const batch = operation.batch;
+  const item = BATCH_ITEM_COMPONENT;
+  const dispatch = `Mediator(http).Dispatch(envelope.Message(${item}), http.RequestAborted)`;
+  const process = batch.resultFields.length > 0
+    ? `async ${item} => await ${dispatch}`
+    : `async ${item} =>
+            {
+                await ${dispatch};
+                return null;
+            }`;
+  const reader = `ValueReaders.Read${batch.itemType}`;
+  const translate = 'error => ApiErrorMiddleware.Translate(http, error)';
+  const head = `${xmlDoc([`${operation.route.method} ${operation.route.path} (${operation.name}).`, operation.description], '    ')}    public static async Task ${csMember(operation.name)}(HttpContext http)
+    {
+        var envelope = ${read};`;
+  if (batch.atomicity === 'per-item') {
+    return `${head}
+        var response = await BatchRunner.PerItem<${batch.itemType}>(
+            envelope.Items,
+            ${reader},
+            [${batch.itemErrors.map(csString).join(', ')}],
+            ${process},
+            ${translate},
+            http.RequestAborted);
+        await HttpReply.Json(http, BatchRunner.MultiStatus, response);
+    }`;
+  }
+  usings.push(namespaceOf(model, 'useCaseInfra'));
+  return `${head}
+        // Todo o nada: la transacción del lote la abre aquí el bucle, y los despachos del mediator se unen a ella.
+        var outcome = await BatchRunner.AllOrNothing<${batch.itemType}>(
+            ${csString(batch.over)},
+            envelope.Items,
+            ${reader},
+            http.RequestServices.GetRequiredService<IUseCaseTransactions>(),
+            ${process},
+            ${translate},
+            http.RequestAborted);
+        if (outcome.Error is { } error)
+        {
+            await HttpReply.Json(http, error.Status, error);
+            return;
+        }
+        await HttpReply.Json(http, ${operation.route.status}, outcome.Body);
     }`;
 }
 
@@ -292,6 +348,14 @@ function renderReader(model, operation, usings) {
       continue;
     }
     usings.push(...fieldUsings(model, component));
+    // El elemento de un lote (DSL 2.30): el sobre trae la LISTA sin leer, y solo se validan su presencia y su maxItems
+    // (las reglas de la lista); cada elemento lo lee y valida el bucle, para que uno mal formado sea su resultado (D3).
+    if (component.batchItem) {
+      const over = operation.bodyFields.find((field) => field.name === operation.batch.over);
+      bodyLines.push(`        var ${localOf(over)} = JsonBodyReader.List(requestFields, ${csString(over.name)}, element => element);`);
+      if ((over.inputValidation ?? []).length > 0) bodyChecks.push(`        bodyChecks.Check(${csString(over.name)}, ${localOf(over)}, ${rulesArgs(over.inputValidation)});`);
+      continue;
+    }
     // El null de un PATCH sobre un campo que el dominio exige no vacía nada: es un 400 (keel-core/gen/model.js,
     // derivePatchNotNull). Solo cuando viene.
     const rules = component.patchNotNull ? [{ rule: 'notNull' }, ...(component.inputValidation ?? [])] : component.inputValidation ?? [];
@@ -340,7 +404,10 @@ function renderReader(model, operation, usings) {
     const local = localOf(component);
     const type = componentType(operation, component, model);
     let value;
-    if (component.resolvedIdentity && callerResolution(model)) {
+    if (component.batchItem) {
+      // El elemento lo pasa el bucle a la función que construye su mensaje.
+      value = BATCH_ITEM_COMPONENT;
+    } else if (component.resolvedIdentity && callerResolution(model)) {
       // resolvedBy: la credencial del token es UNA de las del recurso, y el endpoint la resolvió antes de leer a su clave
       // natural (o null si no es de nadie: la precondición la responde la operación con el error que declare el diseño).
       value = 'resolvedCaller';
@@ -400,6 +467,19 @@ function renderReader(model, operation, usings) {
   const resolving = resolvesCaller(model, operation) || scopeResolvesCaller(model, operation);
   const resolved = resolving ? ', Func<Task<string?>> resolveCaller' : '';
   if (resolving) lines.push('        // La identidad, resuelta al recurso solo cuando la entrada ya es válida.', '        var resolvedCaller = await resolveCaller();');
+  if (operation.batch) {
+    // El sobre de un lote (DSL 2.30): los elementos sin leer y el mensaje de UNO, con todo lo demás ya leído y estampado.
+    const over = operation.bodyFields.find((field) => field.name === operation.batch.over);
+    const envelope = `BatchEnvelope<${operation.batch.itemType}, ${operation.messageClass}>`;
+    const message = construct.replace(/\n/g, '\n    ');
+    return `    /// <summary>Lee el sobre del lote ${operation.route.method} ${operation.route.path} (${operation.name}): los elementos, sin leer, y el mensaje de cada uno.</summary>
+    private static async Task<${envelope}> Read${csMember(operation.name)}(HttpRequest httpRequest${resolved})
+    {
+${lines.join('\n')}${lines.length > 0 ? '\n' : ''}        return new ${envelope}(
+            ${localOf(over)} ?? [],
+            ${BATCH_ITEM_COMPONENT} => ${message});
+    }`;
+  }
   const signature = asBody || resolving || multipart
     ? `private static async Task<${operation.messageClass}> Read${csMember(operation.name)}(HttpRequest httpRequest${resolved})`
     : `private static ${operation.messageClass} Read${csMember(operation.name)}(HttpRequest httpRequest${resolved})`;

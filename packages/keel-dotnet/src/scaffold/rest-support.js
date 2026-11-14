@@ -27,6 +27,7 @@ import { usesMultipart } from './storage.js';
 import { readsCompositeResponses } from './http-clients.js';
 import { usesApi } from '@keel-system/keel-core/gen/features';
 import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
+import { usesBatch } from '@keel-system/keel-core/gen/batch';
 export { usesApi };
 
 export function restNamespace(model) {
@@ -97,9 +98,10 @@ export function generate(model) {
         'Microsoft.Extensions.Logging',
         wireNamespace(model),
         namespaceOf(model, 'errors'),
-        ...(usesPersistence(model) ? [namespaceOf(model, 'persistence')] : [])
+        ...(usesPersistence(model) ? [namespaceOf(model, 'persistence')] : []),
+        ...(usesBatch(model) ? ['Microsoft.Extensions.DependencyInjection'] : [])
       ],
-      apiErrorMiddlewareBody(usesPersistence(model), usesMultipart(model), usesPersonalData(model))
+      apiErrorMiddlewareBody(usesPersistence(model), usesMultipart(model), usesPersonalData(model), usesBatch(model))
     ),
     ...(usesPageable(model)
       ? [rest('PageableReading', ['System.Globalization', 'System.Text.RegularExpressions', 'Microsoft.AspNetCore.Http', 'Microsoft.Extensions.Primitives', namespaceOf(model, 'repositories')], pageableReadingBody())]
@@ -840,7 +842,7 @@ public static partial class HttpReply
 }`;
 }
 
-function apiErrorMiddlewareBody(persistence = false, multipart = false, personal = false) {
+function apiErrorMiddlewareBody(persistence = false, multipart = false, personal = false, batch = false) {
   const branch = personal ? PERSISTENCE_BRANCH.replace(...PERSONAL_INTEGRITY.call) : PERSISTENCE_BRANCH;
   const logs = personal ? PERSISTENCE_LOGS.replace(...PERSONAL_INTEGRITY.message).replace(...PERSONAL_INTEGRITY.log) : PERSISTENCE_LOGS;
   const validation = FRAMEWORK_ERRORS.validation.code;
@@ -889,7 +891,7 @@ public sealed partial class ApiErrorMiddleware(RequestDelegate next, ILogger<Api
         }
     }
 
-    private static Task Write(HttpContext context, ErrorResponse body)
+${batch ? batchTranslation(persistence) : ''}    private static Task Write(HttpContext context, ErrorResponse body)
     {
         context.Response.StatusCode = body.Status;${persistence ? RETRY_AFTER : ''}
         return context.Response.WriteAsJsonAsync(body, WireJson.Options, context.RequestAborted);
@@ -948,6 +950,28 @@ ${domainBranches.join('\n')}
     [LoggerMessage(Level = LogLevel.Error, Message = "Excepción no controlada")]
     private partial void LogUnhandled(Exception exception);${persistence ? logs : ''}
 }`;
+}
+
+// El fallo de un elemento de un lote (DSL 2.30) se traduce con este mismo middleware: Batch.cs pide el cuerpo de error que
+// respondería la operación sola. Solo con lotes, para no cambiar el resto de proyectos.
+function batchTranslation(persistence) {
+  // Dentro de una transacción abierta (la del lote todo o nada) el adaptador no traduce el fallo del motor: lo traduce la
+  // transacción que lo abrió. Sola, la operación lo vería traducido; aquí se traduce igual antes de responder.
+  const error = persistence ? 'PersistenceErrors.Translate(exception) ?? exception' : 'exception';
+  return `    /// <summary>
+    /// El cuerpo de error que respondería una operación sola ante este fallo. Lo usa el bucle de los lotes (Batch.cs) para
+    /// el <c>code</c> y el <c>message</c> de cada elemento; un fallo inesperado sale con el catch-all (sin code, y con su
+    /// pila en el log).
+    /// </summary>
+    public static ErrorResponse Translate(HttpContext context, Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(exception);
+        var middleware = new ApiErrorMiddleware(_ => Task.CompletedTask, context.RequestServices.GetRequiredService<ILogger<ApiErrorMiddleware>>());
+        return middleware.ToResponse(${error});
+    }
+
+`;
 }
 
 // La subida multipart (capa storage): la parte que falta y un cuerpo que no es multipart, sin code, como el

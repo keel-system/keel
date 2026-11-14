@@ -287,3 +287,26 @@ conexión la sentencia seguiría dentro de la transacción abierta. En documenta
 solo en HI y en el ciclo de vida (el hueco de la sonda general de `cards-logical-mongo`), y la comprobación de los índices vivos
 mira `change_history` contra `CHANGE_HISTORY_COLLECTION`. RT-4 de `lifecycle-probes.js` daba por hecho que `from: deleted`
 purga; con `then: anonymize` anonimiza.
+
+## Lotes con resultado por elemento (DSL 2.30, incremento 3 de `PLAN-DSL-230-LOTES.md`)
+
+`src/scaffold/batch.js` emite `Api/Rest/Batch.cs` (`BatchItem`, `BatchResponse`, `BatchEnvelope`, `BatchRunner.PerItem` y, con
+un lote todo o nada, `AllOrNothing`). El lector de la operación lee el SOBRE: `JsonBodyReader.List(…, element => element)`
+deja los elementos como `JsonElement` sin leer y solo se validan su presencia y su `maxItems` (BA-7); devuelve un
+`BatchEnvelope` con los elementos y `Message(item)`, que construye el mensaje de UNO (`Item`, no la lista: `messageComponents`
+de `services.js`). Cada elemento lo lee el bucle con el MISMO `ValueReaders.Read<Elemento>` del borde; la guarda del value
+object llega como `InnerException` de `MalformedRequestException` y es el `message` del elemento. El fallo se traduce con
+`ApiErrorMiddleware.Translate(http, error)`, que solo existe con lotes y pasa antes el error por `PersistenceErrors.Translate`:
+dentro de la transacción del lote todo o nada el adaptador se UNE a ella y no traduce nada. Per-item responde con
+`BatchRunner.MultiStatus`, fijo; el todo o nada abre `IUseCaseTransactions.Run` en el bucle (sin persistencia es el paso
+directo), y su `ItemFailure` va SIN causa: la traducción de la persistencia recorre la cadena de causas, y la transacción que
+revierte se habría llevado el índice.
+
+La sonda (`scripts/lib/batch-probes.js`) sustituye el stub del handler por uno que guarda sin buscar el sku, registra
+`AddUseCases()` tras la persistencia, referencia el proyecto de la API y llama al endpoint emitido con un `DefaultHttpContext`
+y el `ApiErrorMiddleware` delante: un `[Fact]` por caso (`Batch_BA3_…`), con sus propios sku `ZZ<letra>-9xxx`. **Medido**:
+`ba-one-tx` en PostgreSQL y MySQL cae SOLO en BA-2. EF Core no marca la transacción por un error capturado (BA-4 no cae) y abre un
+savepoint antes de cada `SaveChanges` dentro de una transacción ajena, así que el duplicado no la aborta (BA-5 no cae); la
+fila rechazada sigue en el change tracker y el elemento siguiente la vuelve a insertar (BA-2). Por eso el adaptador limpia el
+tracker al traducir solo en la transacción que abre él: per-item depende de eso. En MongoDB no hay savepoint: el servidor aborta la transacción tras el duplicado y `ba-one-tx` cae en
+BA-2 y BA-5, como en keel-nest (`BATCH_ONE_TX`).

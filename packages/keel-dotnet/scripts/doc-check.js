@@ -75,6 +75,7 @@ import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
 import { READ_SCOPE_SABOTAGE_SPECS, READ_SCOPE_SUBJECTS, isReadScopeSabotage, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
 import { LIFECYCLE_SABOTAGE_SPECS, LIFECYCLE_SUBJECTS, isLifecycleSabotage, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
 import { HISTORY_SABOTAGE_SPECS, HISTORY_SUBJECTS, isHistorySabotage, historySabotageVerdict } from './lib/history-probes.js';
+import { BATCH_SABOTAGE_SPECS, BATCH_SUBJECTS, batchProbePatch, batchSabotageVerdict, isBatchSabotage } from './lib/batch-probes.js';
 import { resolveRuntime, startMongo, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const args = process.argv.slice(2);
@@ -115,7 +116,7 @@ const SUBJECTS = [
     }
   },
   // `optimisticLocking: declared` sobre documentos: la versión que declara el dominio (el MISMO parche que compila cs-check).
-  ...UNCOVERED_BRANCHES.filter((branch) => ['mailer-mongo-lock', 'jobs-mongo-finder', 'mailer-mongo-author', 'catalog-conditional-mongo', ...READ_SCOPE_SUBJECTS.document, ...LIFECYCLE_SUBJECTS.document, ...HISTORY_SUBJECTS.document].includes(branch.name)).map((branch) => ({
+  ...UNCOVERED_BRANCHES.filter((branch) => ['mailer-mongo-lock', 'jobs-mongo-finder', 'mailer-mongo-author', 'catalog-conditional-mongo', ...READ_SCOPE_SUBJECTS.document, ...LIFECYCLE_SUBJECTS.document, ...HISTORY_SUBJECTS.document, ...BATCH_SUBJECTS.document].includes(branch.name)).map((branch) => ({
     name: branch.name,
     from: branch.from,
     mutate: (manifest, layers) => branch.mutate(manifest, layers, branch.name),
@@ -133,6 +134,8 @@ const SUBJECTS = [
 ].filter((subject) =>
   only
     ? only.split(',').includes(subject.name)
+    : isBatchSabotage(sabotage)
+      ? BATCH_SUBJECTS.document.includes(subject.name)
     : isHistorySabotage(sabotage)
       ? HISTORY_SUBJECTS.document.includes(subject.name)
       : isLifecycleSabotage(sabotage)
@@ -229,7 +232,9 @@ const SABOTAGES = {
   // casos. pd-log-value no tiene qué romper en documental (ver scripts/lib/lifecycle-probes.js).
   ...Object.fromEntries(Object.entries(LIFECYCLE_SABOTAGE_SPECS).filter(([, spec]) => spec.document).map(([id, spec]) => [id, spec.document])),
   // El historial de cambios (DSL 2.29): sobre los sujetos documentales de history-designs.js, cada uno en exactamente sus casos HI.
-  ...Object.fromEntries(Object.entries(HISTORY_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document]))
+  ...Object.fromEntries(Object.entries(HISTORY_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document])),
+  // Los lotes (DSL 2.30): sobre catalog-batch-mongo, cada uno cae en exactamente sus casos BA.
+  ...Object.fromEntries(Object.entries(BATCH_SABOTAGE_SPECS).filter(([id]) => id !== 'ba-atomic-no-tx').map(([id, spec]) => [id, spec.document]))
 };
 // El sabotaje del uuid tiene que cambiar las DOS direcciones (si no, la ida y vuelta lo cazaría sola): también al escribir.
 // Y el del clasificador, sus DOS vías: la etiqueta y el código 112 dicen lo mismo, así que quitar una sola es una mutación
@@ -282,7 +287,8 @@ try {
     const { model, files } = await planFixture(subject.from ?? subject.name, { mutate: subject.mutate ?? null });
     const probes = docProbeProject(model);
     // Lo que escribiría el agente en la entidad con plazo: el método semántico que llaman los casos DL.
-    for (const file of [...files.map((emitted) => timerProbePatch(model, emitted)), ...probes.files]) {
+    // Y en el handler de un lote, el de la sonda: guarda UN elemento (scripts/lib/batch-probes.js).
+    for (const file of [...files.map((emitted) => batchProbePatch(model, timerProbePatch(model, emitted), files)), ...probes.files]) {
       const target = path.join(root, subject.name, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, file.content);
@@ -330,6 +336,11 @@ try {
   for (const subject of subjects) {
     const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
     const ran = tested.output.includes(`${subject.probes.name}.dll`);
+    if (isBatchSabotage(sabotage)) {
+      const verdict = batchSabotageVerdict(mine, sabotage, subject.model, 'mongodb');
+      step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
     if (isHistorySabotage(sabotage)) {
       const verdict = historySabotageVerdict(mine, sabotage, subject.model);
       step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);

@@ -94,6 +94,7 @@ import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
 import { READ_SCOPE_SABOTAGE_SPECS, READ_SCOPE_SUBJECTS, isReadScopeSabotage, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
 import { LIFECYCLE_SABOTAGE_SPECS, LIFECYCLE_SUBJECTS, isLifecycleSabotage, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
 import { HISTORY_SABOTAGE_SPECS, HISTORY_SUBJECTS, isHistorySabotage, historySabotageVerdict } from './lib/history-probes.js';
+import { BATCH_SABOTAGE_SPECS, BATCH_SUBJECTS, batchProbePatch, batchSabotageVerdict, isBatchSabotage } from './lib/batch-probes.js';
 import { resolveRuntime, startDatabase, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const args = process.argv.slice(2);
@@ -199,7 +200,9 @@ const SABOTAGES = {
   // El ciclo de vida del dato (DSL 2.28): sobre los sujetos de data-lifecycle-designs.js, cada uno cae en exactamente sus casos.
   ...Object.fromEntries(Object.entries(LIFECYCLE_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational])),
   // El historial de cambios (DSL 2.29): sobre los sujetos de history-designs.js, cada uno cae en exactamente sus casos HI.
-  ...Object.fromEntries(Object.entries(HISTORY_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
+  ...Object.fromEntries(Object.entries(HISTORY_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational])),
+  // Los lotes (DSL 2.30): sobre catalog-batch y catalog-batch-atomic, cada uno cae en exactamente sus casos BA.
+  ...Object.fromEntries(Object.entries(BATCH_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
 };
 
 /** El sabotaje para un motor: [sufijo, texto, sustituto], o null si no aplica a ese motor. */
@@ -254,7 +257,9 @@ const DERIVED = {
   // El ciclo de vida del dato (DSL 2.28): LC-1 a LC-10, RT-1 a RT-4 y PD-2 (scripts/lib/lifecycle-probes.js).
   ...Object.assign({}, ...LIFECYCLE_SUBJECTS.relational.map((name) => uncoveredBranch(name))),
   // El historial de cambios (DSL 2.29): HI-1 a HI-10 (scripts/lib/history-probes.js).
-  ...Object.assign({}, ...HISTORY_SUBJECTS.relational.map((name) => uncoveredBranch(name)))
+  ...Object.assign({}, ...HISTORY_SUBJECTS.relational.map((name) => uncoveredBranch(name))),
+  // Los lotes (DSL 2.30): BA-1 a BA-7 (scripts/lib/batch-probes.js).
+  ...Object.assign({}, ...BATCH_SUBJECTS.relational.map((name) => uncoveredBranch(name)))
 };
 
 function uncoveredBranch(name) {
@@ -264,6 +269,8 @@ function uncoveredBranch(name) {
 // Un sabotaje del cronómetro solo tiene sujeto en el par de los plazos: sin --only, solo ese.
 const SUBJECTS = only
   ? only.split(',')
+  : isBatchSabotage(sabotage)
+    ? BATCH_SUBJECTS.relational
   : isHistorySabotage(sabotage)
     ? HISTORY_SUBJECTS.relational
     : isLifecycleSabotage(sabotage)
@@ -330,7 +337,8 @@ async function checkEngine(engine) {
       const stack = engine === 'postgresql' ? null : { database: engine };
       const { model, files: emitted } = await planFixture(derived?.from ?? name, { mutate: derived?.mutate ?? null, stack });
       // Lo que escribiría el agente en la entidad con plazo: el método semántico que llaman los casos DL.
-      const planned = emitted.map((file) => timerProbePatch(model, file));
+      // Y en el handler de un lote, el de la sonda: guarda UN elemento (scripts/lib/batch-probes.js).
+      const planned = emitted.map((file) => batchProbePatch(model, timerProbePatch(model, file), emitted));
       const files = sabotage
         ? planned.map((file) => {
             // Lo de `src/` por sufijo; el arnés, solo si el sabotaje lo nombra (sus sufijos llevan `IntegrationTests/`).
@@ -375,6 +383,11 @@ async function checkEngine(engine) {
       // Con el espacio delante: `Catalog.DbProbes.` es subcadena de `ProductCatalog.DbProbes.`.
       const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
       const ran = tested.output.includes(`${subject.probes.name}.dll`);
+      if (isBatchSabotage(sabotage)) {
+        const verdict = batchSabotageVerdict(mine, sabotage, subject.model, engine);
+        step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+        continue;
+      }
       if (isHistorySabotage(sabotage)) {
         const verdict = historySabotageVerdict(mine, sabotage, subject.model);
         step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
