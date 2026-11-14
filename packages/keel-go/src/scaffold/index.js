@@ -74,6 +74,7 @@ import * as telemetryGate from './telemetry-gate.js';
 import * as observabilityAssets from './observability-assets.js';
 import * as deploy from './deploy.js';
 import * as endpoints from './endpoints.js';
+import * as batch from './batch.js';
 import * as restSupport from './rest-support.js';
 import * as security from './security.js';
 import * as apiTests from './api-tests.js';
@@ -149,6 +150,7 @@ const GENERATORS = [
   // El historial de cambios (DSL 2.29): la entrada, el diff y su almacén; lo escriben los adaptadores de las raíces.
   history,
   endpoints,
+  batch,
   restSupport,
   security,
   apiTests,

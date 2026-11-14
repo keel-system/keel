@@ -150,3 +150,15 @@ for (const name of ['cards-history', 'cards-history-mongo', 'cards-history-anony
     assert.ok(files.some((file) => /history_query_handler\.go$/.test(file.path) && file.content.includes('PagedResponse[domain.HistoryEntry]')), `${name}: la query no devuelve la página de entradas`);
   });
 }
+
+// Los lotes (DSL 2.30): use-cases.<op>.batch, que ninguna fixture declara hasta el incremento 11 de PLAN-DSL-230-LOTES.md.
+// Los sujetos son los de keel-core (los mismos que miden los otros tres); la forma la fija batch-parity.test.js, y db-check
+// y doc-check lo ejecutan.
+for (const name of ['catalog-batch', 'catalog-batch-mongo', 'catalog-batch-atomic']) {
+  test(`${name}: el lote entero (use-cases *.batch)`, () => {
+    const files = emitted(name);
+    const runner = name === 'catalog-batch-atomic' ? 'runAllOrNothing(' : 'runPerItem(';
+    assert.ok(files.some((file) => file.path === 'internal/httpapi/batch.go' && file.content.includes(`func ${runner.slice(0, -1)}[T any](`)), `${name}: sin el bucle del lote`);
+    assert.ok(files.some((file) => /_endpoints\.go$/.test(file.path) && file.content.includes(runner)), `${name}: el endpoint no recorre el lote`);
+  });
+}

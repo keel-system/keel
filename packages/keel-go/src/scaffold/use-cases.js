@@ -36,6 +36,7 @@ import { storageDependencies, storageDependencyRows } from './storage.js';
 import { responseNeedsStorage } from './mappers.js';
 import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { CLOCK, DEADLINES, deadlinesType, lateOperations, usesDeadlines } from './timer.js';
+import { usesBatch } from './batch.js';
 
 /** ¿Reciben los casos de uso adaptadores (Dependencies)? Con la persistencia relacional. */
 export function usesDependencies(model) {
@@ -406,6 +407,12 @@ function useCasesBody(model, ops) {
     fieldRows.push({ text: `	// callers resuelve la credencial del llamante al ${resolution.entity.name} al que pertenece (resolvedBy).` });
     fieldRows.push({ indent: '	', cells: ['callers', `domain.${portName(resolution.entity)}`] });
   }
+  // Los lotes (DSL 2.30): uno todo o nada abre la transacción del lote con InTransaction, y los despachos se unen a ella.
+  const batched = usesBatch(model);
+  if (batched) {
+    fieldRows.push({ text: '	// tx abre la transacción de un lote all-or-nothing (InTransaction).' });
+    fieldRows.push({ indent: '	', cells: ['tx', 'Transactor'] });
+  }
   const wiring = ops.map((operation) => {
     const contract = contractOf(operation, model);
     const handler = entryGateGuard(model, operation, `New${handlerType(operation)}(${handlerArgs(model, operation).join(', ')})`);
@@ -505,12 +512,22 @@ ${alignRows(fieldRows).join('\n')}
 // build: lo que no está aquí no se despacha. Un handler que despacha otra operación (use-cases.dispatches)
 // recibe el propio UseCases, ya completo cuando se le llama.
 func NewUseCases(logger *slog.Logger${usesTelemetry(model) ? ', observer Observer' : ''}${persistent ? ', deps Dependencies' : ''}) *UseCases {
-${prelude}	uc := &UseCases{${resolution ? `callers: deps.${goExported(repositoryParam(resolution.entity))}` : ''}}
+${prelude}	uc := &UseCases{${[...(resolution ? [`callers: deps.${goExported(repositoryParam(resolution.entity))}`] : []), ...(batched ? ['tx: tx'] : [])].join(', ')}}
 ${paymentWiring(model)}${wiring.join('\n')}
 	return uc
 }
-${resolution ? resolveCallerMethod(resolution) : ''}`;
+${resolution ? resolveCallerMethod(resolution) : ''}${batched ? IN_TRANSACTION : ''}`;
 }
+
+// La transacción de un lote all-or-nothing (DSL 2.30): la abre la API alrededor del lote entero, y cada caso de uso que
+// despacha dentro se une a ella en vez de abrir la suya.
+const IN_TRANSACTION = `
+// InTransaction ejecuta fn en UNA transacción de escritura, la de un lote all-or-nothing (DSL 2.30): los casos de uso que
+// se despachan con el contexto que recibe fn se unen a ella. Si fn devuelve un error, revierte entera.
+func (uc *UseCases) InTransaction(ctx context.Context, fn func(context.Context) error) error {
+	return uc.tx.Within(ctx, KindCommand, fn)
+}
+`;
 
 /**
  * Cuándo la identidad del llamante se RESUELVE al recurso y no se pasa en crudo: con `from.resolvedBy` el valor del token es

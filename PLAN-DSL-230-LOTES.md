@@ -1,6 +1,6 @@
 # DSL 2.30: lotes con resultado por elemento (R5)
 
-**Estado: APROBADO el 2026-11-14.** Incrementos 0, 1, 2 y 3 cerrados el 2026-11-14; el siguiente es el 4 (keel-go `sync`). Al cerrar pasa a `completed_plans/`.
+**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 4 cerrados el 2026-11-14 (la fase A, `sync`, en los cuatro generadores); el siguiente es el 5 (fase B en keel-core). Al cerrar pasa a `completed_plans/`.
 
 ## Contexto
 
@@ -243,16 +243,39 @@ Incremento 3 (keel-dotnet `sync`):
   `doc-check --only=catalog-batch-mongo`, en verde, con los cinco sabotajes cayendo en exactamente sus casos. Sin SDK no se
   ejecuta el bucle; lo ejecutan esas dos redes.
 
+Incremento 4 (keel-go `sync`):
+
+- **D3 en keel-go**: el lector de la operación devuelve `(msg, items []jsontext.Value, err)`: el mensaje con todo lo demás ya
+  leído y los elementos sin leer, que el endpoint pone uno a uno en una COPIA del mensaje (`msg := cmd; msg.Item = item`). La
+  lista no se lee con `member`: el lector de `jsontext.Value` del cable toma una cadena por un documento serializado, y un
+  elemento `"mal"` sería un 400 del lote. Va con `rawList` (`reading.go`, `encoding/json/v2` sin las opciones del cable).
+  `batch.go` lee cada elemento con `wire.Unmarshal`, el mismo lector del borde, y el `message` es el del `*domain.Error` con
+  `VALIDATION_ERROR` que devuelve la guarda del constructor.
+- **El fallo se traduce con `a.errorResponse`**, el que ya existía: en Go la traducción del motor la hace `within` también al
+  unirse a una transacción abierta, así que no hace falta pasar antes por la persistencia (lo que sí necesitó keel-dotnet).
+- **La transacción del lote**: `UseCases.InTransaction` (emitido con cualquier lote, no solo con el todo o nada: lo usa el
+  sabotaje `ba-one-tx`). Su `Within` une a ella cada despacho, y `runAllOrNothing` reinicia los resultados en cada intento.
+- **`ba-one-tx` medido**: BA-2 y BA-5 en PostgreSQL y MongoDB, y en MySQL no es observable, como en keel-nest (database/sql no
+  marca la transacción por un error capturado, y MySQL no la aborta por un duplicado). Está en `BATCH_ONE_TX` de
+  `keel-go/scripts/lib/batch-probes.js`.
+- La sonda (`batch_probe_test.go`, en el paquete del almacén) llama al `http.Handler` ENTERO de `httpapi.NewHandler`, con los
+  casos de uso de `NewUseCases` sobre las `Transactions` de la sonda: entra por el borde, la tabla de rutas y `writeError`.
+- Red: `test/batch-parity.test.js` (casos, nota y contrato contra los otros tres, la forma de lo emitido, los sabotajes
+  aplicables); `db-check --only=catalog-batch,catalog-batch-atomic` en PostgreSQL y MySQL y `doc-check --only=catalog-batch-mongo`,
+  en verde, con los cinco sabotajes cayendo en exactamente sus casos; los tres sujetos con gofmt, vet y staticcheck vacíos y sus
+  pruebas emitidas en verde.
+
 ## Para retomar
 
-Inc. 4, keel-go `sync`. Calcar el 3: el sobre con los elementos sin leer (el lector de Go lee el cuerpo entero: el mismo
-riesgo D3), cada elemento con el mismo lector y las mismas guardas que el borde, el despacho por elemento con su transacción,
-el fallo traducido con el mismo traductor que el borde. `syncIncrement: null` y `batchFrontierErrors` en
-`keel-go/src/lib/supported-features.js`, y su fila en el README § La frontera. La red es `db-check` y `doc-check` con
-`scripts/lib/batch-probes.js` y los cinco sabotajes, más `test/batch-parity.test.js` contra los otros tres. Medir primero
-dónde cae `ba-one-tx` con database/sql y el driver de MongoDB en cada motor (`BATCH_ONE_TX`). La huella golden de keel-nest
-está atrasada desde antes de la 2.30 (`npm run golden --workspace packages/keel-nest -- --check`): regenerarla en su propio
-commit. Las filas de `capability-coverage` de los lotes se borran en el inc. 11.
+Inc. 5, fase B en keel-core: `execution: async` (el schema ya la admite y `CHK-USECASES-BATCH-NO-AUTH` existe desde el inc. 0),
+`gen/batch-store.js` con `batch_job` y `batch_item_result` como datos, sus sentencias por motor (reclamo con el arriendo y
+`SKIP LOCKED` de `timer-store.js`, cursor, página de resultados, purga), su entrada en `GENERATOR_TABLES` de `schema-steps.js`,
+los parámetros (`batch.chunk-size`, retención), el `kind: batch` y su purga en `timer-plan.js`, el 202 con `Location` y las dos
+rutas del trabajo en `gen/openapi.js`, y los casos `BJ-*` con sus sabotajes. Red: `timer-sql-check --sabotage=batch-*`. Antes de
+escribir nada, decidir con el usuario si la idempotencia del lote entero (D5, BA-8, hoy rechazada en los cuatro con
+`batchFrontierErrors`) entra en la fase B. La huella golden de keel-nest sigue atrasada desde antes de la 2.30
+(`npm run golden --workspace packages/keel-nest -- --check`): regenerarla en su propio commit. Las filas de
+`capability-coverage` de los lotes se borran en el inc. 11.
 
 ## Verificación
 

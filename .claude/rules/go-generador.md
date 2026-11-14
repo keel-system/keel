@@ -88,3 +88,24 @@ sabotaje se siga aplicando), la prueba emitida `history_test.go` (diff, anonimiz
 por la conexión del pool (`r.tx.conn(context.Background())`); en documental, con `outside(ctx)`. La sonda de los índices vivos de
 doc-check compara ahora `clave:dirección`, y el índice de `change_history` lo pide keel-core (`CHANGE_HISTORY_COLLECTION`), no
 `indexes.go`. RT-4 de `lifecycle-probes.js` daba por hecho que `from: deleted` purga; con `then: anonymize` anonimiza.
+
+## Lotes con resultado por elemento (DSL 2.30, incremento 4 de `PLAN-DSL-230-LOTES.md`)
+
+`src/scaffold/batch.js` emite `internal/httpapi/batch.go`: `BatchItem` (las cinco claves siempre, sin `omitzero`),
+`BatchSummary`, `BatchResponse`, `runPerItem` y, con un lote todo o nada, `runAllOrNothing`, genéricos sobre el tipo del
+elemento. D3: el lector de la operación devuelve `(msg, items []jsontext.Value, err)` —el mensaje con todo lo demás leído y los
+elementos SIN leer—, y los lee con `rawList` (`reading.go`), que usa `encoding/json/v2` a pelo: con `member`, el lector de
+`jsontext.Value` del cable tomaría una cadena por un documento serializado y un elemento `"mal"` sería un 400 del lote. Cada
+elemento se lee en el bucle con `wire.Unmarshal` (el constructor del value object y sus guardas); su `message` es el del
+`*domain.Error` con `VALIDATION_ERROR` de la guarda, o `BATCH_ITEM_MALFORMED_MESSAGE`. El endpoint copia el mensaje y pone
+`Item` en la copia por elemento; el fallo se traduce con `a.errorResponse` (el catch-all sin `code` sale `BATCH_ABORTED`).
+El todo o nada abre la transacción con `UseCases.InTransaction` (`use-cases.js`, emitido con cualquier lote: lo usa el
+sabotaje `ba-one-tx`), cuyo `Within` une a ella cada despacho; el fallo del culpable vuelve como `*batchItemFailure` con la
+respuesta ya traducida y su ruta en `details`.
+
+Lo miden `test/batch-parity.test.js` (casos, nota y contrato contra los otros tres, la forma de lo emitido, los sabotajes
+aplicables) y `db-check`/`doc-check` con `scripts/lib/batch-probes.js`: `batch_probe_test.go` en el paquete del almacén, que
+llama al `http.Handler` ENTERO de `httpapi.NewHandler` con los casos de uso sobre las `Transactions` de la sonda; sku propios
+(`ZZ<letra>-9xxx`), sin vaciar tablas. **Medido**: `ba-one-tx` cae en BA-2 y BA-5 en PostgreSQL y MongoDB (el motor aborta la
+transacción tras el duplicado; un error capturado no la marca en database/sql, así que BA-4 no cae) y en MySQL no es observable
+(`BATCH_ONE_TX`, sale en rojo en voz alta).

@@ -516,6 +516,22 @@ func member[T any](fields map[string]jsontext.Value, name string, out *T) error 
 	return nil
 }`
   },
+  rawList: {
+    deps: ['has', 'malformed'],
+    code: `
+// rawList lee el miembro name como una lista de valores SIN leer: los elementos de un lote (DSL 2.30), que lee uno a uno
+// el bucle. Sin las opciones del cable, que leerían una cadena como un documento: cada elemento queda tal cual llegó.
+// Ausente o null la deja vacía; lo que no es una lista, malformada.
+func rawList(fields map[string]jsontext.Value, name string, out *[]jsontext.Value) error {
+	if !has(fields, name) {
+		return nil
+	}
+	if err := json.Unmarshal(fields[name], out); err != nil {
+		return malformed(err)
+	}
+	return nil
+}`
+  },
   optionalMember: {
     deps: ['malformed'],
     code: `

@@ -39,6 +39,8 @@ import { projectionNotes, replicaNote } from './projections.js';
 import { mailNote } from './mail.js';
 import { deadlineNotes } from './timer.js';
 import * as history from './history.js';
+import { BATCH_ITEM_COMPONENT } from './batch.js';
+import { batchNote } from '@keel-system/keel-core/gen/batch';
 import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { cacheHandlerNote } from './cache.js';
 import { uploadHandlerNotes } from './storage.js';
@@ -262,7 +264,14 @@ export function usesPageable(model, operation) {
 export function messageComponents(operation, model) {
   const path = (operation.pathParams ?? []).map((param) => ({ ...param, fromPath: true }));
   const paging = !operation.paginated ? [] : usesPageable(model, operation) ? [PAGEABLE_COMPONENT] : PAGE_COMPONENTS;
-  return [...path, ...(operation.bodyFields ?? []), ...paging];
+  // Un lote (DSL 2.30): el mensaje lleva UN elemento del campo que se recorre, no la lista. Sin reglas propias: el
+  // elemento ya lo leyó el bucle (batch.go), y el mensaje no es el cuerpo de ninguna petición.
+  const body = (operation.bodyFields ?? []).map((field) =>
+    operation.batch?.over === field.name
+      ? { ...field, name: BATCH_ITEM_COMPONENT, goType: field.elementGoType, list: false, required: true, inputValidation: [], elementInputValidation: [], inputRules: [], elementInputRules: [], batchItem: true }
+      : field
+  );
+  return [...path, ...body, ...paging];
 }
 
 /**
@@ -459,6 +468,8 @@ function handlerNotes(model, operation) {
   if (finderText) notes.push(finderText);
   // La lectura acotada (DSL 2.27): el adaptador ya filtra; la nota neutral dice qué pasar y que no se filtre a mano.
   // El historial (DSL 2.29): la nota neutral, con la llamada al puerto de la raíz.
+  // El lote (DSL 2.30): la nota neutral. El handler procesa UN elemento; el bucle es de batch.go.
+  if (operation.batch) notes.push(...batchNote(operation.batch));
   if (operation.historyOf) {
     const historyRead = history.handlerNote(model, operation, repositoryParam({ name: operation.historyOf }));
     if (historyRead) notes.push(historyRead);

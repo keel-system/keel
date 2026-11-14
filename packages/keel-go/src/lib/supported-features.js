@@ -16,7 +16,7 @@ import { persistedMembers } from '@keel-system/keel-core/gen';
 import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/messaging-frontier';
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
 import { optionalAuthFrontierErrors } from '@keel-system/keel-core/gen/read-scope';
-import { batchPendingErrors } from '@keel-system/keel-core/gen/batch';
+import { batchFrontierErrors, batchPendingErrors } from '@keel-system/keel-core/gen/batch';
 import { declaredDeadlines, modelDeadlines } from '@keel-system/keel-core/gen/deadlines';
 import { repositoryRoots } from '@keel-system/keel-core/gen/features';
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
@@ -79,9 +79,10 @@ export function checkSupportedFeatures(manifest, layers) {
   // construcción (T7, T8) lo rechaza planService con la frontera neutral, que necesita el modelo. level: optional también
   // (permitAll y optionalCallerIdentity), salvo sobre una identidad que no es un token: la frontera neutral.
   errors.push(...optionalAuthFrontierErrors(layers, 'keel-go'));
-  // Los lotes con resultado por elemento (DSL 2.30: use-cases.<op>.batch) llegan en el incremento 4 de
-  // PLAN-DSL-230-LOTES.md (sync) y en el 9 (async): hasta entonces se rechazan enteros, con el mismo mensaje en los cuatro.
-  errors.push(...batchPendingErrors(layers, 'keel-go', { syncIncrement: 4, asyncIncrement: 9 }));
+  // Los lotes con resultado por elemento (DSL 2.30: use-cases.<op>.batch): sync se genera entero (scaffold/batch.js);
+  // async llega en el incremento 9 de PLAN-DSL-230-LOTES.md, y la idempotencia del lote entero no la genera nadie todavía.
+  errors.push(...batchPendingErrors(layers, 'keel-go', { syncIncrement: null, asyncIncrement: 9 }));
+  errors.push(...batchFrontierErrors(layers, 'keel-go'));
   // El historial de cambios consultable (DSL 2.29: audit.history y output: { history }) se genera entero
   // (scaffold/history.js); lo que depende del motor elegido lo rechaza planService (historyStackErrors).
   // El ciclo de vida del dato (DSL 2.28: personal, deletion: logical, restorableFor, retention) se genera entero

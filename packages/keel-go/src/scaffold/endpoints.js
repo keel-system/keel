@@ -36,6 +36,7 @@ import { usesCallerIdentity } from './security.js';
 import { callerResolution } from './use-cases.js';
 import { EXPECTED_VERSIONS, carriesExpectedVersions, endpointPrelude, returnsVersioned } from './conditional-writes.js';
 import { readScopeEndpointLines } from './read-scope.js';
+import { BATCH_ITEM_COMPONENT } from './batch.js';
 
 /** ¿Resuelve esta operación la identidad del llamante contra las credenciales del recurso (resolvedBy)? */
 export function resolvesCaller(model, operation) {
@@ -44,7 +45,7 @@ export function resolvesCaller(model, operation) {
 import { componentType, entryGateConstant, entryGateField, isThreeState, messageComponents, messageType, operations, scaleRounding, useCaseField } from './services.js';
 
 // Los imports que puede usar un archivo de endpoints: goFile solo escribe los que el cuerpo usa.
-const ENDPOINT_IMPORTS = ['context', 'fmt', 'net/http', 'strings', 'internal/application', 'internal/domain', 'internal/platform/wire'];
+const ENDPOINT_IMPORTS = ['context', 'encoding/json/jsontext', 'fmt', 'net/http', 'strings', 'internal/application', 'internal/domain', 'internal/platform/wire'];
 
 // El lector de TEXTO (ruta y query) de cada tipo base del diseño.
 const TEXT_READERS = {
@@ -132,6 +133,8 @@ export function generate(model) {
 // ─── Endpoints ──────────────────────────────────────────────────────────────────────────────────
 
 function renderEndpoint(model, operation, plan) {
+  // Un lote (DSL 2.30) responde BatchResponse (o el error del culpable), no el resultado del caso de uso.
+  if (operation.batch) return renderBatchEndpoint(model, operation);
   const { method, path, status } = operation.route;
   const full = `${model.api.routeBase}${path}`;
   const variable = operation.messageKind === 'query' ? 'query' : 'cmd';
@@ -176,6 +179,50 @@ function renderEndpoint(model, operation, plan) {
   }
   return `// ${endpointName(operation)} atiende ${method} ${full} (${operation.name}): lee la petición, despacha el caso de uso y
 // escribe su resultado. Solo traduce; la lógica es del handler.
+func (a *api) ${endpointName(operation)}(w http.ResponseWriter, r *http.Request) error {
+${lines.join('\n')}
+}`;
+}
+
+/**
+ * El endpoint de un lote (DSL 2.30): el lector lee el SOBRE y devuelve el mensaje con todo lo demás ya leído y los
+ * elementos sin leer; el bucle (batch.go) los lee, valida y despacha uno a uno, cada uno en su copia del mensaje. Un lote
+ * por elemento responde siempre 207; uno todo o nada, su successStatus o el error del culpable, con el status que lleva.
+ */
+function renderBatchEndpoint(model, operation) {
+  const { method, path, status } = operation.route;
+  const batch = operation.batch;
+  const item = goExported(BATCH_ITEM_COMPONENT);
+  const call = `a.useCases.${useCaseField(operation)}.Handle(ctx, msg)`;
+  const returning = operation.messageKind !== 'command';
+  const process = [
+    `func(ctx context.Context, item domain.${batch.itemType}) (any, error) {`,
+    '		msg := cmd',
+    `		msg.${item} = item`,
+    `		return ${returning ? call : `nil, ${call}`}`,
+    '	}'
+  ].join('\n');
+  const lines = [`	cmd, items, err := ${readerName(operation)}(r)`, '	if err != nil {', '		return err', '	}'];
+  if (entryGateField(model, operation.name, 'HTTP')) lines.push(`	cmd.EntryGate = application.${entryGateConstant('HTTP')}`);
+  if (batch.atomicity === 'per-item') {
+    const itemErrors = batch.itemErrors.length > 0 ? `[]string{${batch.itemErrors.map(goString).join(', ')}}` : 'nil';
+    lines.push(`	response, err := runPerItem(a, r, items, ${itemErrors}, ${process})`, '	if err != nil {', '		return err', '	}', '	return writeJSON(w, batchMultiStatus, response)');
+  } else {
+    lines.push(
+      '	// Todo o nada: la transacción del lote la abre InTransaction, y los casos de uso que despacha se unen a ella.',
+      `	body, failed, err := runAllOrNothing(a, r, ${goString(batch.over)}, items, a.useCases.InTransaction, ${process})`,
+      '	if err != nil {',
+      '		return err',
+      '	}',
+      '	if failed != nil {',
+      '		writeErrorResponse(w, *failed)',
+      '		return nil',
+      '	}',
+      `	return writeJSON(w, ${statusOf(status)}, body)`
+    );
+  }
+  return `// ${endpointName(operation)} atiende ${method} ${model.api.routeBase}${path} (${operation.name}), un lote: lee el sobre y despacha el caso
+// de uso una vez por elemento (batch.go). Solo traduce; la lógica de cada elemento es del handler.
 func (a *api) ${endpointName(operation)}(w http.ResponseWriter, r *http.Request) error {
 ${lines.join('\n')}
 }`;
@@ -415,6 +462,17 @@ function renderReader(model, operation, plan) {
       queryLines.push(...returnErr(`${field}, err = pageParam(r, ${goString(component.name)}, ${fallback})`));
       continue;
     }
+    // El elemento de un lote (DSL 2.30): el sobre trae la LISTA sin leer, y solo se validan su presencia y su maxItems
+    // (las reglas de la lista); cada elemento lo lee y valida el bucle, para que uno mal formado sea su resultado (D3).
+    if (component.batchItem) {
+      const over = operation.bodyFields.find((field) => field.name === operation.batch.over);
+      const name = goString(over.name);
+      plan.uses.add('rawList');
+      plan.uses.add('has');
+      bodyLines.push(...returnErr(`err = rawList(fields, ${name}, &items)`));
+      bodyChecks.push(...componentChecks(over, { rules: over.inputValidation ?? [], each: [], present: `has(fields, ${name})`, value: 'items', sink: 'inBody', path: name, plan }));
+      continue;
+    }
     // El null de un PATCH sobre un campo que el dominio exige no vacía nada: es un 400 (keel-core/gen/model.js).
     const rules = component.patchNotNull ? [{ rule: 'notNull' }, ...(component.inputValidation ?? [])] : component.inputValidation ?? [];
     const each = component.list ? component.elementInputValidation ?? [] : [];
@@ -503,6 +561,15 @@ function renderReader(model, operation, plan) {
     out.push(`\tif ${mustBePresent.map((name) => `!has(fields, ${goString(name)})`).join(' || ')} {`, '\t\treturn msg, malformed(nil)', '\t}');
   }
   out.push(...identity);
+  if (operation.batch) {
+    // El sobre de un lote (DSL 2.30): el mensaje sin el elemento, y los elementos sin leer.
+    const body = out.join('\n').replace(/return msg, /g, 'return msg, items, ');
+    return `// ${readerName(operation)} lee el sobre del lote ${operation.route.method} ${model.api.routeBase}${operation.route.path} (${operation.name}): el
+// mensaje con todo lo demás ya leído, sin el elemento, y los elementos sin leer, que lee el bucle (batch.go).
+func ${readerName(operation)}(r *http.Request) (msg application.${message}, items []jsontext.Value, err error) {
+${body}${out.length > 0 ? '\n' : ''}\treturn msg, items, nil
+}`;
+  }
   return `// ${readerName(operation)} lee ${operation.route.method} ${model.api.routeBase}${operation.route.path} (${operation.name}) al mensaje de su caso de
 // uso, en el orden del binding de keel-spring: la ruta, el cuerpo, la query y después sus reglas.
 func ${readerName(operation)}(r *http.Request${resolvesCaller(model, operation) ? ', resolve func(context.Context, string) (string, error)' : ''}) (msg application.${message}, err error) {
