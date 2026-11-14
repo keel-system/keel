@@ -56,6 +56,10 @@ import ${packages.valueobject}.ProductDraft;
 @ApplicationComponent
 public class ${operation.handlerClass} implements ${result ? `ReturningCommandHandler<${operation.messageClass}, ${returnType}>` : `CommandHandler<${operation.messageClass}>`} {
 
+    /** Lo que corre tras el efecto, dentro de su transacción: la sonda de la valla (BJ-5) lo usa para mover el cursor. */
+    public static volatile Runnable AFTER_EFFECT = () -> {
+    };
+
     private final ProductRepository productRepository;
 
     public ${operation.handlerClass}(ProductRepository productRepository) {
@@ -73,14 +77,15 @@ public class ${operation.handlerClass} implements ${result ? `ReturningCommandHa
         }
         Product saved = productRepository.save(
                 new Product(Uuids.v7(), draft.sku(), draft.name(), null, draft.price(), "sonda", ProductStatus.DRAFT, null));
+        AFTER_EFFECT.run();
         ${result ? 'return new ' + returnType + '(saved.getId());' : ''}
     }
 }
 `;
 }
 
-const item = (sku, name = 'Producto') => `{"sku":"${sku}","name":"${name}","price":{"amount":10.00,"currency":"EUR"}}`;
-const body = (...items) => JSON.stringify(`{"items":[${items.join(',')}]}`);
+export const item = (sku, name = 'Producto') => `{"sku":"${sku}","name":"${name}","price":{"amount":10.00,"currency":"EUR"}}`;
+export const body = (...items) => JSON.stringify(`{"items":[${items.join(',')}]}`);
 
 /** La clase JUnit de los casos BA-*. */
 export function batchTestClass(model, { packages, document, properties, doubles }) {

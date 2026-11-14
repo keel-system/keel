@@ -139,7 +139,7 @@ function operationObject(context, operation) {
         (required ? '; sin él, 428.' : '; sin él, la escritura no compara.')
     });
   }
-  if (operation.idempotency?.keySource === 'client-key') {
+  if ((operation.idempotency ?? operation.batch?.idempotency)?.keySource === 'client-key') {
     parameters.push({ name: IDEMPOTENCY_HEADER, in: 'header', required: false, schema: { type: 'string' }, description: 'Clave de idempotencia: repetir la petición con la misma clave no la ejecuta dos veces.' });
   }
 
@@ -233,7 +233,8 @@ function responses(context, operation, inputs) {
     const typed = (operation.bodyFields ?? []).some((field) => field.kind === 'fileUpload' && (buckets.get(field.bucket)?.allowedContentTypes ?? []).length > 0);
     if (typed) add(FRAMEWORK_ERRORS.unsupportedContentType.http, effectiveErrorCode(model, FRAMEWORK_ERRORS.unsupportedContentType), 'el archivo no es de ningún tipo que admita su bucket.');
   }
-  if (operation.idempotency && operation.idempotency.guard !== 'natural-key') {
+  const idempotency = operation.idempotency ?? operation.batch?.idempotency;
+  if (idempotency && idempotency.guard !== 'natural-key') {
     // En un lote asíncrono (D13) la repetición durante la carrera espera a la ganadora y responde su trabajo: no hay 409 «en curso».
     const outcomes = [[FRAMEWORK_ERRORS.idempotencyRace, 'otra petición con la misma clave está en curso.'], [FRAMEWORK_ERRORS.idempotencyReuse, 'la misma clave con otro contenido.']];
     for (const [entry, what] of asynchronous ? outcomes.slice(1) : outcomes) {

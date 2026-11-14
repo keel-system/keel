@@ -40,6 +40,8 @@ import {
   isItemFailure,
   usesBatch
 } from '../src/lib/gen/batch.js';
+import { registryOperations } from '../src/lib/gen/request-idempotency.js';
+import { idempotencyOutcomeCodes } from '../src/lib/gen/declared-errors.js';
 import { BATCH_DESIGNS, BATCH_JOB_DESIGNS } from './helpers/batch-designs.js';
 import { PROBE } from './helpers/probe-projection.js';
 
@@ -84,6 +86,7 @@ test('el modelo: el lote recorre su campo, con su elemento, su confirmación y l
       itemErrors: ['SKU_ALREADY_EXISTS'],
       execution: 'sync',
       maxItems: 500,
+      idempotency: null,
       resultFields: ['productId']
     }
   );
@@ -217,6 +220,19 @@ test('los sujetos asíncronos validan sin errores ni hallazgos de los lotes', ()
     assert.deepEqual(result.errors, [], design.name);
     assert.deepEqual(idsOf(result).filter((id) => BATCH_IDS.test(id)), [], design.name);
   }
+});
+
+test('D13: la clave de un lote asíncrono la lleva su lote, no la operación (ningún generador monta idempotency_record)', () => {
+  const { model } = derivedJob('catalog-batch-async');
+  const operation = operationOf(model, 'importProducts');
+  assert.equal(operation.idempotency, null);
+  assert.deepEqual(operation.batch.idempotency, { keySource: 'client-key', ttlSeconds: 86400 });
+  assert.equal(registryOperations(model).some((candidate) => candidate.name === 'importProducts'), false);
+  // Sus desenlaces siguen en el contrato: IDEMPOTENCY_KEY_REUSED con el code de la operación.
+  assert.deepEqual(
+    idempotencyOutcomeCodes(model, FRAMEWORK_ERRORS.idempotencyReuse).filter((row) => row.operation === 'importProducts'),
+    [{ operation: 'importProducts', code: 'IDEMPOTENCY_KEY_REUSED', declared: false }]
+  );
 });
 
 test('D14: un lote asíncrono todo o nada es incoherente; por elemento, no', () => {

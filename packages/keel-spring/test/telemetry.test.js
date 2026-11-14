@@ -565,6 +565,6 @@ test('cronómetro: el disparo observado y los dos gauges solo con telemetría, e
     const sin = generate(fixture, { telemetry: 'none' });
     const plain = sin.find('TimerPoller.java');
     assert.ok(!plain.includes('Observation') && !plain.includes('MeterRegistry'), `${fixture}: sin telemetría el sondeador no observa`);
-    assert.ok(plain.includes('                transaction.executeWithoutResult(status -> {'));
+    assert.ok(plain.includes('                    transaction.executeWithoutResult(status -> settle(timer, token, handler.handle(timer, store.dbNow())));'));
   }
 });

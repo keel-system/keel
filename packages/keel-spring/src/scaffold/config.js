@@ -28,6 +28,8 @@ import { parameterProfileValue } from '@keel-system/keel-core/gen/service-parame
 import { KAFKA_PRODUCER_TIMEOUTS } from '@keel-system/keel-core/gen/infra-catalog';
 import { usesHttpIdempotency } from './http-idempotency.js';
 import { usesTimer, TIMER_CONFIG_PARAMETERS, TIMER_SWITCH } from './timer.js';
+import { usesBatchJobs } from './batch-jobs.js';
+import { BATCH_PARAMETERS } from '@keel-system/keel-core/gen/batch-store';
 import { usesCorrelation } from './correlation.js';
 import { instrumentationFor, usesTelemetry } from './telemetry.js';
 import { METRICS_TRANSPORT, OBSERVATIONS } from '../lib/telemetry-probes.js';
@@ -158,6 +160,11 @@ export function generate(model) {
       fragments.push(fragment(profile, 'timer', timerYaml(profile)));
     }
 
+    // Los lotes asíncronos (DSL 2.30, fase B): el tamaño del chunk y la retención de los trabajos terminados.
+    if (usesBatchJobs(model)) {
+      fragments.push(fragment(profile, 'batch', batchYaml(profile)));
+    }
+
     // Parámetros de DESPLIEGUE del servicio (`service.keel.yaml § parameters`). El fragmento
     // lleva el nombre del servicio porque su prefijo de configuración es ese: no es
     // infraestructura, es el valor único con el que este servicio opera.
@@ -277,6 +284,28 @@ function timerYaml(profile) {
   }
   const [root, leaf] = TIMER_SWITCH.key.split('.');
   lines.push(`${root}:`, `  ${leaf}: ${profile === 'test' ? 'false' : envWithDefault(profile, TIMER_SWITCH.env, TIMER_SWITCH.default)}`);
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * parameters/<perfil>/batch.yaml: la mecánica de los lotes asíncronos (keel-core/gen/batch-store.js, la misma clave y
+ * variable en los cuatro generadores).
+ */
+function batchYaml(profile) {
+  const lines = [
+    '# Los lotes asíncronos (DSL 2.30): cuántos elementos procesa cada disparo y cuánto vive un trabajo terminado.',
+    '# El chunk tiene que caber en el arriendo del cronómetro (timer.lease-ms): uno más lento lo tomaría otra réplica.',
+    'batch:'
+  ];
+  let parent = null;
+  for (const parameter of Object.values(BATCH_PARAMETERS)) {
+    const segments = parameter.key.split('.');
+    if (segments.length === 3 && parent !== segments[1]) {
+      parent = segments[1];
+      lines.push(`  ${parent}:`);
+    }
+    lines.push(parameterLine(profile, parameter));
+  }
   return `${lines.join('\n')}\n`;
 }
 

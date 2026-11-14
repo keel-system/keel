@@ -14,6 +14,7 @@ import { javaFile, javaPath, subPackage } from './render.js';
 import { usesCorrelation, correlationImport } from './correlation.js';
 import { SYSTEM_ACTOR } from '@keel-system/keel-core/gen/relational';
 import { usesHistory } from '@keel-system/keel-core/gen/history';
+import { asyncBatchOperations } from '@keel-system/keel-core/gen/batch';
 
 const AUDIT_PKG = 'infrastructure.configurations.audit';
 
@@ -28,8 +29,10 @@ export function usesAuthorship(model) {
 }
 
 export function generate(model) {
-  // El historial (DSL 2.29) reutiliza este actor aunque el diseño no pida autoría en las filas: D5.
-  if (!usesAuthorship(model) && !(model.layersPresent.persistence && usesHistory(model))) return [];
+  // El historial (DSL 2.29) reutiliza este actor aunque el diseño no pida autoría en las filas: D5. Y el dueño de un
+  // trabajo de un lote asíncrono (DSL 2.30, D11) también es este actor.
+  const reused = model.layersPresent.persistence && (usesHistory(model) || asyncBatchOperations(model).length > 0);
+  if (!usesAuthorship(model) && !reused) return [];
   return [renderAuditorAware(model)];
 }
 

@@ -258,26 +258,38 @@ ${assigns.join('\n')}
             try {
                 results.add(BatchResponse.Item.succeeded(index, process.apply(item)));
             } catch (RuntimeException ex) {
-                ErrorResponse error = translate(ex);
-                String code = error.code();
-                if (code != null && (VALIDATION_ERROR.equals(code) || itemErrors.contains(code))) {
-                    results.add(BatchResponse.Item.failed(index, code, error.message()));
-                } else {
-                    stopped = true;
-                    results.add(code != null
-                            ? BatchResponse.Item.failed(index, code, error.message())
-                            : BatchResponse.Item.failed(index, BATCH_ABORTED, BATCH_ABORTED_MESSAGE));
-                }
+                Failure failure = failureOf(index, ex, itemErrors);
+                results.add(failure.item());
+                stopped = failure.stops();
             }
         }
         return ResponseEntity.status(HttpStatus.MULTI_STATUS).body(BatchResponse.of(results));
+    }
+
+    /** El {@code failed} de un elemento, y si su fallo detiene el lote (D4) o es solo suyo. */
+    record Failure(BatchResponse.Item item, boolean stops) {
+    }
+
+    /**
+     * Cómo falla un elemento: solo él con un code de {@code itemErrors} o ${validation}; cualquier otro fallo detiene el
+     * lote, con su code o con ${aborted} si no tiene.
+     */
+    Failure failureOf(int index, RuntimeException ex, Set<String> itemErrors) {
+        ErrorResponse error = translate(ex);
+        String code = error.code();
+        if (code != null && (VALIDATION_ERROR.equals(code) || itemErrors.contains(code))) {
+            return new Failure(BatchResponse.Item.failed(index, code, error.message()), false);
+        }
+        return new Failure(code != null
+                ? BatchResponse.Item.failed(index, code, error.message())
+                : BatchResponse.Item.failed(index, BATCH_ABORTED, BATCH_ABORTED_MESSAGE), true);
     }${allOrNothing}
 
     /**
      * El elemento como lo leería el borde: Jackson con el ObjectMapper de la aplicación (las guardas del constructor del
      * value object incluidas) y después Bean Validation.
      */
-    private <T> T read(JsonNode node, Class<T> itemType) {
+    <T> T read(JsonNode node, Class<T> itemType) {
         if (node == null || node.isNull()) {
             throw new InvalidItem(MALFORMED_MESSAGE);
         }
@@ -329,7 +341,7 @@ ${assigns.join('\n')}
     }
 
     /** Un elemento mal formado: su mensaje es el que viaja en el resultado. */
-    private static final class InvalidItem extends RuntimeException {
+    static final class InvalidItem extends RuntimeException {
 
         InvalidItem(String message) {
             super(message, null, false, false);

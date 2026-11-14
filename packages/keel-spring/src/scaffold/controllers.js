@@ -9,6 +9,7 @@
 // @RestControllerAdvice central en infrastructure/rest.
 
 import { batchRequestClass, controllerBatchCall, BATCH_ITEM_COMPONENT } from './batch.js';
+import { controllerBatchJobMethods } from './batch-jobs.js';
 import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
 import { callsPaymentGateway } from '../lib/payments-model.js';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
@@ -155,7 +156,9 @@ function renderController(model, service) {
     ...(methods.some((method) => /\bcallerIdentity\.resolve(Optional)?\(\)/.test(method)) ? [['CallerIdentity', 'callerIdentity']] : []),
     ...(methods.some((method) => method.includes('readScopes.')) ? [['ReadScopes', 'readScopes']] : []),
     // El bucle de los lotes (DSL 2.30).
-    ...(methods.some((method) => method.includes('batchRunner.')) ? [['BatchRunner', 'batchRunner']] : [])
+    ...(methods.some((method) => method.includes('batchRunner.')) ? [['BatchRunner', 'batchRunner']] : []),
+    // Los lotes asíncronos (DSL 2.30, fase B): el alta y las rutas del trabajo.
+    ...(methods.some((method) => method.includes('batchJobs.')) ? [['BatchJobs', 'batchJobs']] : [])
   ];
 
   const body = `@RestController
@@ -345,6 +348,14 @@ function renderMethod(model, operation, imports) {
     imports.add('org.springframework.web.bind.annotation.PathVariable');
     const validation = paramValidation(param, imports, { presence: false });
     params.push(`@PathVariable ${validation}${param.javaType} ${param.name}`);
+  }
+
+  if (batch && operation.batch.execution === 'async') {
+    // Un lote asíncrono (DSL 2.30, fase B): el alta lee los BYTES del cuerpo (su firma es la de la petición, D13) y las dos
+    // rutas del trabajo cuelgan de la suya.
+    const jobs = controllerBatchJobMethods(model, operation, { annotations, mappingImport: `org.springframework.web.bind.annotation.${mapping}` });
+    for (const name of jobs.imports) imports.add(name);
+    return `${javadoc(operation.description, '    ')}${jobs.methods}`;
   }
 
   if (batch) {

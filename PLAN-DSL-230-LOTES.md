@@ -1,6 +1,6 @@
 # DSL 2.30: lotes con resultado por elemento (R5)
 
-**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 5 cerrados el 2026-11-14 (la fase A, `sync`, en los cuatro generadores, y la fase B neutral en keel-core); el siguiente es el 6 (keel-spring `async`). Al cerrar pasa a `completed_plans/`.
+**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 6 cerrados el 2026-11-14 (la fase A, `sync`, en los cuatro generadores, la fase B neutral en keel-core y la fase B en keel-spring); el siguiente es el 7 (keel-nest `async`). Al cerrar pasa a `completed_plans/`.
 
 ## Contexto
 
@@ -310,16 +310,53 @@ Incremento 5 (fase B en keel-core):
   `lote-ventana`, `lote-valla`, `lote-resultados`, `lote-final`, `lote-purga`) y cuatro sabotajes (`batch-fence`,
   `batch-key-expiry`, `batch-purge-live`, `batch-finish-twice`), cada uno en exactamente su paso.
 
+Incremento 6 (keel-spring `async`):
+
+- **La clave del lote asíncrono sale de la operación en el modelo neutral** (`gen/model.js`): `operation.idempotency` es null
+  y la lleva `batch.idempotency` (`{ keySource, ttlSeconds }`). Así ningún generador monta `idempotency_record`, su filtro
+  ni su purga para un lote asíncrono (D13), sin tocar cada selector. `openapi.js` e `idempotencyOutcomeCodes` leen las dos,
+  y el contrato no cambia.
+- **El cronómetro gana un modo**: `TimerHandler.inTransaction()` (por defecto true). El trabajo de un lote lo pone a false:
+  el chunk corre FUERA de la transacción del sondeador, cada elemento abre la suya, y el sondeador borra o rearma el
+  temporizador después, con la valla. Un fallo cuenta y aparca como el de un plazo. Los otros tres tendrán que dar el
+  mismo modo a su sondeador.
+- **El alta lee los BYTES del cuerpo** (`@RequestBody byte[]`): la firma de D13 es su sha256, y el sobre se lee con el
+  mismo ObjectMapper y se valida con el mismo Validator que el borde. Un sobre mal formado sale por
+  `HttpMessageNotReadableException` (el `malformed` del borde) y uno que viola las cotas de la lista por
+  `ConstraintViolationException`: el `VALIDATION_ERROR` del lote síncrono, con el mensaje `invalidParams` de
+  `api-errors.js` y no `invalidBody` (no hay `MethodParameter` con el que construir la del cuerpo). Los otros tres tienen
+  que responder ese mismo mensaje.
+- **La carrera del alta** con la misma clave la arbitra la unicidad del motor: la que pierde vuelve a buscar la clave en
+  otra transacción y responde el trabajo de la ganadora (sin el 409 «en curso»).
+- **El orden dentro de la transacción del elemento es avance y después resultado**: el avance toma la fila del trabajo y
+  es la valla; con el resultado primero, un elemento ya escrito por otra réplica chocaría en la clave primaria antes de
+  llegar a la valla. En MongoDB, mover el cursor fuera de la transacción del elemento da un WriteConflict en vez de cero
+  filas; el procesador lo trata como un fallo y su transacción de fallo vuelve a chocar con la valla, así que el elemento
+  revierte igual.
+- **El dueño** es el actor de autoría (`AuditorAware`, que ahora se emite también con lotes asíncronos) y el procesador
+  corre con él en el `SecurityContext`, así que la autoría de cada elemento es la de quien creó el trabajo.
+- **La frontera de keel-spring** (`batchJobStackErrors`): motor sin sentencias medidas, ruta con parámetros (el trabajo
+  guarda el cuerpo) y un mensaje que estampa la petición (identidad, versiones, alcance). El último caso lo cubre en parte
+  la frontera neutral; los otros dos son de cada generador.
+- `BatchRunner` expone a su paquete `read` y `failureOf` (una sola traducción del fallo por elemento: con dos, el catch-all
+  dejaba la pila dos veces en el log), y el bucle síncrono los usa también.
+- **Red**: `batch-check` con los sujetos de `BATCH_JOB_DESIGNS` (`src/lib/batch-job-probes.js`): MockMvc sin la cadena de
+  seguridad y el dueño puesto a mano; el temporizador disparado a mano con el chunk a 2; la caída a mitad de chunk es un
+  almacén envuelto que lanza un `Error` al escribir el resultado del elemento 3 (BJ-4), y la réplica que se lleva el
+  trabajo es un gancho del handler que mueve el cursor en otra transacción tras el efecto (BJ-5). BJ-1 a BJ-9 en verde en
+  PostgreSQL, MySQL y MongoDB; `bj-no-resume` (empezar en el principio del chunk) cae en BJ-4, `bj-cursor-outside-tx` en
+  BJ-4 y BJ-5 y `bj-foreign-reader` en BJ-6, exactamente.
+- **Sin fila en la matriz de paridad**: los lotes no la tienen desde el inc. 1, y una fila nueva en el catálogo neutral
+  (`gen/mechanisms.js`) obliga a los cuatro generadores. Entra en el inc. 10.
+
 ## Para retomar
 
-Inc. 6, keel-spring `async`: el alta (la fila, el temporizador con `arm` y la clave de D13 en una transacción; 202 con
-`Location`), el procesador como `kind` del cronómetro (un chunk por disparo, cada elemento con su resultado y `advance` en
-su transacción, `reschedule` para ya si queda o `finish` y `complete` si no), las dos rutas con el dueño (`authorship`), la
-purga como recurrente y las tablas en la baseline y en el paso de esquema. Medirlo con BJ-1 a BJ-9 en `batch-check`
-(PostgreSQL, MySQL y MongoDB), la reanudación con dos réplicas matando una a mitad de chunk, y los tres sabotajes `bj-*`.
-Pasar los sujetos de `BATCH_JOB_DESIGNS` a la frontera de keel-spring (`asyncIncrement: null`). La huella golden de
-keel-nest sigue atrasada desde antes de la 2.30 (`npm run golden --workspace packages/keel-nest -- --check`): regenerarla
-en su propio commit. Las filas de `capability-coverage` de los lotes se borran en el inc. 11.
+Inc. 7, keel-nest `async`: lo mismo que el 6 con las decisiones de arriba (el modo fuera de transacción en su sondeador, el
+alta sobre los bytes, el avance antes del resultado, el dueño como actor) y su red en `db-check`/`doc-check` con
+`scripts/lib/batch-probes.js`, BJ-1 a BJ-9 y los tres sabotajes `bj-*`. Pasar los sujetos de `BATCH_JOB_DESIGNS` a la
+frontera de keel-nest (`asyncIncrement: null`). La huella golden de keel-nest sigue atrasada desde antes de la 2.30
+(`npm run golden --workspace packages/keel-nest -- --check`): regenerarla en su propio commit. Las filas de
+`capability-coverage` de los lotes se borran en el inc. 11.
 
 ## Verificación
 

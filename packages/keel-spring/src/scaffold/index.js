@@ -78,6 +78,7 @@ import * as timer from './timer.js';
 import * as dataLifecycle from './data-lifecycle.js';
 import * as history from './history.js';
 import * as batch from './batch.js';
+import * as batchJobs from './batch-jobs.js';
 import { enginesWithPartialIndex } from './migrations.js';
 import * as readme from './readme.js';
 import * as contextMd from './context-md.js';
@@ -161,6 +162,8 @@ const GENERATORS = [
   controllers,
   // Los lotes con resultado por elemento (DSL 2.30): el sobre, el bucle y la respuesta que llama el controller.
   batch,
+  // Los lotes asíncronos (DSL 2.30, fase B): el trabajo, su almacén y su procesador sobre el cronómetro.
+  batchJobs,
   web,
   security,
   // La política de direcciones salientes: la inyectan los clientes de http-clients y la pasarela.
@@ -254,6 +257,9 @@ export function planService({ manifest, layers, fixtures = null, workspace, stac
   // El historial (DSL 2.29): sentencias medidas para PostgreSQL y MySQL, y MongoDB.
   const historyErrors = history.historyStackErrors(model);
   if (historyErrors.length > 0) throw new Error(historyErrors.join('\n'));
+  // Los lotes asíncronos (DSL 2.30, fase B): el almacén de los trabajos y lo que el trabajo no puede llevarse de la petición.
+  const batchJobErrors = batchJobs.batchJobStackErrors(model);
+  if (batchJobErrors.length > 0) throw new Error(batchJobErrors.join('\n'));
   const scopeErrors = readScopeGenerationErrors(model);
   if (scopeErrors.length > 0) throw new Error(scopeErrors.join('\n'));
   return { model, stack: resolved, files: GENERATORS.flatMap((generator) => generator.generate(model)) };

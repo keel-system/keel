@@ -44,6 +44,7 @@ import {
 import { ATTRIBUTES, OBSERVATIONS, TIMER_LAG, TIMER_PARKED, usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { TIMER_DATABASES, claimDrains, timerPurges, timerSchedules, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { retentionKindConstant, retentionRoots, retentionTimer } from './data-lifecycle.js';
+import { BATCH_PURGE_TARGET, batchTimerKinds } from './batch-jobs.js';
 
 export { usesDeadlines, usesTimer, TIMER_DATABASES };
 
@@ -407,7 +408,8 @@ function timerKinds(model) {
     ...retentionRoots(model).map(
       ({ entity, root }) => `    /** La retención de ${entity.name} (DSL 2.28): un recurrente en modo clúster. */
     public static final String ${retentionKindConstant(entity.name)} = "${root.retention.kind}";`
-    )
+    ),
+    ...batchTimerKinds(model)
   ];
   return `/**
  * El nombre de cada temporizador en {@code ${KEEL_TIMER.table}} (columna {@code kind}). Es contrato con los otros
@@ -468,6 +470,15 @@ public interface TimerHandler {
 
     /** {@code dbNow} es la hora de la BASE (T1): la única que compara el cronómetro. */
     TimerOutcome handle(ClaimedTimer timer, Instant dbNow);
+
+    /**
+     * ¿Corre dentro de la transacción del sondeador? Un plazo sí. Un trabajo de un lote asíncrono (DSL 2.30) no: procesa
+     * un chunk en el que cada elemento abre la suya, y envolverlo en una sola volvería a ser el lote en una transacción.
+     * Entonces el sondeador borra o rearma el temporizador DESPUÉS, con la valla, y un fallo cuenta como siempre.
+     */
+    default boolean inTransaction() {
+        return true;
+    }
 }`;
 }
 
@@ -1168,14 +1179,11 @@ public class TimerPoller implements SmartLifecycle {
             }
             TimerHandler handler = handlers.get(timer.kind());
             try {
-                ${telemetry ? 'observed(timer.kind(), () -> ' : ''}transaction.executeWithoutResult(status -> {
-                    TimerOutcome outcome = handler.handle(timer, store.dbNow());
-                    if (outcome.done()) {
-                        store.complete(timer.id(), token);
-                    } else {
-                        store.reschedule(timer.id(), token, outcome.dueAt());
-                    }
-                })${telemetry ? ')' : ''};
+                if (handler.inTransaction()) {
+                    ${telemetry ? 'observed(timer.kind(), () -> ' : ''}transaction.executeWithoutResult(status -> settle(timer, token, handler.handle(timer, store.dbNow())))${telemetry ? ')' : ''};
+                } else {
+                    ${telemetry ? 'observed(timer.kind(), () -> ' : ''}settle(timer, token, handler.handle(timer, store.dbNow()))${telemetry ? ')' : ''};
+                }
             } catch (RuntimeException failure) {
                 log.warn("El temporizador {} ({}) falló en su intento {}: {}", timer.id(), timer.kind(), timer.attempts() + 1, failure.toString());
                 store.fail(timer.id(), token, maxAttempts, retryDelayMs);
@@ -1185,6 +1193,15 @@ public class TimerPoller implements SmartLifecycle {
             }
         }
         return sleepMs(store.nextDueMs(kinds), maxSleepMs);
+    }
+
+    /** Borra el temporizador o lo rearma, con la valla con la que se reclamó. */
+    private void settle(ClaimedTimer timer, UUID token, TimerOutcome outcome) {
+        if (outcome.done()) {
+            store.complete(timer.id(), token);
+        } else {
+            store.reschedule(timer.id(), token, outcome.dueAt());
+        }
     }
 
     /**
@@ -1407,6 +1424,8 @@ function purgeTarget(model, table) {
       return { pkg: 'infrastructure.persistence.idempotency', className: document ? 'MongoIdempotencyStore' : 'JpaIdempotencyStore' };
     case 'reconciliation_claim':
       return { pkg: 'infrastructure.persistence.reconciliation', className: 'ReconciliationClaimPurge' };
+    case 'batch_job':
+      return BATCH_PURGE_TARGET;
     default:
       throw new Error(`timer.js: no sé qué bean purga ${table}`);
   }

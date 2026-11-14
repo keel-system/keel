@@ -53,7 +53,8 @@ export function idempotencyOutcomeCodes(model, entry) {
   const rows = [];
   for (const service of model.services ?? []) {
     for (const operation of service.operations ?? []) {
-      const idempotency = operation.idempotency;
+      // La de un lote asíncrono la lleva su lote (DSL 2.30, D13), y responde los mismos desenlaces.
+      const idempotency = operation.idempotency ?? operation.batch?.idempotency;
       if (!idempotency || idempotency.guard === 'natural-key') continue;
       const own = new Set(operation.errors ?? []);
       const declared = declaredErrorFor({ errors: errors.filter((error) => own.has(error.code)) }, entry);

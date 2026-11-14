@@ -1213,7 +1213,10 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
       // puertas por las que entre la operación—, así que un almacén aparte sería un segundo
       // registro de lo mismo que además caduca. Es el mismo tipo de derivación que hace
       // `soleConstraint` en keel-core/gen (declared-errors.js), no una adivinanza.
-      idempotency: resolveIdempotency(op, targetEntity, layers),
+      // Un lote asíncrono (DSL 2.30, D13) guarda su clave en el TRABAJO (`batch_job`), no en el registro de claves de
+      // petición: la operación no la lleva y la lleva su lote (`batch.idempotency`), para que ningún generador monte
+      // `idempotency_record` ni su filtro para ella.
+      idempotency: op.batch?.execution === 'async' ? null : resolveIdempotency(op, targetEntity, layers),
       // Las transiciones del lifecycle que esta operación ejecuta (DSL 2.6). Aquí se
       // usan para el ORDEN de los efectos en el stub del handler; el TODO del método
       // semántico dentro del agregado lo cablea attachTransitionExecutors.
@@ -3128,6 +3131,11 @@ export function batchModelOf(op, resultFields) {
     itemErrors: [...(batch.itemErrors ?? [])],
     execution: batch.execution ?? 'sync',
     maxItems: over?.constraints?.maxItems ?? null,
+    // La clave del lote asíncrono (D13): `keySource` (client-key o payload-hash) y su ventana; null sin idempotency.
+    idempotency:
+      (batch.execution ?? 'sync') === 'async' && op.idempotency
+        ? { keySource: op.idempotency.keySource, ttlSeconds: op.idempotency.ttlSeconds ?? null }
+        : null,
     resultFields
   };
 }
