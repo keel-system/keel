@@ -16,8 +16,7 @@
 
 Proyecto en `D:\keel-example\cards-229-go-postgre\services\profile-directory-go`. Es la cuarta de las cinco corridas
 de control del incremento 7 de `PLAN-DSL-229-HISTORIAL.md`, gemela de las de keel-spring, keel-nest y keel-dotnet: el
-mismo diseño y el mismo stack. El pipeline tardó unos sesenta minutos desde `build`; la gemela de keel-spring, unos
-diez.
+mismo diseño y el mismo stack.
 
 ## Lo que medía
 
