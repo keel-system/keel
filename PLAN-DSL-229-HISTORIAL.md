@@ -327,20 +327,19 @@ generador que no llegue rechaza la capacidad con su motivo en `supported-feature
 | 4. keel-go | hecho (2026-11-13) | la suite de keel-go (1572) y `test/history-parity.test.js` (12: casos, sentencias, tablas, patrones personales y nota contra los otros tres, y que cada sabotaje se siga aplicando); `go-check --history` (la prueba emitida `history_test.go`, falsada con `history-diff` e `history-next-id`); los seis sujetos con gofmt, vet, staticcheck y pruebas en PostgreSQL, MySQL y MongoDB; `db-check` en PostgreSQL y MySQL y `doc-check` sobre los tres sujetos de cada almacén, índices vivos incluidos; los 8 sabotajes `hi-*` cada uno en exactamente sus casos en los tres almacenes; lo emitido para las fixtures sin historial, idéntico byte a byte (7618 archivos); fila `history` de la matriz verificada y falsada en sus dos ramas |
 | 5. Derivados y documentación | hecho (2026-11-13) | `keel-nest/test/openapi.test.js` sobre los seis sujetos (el mismo documento en los cuatro, la página y la entrada con la forma del cable, sin `sort` en el contrato ni en `ROUTES`, `x-personal-fields` contra `historyPersonalPaths`, sin deriva para `CHK-DOCS-OPENAPI-DRIFT`); `redocly lint` de los seis documentos (solo el aviso `info-license` de siempre); `test/history.test.js` de keel-core (rutas legibles contra los patrones de la anonimización, cláusula, inventario); `data-lifecycle-parity` de keel-go (el inventario igual en los cuatro); la suite de los seis paquetes (keel-core 1574, keel-spring 1999, keel-nest 1115, keel-dotnet 982, keel-go 1572, keel-recover 190) |
 | 6. Fixtures | hecho (2026-11-13) | profile-directory v1.2.0 13/13 en `--ready` (escenarios FL-CRD-007-C a FL-CRD-010, careo de una pasada con dos hallazgos nuevos aceptados, revisión con `REV-HISTORY-SCOPE`, huecos de las clases 5, 15, 16 y 19, § 3.8 y `DESIGN.md`); `timer-sql-check` (38 pasos, `history-micros` solo en `historial-hora` en los dos motores); fuera las filas `persistence.audit.history` de las cuatro `capability-coverage`; la suite de los seis paquetes (keel-core 1574, keel-spring 1999, keel-nest 1115, keel-dotnet 982, keel-go 1572, keel-recover 190), que destapó las constantes `History*` sin comentario propio en el Go emitido (corregido); `go-check --fixtures` 146/146, `cs-check --fixtures --only=profile-directory`, `ts-check --only=profile-directory` 13/13 y `compile-check profile-directory` en sus cuatro variantes |
-| 7. Corridas de control | pendiente | |
+| 7. Corridas de control | hecho (2026-11-13) | cinco corridas de profile-directory v1.2.0 (keel-spring, keel-nest, keel-dotnet y keel-go sobre PostgreSQL, y keel-go sobre MySQL para T2), todas 37/37 a la primera, sin `designGaps`, con una huella de 6 o 7 archivos y registradas en `docs/corridas/2026-11-13-profile-directory-229-*`. `ageDeletion` usado en las cinco; FL-CRD-007-C resuelto en las cinco sin helper, así que `historyOf` no entra; el rollback de la entrada (FL-CRD-008-D) lo pisó la de keel-dotnet, que no comprueba el correo antes de guardar; un hueco de documentación común a los cuatro (el README sin `init-keycloak.sh`) |
 
 ## Para retomar
 
-- **Siguiente: incremento 7, corridas de control**, que lanza el usuario (dos a la vez como mucho): profile-directory
-  v1.2.0 en los cuatro generadores sobre PostgreSQL y una con MySQL (T2), registradas en `docs/corridas/`.
-  **Preparadas el 2026-11-13** desde `9be8b08d` (`keel init`, el diseño y su `DESIGN.md`, `ready.log` 13/13 y
-  `build.log`, con el stack sembrado en `keel-stack.json`): `D:\keel-example\cards-229-{spring,nest,dotnet,go}-postgre`
-  y `D:\keel-example\cards-229-go-mysql`. El MySQL es de keel-go y no de keel-dotnet, como en la 2.28: así lo pisa
-  otro generador, y uno que escribe su propio SQL. Cada una se lanza con `cd services/profile-directory-<tech>`, el paso
-  previo de su `build.log` (`npm install`, `dotnet restore`, `go mod tidy`) y `/keel-generate-<tech>` sin argumentos.
-- Lo que se mira en ellas: HI-11 con la app arrancada y telemetría, si el agente de pruebas lee bien `change_history` en
-  FL-CRD-007-C (si no, entra el helper `historyOf` en el arnés de los cuatro, como `ageDeletion`), y que los filtros por
-  fecha con el `at` leído (FL-CRD-009-C) salgan verdes en los dos motores.
-- Hallado en la corrida de keel-nest (2026-11-13): el README que emiten los cuatro generadores enseña `bash infra/up.sh`
-  sin el `bash infra/init-keycloak.sh` que siembra el realm. Arreglarlo en los cuatro antes de cerrar el plan.
-- Al cerrarlas, el plan pasa a `completed_plans/`.
+- **Las cinco corridas de control están hechas** (ver § Estado). Lo que dijeron:
+  - el helper `historyOf` **no entra**: los cinco agentes leyeron `change_history` a la primera con el `db(...)` del arnés
+    y la tabla y las columnas de la convención;
+  - los filtros por fecha con el `at` leído salen verdes en PostgreSQL y en MySQL, que era el control del arreglo del
+    incremento 6.
+- **Antes de cerrar el plan, dos cosas:**
+  - el README que emiten los cuatro generadores enseña `bash infra/up.sh` sin el `bash infra/init-keycloak.sh` que siembra
+    el realm (hallado en la corrida de keel-nest); va en los cuatro, con su test;
+  - HI-11 (ningún valor personal del historial en logs ni spans) no lo midió ninguna corrida, porque las cinco iban sin
+    telemetría. O se mide con una corrida con `--telemetry otel`, o se cierra con la PD-3 de la 2.28 y el argumento de
+    «Decidido al escribir el incremento 5» (`change_history` no tiene unicidad sobre valores). Lo decide el usuario.
+- Después, el plan pasa a `completed_plans/`.
