@@ -334,7 +334,7 @@ if (process.argv.includes('--fixtures')) {
 }
 
 const workspace = makeWorkspace('keel-dotnet-cs-check-');
-mountDesign(workspace, DOTNET_READY_DESIGN.name, DOTNET_READY_DESIGN);
+const secured = /^\s*security:/m.test(fs.readFileSync(path.join(mountDesign(workspace, DOTNET_READY_DESIGN.name, DOTNET_READY_DESIGN), 'service.keel.yaml'), 'utf8'));
 const projectDir = path.join(workspace, 'services', `${DOTNET_READY_DESIGN.name}-dotnet`);
 if (engine !== 'postgresql') {
   // El motor se elige como lo elige el diseñador: en el keel-stack.json del proyecto, que build lee antes de preguntar.
@@ -433,14 +433,22 @@ if (results.every((result) => result.ok) && database) {
   step('arranca y GET /livez → 200 {"status":"UP"}', livez?.status === 200 && livez.body === '{"status":"UP"}', livez ? `${livez.status} ${livez.body}` : 'no respondió en 30 s');
   const readyz = await get(port, '/readyz');
   step('GET /readyz → 200 {"status":"UP"}', readyz?.status === 200 && readyz.body === '{"status":"UP"}', readyz ? `${readyz.status} ${readyz.body}` : 'sin respuesta');
+  // Con security en el diseño (product-catalog desde su v1.2.0, inc. 11 de PLAN-DSL-230-LOTES.md), una petición sin
+  // credencial no pasa de la cadena: cualquier ruta responde 401 UNAUTHENTICATED con el ErrorResponse, también la
+  // que no existe, como en keel-spring.
   const missing = await get(port, '/no-existe');
-  step('una ruta que no existe → 404 con ErrorResponse', missing?.status === 404 && errorShaped(missing.body, 404), missing ? `${missing.status} ${missing.body}` : 'sin respuesta');
+  const missingStatus = secured ? 401 : 404;
+  step(`una ruta que no existe → ${missingStatus} con ErrorResponse`, missing?.status === missingStatus && errorShaped(missing.body, missingStatus), missing ? `${missing.status} ${missing.body}` : 'sin respuesta');
   // Una ruta del DISEÑO, en el servidor arrancado de verdad: el uuid mal formado lo rechaza el lector antes de
-  // llegar al handler, con el cuerpo de error del contrato.
+  // llegar al handler, con el cuerpo de error del contrato; con security, la cadena antes que el lector.
   const malformed = await get(port, '/api/v1/products/no-es-un-uuid');
   step(
-    'GET /api/v1/products/no-es-un-uuid → 400 «Petición malformada» con ErrorResponse',
-    malformed?.status === 400 && errorShaped(malformed.body, 400) && JSON.parse(malformed.body).message === 'Petición malformada',
+    secured
+      ? 'GET /api/v1/products/no-es-un-uuid sin credencial → 401 UNAUTHENTICATED con ErrorResponse (la cadena antes que el lector)'
+      : 'GET /api/v1/products/no-es-un-uuid → 400 «Petición malformada» con ErrorResponse',
+    secured
+      ? malformed?.status === 401 && errorShaped(malformed.body, 401) && JSON.parse(malformed.body).code === 'UNAUTHENTICATED'
+      : malformed?.status === 400 && errorShaped(malformed.body, 400) && JSON.parse(malformed.body).message === 'Petición malformada',
     malformed ? `${malformed.status} ${malformed.body}` : 'sin respuesta'
   );
 

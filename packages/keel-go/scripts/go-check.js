@@ -318,7 +318,7 @@ if (onlyFixtures) {
 }
 
 const workspace = makeWorkspace('keel-go-go-check-');
-mountDesign(workspace, GO_READY_DESIGN.name, GO_READY_DESIGN);
+const secured = /^\s*security:/m.test(fs.readFileSync(path.join(mountDesign(workspace, GO_READY_DESIGN.name, GO_READY_DESIGN), 'service.keel.yaml'), 'utf8'));
 const generated = await runCommand(workspace, build, `specs/${GO_READY_DESIGN.name}`, { defaults: true, acceptUnready: true });
 const projectDir = path.join(workspace, 'services', `${GO_READY_DESIGN.name}-go`);
 if (!step('build genera el proyecto', generated.exitCode === undefined && fs.existsSync(projectDir), generated.exitCode ? generated.output : '')) {
@@ -968,13 +968,21 @@ if (fs.existsSync(binary) && database) {
   step('al arrancar, goose aplica la baseline (goose_db_version y la tabla products)', applied.ok && applied.stdout.trim().split(/\s+/).join(',') === '1,1', applied.output.trim().slice(0, 300));
   const readyz = await get(port, '/readyz');
   step('GET /readyz → 200 {"status":"UP"}', readyz?.status === 200 && readyz.body === '{"status":"UP"}', readyz ? `${readyz.status} ${readyz.body}` : 'sin respuesta');
+  // Con security en el diseño (product-catalog desde su v1.2.0, inc. 11 de PLAN-DSL-230-LOTES.md), una petición sin
+  // credencial no pasa de la cadena: cualquier ruta responde 401 UNAUTHENTICATED con el ErrorResponse, también la
+  // que no existe, como en keel-spring.
   const missing = await get(port, '/no-existe');
-  step('una ruta que no existe → 404 con ErrorResponse', missing?.status === 404 && /"error":"Not Found"/.test(missing.body), missing ? `${missing.status} ${missing.body}` : 'sin respuesta');
+  const [missingStatus, missingError] = secured ? [401, 'Unauthorized'] : [404, 'Not Found'];
+  step(`una ruta que no existe → ${missingStatus} con ErrorResponse`, missing?.status === missingStatus && missing.body.includes(`"error":"${missingError}"`), missing ? `${missing.status} ${missing.body}` : 'sin respuesta');
   // Una operación recién generada llega a su handler, que todavía no está escrito: 500 con ErrorResponse, no un 404.
+  // Con security, sin credencial no llega: 401 con su correlación.
   const operation = await get(port, '/api/v1/products/0192f1d2-0000-7000-8000-000000000001');
   step(
-    'GET /api/v1/products/{id} llega a su handler sin escribir → 500 con ErrorResponse y su correlación',
-    operation?.status === 500 && /"code":null/.test(operation.body) && /"correlationId":"[0-9a-f-]{36}"/.test(operation.body),
+    secured
+      ? 'GET /api/v1/products/{id} sin credencial → 401 UNAUTHENTICATED con ErrorResponse y su correlación'
+      : 'GET /api/v1/products/{id} llega a su handler sin escribir → 500 con ErrorResponse y su correlación',
+    (secured ? operation?.status === 401 && /"code":"UNAUTHENTICATED"/.test(operation.body) : operation?.status === 500 && /"code":null/.test(operation.body)) &&
+      /"correlationId":"[0-9a-f-]{36}"/.test(operation.body),
     operation ? `${operation.status} ${operation.body}` : 'sin respuesta'
   );
 
@@ -990,7 +998,13 @@ if (fs.existsSync(binary) && database) {
   });
   step(`la consola en develop es JSON ECS línea a línea (${consoleLines.length} líneas)`, consoleLines.length > 0 && notEcs.length === 0, notEcs.slice(0, 3).join(' | ').slice(0, 400));
   const correlated = consoleLines.some((line) => /"correlationId":"[0-9a-f-]{36}"/.test(line));
-  step('una línea de una petición lleva su correlationId', correlated);
+  if (secured) {
+    // El 401 no escribe línea: sin una petición que llegue a un handler no hay línea de petición que mirar. Se dice en
+    // voz alta; la correlación de la respuesta sí se mide arriba.
+    console.log('(no medido) una línea de una petición lleva su correlationId — con security, sin credencial ninguna petición escribe línea');
+  } else {
+    step('una línea de una petición lleva su correlationId', correlated);
+  }
 
   app.kill('SIGTERM');
   const end = await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve(null), 15_000))]);

@@ -108,6 +108,7 @@ async function waitFor(port, route, deadlineMs) {
 const workspace = makeWorkspace('keel-nest-ts-check-');
 mountDesign(workspace, NEST_READY_DESIGN.name, NEST_READY_DESIGN);
 const generated = await runCommand(workspace, build, `specs/${NEST_READY_DESIGN.name}`, { defaults: true, acceptUnready: true });
+const secured = /^\s*security:/m.test(fs.readFileSync(path.join(workspace, 'specs', NEST_READY_DESIGN.name, 'service.keel.yaml'), 'utf8'));
 const projectDir = path.join(workspace, 'services', `${NEST_READY_DESIGN.name}-nest`);
 if (!step('build genera el proyecto', generated.exitCode === undefined && fs.existsSync(projectDir), generated.exitCode ? generated.output : '')) {
   process.exit(1);
@@ -270,6 +271,9 @@ if (results.every((result) => result.ok) && database) {
   const readyz = await get(port, '/readyz');
   step('GET /readyz → 200 {"status":"UP"}', readyz?.status === 200 && readyz.body === '{"status":"UP"}', readyz ? `${readyz.status} ${readyz.body}` : 'sin respuesta');
   // La API del servidor arrancado: una ruta que no existe responde con el ErrorResponse del contrato.
+  // Con security en el diseño (product-catalog desde su v1.2.0, inc. 11 de PLAN-DSL-230-LOTES.md), una petición sin
+  // credencial no pasa de la cadena: cualquier ruta responde 401 UNAUTHENTICATED con el ErrorResponse, también la
+  // que no existe, como en keel-spring.
   const missing = await get(port, '/api/v1/keel-ruta-que-no-existe');
   let missingBody = null;
   try {
@@ -277,9 +281,10 @@ if (results.every((result) => result.ok) && database) {
   } catch {
     missingBody = null;
   }
+  const [missingStatus, missingError] = secured ? [401, 'Unauthorized'] : [404, 'Not Found'];
   step(
-    'GET de una ruta de la API que no existe → 404 con ErrorResponse',
-    missing?.status === 404 && missingBody?.status === 404 && missingBody?.error === 'Not Found' && typeof missingBody?.correlationId === 'string',
+    `GET de una ruta de la API que no existe → ${missingStatus} con ErrorResponse`,
+    missing?.status === missingStatus && missingBody?.status === missingStatus && missingBody?.error === missingError && typeof missingBody?.correlationId === 'string',
     missing ? `${missing.status} ${missing.body}` : 'sin respuesta'
   );
 
