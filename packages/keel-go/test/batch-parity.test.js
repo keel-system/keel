@@ -56,11 +56,11 @@ test('los sujetos pasan la frontera de keel-go y su sonda ejecuta los MISMOS cas
   assert.deepEqual([...BATCH_SUBJECTS.relational, ...BATCH_SUBJECTS.document].sort(), BATCH_DESIGNS.map((entry) => entry.name).sort());
 });
 
-test('la frontera: async llega en el incremento 9 y la idempotencia del lote entero no la genera nadie todavía', () => {
+test('la frontera: async se genera (incremento 9) y la idempotencia del lote síncrono entero no la genera nadie todavía', () => {
   const asynchronous = load('catalog-batch', (layers) => {
     layers['use-cases'].operations.importProducts.batch.execution = 'async';
   });
-  assert.match(checkSupportedFeatures(asynchronous.manifest, asynchronous.layers).errors.join('\n'), /importProducts\.batch \(execution: async.*incremento 9/);
+  assert.doesNotMatch(checkSupportedFeatures(asynchronous.manifest, asynchronous.layers).errors.join('\n'), /execution: async/);
   const idempotent = load('catalog-batch', (layers) => {
     layers['use-cases'].operations.importProducts.idempotency = { keySource: 'client-key', ttlSeconds: 3600 };
   });
@@ -106,7 +106,7 @@ test('el borde solo lee el SOBRE: la lista sin leer, con su presencia y su maxIt
   assert.doesNotMatch(runner, /func runAllOrNothing/);
   assert.match(runner, /const batchMultiStatus = 207/);
   // El fallo se traduce con el MISMO errorResponse del borde.
-  assert.match(runner, /response := a\.errorResponse\(r, err\)/);
+  assert.match(runner, /failure, stops := batchFailureOf\(index, a\.errorResponse\(r, err\), itemErrors\)/);
   // El elemento se lee con el contrato del cable, y la guarda del value object es su mensaje.
   assert.match(runner, /if err := wire\.Unmarshal\(raw, &item\); err != nil \{/);
   assert.match(runner, /guard\.Code\(\) == validationCode/);

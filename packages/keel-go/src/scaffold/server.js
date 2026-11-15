@@ -45,6 +45,7 @@ import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { MANAGEMENT_LISTEN, MANAGEMENT_SERVER, MANAGEMENT_SHUTDOWN, TELEMETRY_FLUSH, TELEMETRY_START } from './telemetry.js';
 import { usesRelational } from '@keel-system/keel-core/gen/features';
 import { purgedByTimer } from '@keel-system/keel-core/gen/timer-plan';
+import { BATCH_JOBS, BATCH_JOB_STORE_VAR, batchJobStoreWiring, usesBatchJobs } from './batch-jobs.js';
 import { CLOCK, DEADLINES, DEADLINES_VAR, TIMER_IMPORT, TIMER_WORKER, deadlinesReadParameters, deadlinesWiring, timerWiring, usesDeadlines, usesTimer, usesTimerSchedules } from './timer.js';
 
 // El gauge de las filas del outbox que se rindieron, leído en cada scrape (sin base, el perfil test, no hay relay que
@@ -298,6 +299,8 @@ ${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', undefined, 
   if (usesCallerScope(model)) repositories.push({ indent: '\t\t', cells: [`${CALLER_SCOPE.field}:`, 'security.CallerScope{},'] });
   if (usesRoleCheck(model)) repositories.push({ indent: '\t\t', cells: [`${CALLER_ROLES.field}:`, 'security.CallerRoles{},'] });
   if (usesRequestIdempotency(model)) repositories.push({ indent: '\t\t', cells: [`${IDEMPOTENCY_STORE.field}:`, `${store.name}.NewIdempotencyStore(transactions),`] });
+  // Los lotes asíncronos (DSL 2.30): el almacén de los trabajos, el mismo que limpia su purga.
+  if (usesBatchJobs(model)) repositories.push({ indent: '\t\t', cells: [`${BATCH_JOBS.field}:`, `${BATCH_JOB_STORE_VAR},`] });
   const clients = usesGoHttpClients(model) && dispatchesUseCases(model);
   if (clients) {
     for (const client of model.httpClients) repositories.push({ indent: '\t\t', cells: [`${clientField(client)}:`, `${clientParam(client)},`] });
@@ -347,7 +350,7 @@ ${usesApi(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', undefined, 
 		}${telemetry && usesRelational(model) ? '\n\t\tobservability.RegisterPool(db.Stats)' : ''}
 	}
 ${statementCountWiring(model)}	transactions := ${store.name}.NewTransactions(db, ${document ? '' : 'database.TransactionTimeout, '}logger)
-${statementCountOnTransactions(model)}${usesDeadlines(model) ? deadlinesWiring(model, PARAMETERS_VAR) : ''}${usesSweepClaims(model) ? sweepsWiring(store) : ''}${usesReconciliationClaims(model) ? reconciliationWiring(store) : ''}${clients ? clientsWiring(model) : ''}${mailing ? MAIL_WIRING : ''}${caching}${storing}${paying ? PAYMENT_SERVER_WIRING : ''}${messaging ? messagingWiring(model) : ''}
+${statementCountOnTransactions(model)}${batchJobStoreWiring(model)}${usesDeadlines(model) ? deadlinesWiring(model, PARAMETERS_VAR) : ''}${usesSweepClaims(model) ? sweepsWiring(store) : ''}${usesReconciliationClaims(model) ? reconciliationWiring(store) : ''}${clients ? clientsWiring(model) : ''}${mailing ? MAIL_WIRING : ''}${caching}${storing}${paying ? PAYMENT_SERVER_WIRING : ''}${messaging ? messagingWiring(model) : ''}
 	probes := &health.Probes{}
 ${dispatchesUseCases(model) ? `\tuseCases := ${newUseCasesCall(model, 'logger', `application.Dependencies{\n${alignRows([{ indent: '\t\t', cells: ['Transactor:', 'transactions,'] }, ...repositories]).join('\n')}\n\t}`, undefined, 'observability')}\n` : ''}${messaging ? listenersWiring(model, store) : ''}${usesScheduling(model) ? schedulingWiring(model, store) : ''}${usesTimer(model) ? timerWiring(model, store, (entity) => `${store.name}.New${entity.name}Repository(${repositoryArgs(model, entity, 'transactions', 'bridge')})`) : ''}${serve}`;
 }

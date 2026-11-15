@@ -27,7 +27,10 @@ import { PROBE_RECONCILIATION } from './reconciliation-probes.js';
 export const UNDECLARED_FAILURE_NAME = 'BOOM';
 
 /** Las operaciones por lotes del modelo. */
-export const batchOperations = (model) => model.services.flatMap((service) => service.operations).filter((operation) => operation.batch);
+export const allBatchOperations = (model) => model.services.flatMap((service) => service.operations).filter((operation) => operation.batch);
+
+/** Las operaciones por lotes SÍNCRONOS: los asíncronos los mide batch-job-probes.js (BJ-*). */
+export const batchOperations = (model) => allBatchOperations(model).filter((operation) => operation.batch.execution !== 'async');
 
 /** Los sujetos por almacén: los de batch-designs.js. */
 export const BATCH_SUBJECTS = { relational: ['catalog-batch', 'catalog-batch-atomic'], document: ['catalog-batch-mongo'] };
@@ -67,7 +70,8 @@ export const BATCH_SABOTAGE_SPECS = {
   // Un elemento mal formado tumba el lote entero con un 400, como si el borde validara el cuerpo completo.
   'ba-validate-whole': spec(BATCH, 'results = append(results, batchFailed(index, validationCode, problem))\n\t\t\tcontinue', 'return BatchResponse{}, malformed(nil)'),
   // Un fallo que no es de su elemento no detiene el lote.
-  'ba-continue-on-undeclared': spec(BATCH, 'stopped = true', 'stopped = false'),
+  // (`stops` se sigue leyendo: una variable sin usar no compila.)
+  'ba-continue-on-undeclared': spec(BATCH, 'stopped = stops', 'stopped = stops && false'),
   // El lote por elemento responde 200: el status deja de ser el del método.
   'ba-status': spec(ENDPOINTS, 'return writeJSON(w, batchMultiStatus, response)', 'return writeJSON(w, http.StatusOK, response)'),
   // all-or-nothing sin la transacción que abarca el lote: cada elemento se confirma en la suya.
@@ -101,7 +105,7 @@ export function batchSabotageVerdict(failures, id, model, engine) {
 
 /** El handler de la sonda en el lugar del stub de `importProducts`; el resto de archivos, tal cual. */
 export function batchProbePatch(model, file) {
-  const operation = batchOperations(model)[0];
+  const operation = allBatchOperations(model)[0];
   if (!operation || typeof file.content !== 'string' || !/^internal\/application\/import_products_command_handler\.go$/.test(file.path)) return file;
   const product = model.entities.find((entity) => entity.name === 'Product');
   const repo = repositoryParam(product);
@@ -117,6 +121,9 @@ export function batchProbePatch(model, file) {
       generated: false,
       imports: ['context', 'errors', 'github.com/google/uuid', 'internal/domain'],
       body: `
+// ProbeAfterEffect, si no es nil, corre tras el efecto de cada elemento, dentro de su transacción (BJ-5).
+var ProbeAfterEffect func(ctx context.Context) error
+
 // ${message}Handler es la sonda de db-check y doc-check: lo que escribiría el agente para UN elemento.
 type ${message}Handler struct {
 	${repo} domain.ProductRepository
@@ -139,6 +146,12 @@ func (h *${message}Handler) Handle(ctx context.Context, cmd ${message}) ${return
 	state := domain.ProductState{ID: id, Sku: draft.Sku(), Name: draft.Name(), Price: draft.Price(), APIToken: &token, Status: domain.ProductStatusDraft}
 	if _, err := h.${repo}.Save(ctx, domain.RehydrateProduct(state)); err != nil {
 		${fail('err')}
+	}
+	// La otra réplica que se lleva el trabajo tras el efecto (BJ-5, batch-job-probes.js).
+	if ProbeAfterEffect != nil {
+		if err := ProbeAfterEffect(ctx); err != nil {
+			${fail('err')}
+		}
 	}
 	${result ? `return ${result}{ProductID: &id}, nil` : 'return nil'}
 }

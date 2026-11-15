@@ -14,7 +14,7 @@ import { CONDITIONAL_WRITE_DESIGNS } from '../../../keel-core/test/helpers/condi
 import { READ_SCOPE_DESIGNS } from '../../../keel-core/test/helpers/read-scope-designs.js';
 import { DATA_LIFECYCLE_DESIGNS } from '../../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { HISTORY_DESIGNS } from '../../../keel-core/test/helpers/history-designs.js';
-import { BATCH_DESIGNS } from '../../../keel-core/test/helpers/batch-designs.js';
+import { BATCH_DESIGNS, BATCH_JOB_DESIGNS } from '../../../keel-core/test/helpers/batch-designs.js';
 
 const here = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.join(here, '..', '..', '..');
@@ -261,8 +261,8 @@ export const UNCOVERED_BRANCHES = [
   })),
   // Los lotes (DSL 2.30, PLAN-DSL-230-LOTES.md): los diseños de keel-core/test/helpers/batch-designs.js, los MISMOS que
   // miden los otros tres (por elemento relacional y documental, y todo o nada). Ninguna fixture los declara hasta el
-  // incremento 11.
-  ...BATCH_DESIGNS.map((design) => ({
+  // incremento 11. Con los de la fase B (lotes asíncronos, incremento 9).
+  ...[...BATCH_DESIGNS, ...BATCH_JOB_DESIGNS].map((design) => ({
     name: design.name,
     from: design.from,
     mutate(manifest, layers) {

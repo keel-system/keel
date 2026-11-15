@@ -69,6 +69,8 @@ import { retentionKindRows, retentionWiring } from './data-lifecycle.js';
 import { agingSweeps } from '@keel-system/keel-core/gen/aging-targets';
 import { DRAIN_CASES, claimDrains, clusterRecurrings, scheduledByTimer, timerPurges, timerSchedules, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { pascalCase } from '@keel-system/keel-core/gen';
+import { BATCH_JOB } from '@keel-system/keel-core/gen/batch-store';
+import { batchJobTimerWiring, batchKindRows, usesBatchJobs } from './batch-jobs.js';
 
 export { usesDeadlines, usesTimer, deadlineHandlerNote, lateTransitionNote, deadlineOf };
 
@@ -491,6 +493,8 @@ function kindsBody(model) {
   }
   // Las retenciones (DSL 2.28, D8): un recurrente en modo clúster por raíz.
   rows.push(...retentionKindRows(model));
+  // Los trabajos de los lotes asíncronos (DSL 2.30, D9): un temporizador de UNA vez por trabajo.
+  rows.push(...batchKindRows(model));
   rows.push({ text: '\t// NilEntityID es el entity_id de un recurrente: no tiene entidad, y la unicidad (kind, entity_id) necesita un valor.' });
   rows.push({ indent: '\t', cells: ['NilEntityID', `= ${goString(NIL_ENTITY_ID)}`] });
   return `
@@ -722,6 +726,8 @@ func (r *reader) flag(key string, fallback bool) bool {
 
 function pollerBody(model) {
   const correlated = usesCorrelation(model);
+  // Los trabajos de los lotes asíncronos (DSL 2.30) corren FUERA de la transacción del sondeador: cada elemento abre la suya.
+  const detached = usesBatchJobs(model);
   return `
 // parser lee el cron de seis campos de los cuatro servidores del diseño: segundo, minuto, hora, día del mes, mes y día
 // de la semana.
@@ -866,7 +872,17 @@ func (p *Poller) PollOnce(ctx context.Context) (time.Duration, error) {
 		var err error
 		if recurring, ok := p.recurrings[timer.Kind]; ok {
 			err = p.tick(ctx, recurring, timer, token)
-		} else {
+		} ${detached ? `else if detached(p.handlers[timer.Kind]) {
+			err = p.observed(ctx, timer.Kind, func(ctx context.Context) error {
+				outcome, err := p.handle(ctx, timer)
+				if err != nil {
+					return err
+				}
+				return p.store.Resolve(ctx, timer, token, func(context.Context) (Outcome, error) {
+					return outcome, nil
+				})
+			})
+		} ` : ''}else {
 			err = p.observed(ctx, timer.Kind, func(ctx context.Context) error {
 				return p.store.Resolve(ctx, timer, token, func(ctx context.Context) (Outcome, error) {
 					return p.handle(ctx, timer)
@@ -889,7 +905,15 @@ func (p *Poller) PollOnce(ctx context.Context) (time.Duration, error) {
 	return SleepFor(next, pending, p.settings.MaxSleep), nil
 }
 
-// handle resuelve un temporizador con su handler, con la hora de la base. Un pánico del handler es un fallo más: no
+${detached ? `// detached dice si el handler corre FUERA de la transacción del sondeador (InTransaction() false, el trabajo de un lote
+// asíncrono): el sondeador lo ejecuta primero y borra o rearma el temporizador después, con la valla, en una transacción
+// propia. Un fallo cuenta y aparca como el de un plazo.
+func detached(handler Handler) bool {
+	scoped, ok := handler.(interface{ InTransaction() bool })
+	return ok && !scoped.InTransaction()
+}
+
+` : ''}// handle resuelve un temporizador con su handler, con la hora de la base. Un pánico del handler es un fallo más: no
 // tumba la réplica.
 func (p *Poller) handle(ctx context.Context, timer Claimed) (outcome Outcome, err error) {
 	handler, ok := p.handlers[timer.Kind]
@@ -2279,7 +2303,7 @@ export function timerWiring(model, store, repositoryCall) {
   );
   // Las purgas de las tablas del generador (inc. 7): la tarea de siempre (scheduler.PurgeTask, con su SQL y sus lotes), que
   // ya no va al reloj de cada réplica sino al cronómetro, en modo clúster.
-  const purges = timerPurges(model).map((purge) => {
+  const purges = timerPurges(model).filter((purge) => purge.table !== BATCH_JOB.table).map((purge) => {
     const entry = tablePurges(model).find((candidate) => candidate.table === purge.table);
     if (!entry) throw new Error(`timer.js: ${purge.table} se purga con el cronómetro y la purga del reloj no la tiene`);
     const variable = `purge${pascalCase(purge.table)}`;
@@ -2294,7 +2318,11 @@ export function timerWiring(model, store, repositoryCall) {
   });
   // Las retenciones del diseño (DSL 2.28, D8): un recurrente por raíz, con su lote y su cron de retention.yaml.
   const retention = retentionWiring(model, store);
-  const recurrings = ['timerPurge', ...purges.map((purge) => purge.variable), ...retention.variables];
+  // Los lotes asíncronos (DSL 2.30): el procesador y su temporizador por operación, y la purga de batch_job, que no es una
+  // tarea del reloj (su retención es de batch.yaml).
+  const batch = batchJobTimerWiring(model, purgeKindConstant(BATCH_JOB.table));
+  handlers.push(...batch.handlers);
+  const recurrings = ['timerPurge', ...purges.map((purge) => purge.variable), ...retention.variables, ...batch.recurrings];
   // Los schedule de las operaciones (inc. 8): las tareas de su grupo, que ya no van al reloj de cada réplica sino al
   // cronómetro, en modo clúster y con drenaje.
   const groups = usesTimerSchedules(model) ? scheduledServices(model).map(({ service }) => `scheduler.${tasksFunc(service)}(useCases)`) : [];
@@ -2325,7 +2353,7 @@ export function timerWiring(model, store, repositoryCall) {
 	if err != nil {
 		return fmt.Errorf("la purga del cronómetro: %w", err)
 	}
-${purges.map((purge) => purge.code).join('')}${retention.code}${schedules}	poller, err := timer.NewPoller(timerStore, ${handlers.length > 0 ? `[]timer.Handler{\n${handlers.join('\n')}\n\t}` : 'nil'}, ${recurringList}, timerSettings, logger)
+${purges.map((purge) => purge.code).join('')}${retention.code}${batch.code}${schedules}	poller, err := timer.NewPoller(timerStore, ${handlers.length > 0 ? `[]timer.Handler{\n${handlers.join('\n')}\n\t}` : 'nil'}, ${recurringList}, timerSettings, logger)
 	if err != nil {
 		return err
 	}

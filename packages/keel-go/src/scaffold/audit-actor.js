@@ -20,6 +20,7 @@ import { goString } from '../lib/go-source.js';
 import { usesCorrelation } from './correlation.js';
 import { usesHttpSecurity } from './security.js';
 import { layout, packageFile } from './render.js';
+import { usesBatchJobs } from './batch-jobs.js';
 
 /** ¿Alguna entidad persistida registra QUIÉN escribe, por política (`all`) o en campos que declara (`declared`)? */
 export function usesAuthorship(model) {
@@ -40,7 +41,8 @@ export function usesDeclaredAuthorship(model) {
 
 export function generate(model) {
   // El historial (DSL 2.29) reutiliza este actor aunque el diseño no pida autoría en las filas: D5.
-  if (!usesAuthorship(model) && !(usesPersistence(model) && usesHistory(model))) return [];
+  // Y los lotes asíncronos (DSL 2.30, D11): el dueño de un trabajo es el actor de autoría.
+  if (!usesAuthorship(model) && !(usesPersistence(model) && usesHistory(model)) && !usesBatchJobs(model)) return [];
   const { store } = layout(model);
   const security = usesHttpSecurity(model);
   const correlation = usesCorrelation(model);

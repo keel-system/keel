@@ -337,7 +337,9 @@ ${history.recordsHistory(entity) ? `${history.recordLines(entity, 'restored', id
 export function partialFilterEntries(spec, literal) {
   return [
     ...(spec.partialFilter ? [`{Key: ${goString(spec.partialFilter.path)}, Value: ${literal(spec.partialFilter.equals)}}`] : []),
-    ...(spec.live ? [`{Key: ${goString(spec.live.path)}, Value: nil}`] : [])
+    ...(spec.live ? [`{Key: ${goString(spec.live.path)}, Value: nil}`] : []),
+    // Un filtro por TIPO (la clave de un lote asíncrono, DSL 2.30): en MongoDB dos ausentes chocan en una unicidad.
+    ...(spec.partialType ? [`{Key: ${goString(spec.partialType.path)}, Value: bson.D{{Key: "$type", Value: ${goString(spec.partialType.type)}}}}`] : [])
   ];
 }
 

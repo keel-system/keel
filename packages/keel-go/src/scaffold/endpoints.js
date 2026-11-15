@@ -37,6 +37,8 @@ import { callerResolution } from './use-cases.js';
 import { EXPECTED_VERSIONS, carriesExpectedVersions, endpointPrelude, returnsVersioned } from './conditional-writes.js';
 import { readScopeEndpointLines } from './read-scope.js';
 import { BATCH_ITEM_COMPONENT } from './batch.js';
+import { batchJobEndpoints, batchJobRouteRows } from './batch-jobs.js';
+import { BATCH_ACCEPTED_STATUS } from '@keel-system/keel-core/gen/batch';
 
 /** ¿Resuelve esta operación la identidad del llamante contra las credenciales del recurso (resolvedBy)? */
 export function resolvesCaller(model, operation) {
@@ -134,6 +136,7 @@ export function generate(model) {
 
 function renderEndpoint(model, operation, plan) {
   // Un lote (DSL 2.30) responde BatchResponse (o el error del culpable), no el resultado del caso de uso.
+  if (operation.batch?.execution === 'async') return batchJobEndpoints(model, operation, plan);
   if (operation.batch) return renderBatchEndpoint(model, operation);
   const { method, path, status } = operation.route;
   const full = `${model.api.routeBase}${path}`;
@@ -544,7 +547,9 @@ function renderReader(model, operation, plan) {
     out.push(`	fields, err := readObject(r, ${bodyRequired})`, '	if err != nil {', '		return msg, err', '	}', ...bodyLines);
     if (bodyChecks.some((line) => !line.startsWith('	//'))) {
       plan.uses.add('violations');
-      out.push('	inBody := violations{}', ...bodyChecks, ...returnErr('err = inBody.err()'));
+      // El sobre de un lote asíncrono (DSL 2.30) se valida como los parámetros: el mensaje invalidParams de keel-spring, que
+      // no tiene MethodParameter con el que construir el del cuerpo.
+      out.push(`	inBody := violations{${operation.batch?.execution === 'async' ? 'params: true' : ''}}`, ...bodyChecks, ...returnErr('err = inBody.err()'));
     } else out.push(...bodyChecks);
   }
   out.push(...queryRequired, ...queryLines);
@@ -593,8 +598,9 @@ export function routeRow(model, operation) {
     operation: operation.name,
     method: operation.route.method,
     path: `${model.api.routeBase}${operation.route.path}`,
-    status: operation.route.status,
-    location: returnsLocation(model, operation),
+    // El alta de un lote asíncrono responde 202 con el trabajo (DSL 2.30).
+    status: operation.batch?.execution === 'async' ? BATCH_ACCEPTED_STATUS : operation.route.status,
+    location: operation.batch?.execution === 'async' || returnsLocation(model, operation),
     query,
     body: asBody ? (bodyRequired ? 'required' : 'optional') : null
   };
@@ -602,8 +608,12 @@ export function routeRow(model, operation) {
 
 function routesFile(model) {
   const { httpapi } = layout(model);
-  const rows = servedRoutes(model).map(({ operation }) => {
-    const row = routeRow(model, operation);
+  const rowsOf = ({ operation }) => [
+    { ...routeRow(model, operation), handle: endpointName(operation) },
+    // Las dos rutas del trabajo de un lote asíncrono (DSL 2.30): su estado y sus resultados.
+    ...(operation.batch?.execution === 'async' ? batchJobRouteRows(model, operation) : [])
+  ];
+  const rows = servedRoutes(model).flatMap(rowsOf).map((row) => {
     const parts = [
       `Operation: ${goString(row.operation)}`,
       `Method: ${METHOD_CONSTANTS[row.method] ?? goString(row.method)}`,
@@ -612,7 +622,7 @@ function routesFile(model) {
       ...(row.location ? ['Location: true'] : []),
       ...(row.query.length > 0 ? [`Query: []string{${row.query.map(goString).join(', ')}}`] : []),
       ...(row.body ? [`Body: ${goString(row.body)}`] : []),
-      `handle: (*api).${endpointName(operation)}`
+      `handle: (*api).${row.handle}`
     ];
     return `\t{${parts.join(', ')}},`;
   });

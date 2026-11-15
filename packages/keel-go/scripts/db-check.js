@@ -45,6 +45,7 @@ import { RELAY_WAKE_SABOTAGES } from './lib/relay-wake-probes.js';
 import { READ_SCOPE_SABOTAGE_SPECS, READ_SCOPE_SUBJECTS, isReadScopeSabotage, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
 import { LIFECYCLE_ALSO, LIFECYCLE_SABOTAGE_SPECS, LIFECYCLE_SUBJECTS, isLifecycleSabotage, lifecycleProbeFile, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
 import { BATCH_SABOTAGE_SPECS, BATCH_SUBJECTS, batchProbeFile, batchProbePatch, batchSabotageVerdict, isBatchSabotage } from './lib/batch-probes.js';
+import { BATCH_JOB_SABOTAGE_SPECS, BATCH_JOB_SUBJECTS, batchJobProbeFile, batchJobSabotageVerdict, isBatchJobSabotage } from './lib/batch-job-probes.js';
 import { HISTORY_ALSO, HISTORY_SABOTAGE_SPECS, HISTORY_SUBJECTS, historyProbeFile, historySabotageVerdict, isHistorySabotage } from './lib/history-probes.js';
 import { resolveRuntime, startDatabase, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 import { ENGINE_LABELS, STORE_PACKAGES } from '../src/lib/relational-engine.js';
@@ -77,7 +78,9 @@ const SABOTAGES = {
   // Los del historial de cambios (DSL 2.29) caen en EXACTAMENTE sus casos HI (scripts/lib/history-probes.js).
   ...Object.fromEntries(Object.entries(HISTORY_SABOTAGE_SPECS).filter(([, spec]) => spec.relational).map(([id, spec]) => [id, spec.relational])),
   // Los de los lotes (DSL 2.30) caen en EXACTAMENTE sus casos BA (scripts/lib/batch-probes.js).
-  ...Object.fromEntries(Object.entries(BATCH_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
+  ...Object.fromEntries(Object.entries(BATCH_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational])),
+  // Los de los lotes asíncronos (DSL 2.30, fase B) caen en EXACTAMENTE sus casos BJ (scripts/lib/batch-job-probes.js).
+  ...Object.fromEntries(Object.entries(BATCH_JOB_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
 };
 
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -147,12 +150,15 @@ try {
     // (keel-core/test/helpers/history-designs.js).
     ...UNCOVERED_BRANCHES.filter((design) => HISTORY_SUBJECTS.relational.includes(design.name) && (!only || only.split(',').includes(design.name))).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) })),
     // Los lotes (DSL 2.30, BA-1 a BA-7): los MISMOS diseños que miden los otros tres (keel-core/test/helpers/batch-designs.js).
-    ...UNCOVERED_BRANCHES.filter((design) => BATCH_SUBJECTS.relational.includes(design.name) && (!only || only.split(',').includes(design.name))).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) }))
+    ...UNCOVERED_BRANCHES.filter((design) => BATCH_SUBJECTS.relational.includes(design.name) && (!only || only.split(',').includes(design.name))).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) })),
+    // Los lotes asíncronos (DSL 2.30, BJ-1 a BJ-9): los MISMOS diseños que miden los otros tres.
+    ...UNCOVERED_BRANCHES.filter((design) => BATCH_JOB_SUBJECTS.relational.includes(design.name) && (!only || only.split(',').includes(design.name))).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) }))
   ]
     .filter((subject) => only || !isReadScopeSabotage(sabotage) || READ_SCOPE_SUBJECTS.relational.includes(subject.name))
     .filter((subject) => only || !isLifecycleSabotage(sabotage) || LIFECYCLE_SUBJECTS.relational.includes(subject.name))
     .filter((subject) => only || !isHistorySabotage(sabotage) || HISTORY_SUBJECTS.relational.includes(subject.name))
-    .filter((subject) => only || !isBatchSabotage(sabotage) || BATCH_SUBJECTS.relational.includes(subject.name));
+    .filter((subject) => only || !isBatchSabotage(sabotage) || BATCH_SUBJECTS.relational.includes(subject.name))
+    .filter((subject) => only || !isBatchJobSabotage(sabotage) || BATCH_JOB_SUBJECTS.relational.includes(subject.name));
 
   // ─── El esquema ─────────────────────────────────────────────────────────────────────────────────
   if (!sabotage) {
@@ -205,8 +211,10 @@ try {
     const purgeTimerProbe = purgeTimerProbeFile(plan.model);
     // Los lotes (DSL 2.30): por el http.Handler emitido, también en el paquete del almacén.
     const batchProbe = batchProbeFile(plan.model);
+    // Los lotes asíncronos (DSL 2.30, fase B): el alta, las rutas y el procesador emitidos.
+    const batchJobProbe = batchJobProbeFile(plan.model);
     const dir = path.join(root, name);
-    for (const file of [...files, probe, ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : []), ...(lifecycleProbe ? [lifecycleProbe] : []), ...(historyProbe ? [historyProbe] : []), ...(batchProbe ? [batchProbe] : [])]) {
+    for (const file of [...files, probe, ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : []), ...(lifecycleProbe ? [lifecycleProbe] : []), ...(historyProbe ? [historyProbe] : []), ...(batchProbe ? [batchProbe] : []), ...(batchJobProbe ? [batchJobProbe] : [])]) {
       const target = path.join(dir, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, file.content);
@@ -246,6 +254,18 @@ try {
       const detail = ok ? (skipped.length > 0 ? `se saltan ${skipped.join(', ')}` : '') : failed.join(', ') || tested.output.slice(-3000);
       step(`${name}: los adaptadores guardan, leen y traducen contra ${label} (${passed.length} sondas)`, ok, detail);
       if (!ok && failed.length > 0) console.error(failureLines(tested.output));
+      return;
+    }
+    if (isBatchJobSabotage(sabotage)) {
+      const verdict = batchJobSabotageVerdict(failed, sabotage);
+      // Y ninguna otra sonda: el sabotaje rompe el trabajo, no el resto del adaptador.
+      const stray = failed.filter((test) => !/_BJ\d+_/.test(test));
+      step(
+        `falsado: ${sabotage} en ${name} cae en exactamente sus casos`,
+        ran > 0 && verdict.exact && stray.length === 0,
+        `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]${stray.length > 0 ? `; además ${stray.join(', ')}` : ''}`
+      );
+      if (verdict.exact) results.at(-1).caught = true;
       return;
     }
     if (isBatchSabotage(sabotage)) {

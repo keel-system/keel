@@ -364,8 +364,13 @@ function contractIndexes(model) {
 function indexProbe(model) {
   const rows = contractIndexes(model).map(({ collection, specs }) => {
     const items = specs.map((spec) => {
-      // La condición del diseño y, con borrado lógico (DSL 2.28, T1), la vida, en el orden en que los escribe indexes.go.
-      const partial = { ...(spec.partialFilter ? { [spec.partialFilter.path]: spec.partialFilter.equals } : {}), ...(spec.live ? { [spec.live.path]: null } : {}) };
+      // La condición del diseño, con borrado lógico (DSL 2.28, T1) la vida y, en la clave de un lote asíncrono (DSL 2.30), el
+      // tipo, en el orden en que los escribe indexes.go.
+      const partial = {
+        ...(spec.partialFilter ? { [spec.partialFilter.path]: spec.partialFilter.equals } : {}),
+        ...(spec.live ? { [spec.live.path]: null } : {}),
+        ...(spec.partialType ? { [spec.partialType.path]: { $type: spec.partialType.type } } : {})
+      };
       const filter = Object.keys(partial).length > 0 ? JSON.stringify(partial) : '';
       // Cada clave con su dirección: el índice de la lectura del historial va descendente en at y _id.
       return `{name: ${goString(spec.name)}, keys: []string{${spec.paths.map((path, i) => goString(`${path}:${spec.directions?.[i] ?? 1}`)).join(', ')}}, unique: ${Boolean(spec.unique)}, filter: ${goString(filter)}}`;

@@ -33,6 +33,7 @@ import { RELAY_WAKE_SABOTAGES } from './lib/relay-wake-probes.js';
 import { READ_SCOPE_SABOTAGE_SPECS, READ_SCOPE_SUBJECTS, isReadScopeSabotage, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
 import { LIFECYCLE_ALSO, LIFECYCLE_SABOTAGE_SPECS, LIFECYCLE_SUBJECTS, isLifecycleSabotage, lifecycleProbeFile, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
 import { BATCH_SABOTAGE_SPECS, BATCH_SUBJECTS, batchProbeFile, batchProbePatch, batchSabotageVerdict, isBatchSabotage } from './lib/batch-probes.js';
+import { BATCH_JOB_SABOTAGE_SPECS, BATCH_JOB_SUBJECTS, batchJobProbeFile, batchJobSabotageVerdict, isBatchJobSabotage } from './lib/batch-job-probes.js';
 import { HISTORY_ALSO, HISTORY_SABOTAGE_SPECS, HISTORY_SUBJECTS, historyProbeFile, historySabotageVerdict, isHistorySabotage } from './lib/history-probes.js';
 
 // Los del cronómetro y los plazos (DSL 2.26) caen en EXACTAMENTE sus casos DL (scripts/lib/timer-probes.js).
@@ -49,7 +50,9 @@ const SABOTAGES = {
   // Los del historial de cambios (DSL 2.29) (scripts/lib/history-probes.js).
   ...Object.fromEntries(Object.entries(HISTORY_SABOTAGE_SPECS).filter(([, spec]) => spec.document).map(([id, spec]) => [id, spec.document])),
   // Los de los lotes (DSL 2.30) caen en EXACTAMENTE sus casos BA (scripts/lib/batch-probes.js).
-  ...Object.fromEntries(Object.entries(BATCH_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document]))
+  ...Object.fromEntries(Object.entries(BATCH_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document])),
+  // Los de los lotes asíncronos (DSL 2.30, fase B) caen en EXACTAMENTE sus casos BJ (scripts/lib/batch-job-probes.js).
+  ...Object.fromEntries(Object.entries(BATCH_JOB_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document]))
 };
 import { resolveRuntime, startMongo, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 
@@ -101,12 +104,15 @@ try {
     // El historial de cambios (DSL 2.29): los MISMOS diseños que miden los otros tres.
     ...UNCOVERED_BRANCHES.filter((design) => HISTORY_SUBJECTS.document.includes(design.name)),
     // Los lotes (DSL 2.30, BA-1 a BA-7): los MISMOS diseños que miden los otros tres.
-    ...UNCOVERED_BRANCHES.filter((design) => BATCH_SUBJECTS.document.includes(design.name))
+    ...UNCOVERED_BRANCHES.filter((design) => BATCH_SUBJECTS.document.includes(design.name)),
+    // Los lotes asíncronos (DSL 2.30, BJ-1 a BJ-9): los MISMOS diseños que miden los otros tres.
+    ...UNCOVERED_BRANCHES.filter((design) => BATCH_JOB_SUBJECTS.document.includes(design.name))
   ]
     .filter((design) => only || !isReadScopeSabotage(sabotage) || READ_SCOPE_SUBJECTS.document.includes(design.name))
     .filter((design) => only || !isLifecycleSabotage(sabotage) || LIFECYCLE_SUBJECTS.document.includes(design.name))
     .filter((design) => only || !isHistorySabotage(sabotage) || HISTORY_SUBJECTS.document.includes(design.name))
-    .filter((design) => only || !isBatchSabotage(sabotage) || BATCH_SUBJECTS.document.includes(design.name));
+    .filter((design) => only || !isBatchSabotage(sabotage) || BATCH_SUBJECTS.document.includes(design.name))
+    .filter((design) => only || !isBatchJobSabotage(sabotage) || BATCH_JOB_SUBJECTS.document.includes(design.name));
   for (const { name, from, mutate } of designs) {
     // `--only` admite una lista separada por comas.
     if (only && !only.split(',').includes(name)) continue;
@@ -137,8 +143,10 @@ try {
     const historyProbe = historyProbeFile(plan.model);
     // Los lotes (DSL 2.30): por el http.Handler emitido, también en el paquete del almacén.
     const batchProbe = batchProbeFile(plan.model);
+    // Los lotes asíncronos (DSL 2.30, fase B): el alta, las rutas y el procesador emitidos.
+    const batchJobProbe = batchJobProbeFile(plan.model);
     const dir = path.join(root, name);
-    for (const file of [...files, probe, ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : []), ...(lifecycleProbe ? [lifecycleProbe] : []), ...(historyProbe ? [historyProbe] : []), ...(batchProbe ? [batchProbe] : [])]) {
+    for (const file of [...files, probe, ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : []), ...(lifecycleProbe ? [lifecycleProbe] : []), ...(historyProbe ? [historyProbe] : []), ...(batchProbe ? [batchProbe] : []), ...(batchJobProbe ? [batchJobProbe] : [])]) {
       const target = path.join(dir, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, file.content);
@@ -166,6 +174,18 @@ try {
       const ok = tested.ok && ran > 0;
       step(`${name}: los adaptadores documentales guardan, leen y traducen contra MongoDB (${passed.length} sondas)`, ok, ok ? '' : failed.join(', ') || tested.output.slice(-3000));
       if (!ok && failed.length > 0) console.error(failureLines(tested.output));
+      return;
+    }
+    if (isBatchJobSabotage(sabotage)) {
+      const verdict = batchJobSabotageVerdict(failed, sabotage);
+      // Y ninguna otra sonda: el sabotaje rompe el trabajo, no el resto del adaptador.
+      const stray = failed.filter((test) => !/_BJ\d+_/.test(test));
+      step(
+        `falsado: ${sabotage} en ${name} cae en exactamente sus casos`,
+        ran > 0 && verdict.exact && stray.length === 0,
+        `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]${stray.length > 0 ? `; además ${stray.join(', ')}` : ''}`
+      );
+      if (verdict.exact) results.at(-1).caught = true;
       return;
     }
     if (isBatchSabotage(sabotage)) {

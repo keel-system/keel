@@ -34,7 +34,10 @@ export const BATCH_ITEM_COMPONENT = 'item';
 /** ¿Hay algún lote que se confirma entero? */
 export const usesAllOrNothing = (model) => batchModelOperations(model).some(({ batch }) => batch.atomicity === 'all-or-nothing');
 
-/** ¿Hay algún lote que responde por elemento? */
+/** ¿Hay algún lote SÍNCRONO que responde por elemento (207)? */
+const usesSyncPerItem = (model) => batchModelOperations(model).some(({ batch }) => batch.atomicity === 'per-item' && batch.execution !== 'async');
+
+/** ¿Hay algún lote que responde por elemento, síncrono o asíncrono (un trabajo es siempre per-item, D14)? */
 const usesPerItem = (model) => batchModelOperations(model).some(({ batch }) => batch.atomicity === 'per-item');
 
 export function generate(model) {
@@ -47,7 +50,7 @@ export function generate(model) {
 function batchBody(model) {
   const validation = FRAMEWORK_ERRORS.validation.code;
   const aborted = FRAMEWORK_ERRORS.batchAborted.code;
-  const perItem = usesPerItem(model)
+  const perItem = usesSyncPerItem(model)
     ? `
 // runPerItem es un lote per-item: una transacción por elemento (la abre el caso de uso en cada despacho), en orden de
 // índice y sin paralelismo, y la respuesta es SIEMPRE ${BATCH_MULTI_STATUS} (D1), también si todo salió bien.
@@ -76,19 +79,50 @@ func runPerItem[T any](a *api, r *http.Request, items []jsontext.Value, itemErro
 		if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
 			return BatchResponse{}, err
 		}
-		response := a.errorResponse(r, err)
-		if response.Code != nil && (*response.Code == validationCode || slices.Contains(itemErrors, *response.Code)) {
-			results = append(results, batchFailed(index, *response.Code, response.Message))
-			continue
-		}
-		stopped = true
-		if response.Code != nil {
-			results = append(results, batchFailed(index, *response.Code, response.Message))
-		} else {
-			results = append(results, batchFailed(index, batchAbortedCode, batchAbortedMessage))
-		}
+		failure, stops := batchFailureOf(index, a.errorResponse(r, err), itemErrors)
+		results = append(results, failure)
+		stopped = stops
 	}
 	return newBatchResponse(results), nil
+}
+
+// batchNotAttempted es un elemento que no se intentó porque el lote se detuvo antes.
+func batchNotAttempted(index int) BatchItem {
+	return BatchItem{Index: index, Status: "notAttempted"}
+}
+`
+    : '';
+  // La regla de qué falla solo su elemento y qué detiene el lote: la comparten el bucle síncrono y el procesador de los
+  // trabajos asíncronos (batch-jobs.js).
+  const failure = usesPerItem(model)
+    ? `
+// batchFailureOf es el resultado de un elemento que falló y si detiene el lote (D4): fallan solo su elemento los codes de
+// itemErrors y ${validation}; cualquier otro fallo lo detiene, con su code o con ${aborted} si no tiene.
+func batchFailureOf(index int, response ErrorResponse, itemErrors []string) (BatchItem, bool) {
+	if response.Code == nil {
+		return batchFailed(index, batchAbortedCode, batchAbortedMessage), true
+	}
+	stops := *response.Code != validationCode && !slices.Contains(itemErrors, *response.Code)
+	return batchFailed(index, *response.Code, response.Message), stops
+}
+`
+    : '';
+  const compose = usesSyncPerItem(model) || usesAllOrNothing(model)
+    ? `
+// newBatchResponse compone la respuesta de los resultados de cada elemento.
+func newBatchResponse(items []BatchItem) BatchResponse {
+	summary := BatchSummary{Total: len(items)}
+	for _, item := range items {
+		switch item.Status {
+		case "succeeded":
+			summary.Succeeded++
+		case "failed":
+			summary.Failed++
+		case "notAttempted":
+			summary.NotAttempted++
+		}
+	}
+	return BatchResponse{Summary: summary, Items: items}
 }
 `
     : '';
@@ -155,16 +189,16 @@ func (f *batchItemFailure) Error() string {
 // failed con ${validation}, no un 400 del lote. Su fallo se traduce con errorResponse, así que el code y el message son
 // los que daría la operación sola.
 
-// batchMultiStatus es el status de un lote por elemento: siempre el mismo, también si todo salió bien (D1).
+${usesSyncPerItem(model) ? `// batchMultiStatus es el status de un lote por elemento: siempre el mismo, también si todo salió bien (D1).
 const batchMultiStatus = ${BATCH_MULTI_STATUS}
 
-// batchAbortedCode es el error del elemento que detiene el lote sin un code propio (D4, framework-errors.md).
+` : ''}${usesPerItem(model) ? `// batchAbortedCode es el error del elemento que detiene el lote sin un code propio (D4, framework-errors.md).
 const batchAbortedCode = ${goString(aborted)}
 
 // batchAbortedMessage es el mensaje de ese elemento.
 const batchAbortedMessage = ${goString(BATCH_ABORTED_MESSAGE)}
 
-// batchMalformedMessage es el mensaje de un elemento mal formado cuando ninguna guarda dice por qué.
+` : ''}// batchMalformedMessage es el mensaje de un elemento mal formado cuando ninguna guarda dice por qué.
 const batchMalformedMessage = ${goString(BATCH_ITEM_MALFORMED_MESSAGE)}
 
 // BatchItem es un elemento de la respuesta de un lote, con sus cinco claves SIEMPRE: null donde no aplica. Su forma es
@@ -193,22 +227,6 @@ type BatchResponse struct {
 	Items   []BatchItem  \`json:"items"\`
 }
 
-// newBatchResponse compone la respuesta de los resultados de cada elemento.
-func newBatchResponse(items []BatchItem) BatchResponse {
-	summary := BatchSummary{Total: len(items)}
-	for _, item := range items {
-		switch item.Status {
-		case "succeeded":
-			summary.Succeeded++
-		case "failed":
-			summary.Failed++
-		case "notAttempted":
-			summary.NotAttempted++
-		}
-	}
-	return BatchResponse{Summary: summary, Items: items}
-}
-
 // batchSucceeded es un elemento confirmado, con lo que devolvió su caso de uso (nil si no devuelve nada).
 func batchSucceeded(index int, result any) BatchItem {
 	return BatchItem{Index: index, Status: "succeeded", Result: result}
@@ -218,12 +236,7 @@ func batchSucceeded(index int, result any) BatchItem {
 func batchFailed(index int, code, message string) BatchItem {
 	return BatchItem{Index: index, Status: "failed", Error: &code, Message: &message}
 }
-
-// batchNotAttempted es un elemento que no se intentó porque el lote se detuvo antes.
-func batchNotAttempted(index int) BatchItem {
-	return BatchItem{Index: index, Status: "notAttempted"}
-}
-${perItem}${allOrNothing}
+${compose}${perItem}${failure}${allOrNothing}
 // readBatchItem lee un elemento como lo leería el borde: con el contrato del cable y el constructor de su value object,
 // con sus guardas. Devuelve el motivo si no se puede: el mensaje de la guarda que lo rechazó, o el genérico (también
 // para un null).

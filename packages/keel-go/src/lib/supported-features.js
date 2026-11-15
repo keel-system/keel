@@ -79,9 +79,10 @@ export function checkSupportedFeatures(manifest, layers) {
   // construcción (T7, T8) lo rechaza planService con la frontera neutral, que necesita el modelo. level: optional también
   // (permitAll y optionalCallerIdentity), salvo sobre una identidad que no es un token: la frontera neutral.
   errors.push(...optionalAuthFrontierErrors(layers, 'keel-go'));
-  // Los lotes con resultado por elemento (DSL 2.30: use-cases.<op>.batch): sync se genera entero (scaffold/batch.js);
-  // async llega en el incremento 9 de PLAN-DSL-230-LOTES.md, y la idempotencia del lote entero no la genera nadie todavía.
-  errors.push(...batchPendingErrors(layers, 'keel-go', { syncIncrement: null, asyncIncrement: 9 }));
+  // Los lotes con resultado por elemento (DSL 2.30: use-cases.<op>.batch): sync y async se generan enteros
+  // (scaffold/batch.js y scaffold/batch-jobs.js); lo que depende del stack lo rechaza planService (batchJobStackErrors), y
+  // la idempotencia del lote síncrono entero no la genera nadie todavía.
+  errors.push(...batchPendingErrors(layers, 'keel-go', { syncIncrement: null, asyncIncrement: null }));
   errors.push(...batchFrontierErrors(layers, 'keel-go'));
   // El historial de cambios consultable (DSL 2.29: audit.history y output: { history }) se genera entero
   // (scaffold/history.js); lo que depende del motor elegido lo rechaza planService (historyStackErrors).

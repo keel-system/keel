@@ -21,6 +21,7 @@ import { docComment, domainPath, layout, packageFile } from './render.js';
 import { idempotencySentinels } from './request-idempotency.js';
 import { storageSentinels } from './storage.js';
 import { conditionalWriteSentinels } from './conditional-writes.js';
+import { batchJobSentinels } from './batch-jobs.js';
 
 /** El centinela de un `code`: `SKU_ALREADY_EXISTS` → `ErrSKUAlreadyExists`. */
 export function sentinelOf(code) {
@@ -99,7 +100,9 @@ export function persistenceSentinels(model) {
     list.push({ name, doc: `la unicidad de ${entry.entity}.${entry.fields.join(', ')}, que el diseño no nombra: su code canónico.`, code: entry.code, http: 409 });
   }
   // Los dos conflictos del registro de idempotencia (request-idempotency.js), con su code canónico.
-  for (const entry of idempotencySentinels(model)) if (!seen.has(entry.name)) list.push(entry);
+  for (const entry of idempotencySentinels(model)) if (!seen.has(entry.name)) seen.add(entry.name) && list.push(entry);
+  // Los de los lotes asíncronos (DSL 2.30): el trabajo que no hay y, con su clave, la reutilizada.
+  for (const entry of batchJobSentinels(model)) if (!seen.has(entry.name)) seen.add(entry.name) && list.push(entry);
   return list;
 }
 

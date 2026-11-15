@@ -58,6 +58,7 @@ import { KEEL_TIMER } from '@keel-system/keel-core/gen/timer-store';
 import { usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { CHANGE_HISTORY, CHANGE_HISTORY_FIELD } from '@keel-system/keel-core/gen/history-store';
 import { usesHistory } from '@keel-system/keel-core/gen/history';
+import { batchJobTables } from './batch-jobs.js';
 
 export { usesRelational };
 
@@ -399,7 +400,7 @@ export function schemaTables(model) {
   // con su clave primaria, su unicidad y los índices de la purga. Las mismas que crea un paso de esquema de build.
   // El historial de cambios (DSL 2.29, D6 y D11): la entrada y los campos que tocó, con la FK en cascada de keel-core.
   const history = usesHistory(model) ? [CHANGE_HISTORY, CHANGE_HISTORY_FIELD] : [];
-  const stores = [...(usesRequestIdempotency(model) ? [IDEMPOTENCY_RECORD] : []), ...storeTables(model), ...reconciliationTables(model), ...(usesTimer(model) ? [KEEL_TIMER] : []), ...history];
+  const stores = [...(usesRequestIdempotency(model) ? [IDEMPOTENCY_RECORD] : []), ...storeTables(model), ...reconciliationTables(model), ...(usesTimer(model) ? [KEEL_TIMER] : []), ...history, ...batchJobTables(model)];
   for (const store of stores) {
     tables.push({
       name: store.table,

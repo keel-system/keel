@@ -37,6 +37,7 @@ import { responseNeedsStorage } from './mappers.js';
 import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
 import { CLOCK, DEADLINES, deadlinesType, lateOperations, usesDeadlines } from './timer.js';
 import { usesBatch } from './batch.js';
+import { BATCH_JOBS, BATCH_JOBS_ACCESSOR, batchJobDependencyRows, usesBatchJobs } from './batch-jobs.js';
 
 /** ¿Reciben los casos de uso adaptadores (Dependencies)? Con la persistencia relacional. */
 export function usesDependencies(model) {
@@ -413,6 +414,12 @@ function useCasesBody(model, ops) {
     fieldRows.push({ text: '	// tx abre la transacción de un lote all-or-nothing (InTransaction).' });
     fieldRows.push({ indent: '	', cells: ['tx', 'Transactor'] });
   }
+  // Los lotes asíncronos (DSL 2.30): el almacén de los trabajos, que leen el alta, sus rutas y el procesador.
+  const jobs = persistent && usesBatchJobs(model);
+  if (jobs) {
+    fieldRows.push({ text: '	// batchJobs es el almacén de los trabajos de los lotes asíncronos.' });
+    fieldRows.push({ indent: '	', cells: ['batchJobs', BATCH_JOBS.port] });
+  }
   const wiring = ops.map((operation) => {
     const contract = contractOf(operation, model);
     const handler = entryGateGuard(model, operation, `New${handlerType(operation)}(${handlerArgs(model, operation).join(', ')})`);
@@ -461,6 +468,7 @@ ${alignRows([
       ]
     : []),
   ...paymentDependencyRows(model),
+  ...batchJobDependencyRows(model),
   ...cacheDependencyRows(model),
   ...storageDependencyRows(model),
   ...(handlersReadParameters(model)
@@ -512,11 +520,11 @@ ${alignRows(fieldRows).join('\n')}
 // build: lo que no está aquí no se despacha. Un handler que despacha otra operación (use-cases.dispatches)
 // recibe el propio UseCases, ya completo cuando se le llama.
 func NewUseCases(logger *slog.Logger${usesTelemetry(model) ? ', observer Observer' : ''}${persistent ? ', deps Dependencies' : ''}) *UseCases {
-${prelude}	uc := &UseCases{${[...(resolution ? [`callers: deps.${goExported(repositoryParam(resolution.entity))}`] : []), ...(batched ? ['tx: tx'] : [])].join(', ')}}
+${prelude}	uc := &UseCases{${[...(resolution ? [`callers: deps.${goExported(repositoryParam(resolution.entity))}`] : []), ...(batched ? ['tx: tx'] : []), ...(jobs ? [`batchJobs: deps.${BATCH_JOBS.field}`] : [])].join(', ')}}
 ${paymentWiring(model)}${wiring.join('\n')}
 	return uc
 }
-${resolution ? resolveCallerMethod(resolution) : ''}${batched ? IN_TRANSACTION : ''}`;
+${resolution ? resolveCallerMethod(resolution) : ''}${batched ? IN_TRANSACTION : ''}${jobs ? BATCH_JOBS_ACCESSOR : ''}`;
 }
 
 // La transacción de un lote all-or-nothing (DSL 2.30): la abre la API alrededor del lote entero, y cada caso de uso que

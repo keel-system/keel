@@ -1,6 +1,6 @@
 # DSL 2.30: lotes con resultado por elemento (R5)
 
-**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 8 cerrados el 2026-11-14 (la fase A, `sync`, en los cuatro generadores, la fase B neutral en keel-core y la fase B en keel-spring, keel-nest y keel-dotnet); el siguiente es el 9 (keel-go `async`). Al cerrar pasa a `completed_plans/`.
+**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 9 cerrados el 2026-11-14 (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores, con la fase B neutral en keel-core); el siguiente es el 10 (contrato y método). Al cerrar pasa a `completed_plans/`.
 
 ## Contexto
 
@@ -413,14 +413,42 @@ Incremento 8 (keel-dotnet `async`):
   verde, y `bj-no-resume` en BJ-4, `bj-cursor-outside-tx` en BJ-4 y BJ-5 y `bj-foreign-reader` en BJ-6, exactamente, en los
   tres motores. El lote síncrono y el cronómetro (`verification-codes`) siguen en verde en db-check y doc-check.
 
+Incremento 9 (keel-go `async`):
+
+- **La frontera hexagonal decide el reparto**: httpapi no puede importar la infraestructura, así que el puerto
+  (`domain.BatchJobStore`, como el registro de idempotencia) va en el dominio, su adaptador en el paquete del almacén
+  (`<almacén>/batch_jobs.go`, con las sentencias de keel-core por el `timerSQL` del cronómetro, o MongoDB) y el alta, las dos
+  rutas y el procesador en `internal/httpapi/batch_jobs.go`. El temporizador es `timer.NewBatchJob`, que recibe el disparo
+  del procesador como FUNCIÓN: el cronómetro no ve la API. El almacén llega a la API por las Dependencies (`BatchJobs`) y
+  `UseCases.BatchJobs()`.
+- **El dueño lo pone el almacén**: `auditActor(ctx)` en el alta, la clave y `Owned`. `audit_actor.go` se emite también con
+  lotes asíncronos, y el procesador corre con un principal de token cuyo `sub` es el dueño (`security.WithPrincipal`).
+- **El alta arma el temporizador dentro del `Insert`** del almacén (`armTimer`, en la transacción que abre
+  `UseCases.InTransaction`), en vez de pedir el almacén del cronómetro desde la API.
+- **El modo fuera de transacción es una interfaz opcional** (`InTransaction() bool`), que el sondeador consulta con `detached`
+  (emitido solo con lotes asíncronos): ejecuta el handler y después `Store.Resolve` con el desenlace ya calculado.
+- **El procesador vuelve a leer el sobre** con `http.NewRequestWithContext` sobre el `input` guardado y el MISMO lector de la
+  operación; el alta lo hace sobre un clon de la petición con los bytes ya leídos. El 400 del sobre asíncrono usa
+  `violations{params: true}` (el mensaje `invalidParams` de keel-spring).
+- **`batchFailureOf` (`batch.go`) es la regla compartida** de qué falla solo su elemento, también en el bucle síncrono; el
+  sabotaje `ba-continue-on-undeclared` pasa a `stopped = stops`.
+- **La sonda** (`scripts/lib/batch-job-probes.js`, `batch_job_probe_test.go`) entra por el `http.Handler` ENTERO con la
+  seguridad emitida, un JWKS de `securitytest` y un token por dueño; BJ-4 envuelve el almacén emitido en las Dependencies,
+  BJ-5 usa `application.ProbeAfterEffect`, un gancho del handler de la sonda. La sonda síncrona deja fuera las operaciones
+  asíncronas. La de los índices vivos de doc-check lee el filtro parcial por tipo de la clave (`partialType`).
+- Red: `test/batch-jobs.test.js` (11 casos, contrato byte a byte con los otros tres); `db-check --only=catalog-batch-async`
+  en PostgreSQL (35 sondas) y MySQL (36) y `doc-check --only=catalog-batch-async-mongo` (29), en verde, con `bj-no-resume` en
+  BJ-4, `bj-cursor-outside-tx` en BJ-4 y BJ-5 y `bj-foreign-reader` en BJ-6, exactamente, en los tres motores. Los sujetos
+  de `BATCH_JOB_DESIGNS` en `UNCOVERED_BRANCHES` (go-check y go-syntax).
+
 ## Para retomar
 
-Inc. 9, keel-go `async`: lo mismo que el 6, el 7 y el 8 con las decisiones de arriba (el modo fuera de transacción en su
-sondeador, el alta sobre los bytes del cuerpo, el avance antes del resultado, el dueño como actor, cada elemento con su
-transacción) y su red en `db-check`/`doc-check` con BJ-1 a BJ-9 y los tres sabotajes `bj-*`. Pasar los sujetos de
-`BATCH_JOB_DESIGNS` a la frontera de keel-go (`asyncIncrement: null`). La huella golden de keel-nest sigue atrasada desde
-antes de la 2.30 (`npm run golden --workspace packages/keel-nest -- --check`): regenerarla en su propio commit. Las filas
-de `capability-coverage` de los lotes se borran en el inc. 11.
+Inc. 10, contrato y método: `keel-nest/test/openapi.test.js` en los cuatro, la guía de Postman de `/keel-docs`, la pregunta
+de `/keel-design`, la tabla de `/keel-recover`, los agentes de código y de calidad de los cuatro y `methodology.md` (cuándo
+`sync` y cuándo `async`), y la fila de los lotes en el catálogo neutral de la matriz de paridad (`gen/mechanisms.js`), que
+obliga a los cuatro. La huella golden de keel-nest sigue atrasada desde antes de la 2.30 (`npm run golden --workspace
+packages/keel-nest -- --check`): regenerarla en su propio commit. Las filas de `capability-coverage` de los lotes se borran
+en el inc. 11.
 
 ## Verificación
 

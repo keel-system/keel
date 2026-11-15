@@ -109,3 +109,36 @@ llama al `http.Handler` ENTERO de `httpapi.NewHandler` con los casos de uso sobr
 (`ZZ<letra>-9xxx`), sin vaciar tablas. **Medido**: `ba-one-tx` cae en BA-2 y BA-5 en PostgreSQL y MongoDB (el motor aborta la
 transacción tras el duplicado; un error capturado no la marca en database/sql, así que BA-4 no cae) y en MySQL no es observable
 (`BATCH_ONE_TX`, sale en rojo en voz alta).
+
+## Lotes asíncronos (DSL 2.30, incremento 9 de `PLAN-DSL-230-LOTES.md`)
+
+`src/scaffold/batch-jobs.js`, con la frontera hexagonal de `render.js` (httpapi no ve la infraestructura): el puerto
+`domain.BatchJobStore` en `internal/domain/batch_job.go` (como el registro de idempotencia); su adaptador en
+`<almacén>/batch_jobs.go`, con las sentencias de keel-core tal cual por el `timerSQL` del cronómetro (o MongoDB con su índice
+parcial en `indexes.go`, `partialType` en `partialFilterEntries`), que arma el temporizador del trabajo en el `Insert` con
+`armTimer` y cuyo DUEÑO es `auditActor(ctx)` en el alta, la clave y `Owned` (por eso `audit_actor.go` se emite también con
+lotes asíncronos), y `BatchSettings`/`BatchSettingsFrom` (batch.yaml, el mismo de los otros tres); el alta, las dos rutas y el
+procesador en `internal/httpapi/batch_jobs.go`; y `timer.NewBatchJob` (`internal/infrastructure/timer/batch_job.go`), el
+`Handler` que recibe el disparo del procesador como función y declara `InTransaction() false`. El sondeador lo detecta con una
+interfaz opcional (`detached`, solo emitida con lotes asíncronos): ejecuta el handler fuera de su transacción y después
+`Store.Resolve` con el desenlace ya calculado. El almacén llega a la API por las Dependencies (`BatchJobs`) y
+`UseCases.BatchJobs()`; el arranque declara `batchJobStore` antes de los casos de uso porque lo comparte con la purga, que
+`timerWiring` monta como un recurrente más fuera de `tablePurges` (su retención es de batch.yaml).
+
+El alta lee los bytes con `io.ReadAll`, los vuelve a poner en un clon de la petición para el lector de la operación (el del
+lote síncrono, con `violations{params: true}`: el mensaje `invalidParams` de keel-spring) y crea trabajo y temporizador con
+`UseCases.InTransaction`; la carrera de dos altas con la misma clave la arbitra la unicidad del motor y la perdedora relee la
+clave. El procesador (`httpapi.NewBatchJobRunner`, un método por operación) vuelve a leer el sobre con
+`http.NewRequestWithContext` sobre el `input` guardado y el MISMO lector, corre como el dueño (`security.WithPrincipal` con su
+`sub`), y lleva cada elemento a `InTransaction` con su efecto, `Advance` (la valla) y `InsertResult`; un `errBatchFenceLost`
+revierte el elemento y para el disparo. La regla de qué falla solo su elemento es `batchFailureOf` (`batch.go`), la misma del
+bucle síncrono (el sabotaje `ba-continue-on-undeclared` cambia ahora `stopped = stops`).
+
+Lo miden `test/batch-jobs.test.js` (frontera, casos, nota, batch.yaml y contrato contra los otros tres, sentencias tal cual,
+baseline, índice parcial, cronómetro, alta, valla antes del resultado, `planService` y los sabotajes aplicables) y
+`db-check`/`doc-check` con `scripts/lib/batch-job-probes.js` (`batch_job_probe_test.go`: el `http.Handler` entero con un JWKS de
+`securitytest` y un token cuyo `sub` es el dueño; el disparo llamando al procesador con el chunk a 2; BJ-4 con un almacén
+envuelto en las Dependencies que cae al escribir el resultado del elemento 3; BJ-5 con `application.ProbeAfterEffect`, el
+gancho del handler de la sonda, que mueve el cursor por otra conexión). La sonda síncrona deja fuera las operaciones
+asíncronas (`batchOperations` frente a `allBatchOperations`). Los sujetos de `BATCH_JOB_DESIGNS` están en
+`UNCOVERED_BRANCHES` (go-syntax, uncovered-branches y go-check).

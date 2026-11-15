@@ -9,6 +9,7 @@
 // Un value object viaja con su forma (su MarshalJSONTo), así que el DTO lo lleva tal cual.
 
 import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
+import { usesBatchJobs } from './batch-jobs.js';
 import { goExported } from '../lib/go-projection.js';
 import { alignRows, keyedLiteral } from '../lib/go-source.js';
 import { appType, applicationPath, docComment, fieldImports, goTypeName, isOptional, layout, packageFile } from './render.js';
@@ -35,7 +36,8 @@ export function generate(model) {
     emit(dto, `${dto.entity} embebida con el recorte que el diseño pide en esta proyección: solo los campos que la operación deja ver`);
   }
   for (const dto of model.needDtos ?? []) emit(dto, 'los datos de otro servicio que esta respuesta expone');
-  if (paginated) files.push(pagedResponseFile(model));
+  // Los resultados de un trabajo de un lote asíncrono (DSL 2.30) salen con la página del contrato.
+  if (paginated || usesBatchJobs(model)) files.push(pagedResponseFile(model));
   if (model.hasFileUploads) files.push(fileUploadFile(model));
   return files;
 }

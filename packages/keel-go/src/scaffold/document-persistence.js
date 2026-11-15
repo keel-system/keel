@@ -43,6 +43,7 @@ import { usesBestEffort } from './messaging.js';
 import { usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { KEEL_TIMER_DOCUMENT } from '@keel-system/keel-core/gen/timer-store';
 import { partialFilterEntries } from './data-lifecycle.js';
+import { batchJobIndexEntries } from './batch-jobs.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -237,7 +238,8 @@ function filterLiteral(value) {
 
 /** Los índices del servidor como datos: lo que emite indexes.go y lo que relee doc-check. */
 export function indexEntries(model) {
-  const entries = withHistory(model, documentIndexes(model, model.warnings));
+  // Los trabajos de los lotes asíncronos (DSL 2.30, BATCH_JOB_COLLECTIONS de keel-core), con la clave única y parcial.
+  const entries = [...withHistory(model, documentIndexes(model, model.warnings)), ...batchJobIndexEntries(model)];
   // El índice de due_at del cronómetro (DSL 2.26, KEEL_TIMER_DOCUMENT de keel-core): lo que reclama el sondeador. keel-core
   // todavía no lo cuenta entre los almacenes del generador (storeDocumentIndexes), así que se añade aquí.
   if (!usesTimer(model) || entries.some((entry) => entry.collection === KEEL_TIMER_DOCUMENT.collection)) return entries;
