@@ -74,6 +74,9 @@
 // Y los del historial de cambios (DSL 2.29), sobre los sujetos de keel-core/test/helpers/history-designs.js (sin --only,
 // esos): verde = cada uno cae en EXACTAMENTE sus casos HI (scripts/lib/history-probes.js):
 //   hi-outside-tx  hi-full-snapshot  hi-sensitive  hi-author  hi-order  hi-unscoped  hi-anonymize-miss  hi-purge-miss
+// Y los de los lotes asíncronos (DSL 2.30, fase B), sobre catalog-batch-async (sin --only, ese): verde = cada uno cae en
+// EXACTAMENTE sus casos BJ (scripts/lib/batch-job-probes.js):
+//   bj-no-resume  bj-cursor-outside-tx  bj-foreign-reader
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -95,6 +98,7 @@ import { READ_SCOPE_SABOTAGE_SPECS, READ_SCOPE_SUBJECTS, isReadScopeSabotage, re
 import { LIFECYCLE_SABOTAGE_SPECS, LIFECYCLE_SUBJECTS, isLifecycleSabotage, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
 import { HISTORY_SABOTAGE_SPECS, HISTORY_SUBJECTS, isHistorySabotage, historySabotageVerdict } from './lib/history-probes.js';
 import { BATCH_SABOTAGE_SPECS, BATCH_SUBJECTS, batchProbePatch, batchSabotageVerdict, isBatchSabotage } from './lib/batch-probes.js';
+import { BATCH_JOB_SABOTAGE_SPECS, BATCH_JOB_SUBJECTS, batchJobSabotageVerdict, isBatchJobSabotage } from './lib/batch-job-probes.js';
 import { resolveRuntime, startDatabase, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const args = process.argv.slice(2);
@@ -202,7 +206,9 @@ const SABOTAGES = {
   // El historial de cambios (DSL 2.29): sobre los sujetos de history-designs.js, cada uno cae en exactamente sus casos HI.
   ...Object.fromEntries(Object.entries(HISTORY_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational])),
   // Los lotes (DSL 2.30): sobre catalog-batch y catalog-batch-atomic, cada uno cae en exactamente sus casos BA.
-  ...Object.fromEntries(Object.entries(BATCH_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
+  ...Object.fromEntries(Object.entries(BATCH_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational])),
+  // Los lotes asíncronos (DSL 2.30, fase B): sobre catalog-batch-async, cada uno cae en exactamente sus casos BJ.
+  ...Object.fromEntries(Object.entries(BATCH_JOB_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
 };
 
 /** El sabotaje para un motor: [sufijo, texto, sustituto], o null si no aplica a ese motor. */
@@ -259,7 +265,9 @@ const DERIVED = {
   // El historial de cambios (DSL 2.29): HI-1 a HI-10 (scripts/lib/history-probes.js).
   ...Object.assign({}, ...HISTORY_SUBJECTS.relational.map((name) => uncoveredBranch(name))),
   // Los lotes (DSL 2.30): BA-1 a BA-7 (scripts/lib/batch-probes.js).
-  ...Object.assign({}, ...BATCH_SUBJECTS.relational.map((name) => uncoveredBranch(name)))
+  ...Object.assign({}, ...BATCH_SUBJECTS.relational.map((name) => uncoveredBranch(name))),
+  // Los lotes asíncronos (DSL 2.30, fase B): BJ-1 a BJ-9 (scripts/lib/batch-job-probes.js).
+  ...Object.assign({}, ...BATCH_JOB_SUBJECTS.relational.map((name) => uncoveredBranch(name)))
 };
 
 function uncoveredBranch(name) {
@@ -271,6 +279,8 @@ const SUBJECTS = only
   ? only.split(',')
   : isBatchSabotage(sabotage)
     ? BATCH_SUBJECTS.relational
+  : isBatchJobSabotage(sabotage)
+    ? BATCH_JOB_SUBJECTS.relational
   : isHistorySabotage(sabotage)
     ? HISTORY_SUBJECTS.relational
     : isLifecycleSabotage(sabotage)
@@ -383,6 +393,11 @@ async function checkEngine(engine) {
       // Con el espacio delante: `Catalog.DbProbes.` es subcadena de `ProductCatalog.DbProbes.`.
       const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
       const ran = tested.output.includes(`${subject.probes.name}.dll`);
+      if (isBatchJobSabotage(sabotage)) {
+        const verdict = batchJobSabotageVerdict(mine, sabotage);
+        step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+        continue;
+      }
       if (isBatchSabotage(sabotage)) {
         const verdict = batchSabotageVerdict(mine, sabotage, subject.model, engine);
         step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);

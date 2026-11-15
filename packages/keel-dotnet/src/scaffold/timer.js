@@ -59,6 +59,8 @@ import { telemetryNamespace, usesTelemetry } from './telemetry.js';
 
 export { usesDeadlines, usesTimer, TIMER_DATABASES };
 import { retentionKindLines, retentionNamespace, retentionRegistrations, retentionRoots } from './data-lifecycle.js';
+import { BATCH_JOB } from '@keel-system/keel-core/gen/batch-store';
+import { batchInfraNamespace, batchKindLines, batchPurgeTimerBody, programBatchJobs } from './batch-jobs.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
 
@@ -337,14 +339,16 @@ export function persistenceTimerRegistration(model) {
 /** Lo que Program.cs registra: el sondeador, los handlers y la mecánica del perfil. */
 export function programTimer(model) {
   if (!usesTimer(model)) return { usings: [], registration: '' };
+  // Los lotes asíncronos (DSL 2.30): su configuración y los handlers de sus trabajos, que son de la API.
+  const batch = programBatchJobs(model);
   return {
-    usings: [timerNamespace(model), ...(retentionRoots(model).length > 0 ? [retentionNamespace(model)] : [])],
+    usings: [timerNamespace(model), ...(retentionRoots(model).length > 0 ? [retentionNamespace(model)] : []), ...batch.usings],
     registration: `
 // El cronómetro del servicio (DSL 2.26): un sondeador por réplica sobre keel_timer, con la mecánica del perfil (timer.yaml)
 // y su interruptor, scheduling.enabled (TimerRegistration, generado).
 builder.Services.AddTimer(TimerSettings.From(configuration));${retentionRoots(model).length > 0 ? `
 // Los barridos de retención (DSL 2.28): el cron y el lote de cada uno (retention.yaml), recurrentes del cronómetro.
-builder.Services.AddSingleton(RetentionSettings.From(configuration));` : ''}`
+builder.Services.AddSingleton(RetentionSettings.From(configuration));` : ''}${batch.registration}`
   };
 }
 
@@ -387,7 +391,12 @@ export function generate(model) {
       pollerBody(model)
     ),
     timer('KeelTimerPurge', [], purgeBody()),
-    ...timerPurges(model).map((purge) => timer(purgeTimerClass(purge.table), [namespaceOf(model, 'purge')], purgeTimerBody(model, purge))),
+    ...timerPurges(model).map((purge) =>
+      // Los trabajos de los lotes asíncronos (DSL 2.30, D10) no los purga TablePurges: su almacén sabe llevarse sus resultados.
+      purge.table === BATCH_JOB.table
+        ? timer(purgeTimerClass(purge.table), [batchInfraNamespace(model)], batchPurgeTimerBody(purgeTimerClass(purge.table), purgeKindConstant(purge.table)))
+        : timer(purgeTimerClass(purge.table), [namespaceOf(model, 'purge')], purgeTimerBody(model, purge))
+    ),
     ...timerSchedules(model).map((schedule) =>
       timer(scheduleTimerClass(schedule.operation), ['System.Diagnostics', namespaceOf(model, 'scheduling'), sweepPassNamespace(model)], scheduleTimerBody(model, schedule))
     ),
@@ -456,7 +465,9 @@ function timerKindsBody(model) {
     public const string ${scheduleKindConstant(schedule.operation)} = ${csString(schedule.kind)};`
     ),
     // Las retenciones (DSL 2.28, D8): un recurrente en modo clúster por raíz.
-    ...retentionKindLines(model)
+    ...retentionKindLines(model),
+    // Los lotes asíncronos (DSL 2.30): un temporizador de UNA vez por trabajo.
+    ...batchKindLines(model)
   ];
   return `/// <summary>
 /// El nombre de cada temporizador en <c>${KEEL_TIMER.table}</c> (columna <c>kind</c>). Es contrato con los otros generadores
@@ -505,6 +516,13 @@ function timerHandlerBody() {
 public interface ITimerHandler
 {
     string Kind { get; }
+
+    /// <summary>
+    /// ¿Corre dentro de la transacción del sondeador? Un plazo sí (el valor por defecto). Un trabajo de un lote asíncrono
+    /// (DSL 2.30) no: procesa un chunk en el que cada elemento abre la suya, y envolverlo en una sola volvería a ser el lote en
+    /// una transacción. Entonces el sondeador borra o rearma el temporizador DESPUÉS, con la valla, y un fallo cuenta como siempre.
+    /// </summary>
+    bool InTransaction => true;
 
     /// <summary><paramref name="dbNow"/> es la hora de la BASE (T1): la única que compara el cronómetro.</summary>
     Task<TimerOutcome> Handle(ClaimedTimer timer, DateTimeOffset dbNow, CancellationToken cancellationToken);
@@ -1446,18 +1464,17 @@ public sealed partial class TimerPoller : BackgroundService
                     continue;
                 }
                 var handler = scope.ServiceProvider.GetServices<ITimerHandler>().First(candidate => candidate.Kind == timer.Kind);
+                if (!handler.InTransaction)
+                {
+                    // Un trabajo de un lote asíncrono (DSL 2.30): cada elemento abre su transacción, así que el handler corre
+                    // fuera de la del sondeador, y el temporizador se borra o se rearma DESPUÉS, con la valla.
+                    await ${telemetry ? 'Observed(timer.Kind, async () => await ' : ''}Settle(store, timer, token, await handler.Handle(timer, await store.DbNow(cancellationToken), cancellationToken), cancellationToken)${telemetry ? ')' : ''};
+                    continue;
+                }
                 await ${telemetry ? 'Observed(timer.Kind, () => ' : ''}scope.ServiceProvider.GetRequiredService<PersistenceTransactions>().InTransaction(
                     async () =>
                     {
-                        var outcome = await handler.Handle(timer, await store.DbNow(cancellationToken), cancellationToken);
-                        if (outcome.Done)
-                        {
-                            await store.Complete(timer.Id, token, cancellationToken);
-                        }
-                        else
-                        {
-                            await store.Reschedule(timer.Id, token, outcome.DueAt ?? throw new InvalidOperationException("Un rearme sin vencimiento"), cancellationToken);
-                        }
+                        await Settle(store, timer, token, await handler.Handle(timer, await store.DbNow(cancellationToken), cancellationToken), cancellationToken);
                         return true;
                     },
                     readOnly: false,
@@ -1477,6 +1494,19 @@ public sealed partial class TimerPoller : BackgroundService
         await using (var scope = scopes.CreateAsyncScope())
         {
             return SleepMs(await scope.ServiceProvider.GetRequiredService<ITimerStore>().NextDueMs(Kinds, cancellationToken), settings.MaxSleepMs);
+        }
+    }
+
+    /// <summary>Borra el temporizador o lo rearma, con la valla con la que se reclamó.</summary>
+    private static async Task Settle(ITimerStore store, ClaimedTimer timer, Guid token, TimerOutcome outcome, CancellationToken cancellationToken)
+    {
+        if (outcome.Done)
+        {
+            await store.Complete(timer.Id, token, cancellationToken);
+        }
+        else
+        {
+            await store.Reschedule(timer.Id, token, outcome.DueAt ?? throw new InvalidOperationException("Un rearme sin vencimiento"), cancellationToken);
         }
     }
 
@@ -2098,13 +2128,17 @@ ${cron.join('\n')}
   const purges = timerPurges(model);
   if (purges.length > 0) {
     usings.push(namespaceOf(model, 'purge'));
+    if (purges.some((purge) => purge.table === BATCH_JOB.table)) usings.push(batchInfraNamespace(model));
     const all = tablePurges(model);
     members.push(`    /// <summary>Cada purga del generador es un recurrente del cronómetro con el kind de keel-core y el cron de su configuración.</summary>
     [Fact]
     public void CadaPurgaEsUnRecurrenteConElKindDeKeelCore()
     {
         var settings = ${purgeSettingsExpression(all)};
-        IRecurringTimerHandler[] recurrentes = [${purges.map((purge) => `new ${purgeTimerClass(purge.table)}(null!, settings)`).join(', ')}];
+        IRecurringTimerHandler[] recurrentes = [${purges
+          // La de los lotes asíncronos (DSL 2.30) lee su cron de BatchSettings, con los defaults de keel-core.
+          .map((purge) => `new ${purgeTimerClass(purge.table)}(null!, ${purge.table === BATCH_JOB.table ? 'BatchSettings.Defaults' : 'settings'})`)
+          .join(', ')}];
         Assert.Equal(new[] { ${purges.map((purge) => csString(purge.kind)).join(', ')} }, recurrentes.Select(recurrente => recurrente.Kind));
         Assert.Equal(new[] { ${purges.map((purge) => csString(purge.cron.default)).join(', ')} }, recurrentes.Select(recurrente => recurrente.Spec));
     }`);

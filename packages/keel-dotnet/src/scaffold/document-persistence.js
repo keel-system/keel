@@ -34,6 +34,7 @@ import { configNamespace } from './config.js';
 import { usesDocument, persistedEntities, usesTextFold, textFoldFile } from './persistence.js';
 import { auditActorFiles, emitsAuditActor } from './persistence-runtime.js';
 import { historyDocumentIndexEntry, historyRegistration } from './history.js';
+import { batchJobDocumentIndexEntries, batchJobRegistration } from './batch-jobs.js';
 import { repositoryRoots, portClass, adapterClass, repositoriesNamespace } from './repositories.js';
 import { idempotencyRegistration, idempotencyRegistrationUsings } from './request-idempotency.js';
 import { usesSweepClaims } from './claim.js';
@@ -74,7 +75,8 @@ export function generate(model) {
         namespaceOf(model, 'ports'),
         ...idempotencyRegistrationUsings(model),
         ...(persistenceTimerRegistration(model)?.usings ?? []),
-        ...(historyRegistration(model)?.usings ?? [])
+        ...(historyRegistration(model)?.usings ?? []),
+        ...(batchJobRegistration(model)?.usings ?? [])
       ],
       registrationBody(model)
     ),
@@ -503,6 +505,8 @@ function documentIndexesBody(model) {
   // El índice de la lectura del historial (DSL 2.29): una raíz, la entrada más reciente primero.
   const historyIndex = historyDocumentIndexEntry(model);
   if (historyIndex) entries.push(historyIndex);
+  // Los de los trabajos de los lotes asíncronos (DSL 2.30): la clave del lote, única y PARCIAL, y la purga.
+  entries.push(...batchJobDocumentIndexEntries(model));
   return `/// <summary>
 /// Los índices de las colecciones del servicio, derivados de persistence.keel.yaml (clave natural, campos únicos e
 /// índices declarados, con su filtro parcial si el diseño los condiciona al estado) y de los almacenes del generador. Son
@@ -857,6 +861,9 @@ function registrationBody(model) {
   // El almacén del historial de cambios (DSL 2.29): uno por ámbito, sobre la sesión de su PersistenceTransactions.
   const history = historyRegistration(model);
   if (history) repositories.push(history.line);
+  // El almacén de los trabajos de los lotes asíncronos (DSL 2.30): uno por ámbito.
+  const batchJobs = batchJobRegistration(model);
+  if (batchJobs) repositories.push(batchJobs.line);
   return `/// <summary>
 /// La persistencia documental en el contenedor: el cliente del perfil (uno por proceso), la transacción del caso de uso
 /// y un adaptador por puerto. El ÚNICO sitio que registra los repositorios.

@@ -51,6 +51,7 @@ import { DRAIN_SAMPLES, drainProbes, drainSubject, purgeTimerFixtureRegistration
 import { lifecycleFixtureRegistration, lifecycleProbeBlock, lifecycleProbeUsings } from './lifecycle-probes.js';
 import { historyProbeBlock, historyProbeUsings } from './history-probes.js';
 import { batchFixtureRegistration, batchProbeBlock, batchProbeUsings, batchProjectReference } from './batch-probes.js';
+import { batchJobFixtureRegistration, batchJobProbeBlock, batchJobProbeClasses, batchJobProbeUsings } from './batch-job-probes.js';
 import { claimOrderField, claimsForEntity, rescueProbes, screamingSnake, snakeCase, sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
@@ -645,6 +646,9 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
   // Los lotes (DSL 2.30): BA-1 a BA-7 en ESTA clase, con el endpoint emitido.
   const batch = batchProbeBlock(model);
   if (batch) blocks.push(batch.methods);
+  // Los lotes asíncronos (DSL 2.30, fase B): BJ-1 a BJ-9 en ESTA clase, con los endpoints y el procesador emitidos.
+  const batchJobs = batchJobProbeBlock(model);
+  if (batchJobs) blocks.push(batchJobs.methods);
 
   // Las raíces a las que apunta una referencia obligatoria: se guarda UNA de cada, y su id vale para todas las sondas.
   const ensures = [];
@@ -688,6 +692,7 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
     ...lifecycleProbeUsings(model, { document: false }),
     ...historyProbeUsings(model, { document: false }),
     ...batchProbeUsings(model),
+    ...batchJobProbeUsings(model),
     'System.Text.Json',
     'System.Text.Json.Nodes',
     'Microsoft.EntityFrameworkCore',
@@ -725,7 +730,7 @@ ${usesMySql(model) ? MYSQL_SUBJECT_DATABASE : POSTGRESQL_SUBJECT_DATABASE}
         // Los barridos de reconciliación con lotes de DOS (con tres candidatos, dos pasadas); AddPersistence no los pisa.
         services.AddSingleton(${probeReconciliationSettings(model)});` : ''}${usesServiceParameters(model) ? `
         services.AddSingleton(${parametersTestInstance(model)});` : ''}
-        services.AddPersistence(new DatabaseSettings(true, target.ConnectionString, TimeSpan.FromSeconds(30), SchemaMode.Create));${batchFixtureRegistration(model)}${usesBridge(model) ? `
+        services.AddPersistence(new DatabaseSettings(true, target.ConnectionString, TimeSpan.FromSeconds(30), SchemaMode.Create));${batchFixtureRegistration(model)}${batchJobFixtureRegistration(model)}${usesBridge(model) ? `
         // Los adaptadores de las raíces que emiten eventos los entregan al puente (incremento 9).
         services.AddDomainEvents(MessagingSettings.Defaults);` : ''}${usesDotnetOutbox(model) ? `
         services.AddSingleton<OutboxRelayStore>();` : ''}${usesProcessedEvents(model) ? `
@@ -791,7 +796,7 @@ ${ensures.join('\n\n')}
     };
 }`;
   if (ctx.unsampled.length > 0) console.warn(`  (db-check) sin muestra para ${[...new Set(ctx.unsampled)].join(', ')}`);
-  return csFileLike(namespace, usings, [body, timer?.classes, purgeTimer?.classes, lifecycle?.classes].filter(Boolean).join('\n\n'));
+  return csFileLike(namespace, usings, [body, timer?.classes, purgeTimer?.classes, lifecycle?.classes, batchJobProbeClasses(model)].filter(Boolean).join('\n\n'));
 }
 
 /** Los campos de la clave natural que declaran `compare` (su unicidad va sobre la sombra plegada), si son texto. */

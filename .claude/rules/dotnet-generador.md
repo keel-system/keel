@@ -310,3 +310,34 @@ savepoint antes de cada `SaveChanges` dentro de una transacción ajena, así que
 fila rechazada sigue en el change tracker y el elemento siguiente la vuelve a insertar (BA-2). Por eso el adaptador limpia el
 tracker al traducir solo en la transacción que abre él: per-item depende de eso. En MongoDB no hay savepoint: el servidor aborta la transacción tras el duplicado y `ba-one-tx` cae en
 BA-2 y BA-5, como en keel-nest (`BATCH_ONE_TX`).
+
+## Lotes asíncronos (DSL 2.30, incremento 8 de `PLAN-DSL-230-LOTES.md`)
+
+`src/scaffold/batch-jobs.js` emite el almacén en `Infrastructure/Persistence/Batch` (`IBatchJobStore`; `BatchJobStore` con las
+sentencias de keel-core tal cual por la conexión y la transacción del DbContext, como `TimerStore` y `ChangeHistory`, más
+`BatchJobRow`/`BatchItemResultRow` solo para el esquema; o sobre MongoDB con sus índices en `DocumentIndexes`, la clave única y
+PARCIAL), `BatchSettings` y, en `Api/Rest`, `BatchJobs.cs` (el trabajo en el cable, el alta, las dos rutas y `BatchJobRunner`),
+un `<Op>BatchJob : ITimerHandler` por operación y `BatchJobRegistration` (`AddBatchJobs`, que llama Program.cs tras el
+cronómetro con `BatchSettings.From`). Los handlers son de la API y no de `AddTimer`: leen el sobre guardado con el lector
+PÚBLICO del endpoint (`Read<Op>(ReadOnlyMemory<byte> body)`, que con lotes asíncronos parsea los bytes y valida la lista con
+`ViolationSource.Params`, el mensaje `invalidParams` de keel-spring) y traducen el fallo con
+`ApiErrorMiddleware.Translate(IServiceProvider, …)`, la sobrecarga sin petición. `batch-jobs.js` no importa a endpoints.js ni a
+timer.js (ellos lo importan a él): el nombre de la clase de endpoints va escrito ahí.
+
+`ITimerHandler.InTransaction` (miembro por defecto de la interfaz, true): el trabajo lo pone a false y el sondeador lo corre
+fuera de su transacción y borra o rearma después (`Settle`). Cada elemento del chunk va en su ÁMBITO (su DbContext o su
+sesión): el efecto por el mediator, el avance del cursor (la valla, primero) y el resultado en `IUseCaseTransactions.Run`; un
+`FenceLostException` revierte el elemento y para el disparo. El dueño es `AuditActor.Current()` (se emite también con lotes
+asíncronos) y el procesador corre con un principal de token cuyo `sub` es el dueño. La purga de `batch_job` es
+`BatchJobPurgeTimer` (timer.js delega en `batchPurgeTimerBody`), con su almacén y `BatchSettings`, no `TablePurges`.
+
+La sonda (`scripts/lib/batch-job-probes.js`) llama a los tres endpoints emitidos con un `DefaultHttpContext` (cuerpo, ruta,
+query y cabecera) y el `ApiErrorMiddleware` delante, con el dueño en `SecurityContext.Open`; dispara el handler a mano con el
+chunk a 2 (`ActivatorUtilities` con `BatchSettings` explícito) y NO registra el handler en el contenedor, para que el sondeador
+de otras sondas no toque sus temporizadores. BJ-4 es `CrashingBatchJobStore`, registrado en el lugar del emitido (cada
+elemento resuelve el suyo en su ámbito); BJ-5, el gancho `AfterEffect` del handler de la sonda, que mueve el cursor en otro
+ámbito (en MongoDB, sin sesión: BJ-5 cae igual, aunque no se midió si por la valla o por un WriteConflict que
+`PersistenceTransactions` repite hasta chocar con ella). La sonda de dos réplicas de las purgas cuenta también `BatchJobPurgeTimer`, y la de índices vivos de
+doc-check compara las colecciones de `BATCH_JOB_COLLECTIONS` (claves, unicidad y filtro parcial). Medido: BJ-1 a BJ-9 en verde
+en PostgreSQL, MySQL y MongoDB, y `bj-no-resume` en BJ-4, `bj-cursor-outside-tx` en BJ-4 y BJ-5 y `bj-foreign-reader` en BJ-6,
+exactamente, en los tres.

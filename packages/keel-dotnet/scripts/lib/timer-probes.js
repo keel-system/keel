@@ -27,6 +27,8 @@ import { claimsForEntity, sweepClaims } from '@keel-system/keel-core/gen';
 import { claimDrains, timerPurges, timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
 import { usesDocument } from '@keel-system/keel-core/gen/features';
 import { sampleState } from './db-probes.js';
+import { BATCH_JOB } from '@keel-system/keel-core/gen/batch-store';
+import { batchInfraNamespace } from '../../src/scaffold/batch-jobs.js';
 
 /** El sujeto: el primer plazo con rechazo tardío del diseño, con todo lo que la sonda nombra. */
 export function timerSubject(model) {
@@ -680,8 +682,11 @@ export function purgeTimerFixtureRegistration(model) {
   const purges = timerPurges(model);
   const schedules = timerSchedules(model);
   if (purges.length === 0 && schedules.length === 0) return '';
-  const lines = purges.map(
-    (purge) => `        services.AddScoped<IRecurringTimerHandler>(provider => new PurgeTimerCount(new ${purgeTimerClass(purge.table)}(provider.GetRequiredService<TablePurges>(), provider.GetRequiredService<PurgeSettings>())));`
+  // La de los lotes asíncronos (DSL 2.30) no va por TablePurges: su almacén y BatchSettings, con los defaults de keel-core.
+  const lines = purges.map((purge) =>
+    purge.table === BATCH_JOB.table
+      ? `        services.AddScoped<IRecurringTimerHandler>(provider => new PurgeTimerCount(new ${purgeTimerClass(purge.table)}(provider.GetRequiredService<IBatchJobStore>(), BatchSettings.Defaults)));`
+      : `        services.AddScoped<IRecurringTimerHandler>(provider => new PurgeTimerCount(new ${purgeTimerClass(purge.table)}(provider.GetRequiredService<TablePurges>(), provider.GetRequiredService<PurgeSettings>())));`
   );
   // Los `schedule` (inc. 8): su scheduler, con un mediator que no despacha nada (el handler es un stub del agente), y
   // cada <Operación>ScheduleTimer contado igual. Con plazos ya hay mediator de la sonda del cronómetro.
@@ -707,6 +712,7 @@ export function purgeTimerProbeUsings(model) {
     timerNamespace(model),
     'Microsoft.Extensions.Logging.Abstractions',
     'System.Collections.Concurrent',
+    ...(timerPurges(model).some((purge) => purge.table === BATCH_JOB.table) ? [batchInfraNamespace(model)] : []),
     ...(timerSchedules(model).length > 0 ? [namespaceOf(model, 'scheduling'), namespaceOf(model, 'abstractions')] : [])
   ];
 }

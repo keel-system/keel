@@ -38,6 +38,7 @@ import { purgeTimerFixtureRegistration, purgeTimerProbeBlock, purgeTimerProbeUsi
 import { lifecycleFixtureRegistration, lifecycleProbeBlock, lifecycleProbeUsings } from './lifecycle-probes.js';
 import { historyProbeBlock, historyProbeUsings } from './history-probes.js';
 import { batchFixtureRegistration, batchProbeBlock, batchProbeUsings, batchProjectReference } from './batch-probes.js';
+import { batchJobFixtureRegistration, batchJobProbeBlock, batchJobProbeClasses, batchJobProbeUsings } from './batch-job-probes.js';
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
 import { parametersNamespace, parametersTestInstance, usesServiceParameters } from '../../src/scaffold/service-parameters.js';
@@ -521,6 +522,9 @@ function probesCs(model, namespace) {
   // Los lotes (DSL 2.30): BA-1 a BA-7 en ESTA clase, con el endpoint emitido.
   const batch = batchProbeBlock(model);
   if (batch) blocks.push(batch.methods);
+  // Los lotes asíncronos (DSL 2.30, fase B): BJ-1 a BJ-9 en ESTA clase, con los endpoints y el procesador emitidos.
+  const batchJobs = batchJobProbeBlock(model);
+  if (batchJobs) blocks.push(batchJobs.methods);
 
   // Las raíces a las que apunta una referencia: se guarda UNA de cada, y su id vale para todas las sondas.
   const ensures = [];
@@ -564,6 +568,7 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
     ...lifecycleProbeUsings(model, { document: true }),
     ...historyProbeUsings(model, { document: true }),
     ...batchProbeUsings(model),
+    ...batchJobProbeUsings(model),
     'System.Text.Json',
     'System.Text.Json.Nodes',
     'Microsoft.Extensions.DependencyInjection',
@@ -602,7 +607,7 @@ public sealed class DocumentFixture : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddLogging();
 ${fixtureRegistrations(model)}${timerFixtureRegistration(model)}${purgeTimerFixtureRegistration(model)}${lifecycleFixtureRegistration(model, { document: true })}
-        services.AddPersistence(new DatabaseSettings(true, MongoUrl.Create(target), Database, "doc-check"));${batchFixtureRegistration(model)}${usesBridge(model) ? `
+        services.AddPersistence(new DatabaseSettings(true, MongoUrl.Create(target), Database, "doc-check"));${batchFixtureRegistration(model)}${batchJobFixtureRegistration(model)}${usesBridge(model) ? `
         // Los adaptadores de las raíces que emiten eventos los entregan al puente.
         services.AddDomainEvents(MessagingSettings.Defaults);` : ''}${usesDotnetOutbox(model) ? `
         services.AddSingleton<OutboxRelayStore>();` : ''}${usesProcessedEvents(model) ? `
@@ -745,6 +750,6 @@ ${ensures.join('\n\n')}
     };
 }`;
   if (ctx.unsampled.length > 0) console.warn(`  (doc-check) sin muestra para ${[...new Set(ctx.unsampled)].join(', ')}`);
-  const full = [body, timer?.classes, purgeTimer?.classes, lifecycle?.classes].filter(Boolean).join('\n\n');
+  const full = [body, timer?.classes, purgeTimer?.classes, lifecycle?.classes, batchJobProbeClasses(model)].filter(Boolean).join('\n\n');
   return `namespace ${namespace};\n\n${[...new Set(usings)].sort().map((u) => `using ${u};`).join('\n')}\n\n${full}\n`;
 }

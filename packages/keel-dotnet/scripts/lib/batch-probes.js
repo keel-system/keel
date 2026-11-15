@@ -24,8 +24,11 @@ const js = (value) => JSON.stringify(value);
 /** Lo que el nombre de un elemento pide al handler de la sonda: fallar con algo que el diseño no declara (BA-4). */
 export const UNDECLARED_FAILURE_NAME = 'BOOM';
 
-/** Las operaciones por lotes del modelo. */
-export const batchOperations = (model) => model.services.flatMap((service) => service.operations).filter((operation) => operation.batch);
+/** Las operaciones por lotes del modelo, de los dos modos: el handler de la sonda, el registro y la referencia a la API. */
+export const allBatchOperations = (model) => model.services.flatMap((service) => service.operations).filter((operation) => operation.batch);
+
+/** Las operaciones por lotes SÍNCRONAS: las de BA-1 a BA-7 (las asíncronas las mide batch-job-probes.js). */
+export const batchOperations = (model) => allBatchOperations(model).filter((operation) => operation.batch.execution !== 'async');
 
 /** Los sujetos por almacén: los de batch-designs.js. */
 export const BATCH_SUBJECTS = { relational: ['catalog-batch', 'catalog-batch-atomic'], document: ['catalog-batch-mongo'] };
@@ -101,7 +104,7 @@ function namespaceIn(files, suffix) {
 
 /** El handler de la sonda en el lugar del stub de `importProducts`; el resto de archivos, tal cual. */
 export function batchProbePatch(model, file, files) {
-  const operation = batchOperations(model)[0];
+  const operation = allBatchOperations(model)[0];
   if (!operation || typeof file.content !== 'string' || !file.path.endsWith(`/UseCases/${operation.handlerClass}.cs`)) return file;
   const result = operation.batch.resultFields.length > 0;
   const aggregate = namespaceIn(files, '/Product.cs');
@@ -118,6 +121,12 @@ export function batchProbePatch(model, file, files) {
       body: `/// <summary>La sonda de db-check y doc-check: lo que escribiría el agente para UN elemento.</summary>
 public sealed class ${operation.handlerClass}(IProductRepository productRepository) : ${contract}
 {
+    /// <summary>
+    /// Lo que corre tras el efecto, dentro de la transacción del elemento: la réplica que se lleva el trabajo de un lote
+    /// asíncrono (BJ-5) mueve aquí el cursor. Null: nada.
+    /// </summary>
+    public static Func<Task>? AfterEffect { get; set; }
+
     public async ${returns} Handle(${operation.messageClass} command, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -130,6 +139,10 @@ public sealed class ${operation.handlerClass}(IProductRepository productReposito
         var saved = await productRepository.Save(
             new Product(new ProductState { Id = Guid.CreateVersion7(), Sku = draft.Sku, Name = draft.Name, Notes = null, Price = draft.Price, ApiToken = "sonda", Status = ProductStatus.Draft, LockVersion = null }),
             cancellationToken);
+        if (AfterEffect is { } afterEffect)
+        {
+            await afterEffect();
+        }
         ${result ? `return new ${operation.responseDto.name} { ProductId = saved.Id };` : '_ = saved;'}
     }
 }`
@@ -141,7 +154,7 @@ public sealed class ${operation.handlerClass}(IProductRepository productReposito
 
 /** Lo que el contenedor de la sonda registra DESPUÉS de la persistencia: los casos de uso (el mediator y los handlers). */
 export function batchFixtureRegistration(model) {
-  if (batchOperations(model).length === 0) return '';
+  if (allBatchOperations(model).length === 0) return '';
   return `
         // Los lotes (DSL 2.30): el mediator y los handlers, detrás de la persistencia (su transacción no la pisa: TryAdd).
         services.AddUseCases();`;
@@ -149,7 +162,7 @@ export function batchFixtureRegistration(model) {
 
 /** Los using que añaden las sondas de los lotes. */
 export function batchProbeUsings(model) {
-  if (batchOperations(model).length === 0) return [];
+  if (allBatchOperations(model).length === 0) return [];
   return [
     'System.Text',
     'System.Text.Json',
@@ -165,7 +178,7 @@ export function batchProbeUsings(model) {
 
 /** Las líneas del .csproj de las sondas: el proyecto de la API, cuyo endpoint se llama. */
 export function batchProjectReference(model) {
-  if (batchOperations(model).length === 0) return '';
+  if (allBatchOperations(model).length === 0) return '';
   return `\n    <ProjectReference Include="..\\..\\${solution(model).api.csproj.replaceAll('/', '\\')}" />`;
 }
 

@@ -28,6 +28,7 @@ import { readsCompositeResponses } from './http-clients.js';
 import { usesApi } from '@keel-system/keel-core/gen/features';
 import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
 import { usesBatch } from '@keel-system/keel-core/gen/batch';
+import { usesBatchJobs } from './batch-jobs.js';
 export { usesApi };
 
 export function restNamespace(model) {
@@ -111,6 +112,8 @@ export function generate(model) {
 
 /** ¿Algún listado con ruta lee un Pageable? Con persistencia, del modelo que sea, todo listado paginado. */
 export function usesPageable(model) {
+  // Los resultados de un trabajo de un lote asíncrono (DSL 2.30) también se leen por páginas.
+  if (usesBatchJobs(model)) return true;
   return usesPersistence(model) && (model.services ?? []).some((service) => (service.operations ?? []).some((op) => op.route && op.paginated));
 }
 
@@ -966,8 +969,18 @@ function batchTranslation(persistence) {
     public static ErrorResponse Translate(HttpContext context, Exception exception)
     {
         ArgumentNullException.ThrowIfNull(context);
+        return Translate(context.RequestServices, exception);
+    }
+
+    /// <summary>
+    /// Lo mismo sin petición: con los servicios de un ámbito. Lo usa el procesador de los trabajos de un lote asíncrono, que
+    /// corre en el cronómetro.
+    /// </summary>
+    public static ErrorResponse Translate(IServiceProvider services, Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(exception);
-        var middleware = new ApiErrorMiddleware(_ => Task.CompletedTask, context.RequestServices.GetRequiredService<ILogger<ApiErrorMiddleware>>());
+        var middleware = new ApiErrorMiddleware(_ => Task.CompletedTask, services.GetRequiredService<ILogger<ApiErrorMiddleware>>());
         return middleware.ToResponse(${error});
     }
 

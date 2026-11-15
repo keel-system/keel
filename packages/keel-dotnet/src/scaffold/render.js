@@ -109,6 +109,9 @@ export const PLACES = {
   // diff, las raíces y el almacén, infraestructura.
   history: ['domain', 'History'],
   historyInfra: ['infrastructure', 'Persistence/History'],
+  // Los lotes asíncronos (DSL 2.30, fase B): el almacén de los trabajos y su configuración. El alta, el procesador y los
+  // handlers del cronómetro son de la API (Rest), porque leen con el lector del endpoint.
+  batchInfra: ['infrastructure', 'Persistence/Batch'],
   // Lo que corre por reloj: el registro de tareas y un scheduler por grupo de operaciones con `schedule` (incremento 10b).
   scheduling: ['infrastructure', 'Scheduling'],
   // Los plazos de negocio (DSL 2.26): la duración vigente de cada plazo es dominio (la usa el rechazo tardío); el

@@ -54,6 +54,7 @@ import { csFile, csMember, csString, located, namespaceOf, solution, typeUsings,
 import { usesUnmapped } from './repositories.js';
 import { KEEL_TIMER_ROW, timerSchemaNames, usesTimer } from './timer.js';
 import { historyRows, historySchemaNames } from './history.js';
+import { batchJobRows, batchJobSchemaNames } from './batch-jobs.js';
 import { MYSQL_GUID_FORMAT, placeholderConnection, relationalEngine, useProvider, usesMySql } from './relational-engine.js';
 import { usesRelational, usesDocument, usesPersistence } from '@keel-system/keel-core/gen/features';
 export { usesRelational, usesDocument, usesPersistence };
@@ -704,6 +705,8 @@ export function rowClasses(model) {
   if (usesTimer(model)) classes.push(KEEL_TIMER_ROW);
   // Y las dos del historial de cambios (DSL 2.29), solo para el esquema: las usa ChangeHistory con las sentencias de keel-core.
   classes.push(...historyRows(model));
+  // Y las dos de los lotes asíncronos (DSL 2.30), solo para el esquema: las usa BatchJobStore con las sentencias de keel-core.
+  classes.push(...batchJobRows(model));
   return classes;
 }
 
@@ -768,6 +771,7 @@ export function expectedSchemaNames(model) {
   for (const name of reconciliationSchemaNames(model)) names.add(name);
   for (const name of timerSchemaNames(model)) names.add(name);
   for (const name of historySchemaNames(model)) names.add(name);
+  for (const name of batchJobSchemaNames(model)) names.add(name);
   return [...names].sort();
 }
 

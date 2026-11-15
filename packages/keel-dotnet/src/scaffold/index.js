@@ -36,6 +36,10 @@ import * as dtos from './dtos.js';
 import * as mappers from './mappers.js';
 import * as services from './services.js';
 import * as batch from './batch.js';
+import * as batchJobs from './batch-jobs.js';
+import { messageComponents } from './services.js';
+import { EXPECTED_VERSIONS, carriesExpectedVersions } from './conditional-writes.js';
+import { READ_SCOPE_PROPERTY } from './read-scope.js';
 import * as mediator from './mediator.js';
 import * as persistence from './persistence.js';
 import * as persistenceRuntime from './persistence-runtime.js';
@@ -91,7 +95,7 @@ import * as generatorDocs from './generator-docs.js';
 // Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara. El primero es el contrato formal
 // de la API, derivado del modelo neutral (el mismo en los tres generadores), salvo que el workspace traiga el de
 // /keel-docs: keel-core/gen/openapi.js.
-const GENERATORS = [{ generate: derivedOpenapiFiles }, project, config, health, logging, telemetry, telemetryTests, wire, serviceParameters, enums, exceptions, valueTypes, longIds, entities, events, domainGuardsCheck, idempotencyCheck, conditionalWrites, readScope, dtos, mappers, services, mediator, persistence, persistenceRuntime, statementCount, documentPersistence, afterCommit, repositories, claim, reconciliationClaim, requestIdempotency, httpClients, mail, payments, cache, storage, projections, refResolvers, messaging, messagingStores, rabbitmq, kafka, snssqs, messagingTests, purge, scheduling, schedulingTests, timer, dataLifecycle, history, historyTests, deadlinesCheck, security, restSupport, endpoints, batch, api, tests, testCredential, tokenContractTest, apiTests, optionalAuth, infra, integrationTests, schemaBaseline, observabilityAssets, deploy, loggingCheck, telemetryGate, readme, generatorDocs];
+const GENERATORS = [{ generate: derivedOpenapiFiles }, project, config, health, logging, telemetry, telemetryTests, wire, serviceParameters, enums, exceptions, valueTypes, longIds, entities, events, domainGuardsCheck, idempotencyCheck, conditionalWrites, readScope, dtos, mappers, services, mediator, persistence, persistenceRuntime, statementCount, documentPersistence, afterCommit, repositories, claim, reconciliationClaim, requestIdempotency, httpClients, mail, payments, cache, storage, projections, refResolvers, messaging, messagingStores, rabbitmq, kafka, snssqs, messagingTests, purge, scheduling, schedulingTests, timer, dataLifecycle, history, historyTests, deadlinesCheck, security, restSupport, endpoints, batch, batchJobs, api, tests, testCredential, tokenContractTest, apiTests, optionalAuth, infra, integrationTests, schemaBaseline, observabilityAssets, deploy, loggingCheck, telemetryGate, readme, generatorDocs];
 
 /**
  * Todo lo que hay que resolver para generar, SIN tocar disco: el stack normalizado, el modelo con sus
@@ -120,6 +124,13 @@ export function planService({ manifest, layers, fixtures = null, workspace, stac
   // El historial (DSL 2.29): sentencias medidas para PostgreSQL y MySQL, y MongoDB.
   const historyErrors = history.historyStackErrors(model);
   if (historyErrors.length > 0) throw new Error(historyErrors.join('\n'));
+  // Los lotes asíncronos (DSL 2.30, fase B): el almacén de los trabajos y lo que el trabajo no puede llevarse de la petición.
+  const batchJobErrors = batchJobs.batchJobStackErrors(model, (operation) => [
+    ...messageComponents(operation, model).filter((component) => component.resolvedIdentity).map((component) => component.name),
+    ...(carriesExpectedVersions(model, operation) ? [EXPECTED_VERSIONS] : []),
+    ...(operation.readScope ? [READ_SCOPE_PROPERTY] : [])
+  ]);
+  if (batchJobErrors.length > 0) throw new Error(batchJobErrors.join('\n'));
   // La lectura acotada (DSL 2.27) que no se puede generar por construcción (T7, T8 y compañía): la frontera neutral.
   const scopeErrors = readScopeGenerationErrors(model);
   if (scopeErrors.length > 0) throw new Error(scopeErrors.join('\n'));

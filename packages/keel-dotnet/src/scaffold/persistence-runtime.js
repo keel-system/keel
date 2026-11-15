@@ -26,6 +26,7 @@ import { SYSTEM_ACTOR } from '@keel-system/keel-core/gen/relational';
 import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
 import { usesHistory } from '@keel-system/keel-core/gen/history';
 import { historyRegistration } from './history.js';
+import { batchJobRegistration, usesBatchJobs } from './batch-jobs.js';
 import { csFile, csString, located, namespaceOf, solution } from './render.js';
 import { usesCorrelation } from './rest-support.js';
 import { securityNamespace, usesHttpSecurity } from './security.js';
@@ -71,7 +72,8 @@ export function generate(model) {
         namespaceOf(model, 'ports'),
         ...idempotencyRegistrationUsings(model),
         ...(persistenceTimerRegistration(model)?.usings ?? []),
-        ...(historyRegistration(model)?.usings ?? [])
+        ...(historyRegistration(model)?.usings ?? []),
+        ...(batchJobRegistration(model)?.usings ?? [])
       ],
       registrationBody(model)
     ),
@@ -109,9 +111,12 @@ export function usesAuthorship(model) {
   return persistedEntities(model).some((entity) => entity.auditAuthorship === 'all' || entity.auditAuthorship === 'declared');
 }
 
-/** ¿Se emite el actor? Con autoría y también con historial (DSL 2.29, D5): la entrada lleva su autor aunque las filas no. */
+/**
+ * ¿Se emite el actor? Con autoría y también con historial (DSL 2.29, D5): la entrada lleva su autor aunque las filas no. Y
+ * con lotes asíncronos (DSL 2.30, D11): el dueño de un trabajo es este actor.
+ */
 export function emitsAuditActor(model) {
-  return usesAuthorship(model) || usesHistory(model);
+  return usesAuthorship(model) || usesHistory(model) || usesBatchJobs(model);
 }
 
 /**
@@ -773,6 +778,9 @@ function registrationBody(model) {
   // El almacén del historial de cambios (DSL 2.29): uno por ámbito, sobre el DbContext del ámbito.
   const history = historyRegistration(model);
   if (history) repositories.push(history.line);
+  // El almacén de los trabajos de los lotes asíncronos (DSL 2.30): uno por ámbito.
+  const batchJobs = batchJobRegistration(model);
+  if (batchJobs) repositories.push(batchJobs.line);
   return `/// <summary>
 /// La persistencia relacional en el contenedor: el DbContext del perfil (uno por ámbito), la transacción del caso de
 /// uso y un adaptador por puerto. El ÚNICO sitio que registra los repositorios.

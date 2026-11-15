@@ -30,6 +30,8 @@ import { callerResolution, securityNamespace } from './security.js';
 import { EXPECTED_VERSIONS, carriesExpectedVersions, readerLine, returnsVersioned } from './conditional-writes.js';
 import { READ_SCOPE_PROPERTY, readScopeStamp } from './read-scope.js';
 import { BATCH_ITEM_COMPONENT } from './batch.js';
+import { batchJobEndpoints, batchJobRouteRows, isAsyncBatch } from './batch-jobs.js';
+import { BATCH_ACCEPTED_STATUS } from '@keel-system/keel-core/gen/batch';
 
 // Los tipos base que en C# son tipos de VALOR: un ausente se escribe `T?` (Nullable<T>), no una referencia nula.
 const VALUE_BASES = new Set(['int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json']);
@@ -229,6 +231,11 @@ function renderEndpoint(model, operation, usings) {
   const dispatch = callsPaymentGateway(model, operation.name) ? 'DispatchWithoutTransaction' : 'Dispatch';
   const call = `await Mediator(http).${dispatch}(message, http.RequestAborted)`;
   const status = operation.route.status;
+  // Un lote asíncrono (DSL 2.30, fase B): el alta sobre los bytes del cuerpo y las dos rutas del trabajo.
+  if (isAsyncBatch(model, operation)) {
+    const doc = xmlDoc([`${operation.route.method} ${operation.route.path} (${operation.name}).`, operation.description], '    ');
+    return batchJobEndpoints(model, operation, { doc, usings });
+  }
   // Un lote (DSL 2.30) responde BatchResponse (o el error del culpable), no el DTO de la operación.
   if (operation.batch) return renderBatchEndpoint(model, operation, read, usings);
   let statements;
@@ -443,10 +450,17 @@ function renderReader(model, operation, usings) {
   // If-Match lo primero: sin él y con `required` es un 428 que no necesita leer nada (D3: 428 antes que todo 400).
   const conditional = readerLine(model, operation);
   if (conditional) lines.unshift(conditional);
+  // Un lote asíncrono (DSL 2.30) lee el sobre de los BYTES que guarda el trabajo, y una cota de la lista incumplida es el 400 del
+  // sobre con el mensaje de las restricciones declaradas (invalidParams, el de keel-spring, que lo valida fuera del cuerpo).
+  const asyncBatch = isAsyncBatch(model, operation);
   if (asBody) {
-    lines.push(`        var requestFields = await HttpJsonBody.ReadObject(httpRequest, required: ${bodyRequired});`);
+    lines.push(
+      asyncBatch
+        ? '        var requestFields = JsonBodyReader.ParseObject(body.Span, required: true);'
+        : `        var requestFields = await HttpJsonBody.ReadObject(httpRequest, required: ${bodyRequired});`
+    );
     lines.push(...bodyLines);
-    if (bodyChecks.length > 0) lines.push('        var bodyChecks = new InputViolations(ViolationSource.Body);', ...bodyChecks, '        bodyChecks.ThrowIfAny();');
+    if (bodyChecks.length > 0) lines.push(`        var bodyChecks = new InputViolations(ViolationSource.${asyncBatch ? 'Params' : 'Body'});`, ...bodyChecks, '        bodyChecks.ThrowIfAny();');
   } else {
     lines.push(...queryRequired);
   }
@@ -472,6 +486,18 @@ function renderReader(model, operation, usings) {
     const over = operation.bodyFields.find((field) => field.name === operation.batch.over);
     const envelope = `BatchEnvelope<${operation.batch.itemType}, ${operation.messageClass}>`;
     const message = construct.replace(/\n/g, '\n    ');
+    if (asyncBatch) {
+      return `    /// <summary>
+    /// Lee el sobre del lote asíncrono ${operation.route.method} ${operation.route.path} (${operation.name}) de los bytes del cuerpo: los elementos, sin
+    /// leer, y el mensaje de cada uno. Público: el procesador del trabajo lo vuelve a usar sobre lo guardado.
+    /// </summary>
+    public static ${envelope} Read${csMember(operation.name)}(ReadOnlyMemory<byte> body)
+    {
+${lines.join('\n')}${lines.length > 0 ? '\n' : ''}        return new ${envelope}(
+            ${localOf(over)} ?? [],
+            ${BATCH_ITEM_COMPONENT} => ${message});
+    }`;
+    }
     return `    /// <summary>Lee el sobre del lote ${operation.route.method} ${operation.route.path} (${operation.name}): los elementos, sin leer, y el mensaje de cada uno.</summary>
     private static async Task<${envelope}> Read${csMember(operation.name)}(HttpRequest httpRequest${resolved})
     {
@@ -518,13 +544,18 @@ function routesFile(model) {
   const { namespace, path } = located(model, 'rest', 'ApiRoutes');
   const served = servedRoutes(model);
   const usings = ['Microsoft.AspNetCore.Builder', 'Microsoft.AspNetCore.Http', 'Microsoft.AspNetCore.Routing', ...(served.length > 0 ? [namespaceOf(model, 'endpoints')] : [])];
-  const rows = served.map(({ service, operation }) => {
+  const line = (row, handler) =>
+    `        new(${csString(row.operation)}, ${csString(row.method)}, ${csString(row.path)}, ${row.status}, ` +
+    `Location: ${row.location}, Query: [${row.query.map(csString).join(', ')}], ` +
+    `Body: ${row.body ? csString(row.body) : 'null'}, Handler: ${handler}),`;
+  const rows = served.flatMap(({ service, operation }) => {
     const row = routeRow(model, operation);
-    return (
-      `        new(${csString(row.operation)}, ${csString(row.method)}, ${csString(row.path)}, ${row.status}, ` +
-      `Location: ${row.location}, Query: [${row.query.map(csString).join(', ')}], ` +
-      `Body: ${row.body ? csString(row.body) : 'null'}, Handler: ${endpointsClass(service)}.${csMember(operation.name)}),`
-    );
+    if (!isAsyncBatch(model, operation)) return [line(row, `${endpointsClass(service)}.${csMember(operation.name)}`)];
+    // Un lote asíncrono (DSL 2.30): el alta responde 202 con la URL del trabajo, y cuelgan de ella sus dos rutas.
+    return [
+      line({ ...row, status: BATCH_ACCEPTED_STATUS, location: true }, `${endpointsClass(service)}.${csMember(operation.name)}`),
+      ...batchJobRouteRows(model, operation).map((job) => line(job, `${endpointsClass(service)}.${job.member}`))
+    ];
   });
   const body = `/// <summary>Una fila del contrato HTTP del servicio: la operación, su ruta, su status y cómo viaja su entrada.</summary>
 public sealed record ApiRoute(string Operation, string Method, string Path, int Status, bool Location, IReadOnlyList<string> Query, string? Body, RequestDelegate Handler);

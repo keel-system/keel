@@ -65,6 +65,8 @@ import { spawnSync } from 'node:child_process';
 import { documentIndexes } from '@keel-system/keel-core/gen/document';
 import { usesHistory } from '@keel-system/keel-core/gen/history';
 import { CHANGE_HISTORY_COLLECTION } from '@keel-system/keel-core/gen/history-store';
+import { BATCH_JOB_COLLECTIONS } from '@keel-system/keel-core/gen/batch-store';
+import { asyncBatchOperations } from '@keel-system/keel-core/gen/batch';
 import { planFixture, makeWorkspace, UNCOVERED_BRANCHES } from '../test/helpers/workspace.js';
 import { docProbeProject, documentDatabaseOf } from './lib/doc-probes.js';
 import { DRAIN_SABOTAGES, drainSabotageVerdict, isDrainSabotage } from './lib/timer-probes.js';
@@ -76,6 +78,7 @@ import { READ_SCOPE_SABOTAGE_SPECS, READ_SCOPE_SUBJECTS, isReadScopeSabotage, re
 import { LIFECYCLE_SABOTAGE_SPECS, LIFECYCLE_SUBJECTS, isLifecycleSabotage, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
 import { HISTORY_SABOTAGE_SPECS, HISTORY_SUBJECTS, isHistorySabotage, historySabotageVerdict } from './lib/history-probes.js';
 import { BATCH_SABOTAGE_SPECS, BATCH_SUBJECTS, batchProbePatch, batchSabotageVerdict, isBatchSabotage } from './lib/batch-probes.js';
+import { BATCH_JOB_SABOTAGE_SPECS, BATCH_JOB_SUBJECTS, batchJobSabotageVerdict, isBatchJobSabotage } from './lib/batch-job-probes.js';
 import { resolveRuntime, startMongo, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const args = process.argv.slice(2);
@@ -116,7 +119,7 @@ const SUBJECTS = [
     }
   },
   // `optimisticLocking: declared` sobre documentos: la versión que declara el dominio (el MISMO parche que compila cs-check).
-  ...UNCOVERED_BRANCHES.filter((branch) => ['mailer-mongo-lock', 'jobs-mongo-finder', 'mailer-mongo-author', 'catalog-conditional-mongo', ...READ_SCOPE_SUBJECTS.document, ...LIFECYCLE_SUBJECTS.document, ...HISTORY_SUBJECTS.document, ...BATCH_SUBJECTS.document].includes(branch.name)).map((branch) => ({
+  ...UNCOVERED_BRANCHES.filter((branch) => ['mailer-mongo-lock', 'jobs-mongo-finder', 'mailer-mongo-author', 'catalog-conditional-mongo', ...READ_SCOPE_SUBJECTS.document, ...LIFECYCLE_SUBJECTS.document, ...HISTORY_SUBJECTS.document, ...BATCH_SUBJECTS.document, ...BATCH_JOB_SUBJECTS.document].includes(branch.name)).map((branch) => ({
     name: branch.name,
     from: branch.from,
     mutate: (manifest, layers) => branch.mutate(manifest, layers, branch.name),
@@ -136,6 +139,8 @@ const SUBJECTS = [
     ? only.split(',').includes(subject.name)
     : isBatchSabotage(sabotage)
       ? BATCH_SUBJECTS.document.includes(subject.name)
+    : isBatchJobSabotage(sabotage)
+      ? BATCH_JOB_SUBJECTS.document.includes(subject.name)
     : isHistorySabotage(sabotage)
       ? HISTORY_SUBJECTS.document.includes(subject.name)
       : isLifecycleSabotage(sabotage)
@@ -234,7 +239,9 @@ const SABOTAGES = {
   // El historial de cambios (DSL 2.29): sobre los sujetos documentales de history-designs.js, cada uno en exactamente sus casos HI.
   ...Object.fromEntries(Object.entries(HISTORY_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document])),
   // Los lotes (DSL 2.30): sobre catalog-batch-mongo, cada uno cae en exactamente sus casos BA.
-  ...Object.fromEntries(Object.entries(BATCH_SABOTAGE_SPECS).filter(([id]) => id !== 'ba-atomic-no-tx').map(([id, spec]) => [id, spec.document]))
+  ...Object.fromEntries(Object.entries(BATCH_SABOTAGE_SPECS).filter(([id]) => id !== 'ba-atomic-no-tx').map(([id, spec]) => [id, spec.document])),
+  // Los lotes asíncronos (DSL 2.30, fase B): sobre catalog-batch-async-mongo, cada uno cae en exactamente sus casos BJ.
+  ...Object.fromEntries(Object.entries(BATCH_JOB_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document]))
 };
 // El sabotaje del uuid tiene que cambiar las DOS direcciones (si no, la ida y vuelta lo cazaría sola): también al escribir.
 // Y el del clasificador, sus DOS vías: la etiqueta y el código 112 dicen lo mismo, así que quitar una sola es una mutación
@@ -336,6 +343,11 @@ try {
   for (const subject of subjects) {
     const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
     const ran = tested.output.includes(`${subject.probes.name}.dll`);
+    if (isBatchJobSabotage(sabotage)) {
+      const verdict = batchJobSabotageVerdict(mine, sabotage);
+      step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
     if (isBatchSabotage(sabotage)) {
       const verdict = batchSabotageVerdict(mine, sabotage, subject.model, 'mongodb');
       step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
@@ -458,21 +470,32 @@ function indexCheck({ model }) {
     }
     for (const index of have) if (!specs.some((spec) => spec.name === index.name)) problems.push(`${collection}: sobra ${index.name}`);
   }
-  // El historial de cambios (DSL 2.29): su colección con el índice de la lectura, con sus direcciones (keel-core,
-  // CHANGE_HISTORY_COLLECTION). documentIndexes no lo lleva: lo añade cada generador.
-  const history = usesHistory(model) ? CHANGE_HISTORY_COLLECTION : null;
-  if (history) {
-    const have = (live[history.collection] ?? []).filter((index) => index.name !== '_id_');
-    for (const spec of history.indexes) {
+  // Las colecciones de los almacenes del generador que documentIndexes no lleva (las añade cada generador), con sus
+  // direcciones: el historial de cambios (DSL 2.29, CHANGE_HISTORY_COLLECTION) y los trabajos de los lotes asíncronos
+  // (DSL 2.30, BATCH_JOB_COLLECTIONS: la clave del lote es única y PARCIAL).
+  const generated = [
+    ...(usesHistory(model) ? [CHANGE_HISTORY_COLLECTION] : []),
+    ...(asyncBatchOperations(model).length > 0 ? Object.values(BATCH_JOB_COLLECTIONS) : [])
+  ];
+  for (const store of generated) {
+    const have = (live[store.collection] ?? []).filter((index) => index.name !== '_id_');
+    for (const spec of store.indexes) {
       const index = have.find((candidate) => candidate.name === spec.name);
-      if (!index) problems.push(`${history.collection}: falta ${spec.name}`);
-      else if (JSON.stringify(Object.entries(index.key)) !== JSON.stringify(spec.keys)) problems.push(`${spec.name}: claves ${JSON.stringify(Object.entries(index.key))}, no ${JSON.stringify(spec.keys)}`);
+      if (!index) {
+        problems.push(`${store.collection}: falta ${spec.name}`);
+        continue;
+      }
+      if (JSON.stringify(Object.entries(index.key)) !== JSON.stringify(spec.keys)) problems.push(`${spec.name}: claves ${JSON.stringify(Object.entries(index.key))}, no ${JSON.stringify(spec.keys)}`);
+      if ((index.unique === true) !== Boolean(spec.unique)) problems.push(`${spec.name}: unique ${index.unique === true}, no ${Boolean(spec.unique)}`);
+      if (JSON.stringify(index.partialFilterExpression ?? null) !== JSON.stringify(spec.partialFilter ?? null)) {
+        problems.push(`${spec.name}: filtro ${JSON.stringify(index.partialFilterExpression ?? null)}, no ${JSON.stringify(spec.partialFilter ?? null)}`);
+      }
     }
-    for (const index of have) if (!history.indexes.some((spec) => spec.name === index.name)) problems.push(`${history.collection}: sobra ${index.name}`);
+    for (const index of have) if (!store.indexes.some((spec) => spec.name === index.name)) problems.push(`${store.collection}: sobra ${index.name}`);
   }
   // Una colección con índices que el contrato no conoce: los creó otra cosa.
   for (const [collection, indexes] of Object.entries(live)) {
-    if (expected.some((entry) => entry.collection === collection) || collection === history?.collection) continue;
+    if (expected.some((entry) => entry.collection === collection) || generated.some((store) => store.collection === collection)) continue;
     const extra = indexes.filter((index) => index.name !== '_id_').map((index) => index.name);
     if (extra.length > 0) problems.push(`${collection}: índices fuera del contrato (${extra.join(', ')})`);
   }

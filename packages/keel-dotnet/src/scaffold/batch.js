@@ -258,25 +258,39 @@ public static class BatchRunner
             }
             catch (Exception error)
             {
-                var response = translate(error);
-                if (response.Code is { } code && (code == ValidationError || itemErrors.Contains(code)))
+                var (failed, stops) = FailureOf(index, translate(error), itemErrors);
+                results.Add(failed);
+                if (stops)
                 {
-                    results.Add(BatchItem.Failed(index, code, response.Message));
-                    continue;
+                    stopped = true;
                 }
-                stopped = true;
-                results.Add(response.Code is { } stop ? BatchItem.Failed(index, stop, response.Message) : BatchItem.Failed(index, BatchAborted, BatchAbortedMessage));
             }
         }
         return BatchResponse.Of(results);
     }${allOrNothing}
 
     /// <summary>
+    /// El resultado de un elemento que falló, desde el cuerpo de error que respondería la operación sola, y si DETIENE el
+    /// lote: fallan solo su elemento los codes de <c>itemErrors</c> y ${validation}; cualquier otro fallo lo detiene (D4) con su
+    /// code, o con ${aborted} si no tiene. Una sola regla para el lote síncrono y el procesador de los trabajos asíncronos.
+    /// </summary>
+    internal static (BatchItem Item, bool Stops) FailureOf(int index, ErrorResponse response, IReadOnlyCollection<string> itemErrors)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        ArgumentNullException.ThrowIfNull(itemErrors);
+        if (response.Code is { } code && (code == ValidationError || itemErrors.Contains(code)))
+        {
+            return (BatchItem.Failed(index, code, response.Message), false);
+        }
+        return (response.Code is { } stop ? BatchItem.Failed(index, stop, response.Message) : BatchItem.Failed(index, BatchAborted, BatchAbortedMessage), true);
+    }
+
+    /// <summary>
     /// El elemento como lo leería el borde: el lector de su value object, con las guardas de su constructor. Un null, o un
     /// valor que no se puede leer como el tipo, es su ${validation} con el mensaje de la guarda que lo rechazó, o el
     /// genérico. Null solo si el lector no devolvió nada (otro ${validation} con el genérico).
     /// </summary>
-    private static T? ReadItem<T>(JsonElement value, Func<JsonElement?, T?> read)
+    internal static T? ReadItem<T>(JsonElement value, Func<JsonElement?, T?> read)
         where T : class
     {
         ArgumentNullException.ThrowIfNull(read);
@@ -307,9 +321,9 @@ public static class BatchRunner
         return MalformedMessage;
     }
 
-    private static InvalidItemException Invalid => new(MalformedMessage);
+    internal static InvalidItemException Invalid => new(MalformedMessage);
 
     /// <summary>Un elemento mal formado: su mensaje es el que viaja en el resultado.</summary>
-    private sealed class InvalidItemException(string message) : Exception(message);
+    internal sealed class InvalidItemException(string message) : Exception(message);
 }`;
 }

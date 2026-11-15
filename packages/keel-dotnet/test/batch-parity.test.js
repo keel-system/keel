@@ -51,11 +51,11 @@ test('los sujetos pasan la frontera de keel-dotnet y su sonda ejecuta los MISMOS
   assert.deepEqual([...BATCH_SUBJECTS.relational, ...BATCH_SUBJECTS.document].sort(), BATCH_DESIGNS.map((entry) => entry.name).sort());
 });
 
-test('la frontera: async llega en el incremento 8 y la idempotencia del lote entero no la genera nadie todavía', () => {
+test('la frontera: async ya no se rechaza (inc. 8) y la idempotencia del lote síncrono entero no la genera nadie todavía', () => {
   const asynchronous = load('catalog-batch', (layers) => {
     layers['use-cases'].operations.importProducts.batch.execution = 'async';
   });
-  assert.match(checkSupportedFeatures(asynchronous.manifest, asynchronous.layers).errors.join('\n'), /importProducts\.batch \(execution: async.*incremento 8/);
+  assert.doesNotMatch(checkSupportedFeatures(asynchronous.manifest, asynchronous.layers).errors.join('\n'), /importProducts\.batch \(execution: async.*incremento/);
   const idempotent = load('catalog-batch', (layers) => {
     layers['use-cases'].operations.importProducts.idempotency = { keySource: 'client-key', ttlSeconds: 3600 };
   });
