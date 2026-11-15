@@ -28,8 +28,9 @@ for (const file of plan.files.filter((candidate) => candidate.path.startsWith('c
   fs.writeFileSync(path.join(root, file.path), file.content);
 }
 
-// production exige las variables de la base (sin default): no son de esta prueba.
-const DB = { DB_URL: 'postgres://db/x', DB_USERNAME: 'u', DB_PASSWORD: 'p' };
+// production exige las variables de la base y, desde que product-catalog tiene security, el emisor de los tokens
+// (sin default): no son de esta prueba.
+const DB = { DB_URL: 'postgres://db/x', DB_USERNAME: 'u', DB_PASSWORD: 'p', OAUTH2_ISSUER_URI: 'http://idp/realms/x' };
 
 function loggerFor(env) {
   const configuration = loadConfiguration({ ...DB, ...env }, root);

@@ -44,9 +44,16 @@ export function springRoutes(files) {
       const signature = javaSignature(block);
       if (!mapping || !signature) continue;
       const { name, params } = signature;
+      // Un lote por elemento con clave (DSL 2.30, D15) delega la respuesta en KeyedBatches, que la da con 207 siempre, y el
+      // alta de un lote asíncrono en BatchJobs, que responde 202 con el Location del trabajo.
+      const submitsJob = /batchJobs\.submit\(/.test(block);
       const status = /ResponseEntity\.created/.test(block)
         ? 201
-        : STATUS_BY_CONSTANT[/@ResponseStatus\(HttpStatus\.(\w+)\)/.exec(block)?.[1]] ?? Number(/HttpStatus\.valueOf\((\d+)\)/.exec(block)?.[1] ?? 200);
+        : submitsJob
+        ? 202
+        : /keyedBatches\.perItem\(/.test(block)
+        ? 207
+        :STATUS_BY_CONSTANT[/@ResponseStatus\(HttpStatus\.(\w+)\)/.exec(block)?.[1]] ?? Number(/HttpStatus\.valueOf\((\d+)\)/.exec(block)?.[1] ?? 200);
       const query = [...params.matchAll(REQUEST_PARAM)].map((m) => m[1]);
       // El Pageable de Spring Data lee tres parámetros: página, tamaño y orden.
       if (/Pageable pageable/.test(params)) query.push('page', 'size', 'sort');
@@ -55,7 +62,7 @@ export function springRoutes(files) {
         method: mapping[1].toUpperCase(),
         path: `${base}${mapping[2]}`,
         status,
-        location: /ResponseEntity\.created/.test(block),
+        location: /ResponseEntity\.created/.test(block) || submitsJob,
         query: [...query].sort(),
         body,
         multipart: /consumes = MediaType\.MULTIPART_FORM_DATA_VALUE/.test(block)

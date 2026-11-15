@@ -11,6 +11,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { planFixture } from './helpers/workspace.js';
+import { withoutBatches } from '../../keel-core/test/helpers/batch-designs.js';
 
 const withAuthorship = (manifest, layers) => {
   layers.persistence.audit = { ...(layers.persistence.audit ?? {}), authorship: 'all' };
@@ -32,7 +33,15 @@ test('con seguridad, el actor es el sujeto del token (el nombre si no lo trae) o
 
 test('sin seguridad no hay principal que mirar: el sistema, con la correlación de la API o la de un listener', async () => {
   for (const name of ['product-catalog', 'metering-digest']) {
-    const { files, model } = await planFixture(name, { mutate: withAuthorship });
+    // product-catalog, sin la security ni los lotes de su v1.2.0.
+    const mutate = (manifest, layers) => {
+      if (name === 'product-catalog') {
+        withoutBatches(layers);
+        delete manifest.layers.security;
+      }
+      withAuthorship(manifest, layers);
+    };
+    const { files, model } = await planFixture(name, { mutate });
     assert.ok(!model.layersPresent.security, name);
     const actor = content(files, '/Persistence/AuditActor.cs');
     assert.ok(actor, `${name}: sin AuditActor`);
@@ -45,7 +54,8 @@ test('sin seguridad no hay principal que mirar: el sistema, con la correlación 
 });
 
 test('sin autoría no hay actor ni prueba', async () => {
-  const { files } = await planFixture('product-catalog');
+  // Sin los lotes de la v1.2.0: el dueño de un trabajo también sale del actor, con autoría o sin ella.
+  const { files } = await planFixture('product-catalog', { mutate: (manifest, layers) => withoutBatches(layers) });
   assert.ok(!files.some((file) => /AuditActor/.test(file.path)));
 });
 

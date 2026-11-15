@@ -48,7 +48,7 @@ import {
 } from '../src/lib/gen/batch.js';
 import { registryOperations } from '../src/lib/gen/request-idempotency.js';
 import { idempotencyOutcomeCodes } from '../src/lib/gen/declared-errors.js';
-import { BATCH_DESIGNS, BATCH_JOB_DESIGNS, BATCH_KEY_DESIGNS } from './helpers/batch-designs.js';
+import { BATCH_DESIGNS, BATCH_JOB_DESIGNS, BATCH_KEY_DESIGNS, withoutBatches } from './helpers/batch-designs.js';
 import { PROBE } from './helpers/probe-projection.js';
 
 const FIXTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'fixtures', 'designs');
@@ -110,7 +110,9 @@ test('el modelo: el lote recorre su campo, con su elemento, su confirmación y l
   assert.deepEqual(batchModelOperations(model).map((entry) => entry.operation), ['importProducts']);
   // Las demás operaciones no son lotes, y sin lote declarado, nada.
   assert.equal(operationOf(model, 'createProduct').batch, null);
-  assert.equal(usesBatch(designOf('product-catalog').model), false);
+  assert.equal(usesBatch(designOf('product-catalog', withoutBatches).model), false);
+  // product-catalog (v1.2.0, inc. 11) declara los dos modos.
+  assert.deepEqual(batchModelOperations(designOf('product-catalog').model).map((entry) => entry.operation), ['importProducts', 'importCatalog']);
   // all-or-nothing no tiene itemErrors.
   assert.deepEqual(operationOf(derived('catalog-batch-atomic').model, 'importProducts').batch.itemErrors, []);
 });
@@ -180,7 +182,7 @@ test('la frontera de los generadores: el mismo mensaje en los cuatro, por modo',
   layers['use-cases'].operations.importProducts.batch.execution = 'async';
   assert.match(batchPendingErrors(layers, 'keel-nest', { syncIncrement: null, asyncIncrement: 7 })[0], /incremento 7/);
   // Sin lotes, nada.
-  assert.deepEqual(batchPendingErrors(designOf('product-catalog').layers, 'keel-go', { syncIncrement: 4, asyncIncrement: 9 }), []);
+  assert.deepEqual(batchPendingErrors(designOf('product-catalog', withoutBatches).layers, 'keel-go', { syncIncrement: 4, asyncIncrement: 9 }), []);
 });
 
 test('la idempotencia del lote síncrono (D15) se rechaza con el mismo mensaje hasta que el generador la genera, y solo en el lote que la declara', () => {

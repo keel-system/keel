@@ -1,9 +1,228 @@
-# El análisis de huecos de este diseño (gap-analysis.md): qué clases se recorrieron, sobre qué
-# unidades y qué se encontró. Migrado desde review.yaml, donde no lo leía nadie: es una fixture
-# del generador, así que el barrido está a medias a propósito y keel validate --ready lo cuenta.
-reviewedAt: 1.0.0
+# El análisis de huecos de este diseño (gap-analysis.md). Hasta la v1.1.0 era una fixture parcial con el barrido a
+# medias a propósito; en la v1.2.0 (incremento 11 de PLAN-DSL-230-LOTES.md, 2026-11-15) pasa a diseño de contraste de
+# los lotes y se recorre entero. Las decisiones las tomó quien preparaba la fixture por delegación del diseñador: van
+# como decididas en el artefacto que las sostiene, y las de la clase 16 como riesgo aceptado, que es lo que la
+# doctrina pide cuando el diseñador dijo «lo que recomiendes».
+reviewedBy: keel-gap-sweep
+reviewedAt: 1.2.0
 
 coverage:
-  - class: 4
-    units: [createProduct]
+  - class: 1
+    units: [ Product ]
+    result: clean
+  - class: 2
+    units: [ createProduct, activateProduct, retireProduct, importProducts, importCatalog ]
     result: findings
+  - class: 3
+    units: [ Product ]
+    result: findings
+  - class: 4
+    units: [ createProduct, activateProduct, retireProduct, importProducts, importCatalog ]
+    result: findings
+  - class: 5
+    units: [ getProduct, listProducts ]
+    result: findings
+  - class: 9
+    units: [ createProduct, getProduct, listProducts, activateProduct, retireProduct, importProducts, importCatalog ]
+    result: findings
+  - class: 12
+    units: [ service ]
+    result: findings
+  - class: 14
+    units: [ Product ]
+    result: findings
+  - class: 15
+    units: [ createProduct, getProduct, listProducts, activateProduct, retireProduct, importProducts, importCatalog ]
+    result: findings
+  - class: 16
+    units: [ '3.2', '3.3', '3.7', '3.8', '3.9', '3.9b' ]
+    result: findings
+
+findings:
+  # --- Clase 2 ---
+  - class: 2
+    unit: activateProduct
+    what: >-
+      Publicar un producto con precio cero dejaría un active que incumple la invariante, y el diseño no decía
+      qué responde.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: PRODUCT_PRICE_NOT_POSITIVE (422), después del 409 del estado (FL-PRD-007-D y
+      FL-PRD-007-E)."
+  - class: 2
+    unit: importProducts
+    what: >-
+      Un elemento del lote con un sku que ya existe: ¿detiene el lote o falla solo él? Y dos elementos con el
+      mismo sku en el mismo lote.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.2.0: SKU_ALREADY_EXISTS está en itemErrors y falla solo su elemento; dos elementos con
+      el mismo sku fallan siempre en el segundo, porque el lote va en orden de índice (FL-PRD-008)."
+  - class: 2
+    unit: importCatalog
+    what: >-
+      Lo mismo en el trabajo asíncrono, donde además el cliente no está esperando la respuesta.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.2.0: el mismo itemErrors, y el fallo se lee en los resultados del trabajo
+      (FL-PRD-009)."
+
+  # --- Clase 3 ---
+  - class: 3
+    unit: Product
+    what: >-
+      notes es opcional en el alta y en el elemento de un lote: ¿viaja como null o se omite? Y un importe con más
+      decimales que la escala.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: conventions.nulls no se declara (include) y notes viaja como null; el importe se
+      redondea HALF_UP a dos decimales (scalePolicy: round), también dentro de un lote (FL-PRD-001-D, FL-PRD-008)."
+
+  # --- Clase 4 ---
+  - class: 4
+    unit: createProduct
+    what: >-
+      Dos altas simultáneas con la misma clave caen en la ventana previa al registro de la clave.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.1.0: una gana y la otra recibe 409 IDEMPOTENCY_KEY_IN_PROGRESS o SKU_ALREADY_EXISTS;
+      queda un solo producto (FL-PRD-003)."
+  - class: 4
+    unit: activateProduct
+    what: >-
+      Publicar y retirar el mismo producto a la vez desde dos pantallas.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.2.0: optimisticLocking all; la que pierde recibe 409 CONCURRENT_MODIFICATION
+      (OBL-CONCURRENCY-CODE, aceptada) y relee el producto. Registro estructural § 3.9."
+  - class: 4
+    unit: importProducts
+    what: >-
+      Dos lotes con la misma clave a la vez, y la repetición de un lote que se cortó a mitad.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.2.0: mientras el primero sigue en marcha, 409 IDEMPOTENCY_KEY_IN_PROGRESS (FL-PRD-008-E);
+      uno cortado se reanuda desde el último elemento confirmado al repetirlo, sin repetir ningún alta. Por
+      elemento, la guarda es la clave natural del sku."
+  - class: 4
+    unit: importCatalog
+    what: >-
+      Dos importaciones con la misma clave a la vez, y dos importaciones distintas que dan de alta el mismo sku.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.2.0: un solo trabajo por clave y dueño (FL-PRD-009-F); entre trabajos distintos, el
+      segundo elemento con el mismo sku falla con SKU_ALREADY_EXISTS por la clave natural."
+
+  # --- Clase 5 ---
+  - class: 5
+    unit: listProducts
+    what: >-
+      Sin sort declarado, el orden del listado era el del id del agregado: un uuid, sin significado para quien lee
+      el catálogo.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.2.0: sort [sku:asc], un orden total porque el sku es único (FL-PRD-005)."
+  - class: 5
+    unit: getProduct
+    what: >-
+      Un id que no es un uuid: ¿404 o 400?
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: 400 VALIDATION_ERROR, porque el id tiene tipo (FL-PRD-004-B)."
+
+  # --- Clase 9 ---
+  - class: 9
+    unit: importCatalog
+    what: >-
+      La URL de un trabajo y la de sus resultados: si cualquiera con un token puede leerlas, un trabajo de un
+      usuario se filtra a otro.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.2.0: solo las lee quien creó el trabajo; cualquier otro recibe 404 BATCH_JOB_NOT_FOUND
+      (FL-PRD-009-D). El resto del catálogo es de toda la tienda: todos los usuarios con el rol catalog-editor lo leen y lo
+      escriben igual."
+
+  # --- Clase 12 ---
+  - class: 12
+    unit: service
+    what: >-
+      Texto: el diseño no decía si el sku se normaliza a mayúsculas ni si name se recorta.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: el formato del SKU solo admite mayúsculas, así que una minúscula es un 400 (o el
+      VALIDATION_ERROR de su elemento en un lote) y no una colisión; name se guarda tal cual llega. Convenciones
+      de determinación de validation-scenarios.md."
+
+  # --- Clase 14 ---
+  - class: 14
+    unit: Product
+    what: >-
+      Un producto retirado no se borra nunca: el catálogo crece con cada alta y cada importación.
+    severity: risk
+    state: decided
+    reason: "Decidido en v1.2.0: se conserva, porque el sku retirado no se puede reutilizar y su historia es la del
+      catálogo. Lo que el método guarda de cada lote (trabajos y resultados) lo purga su retención."
+
+  # --- Clase 15 ---
+  - class: 15
+    unit: importProducts
+    what: >-
+      Un lote en el que todos los elementos fallan: ¿207, 400 o 409?
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.2.0: siempre 207 (per-item), también si todo falla o todo sale bien; solo el sobre es un
+      400 del lote: items ausente o con más de 500 elementos (FL-PRD-008-D)."
+  - class: 15
+    unit: importCatalog
+    what: >-
+      El trabajo asíncrono: dónde lo encuentra el cliente y cómo sabe que terminó.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.2.0: 202 con el trabajo y su Location, estado en jobs/{jobId} y resultados paginados en
+      jobs/{jobId}/results (wire-contract.md § Lotes asíncronos, FL-PRD-009)."
+  - class: 15
+    unit: createProduct
+    what: >-
+      ¿Llama un navegador directamente a esta API? Sin cors declarado, una SPA no podría.
+    severity: risk
+    state: decided
+    reason: "Decidido en v1.2.0: la usa el backoffice de la tienda desde su backend; sin cors, el servicio no acepta
+      peticiones cross-origin."
+
+  # --- Clase 16 ---
+  - class: 16
+    unit: '3.2'
+    what: idempotency client-key en las tres altas y ninguna en las transiciones, decidido por quien preparaba la fixture.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: el porqué está en el registro estructural."
+  - class: 16
+    unit: '3.3'
+    what: Sin caché en las dos lecturas, decidido por quien preparaba la fixture.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: quien lee el producto acaba de escribirlo, y una importación lo cambia en cualquier momento."
+  - class: 16
+    unit: '3.7'
+    what: transactionalBoundary per-operation, decidido por quien preparaba la fixture.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: cada operación toca un solo producto, y en los lotes la transacción es la de cada elemento."
+  - class: 16
+    unit: '3.8'
+    what: listProducts paginado con offset y ordenado por sku, decidido por quien preparaba la fixture.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: el sku da un orden total, y los resultados de un trabajo los pagina el método."
+  - class: 16
+    unit: '3.9'
+    what: optimisticLocking all, decidido por quien preparaba la fixture.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: dos transiciones a la vez sobre el mismo producto dejan un 409 visible, no un pisotón."
+  - class: 16
+    unit: '3.9b'
+    what: audit timestamps all y authorship none, decididos por quien preparaba la fixture.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: las fechas sirven para conciliar importaciones; nadie ha pedido saber quién cambió un producto."

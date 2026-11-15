@@ -19,6 +19,7 @@ import { isStdlib } from '../src/lib/go-source.js';
 import { STATEMENT_COUNT_PATH as DOTNET_STATEMENT_PATH, STATEMENT_COUNT_VARIABLE as DOTNET_STATEMENT_VARIABLE } from '../../keel-dotnet/src/scaffold/statement-count.js';
 import { FIXTURES_DIR, GO_READY_DESIGN } from './helpers/workspace.js';
 import { tmpDir } from './helpers/tmp.js';
+import { withoutBatches } from '../../keel-core/test/helpers/batch-designs.js';
 
 const byPath = (files) => Object.fromEntries(files.map((file) => [file.path, file.content]));
 const fixtureNames = () => fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
@@ -26,6 +27,12 @@ const fixtureNames = () => fs.readdirSync(FIXTURES_DIR).filter((name) => fs.exis
 function planFixture(name, { mutate = null } = {}) {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
   if (mutate) mutate(manifest, layers);
+  // Un lote exige api y persistence, y el asíncrono security (DSL 2.30): product-catalog sin una de ellas es la v1.1.0,
+  // sin sus lotes (inc. 11 de PLAN-DSL-230-LOTES.md).
+  if (name === 'product-catalog' && ['api', 'persistence', 'security'].some((layer) => !manifest.layers[layer] || !layers[layer])) {
+    withoutBatches(layers);
+    delete manifest.layers.security;
+  }
   return planService({ manifest, layers, workspace: FIXTURES_DIR });
 }
 
@@ -183,8 +190,11 @@ test('el humo pide la API con la credencial que satisface la regla de cierre, y 
   assert.match(smoke('profile-directory', { auth: 'cognito' }), /Bearer\(s\.TokenFor\("card-holder"\)\)/);
   // Solo clientes máquina: su credencial.
   assert.match(smoke('notification-mailer'), /SMOKE-5[\s\S]*s\.ServiceCredential\("/);
-  // Sin seguridad, la petición sin credencial.
-  assert.match(smoke(GO_READY_DESIGN.name), /s\.Get\(RouteBase\+"\/keel-smoke-ruta-inexistente", http\.Header\{"X-Correlation-Id": \{"keel-smoke"\}\}\)/);
+  // Sin seguridad, la petición sin credencial: product-catalog sin la security ni los lotes de su v1.2.0.
+  const bare = loadService(path.join(FIXTURES_DIR, 'product-catalog'));
+  withoutBatches(bare.layers);
+  delete bare.manifest.layers.security;
+  assert.match(byPath(planService({ ...bare, workspace: FIXTURES_DIR }).files)['tests/integration/harness_smoke_test.go'], /s\.Get\(RouteBase\+"\/keel-smoke-ruta-inexistente", http\.Header\{"X-Correlation-Id": \{"keel-smoke"\}\}\)/);
 });
 
 // ── El script EJECUTADO en modo --score (sin Go: solo lee el XML) ──

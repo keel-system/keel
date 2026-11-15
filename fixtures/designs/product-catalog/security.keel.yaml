@@ -1,0 +1,31 @@
+# v1.2.0: el catálogo lo gestiona el equipo de la tienda con un token de su proveedor de identidad. Entró con
+# importCatalog: un trabajo asíncrono se ata a quien lo crea (solo él lee su estado y sus resultados), y eso
+# necesita saber quién llama. Un solo rol: todo el equipo lee y escribe el catálogo igual, y una identidad
+# autenticada sin él (otra aplicación del mismo proveedor) no entra.
+authentication:
+  protocol: oidc
+  tokenLocation: header
+
+roles:
+  catalog-editor:
+    description: Persona del equipo de la tienda que gestiona el catálogo.
+
+permissions:
+  catalog:manage:
+    description: Consultar, dar de alta, publicar, retirar e importar productos.
+
+roleGrants:
+  catalog-editor: [catalog:manage]
+
+access:
+  default:
+    level: required
+    description: Toda la API exige un token válido del equipo de la tienda.
+  rules:
+    createProduct: { level: required, permissions: [catalog:manage] }
+    getProduct: { level: required, permissions: [catalog:manage] }
+    listProducts: { level: required, permissions: [catalog:manage] }
+    activateProduct: { level: required, permissions: [catalog:manage] }
+    retireProduct: { level: required, permissions: [catalog:manage] }
+    importProducts: { level: required, permissions: [catalog:manage] }
+    importCatalog: { level: required, permissions: [catalog:manage] }

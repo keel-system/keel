@@ -21,6 +21,22 @@ types:
         constraints:
           minLength: 3
           maxLength: 3
+  ProductDraft:
+    description: Lo que hace falta para dar de alta un producto en un lote (importProducts, importCatalog).
+    fields:
+      sku:
+        type: SKU
+        required: true
+      name:
+        type: string
+        required: true
+        constraints:
+          maxLength: 120
+      notes:
+        type: text
+      price:
+        type: Money
+        required: true
   ProductStatus:
     description: Estados de publicación de un producto.
     values: [draft, active, retired]

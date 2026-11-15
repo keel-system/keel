@@ -30,6 +30,9 @@ for (const name of fs.readdirSync(FIXTURES_DIR).filter((entry) => fs.existsSync(
     for (const service of nest.model.services ?? []) {
       for (const operation of service.operations ?? []) {
         if (!operation.route) continue;
+        // La lista de un lote es el sobre: ausente es el 400 del lote entero (BA-7), no `[]`, y el mensaje lleva el
+        // elemento, no la lista. La miden las redes de lotes.
+        if (operation.batch) continue;
         const partial = operation.route.method === 'PATCH';
         const fromPath = new Set((operation.pathParams ?? []).map((param) => param.name));
         const lists = (operation.bodyFields ?? []).concat(operation.queryParams ?? []).filter((field) => field.list && !fromPath.has(field.name));

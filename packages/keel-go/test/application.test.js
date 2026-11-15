@@ -21,6 +21,7 @@ import { goExported } from '../src/lib/go-projection.js';
 import { GENERATED_HEADER } from '../src/lib/go-source.js';
 import { goFileName as fileOf } from '../src/scaffold/render.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
+import { withoutBatches } from '../../keel-core/test/helpers/batch-designs.js';
 
 const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
 const loaded = new Map(fixtures.map((name) => [name, loadService(path.join(FIXTURES_DIR, name))]));
@@ -65,7 +66,8 @@ function nestMessages(files) {
 /** DTO → sus claves del cable en orden, de lo que emite keel-go. */
 function goDtos(files) {
   const dtos = new Map();
-  for (const file of files.filter((f) => /^internal\/application\/\w+_dto\.go$/.test(f.path))) {
+  // El resultado por elemento de un lote (DSL 2.30) es `<Op>ItemResult`, en su `*_item_result.go`.
+  for (const file of files.filter((f) => /^internal\/application\/\w+_(dto|item_result)\.go$/.test(f.path))) {
     const name = /^type (\w+) struct \{$/m.exec(file.content)?.[1];
     const struct = file.content.slice(file.content.indexOf(`type ${name} struct {`), file.content.indexOf('\n}\n'));
     dtos.set(name, [...struct.matchAll(/`json:"([^",]+)/g)].map((match) => match[1]));
@@ -137,8 +139,10 @@ test('la consulta paginada recibe la página fuera del cuerpo: un Pageable con p
   const query = app(plans.get('product-catalog').files, 'list_products_query');
   assert.match(query, /^\tPageable domain\.Pageable `json:"-"`$/m);
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'product-catalog'));
+  // product-catalog sin la security ni los lotes de su v1.2.0 (inc. 11 de PLAN-DSL-230-LOTES.md): un lote asíncrono exige persistencia.
+  withoutBatches(layers);
   delete layers.persistence;
-  const { persistence, ...declared } = manifest.layers;
+  const { persistence, security, ...declared } = manifest.layers;
   assert.ok(persistence);
   const bare = planService({ manifest: { ...manifest, layers: declared }, layers, workspace: FIXTURES_DIR });
   const plain = app(bare.files, 'list_products_query');

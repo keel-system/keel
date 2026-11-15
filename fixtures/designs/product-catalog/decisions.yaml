@@ -1,20 +1,100 @@
-# Obligaciones de diseño que esta fixture deja abiertas a sabiendas.
-# Ver docs/design-obligations.md — el «aceptado» del análisis de huecos, por escrito.
+# Obligaciones de diseño aceptadas y registro de decisiones estructurales (structural-decisions.md § 3).
+# Ver docs/design-obligations.md — el «aceptado» del análisis de huecos, por escrito. Reafirmadas en la v1.2.0
+# (incremento 11 de PLAN-DSL-230-LOTES.md, 2026-11-15), que añade los dos lotes (importProducts, síncrono, e
+# importCatalog, asíncrono), la capa security y el orden del listado. Las tomó quien preparaba la fixture por
+# delegación del diseñador.
 decisions:
   - id: OBL-IDEM-RACE-CODE
     scope: use-cases
     reason: >
-      La carrera de la clave de createProduct se contesta con el canónico
-      409 IDEMPOTENCY_KEY_IN_PROGRESS, que es el contrato público de este servicio.
-    since: 1.1.0
+      La carrera de la clave de createProduct, importProducts e importCatalog se contesta con el canónico
+      409 IDEMPOTENCY_KEY_IN_PROGRESS, que es el contrato público de este servicio. En importProducts es
+      también la respuesta mientras el primer lote con esa clave sigue en marcha.
+    since: 1.2.0
   - id: OBL-IDEM-REUSE-CODE
     scope: use-cases
     reason: >
-      Misma clave con otro cuerpo se contesta con el canónico 409 IDEMPOTENCY_KEY_REUSED.
-    since: 1.1.0
+      Misma clave con otro cuerpo se contesta con el canónico 409 IDEMPOTENCY_KEY_REUSED, en el alta suelta
+      y en los dos lotes.
+    since: 1.2.0
   - id: OBL-IDEM-KEY-REQUIRED
     scope: use-cases
     reason: >
-      El alta admite clientes sin cabecera. Sin ella la petición se ejecuta sin
-      deduplicar, y lo que frena el segundo insert es la clave natural del SKU.
-    since: 1.1.0
+      El alta y los dos lotes admiten clientes sin cabecera. Sin ella la petición se ejecuta sin deduplicar,
+      y lo que frena el segundo insert es la clave natural del SKU: un lote repetido sin clave da de alta lo
+      nuevo y falla en cada elemento repetido con SKU_ALREADY_EXISTS, sin efecto doble.
+    since: 1.2.0
+  - id: OBL-CONCURRENCY-CODE
+    scope: persistence
+    reason: >
+      Dos transiciones simultáneas del mismo producto (publicar y retirar a la vez) se contestan con el
+      canónico 409 CONCURRENT_MODIFICATION. Es contrato público del servicio, y el cliente lo resuelve
+      releyendo el producto.
+    since: 1.2.0
+
+structural:
+  - section: '3.2'
+    chosen: >-
+      idempotency client-key con ttlSeconds 86400 en createProduct, importProducts e importCatalog; ninguna en
+      activateProduct ni en retireProduct
+    discarded: payload-hash en las altas; idempotency en las transiciones
+    reason: >-
+      Las tres altas crean recursos y un cliente con timeout las reintenta: la clave la genera él y la
+      respuesta se reproduce, también la del lote entero (el mismo 207, o el mismo trabajo). payload-hash
+      confundiría dos lotes legítimos con el mismo contenido enviados a propósito. Las transiciones no la
+      necesitan: repetir una publicación o una retirada la rechaza el lifecycle con su 409 sin efecto.
+    since: 1.2.0
+  - section: '3.3'
+    chosen: sin caché en getProduct ni en listProducts
+    discarded: cache con ttlSeconds e invalidación por las altas y las transiciones
+    reason: >-
+      El equipo de la tienda lee el producto justo después de crearlo, publicarlo o retirarlo y espera ver lo
+      que hizo; un lote asíncrono da de alta productos en cualquier momento. Una respuesta cacheada le mentiría,
+      y la lectura es por id o por página indexada.
+    since: 1.2.0
+  - section: '3.7'
+    scope: persistence.consistency.transactionalBoundary
+    chosen: per-operation
+    discarded: per-aggregate
+    reason: >-
+      Cada operación toca un solo producto y no publica nada, así que las dos opciones confirman lo mismo; se
+      queda per-operation, la de la v1.0.0. En los lotes la transacción es la de cada elemento, que es la
+      operación sola (D2 de los lotes): un elemento que falla no deshace los anteriores.
+    since: 1.2.0
+  - section: '3.8'
+    scope: api.pagination
+    chosen: >-
+      listProducts paginado (offset, 20 por defecto, 100 como máximo) y ordenado por sku ascendente; los
+      resultados de un trabajo de importCatalog, paginados con el mismo sobre en orden de índice
+    discarded: el catálogo entero sin paginar; el orden por id
+    reason: >-
+      El catálogo crece con cada alta y con cada importación de miles de productos. El sku es único, así que
+      ordenar por él da un orden total que no reparte mal entre páginas, y es el que lee una persona. Los
+      resultados de un trabajo son tantos como su lote (hasta 50000) y su orden lo fija el método.
+    since: 1.2.0
+  - section: '3.9'
+    scope: persistence.consistency.optimisticLocking
+    chosen: all
+    discarded: none
+    reason: >-
+      Publicar y retirar el mismo producto a la vez desde dos pantallas tiene que dejar un desenlace que una de
+      las dos vea rechazado, no uno que pise al otro sin que nadie lo sepa: el 409 (OBL-CONCURRENCY-CODE) le
+      dice a quien perdió que relea el producto. Es lo que el servicio hacía sin escribirlo.
+    since: 1.2.0
+  - section: '3.9b'
+    scope: persistence.audit.timestamps
+    chosen: all
+    discarded: none
+    reason: >-
+      Cuándo se dio de alta y cuándo cambió cada producto lo necesita quien opera la base para conciliar una
+      importación con el catálogo del proveedor. No sale en el contrato: la respuesta del producto no los lleva.
+    since: 1.2.0
+  - section: '3.9b'
+    scope: persistence.audit.authorship
+    chosen: none
+    discarded: all
+    reason: >-
+      Todo el equipo de la tienda usa la misma API con los mismos permisos y nadie ha pedido responder quién
+      cambió un producto. El dueño de un trabajo de importCatalog lo guarda el método (solo él lo lee), sin
+      autoría en el producto.
+    since: 1.2.0

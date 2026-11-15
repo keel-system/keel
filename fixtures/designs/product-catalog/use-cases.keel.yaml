@@ -42,6 +42,8 @@ operations:
       # Token de sincronización con el proveedor: sensible, nunca sale del servicio.
       exclude: [apiToken]
       paginated: true
+      # v1.2.0: por sku, que es único; antes no había orden declarado y la página dependía del id.
+      sort: [sku:asc]
   activateProduct:
     description: Publica un producto en borrador; solo con un precio mayor que cero.
     kind: command
@@ -91,3 +93,72 @@ operations:
       - code: PRODUCT_ALREADY_RETIRED
         when: El producto ya está retired.
         http: 409
+  importProducts:
+    description: >-
+      Da de alta en estado draft un lote de hasta 500 productos y responde por elemento: un sku repetido o un
+      producto que no cumple su contrato falla solo su elemento y el lote sigue.
+    kind: command
+    input:
+      fields:
+        items:
+          type: ProductDraft
+          list: true
+          required: true
+          constraints: { maxItems: 500 }
+          description: Los productos del lote, en el orden en que se procesan.
+    output: "void"
+    rules:
+      - Por cada elemento, verificar que el sku no existe antes de crear; dos elementos con el mismo sku fallan en el segundo.
+    errors:
+      - code: SKU_ALREADY_EXISTS
+        when: Ya existe un producto con ese sku.
+        http: 409
+    # La clave se aplica al lote entero: repetirla devuelve el mismo 207 sin volver a dar de alta nada, y un lote
+    # cortado a mitad se reanuda desde el último elemento confirmado.
+    idempotency:
+      keySource: client-key
+      ttlSeconds: 86400
+    batch:
+      over: items
+      atomicity: per-item
+      itemErrors: [SKU_ALREADY_EXISTS]
+      execution: sync
+      output:
+        fields:
+          productId:
+            type: uuid
+            description: El producto que se dio de alta.
+  importCatalog:
+    description: >-
+      Importa el catálogo de un proveedor, hasta 50000 productos en estado draft, como un trabajo que se procesa por
+      partes: responde 202 con la ubicación del trabajo, y quien lo creó sondea su estado y lee sus resultados.
+    kind: command
+    input:
+      fields:
+        items:
+          type: ProductDraft
+          list: true
+          required: true
+          constraints: { maxItems: 50000 }
+          description: Los productos del catálogo, en el orden en que se procesan.
+    output: "void"
+    rules:
+      - Por cada elemento, verificar que el sku no existe antes de crear; dos elementos con el mismo sku fallan en el segundo.
+    errors:
+      - code: SKU_ALREADY_EXISTS
+        when: Ya existe un producto con ese sku.
+        http: 409
+    # Repetir la clave devuelve el MISMO trabajo, en el estado en que esté.
+    idempotency:
+      keySource: client-key
+      ttlSeconds: 86400
+    batch:
+      over: items
+      atomicity: per-item
+      itemErrors: [SKU_ALREADY_EXISTS]
+      execution: async
+      output:
+        fields:
+          productId:
+            type: uuid
+            description: El producto que se dio de alta.

@@ -13,12 +13,18 @@ import { TELEMETRY_CONVENTIONS } from '../src/scaffold/generator-docs.js';
 import { generate as applicationFiles } from '../src/scaffold/application.js';
 import { assetsDir, wrapperDir, GRADLE_VERSION, GRADLE_DISTRIBUTION_SHA256 } from '../src/lib/assets.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
+import { withoutBatches } from '../../keel-core/test/helpers/batch-designs.js';
 
 const fixtureDir = path.join(FIXTURES_DIR, 'product-catalog');
 
+// product-catalog es la base que estas pruebas mutan, y la escribieron sin security y sin lotes: desde la v1.2.0 (inc. 11
+// de PLAN-DSL-230-LOTES.md) la fixture los declara, así que se le quitan (withoutBatches). Lo que la fixture entera
+// genera lo miden java-syntax, compile-check y las redes de lotes.
 function loadFixture() {
   const { manifest, layers, errors } = loadService(fixtureDir);
   assert.deepEqual(errors, []);
+  withoutBatches(layers);
+  delete manifest.layers.security;
   return { manifest, layers };
 }
 

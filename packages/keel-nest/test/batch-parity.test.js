@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { loadService } from '@keel-system/keel-core';
 import { BATCH_ABORTED_MESSAGE, BATCH_ITEM_MALFORMED_MESSAGE, batchNote, batchResponse } from '@keel-system/keel-core/gen/batch';
-import { BATCH_DESIGNS } from '../../keel-core/test/helpers/batch-designs.js';
+import { BATCH_DESIGNS, withoutBatches } from '../../keel-core/test/helpers/batch-designs.js';
 import { planService } from '../src/scaffold/index.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
 import { BATCH_TS } from '../src/scaffold/batch.js';
@@ -119,6 +119,7 @@ test('el borde solo lee el SOBRE: la lista sin leer, con su presencia y su maxIt
 
 function loadNoBatch() {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'product-catalog'));
+  withoutBatches(layers);
   return { manifest, layers, workspace: FIXTURES_DIR, stack: { database: 'postgresql' } };
 }
 

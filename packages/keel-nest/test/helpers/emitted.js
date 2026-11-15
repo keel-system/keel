@@ -14,6 +14,7 @@ import ts from 'typescript';
 import { loadService } from '@keel-system/keel-core';
 import { planService } from '../../src/scaffold/index.js';
 import { FIXTURES_DIR } from './workspace.js';
+import { withoutBatches } from '../../../keel-core/test/helpers/batch-designs.js';
 import { tmpDir } from './tmp.js';
 import { TELEMETRY_DEPENDENCIES } from '../../src/scaffold/telemetry.js';
 
@@ -25,6 +26,11 @@ const require = createRequire(import.meta.url);
 /** Carga una fixture; `mutate(layers)` permite derivar de ella una variante en memoria. */
 export function planFixture(name, { mutate = null, withoutLayers = [], stack = null } = {}) {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
+  // Un lote exige api y persistence, y el asíncrono security (DSL 2.30): product-catalog sin una de ellas es la v1.1.0,
+  // sin sus lotes (inc. 11 de PLAN-DSL-230-LOTES.md).
+  if (name === 'product-catalog' && withoutLayers.some((layer) => ['api', 'persistence', 'security'].includes(layer))) {
+    withoutBatches(layers);
+  }
   for (const layer of withoutLayers) {
     delete manifest.layers[layer];
     delete layers[layer];

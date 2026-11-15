@@ -18,12 +18,18 @@ import { GENERATED_HEADER } from '../src/lib/go-source.js';
 import { SKILL } from '../src/lib/assets.js';
 import { checkGoTree, goParser } from './helpers/go-tree.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
+import { withoutBatches } from '../../keel-core/test/helpers/batch-designs.js';
 
 const assets = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets');
 const byPath = (files) => Object.fromEntries(files.map((file) => [file.path, file.content]));
 
+// product-catalog sin la security ni los lotes de su v1.2.0 (inc. 11 de PLAN-DSL-230-LOTES.md): estas pruebas lo usan como el diseño sin seguridad.
 function planWith(fixture, { stack = null, mutate = null } = {}) {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, fixture));
+  if (fixture === 'product-catalog') {
+    withoutBatches(layers);
+    delete manifest.layers.security;
+  }
   if (mutate) mutate(manifest, layers);
   return planService({ manifest, layers, workspace: FIXTURES_DIR, stack });
 }

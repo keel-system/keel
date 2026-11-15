@@ -93,9 +93,11 @@ function evolveDesign(workspace) {
   ].join('\n');
   fs.writeFileSync(file('use-cases.keel.yaml'), useCases);
   const bump = (name, from, to) => fs.writeFileSync(file(name), fs.readFileSync(file(name), 'utf8').replaceAll(from, to));
-  bump('service.keel.yaml', 'version: 1.1.0', 'version: 1.2.0');
-  // Cambiar createProduct caduca lo aceptado en v1.1.0: una evolución lo reafirma.
-  bump('decisions.yaml', 'since: 1.1.0', 'since: 1.2.0');
+  bump('service.keel.yaml', 'version: 1.2.0', 'version: 1.3.0');
+  // Cambiar createProduct caduca lo aceptado en v1.2.0: una evolución lo reafirma.
+  bump('decisions.yaml', 'since: 1.2.0', 'since: 1.3.0');
+  // Sin getProduct, su regla de acceso nombraría una operación que ya no existe.
+  bump('security.keel.yaml', '    getProduct: { level: required, permissions: [catalog:manage] }\n', '');
 }
 
 test('la primera generación no deja EVOLUTION.md: todo es nuevo y el pipeline ya lo sabe', async () => {
@@ -138,7 +140,7 @@ test('--refresh --prune sobre un diseño evolucionado: el circuito entero', asyn
 
   // El traspaso al pipeline nombra las tres cosas y el delta.
   const evolution = read(workspace, EVOLUTION);
-  assert.match(evolution, /v1\.1\.0 → v1\.2\.0/);
+  assert.match(evolution, /v1\.2\.0 → v1\.3\.0/);
   assert.ok(evolution.includes(CREATE_HANDLER), 'EVOLUTION.md no nombra la fusión pendiente');
   assert.ok(evolution.includes(GET_HANDLER), 'EVOLUTION.md no nombra el huérfano a retirar');
   assert.ok(evolution.includes(COUNT_HANDLER), 'EVOLUTION.md no nombra el stub nuevo');
@@ -210,7 +212,7 @@ test('stack: lo que el diseño empieza a pedir se pregunta (solo eso) y lo que d
 
 const MIGRATIONS = 'src/main/resources/db/migration';
 const BASELINE_V1 = `${MIGRATIONS}/V1__baseline_schema.sql`;
-const STEP_NAME = 'keel_idempotency_record_timer.sql';
+const STEP_NAME = 'keel_idempotency_record_timer_batch_job_batch_item_result.sql';
 const STEP = `${MIGRATIONS}/V3__${STEP_NAME}`;
 
 test('pasos de esquema: sin baseline no hay paso; con ella, build escribe el de la tabla que falta tras los del agente', async () => {
@@ -223,7 +225,7 @@ test('pasos de esquema: sin baseline no hay paso; con ella, build escribe el de 
   fs.writeFileSync(project(workspace, `${MIGRATIONS}/V2__add_product_sku_index.sql`), 'create index ix on products (id);\n');
   await runBuild(workspace, { refresh: true });
   const step = read(workspace, STEP);
-  assert.match(step, /^-- keel:generator-step idempotency_record keel_timer\n/);
+  assert.match(step, /^-- keel:generator-step idempotency_record keel_timer batch_job batch_item_result\n/);
   assert.match(step, /CREATE TABLE IF NOT EXISTS idempotency_record \([\s\S]*PRIMARY KEY \(operation_scope, idempotency_key\)/);
   assert.match(step, /CREATE INDEX IF NOT EXISTS ix_idempotency_record_expires_at ON idempotency_record \(expires_at\)/);
   assert.match(step, /CREATE TABLE IF NOT EXISTS keel_timer \(/);
@@ -241,7 +243,7 @@ test('pasos de esquema: sin baseline no hay paso; con ella, build escribe el de 
 test('pasos de esquema: una baseline que ya crea la tabla no recibe paso, y el paso no se reescribe aunque cambie el SQL', async () => {
   const workspace = withFixture();
   await runBuild(workspace);
-  fs.writeFileSync(project(workspace, BASELINE_V1), 'create table idempotency_record (operation_scope varchar(128));\ncreate table keel_timer (id uuid);\n');
+  fs.writeFileSync(project(workspace, BASELINE_V1), 'create table idempotency_record (operation_scope varchar(128));\ncreate table keel_timer (id uuid);\ncreate table batch_job (id uuid);\ncreate table batch_item_result (job_id uuid);\n');
   await runBuild(workspace, { refresh: true });
   assert.equal(fs.readdirSync(project(workspace, MIGRATIONS)).some((name) => name.includes('__keel_')), false);
 
@@ -262,8 +264,8 @@ test('pasos de esquema: con evolución pendiente, EVOLUTION.md dice qué paso es
   evolveDesign(workspace);
   await runBuild(workspace, { refresh: true, prune: true });
   const md = read(workspace, EVOLUTION);
-  assert.match(md, /## Pasos de esquema de build[\s\S]*V2__keel_idempotency_record_timer\.sql/);
+  assert.match(md, /## Pasos de esquema de build[\s\S]*V2__keel_idempotency_record_timer_batch_job_batch_item_result\.sql/);
   // Un segundo build antes de entrar al proyecto ya no lo ve nuevo, pero lo arrastra.
   await runBuild(workspace, { refresh: true, prune: true });
-  assert.match(read(workspace, EVOLUTION), /V2__keel_idempotency_record_timer\.sql/);
+  assert.match(read(workspace, EVOLUTION), /V2__keel_idempotency_record_timer_batch_job_batch_item_result\.sql/);
 });

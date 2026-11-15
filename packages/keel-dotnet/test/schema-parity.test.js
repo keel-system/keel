@@ -21,11 +21,14 @@ import { springSchema, springCrossAggregateForeignKeys, schemaTable } from '../.
 import { planFixture, FIXTURES_DIR } from './helpers/workspace.js';
 import { dotnetSchema } from './helpers/schema.js';
 import { CHANGE_HISTORY, CHANGE_HISTORY_FIELD } from '@keel-system/keel-core/gen/history-store';
+import { BATCH_ITEM_RESULT, BATCH_JOB } from '@keel-system/keel-core/gen/batch-store';
 
 // Las dos tablas del historial (DSL 2.29) no las lee este cotejo: keel-spring las crea con su migración y no con
 // anotaciones JPA, que es lo que lee springSchema. Su forma la compara test/history-parity.test.js con los datos de
 // keel-core (CHANGE_HISTORY y CHANGE_HISTORY_FIELD), de los que salen las de los cuatro.
-const HISTORY_TABLES = [CHANGE_HISTORY.table, CHANGE_HISTORY_FIELD.table];
+// Las dos de los trabajos de lote (DSL 2.30), igual: keel-spring las crea con su migración, y su forma la comparan
+// test/batch-jobs.test.js y test/batch-keys.test.js con los datos de keel-core (BATCH_JOB y BATCH_ITEM_RESULT).
+const HISTORY_TABLES = [CHANGE_HISTORY.table, CHANGE_HISTORY_FIELD.table, BATCH_JOB.table, BATCH_ITEM_RESULT.table];
 
 const relational = fs.readdirSync(FIXTURES_DIR).filter((name) => {
   const file = path.join(FIXTURES_DIR, name, 'persistence.keel.yaml');

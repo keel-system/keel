@@ -13,9 +13,15 @@ import { planService as planNest } from '../../keel-nest/src/scaffold/index.js';
 import { planService } from '../src/scaffold/index.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
 import { FIXTURES_DIR, planFixture } from './helpers/workspace.js';
+import { withoutBatches } from '../../keel-core/test/helpers/batch-designs.js';
 
+// product-catalog sin security ni lotes: la v1.1.0, sobre la que se escribieron estas pruebas (inc. 11 de PLAN-DSL-230-LOTES.md).
 const plan = (name, auth = 'keycloak') => {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
+  if (name === 'product-catalog') {
+    withoutBatches(layers);
+    delete manifest.layers.security;
+  }
   return planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { auth } });
 };
 const content = (files, suffix) => files.find((file) => file.path.endsWith(suffix))?.content;

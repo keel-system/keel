@@ -13,9 +13,15 @@ import { loadService } from '@keel-system/keel-core';
 import { planService as planNest } from '../../keel-nest/src/scaffold/index.js';
 import { planService } from '../src/scaffold/index.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
+import { withoutBatches } from '../../keel-core/test/helpers/batch-designs.js';
 
+// product-catalog sin la security ni los lotes de su v1.2.0 (inc. 11 de PLAN-DSL-230-LOTES.md): estas pruebas lo usan como el diseño sin seguridad.
 const plan = (name, auth = 'keycloak') => {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
+  if (name === 'product-catalog') {
+    withoutBatches(layers);
+    delete manifest.layers.security;
+  }
   return planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { auth } });
 };
 const content = (files, file) => files.find((candidate) => candidate.path === file)?.content;

@@ -1,2 +1,65 @@
-# La revision semantica de este diseno: que se miro y con que resultado.
-reviewedAt: 1.0.0
+# Revisión semántica de la v1.2.0 (DSL 2.30: los lotes importProducts e importCatalog, la capa security y el orden
+# del listado). Hecha al llevar la fixture a --ready (incremento 11 de PLAN-DSL-230-LOTES.md, 2026-11-15), sobre las
+# capas enteras y no solo sobre lo nuevo: hasta la v1.1.0 era una fixture parcial sin revisión.
+reviewedBy: keel-design-review
+reviewedAt: 1.2.0
+findings:
+  - id: REV-DOMAIN-VAGUE-INVARIANT
+    scope: domain.entities.Product
+    verdict: ok
+    note: >-
+      La única invariante («un producto active siempre tiene price.amount mayor que cero») es verificable con lo
+      que la entidad guarda: un campo, un estado y una comparación. La sostiene la guarda de activateProduct
+      (PRODUCT_PRICE_NOT_POSITIVE), y el precio no cambia después del alta porque ninguna operación lo edita.
+  - id: REV-DOMAIN-INVARIANT-IS-TRANSITION
+    scope: domain.entities.Product
+    verdict: ok
+    note: >-
+      La invariante no describe un paso de estado sino una condición que vale mientras el producto está en
+      active. Las transiciones van en el lifecycle (draft → active | retired, active → retired) y en las
+      operaciones que las disparan.
+  - id: REV-DOMAIN-PROMISED-STATE
+    scope: domain.entities.Product
+    verdict: ok
+    note: >-
+      La prosa promete tres estados de publicación y el enum los tiene; «retira de forma definitiva» lo sostiene
+      retired sin salidas. Lo que prometen los lotes (qué pasó con cada elemento, el estado del trabajo) lo guarda
+      el método en sus tablas, no un campo del producto.
+  - id: REV-USECASES-INTERNAL-REPEAT
+    scope: use-cases.operations
+    verdict: ok
+    note: >-
+      Los tres commands que crean (createProduct, importProducts, importCatalog) declaran idempotency client-key,
+      y sin cabecera la clave natural del sku impide el efecto doble (OBL-IDEM-KEY-REQUIRED, aceptada).
+      activateProduct y retireProduct son transiciones: repetirlas las rechaza el lifecycle con su 409 sin
+      efecto. Registro estructural § 3.2.
+  - id: REV-USECASES-GUARD-ORDER
+    scope: use-cases.operations
+    verdict: ok
+    note: >-
+      activateProduct comprueba existencia, estado y precio en ese orden, y cada paso tiene lo que necesita
+      (FL-PRD-007-E fija que el 409 del estado gana al 422 del precio); retireProduct, existencia y estado. En los
+      lotes la única guarda por elemento es la del sku, y la de forma va antes porque la pone el borde
+      (FL-PRD-008, elemento 2).
+  - id: REV-BATCH-ITEM-ERRORS
+    scope: use-cases.operations
+    verdict: ok
+    note: >-
+      El único rechazo de negocio de un alta, SKU_ALREADY_EXISTS, depende solo del elemento (de su sku), así que
+      está en itemErrors de los dos lotes: un sku repetido no detiene la importación. No hay ningún error que
+      dependa del estado común a todo el lote (un catálogo bloqueado, un proveedor sin contrato). Lo que queda
+      fuera de itemErrors es infraestructura o un defecto, y es correcto que detenga el lote.
+  - id: REV-PERSIST-MISSING-INDEX
+    scope: persistence.entities.Product
+    verdict: ok
+    note: >-
+      getProduct busca por id (la clave primaria) y las altas por sku, que es la naturalKey (índice único);
+      listProducts ordena por sku, que usa el mismo índice. status lleva su índice para los listados por estado
+      que la tienda prevé. Los trabajos y sus resultados los indexa el método (dueño y clave; trabajo e índice).
+  - id: REV-SEC-RESOURCE-SCOPE
+    scope: security.roles
+    verdict: ok
+    note: >-
+      catalog-editor es global a propósito: el catálogo es de toda la tienda, y la prosa no dice en ningún sitio que
+      un usuario solo opere sobre sus productos. Lo único que se acota a quien lo creó es un trabajo de
+      importCatalog, y eso no sale de un rol sino del método (solo lo lee su dueño, FL-PRD-009-D).

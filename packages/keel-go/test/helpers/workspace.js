@@ -14,7 +14,7 @@ import { CONDITIONAL_WRITE_DESIGNS } from '../../../keel-core/test/helpers/condi
 import { READ_SCOPE_DESIGNS } from '../../../keel-core/test/helpers/read-scope-designs.js';
 import { DATA_LIFECYCLE_DESIGNS } from '../../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { HISTORY_DESIGNS } from '../../../keel-core/test/helpers/history-designs.js';
-import { BATCH_DESIGNS, BATCH_JOB_DESIGNS, BATCH_KEY_DESIGNS } from '../../../keel-core/test/helpers/batch-designs.js';
+import { BATCH_DESIGNS, BATCH_JOB_DESIGNS, BATCH_KEY_DESIGNS, withoutBatches } from '../../../keel-core/test/helpers/batch-designs.js';
 
 const here = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.join(here, '..', '..', '..');
@@ -83,6 +83,9 @@ export const AUTHORSHIP_DESIGNS = [
     from: 'product-catalog',
     mutate(manifest, layers) {
       manifest.service.name = 'product-catalog-authorship';
+      // La autoría SIN seguridad (el actor es el sistema): product-catalog sin la security ni los lotes de su v1.2.0.
+      withoutBatches(layers);
+      delete manifest.layers.security;
       layers.persistence.audit = { ...(layers.persistence.audit ?? {}), authorship: 'all' };
     }
   },

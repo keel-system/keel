@@ -49,7 +49,10 @@ test('toda dependencia de un constructor se inyecta con @Inject explícito (sin 
   const injectable = /@(Injectable|Controller|Module|Catch)\(/;
   const offenders = [];
   for (const { path: file, content } of tsFiles.filter((entry) => injectable.test(entry.content))) {
-    for (const [, params] of content.matchAll(/constructor\(([^)]*)\)/g)) {
+    // Clase a clase: un archivo con un servicio puede traer también un valor o un error con su constructor normal (los
+    // lotes, DSL 2.30: BatchJobView y los errores de batch-jobs.ts y keyed-batches.ts).
+    const classes = content.split(/\n(?=(?:@\w+\([^\n]*\)\n)*(?:export )?(?:abstract )?class )/).filter((chunk) => injectable.test(chunk.split(/\bclass /)[0]));
+    for (const [, params] of classes.join('\n').matchAll(/constructor\(([^)]*)\)/g)) {
       for (const param of params.split(',').map((p) => p.trim()).filter(Boolean)) {
         if (!param.startsWith('@Inject(')) offenders.push(`${file}: ${param}`);
       }

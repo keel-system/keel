@@ -6,7 +6,7 @@ import { loadService } from '@keel-system/keel-core';
 import { pendingLayers } from '../../src/lib/supported-features.js';
 import { FIXTURES_DIR } from './workspace.js';
 
-const STATUS = { StatusOK: 200, StatusCreated: 201, StatusAccepted: 202, StatusNoContent: 204 };
+const STATUS = { StatusOK: 200, StatusCreated: 201, StatusAccepted: 202, StatusNoContent: 204, StatusMultiStatus: 207 };
 const ROW = /^\t\{(Operation: .*)\},$/gm;
 
 /** La tabla `routes` emitida, por operación. */

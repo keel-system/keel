@@ -19,6 +19,7 @@ import { planService as planSpring } from '../../keel-spring/src/scaffold/index.
 import { casesOf as springCases } from '../../keel-spring/src/lib/batch-probes.js';
 import { planService as planNest } from '../../keel-nest/src/scaffold/index.js';
 import { batchCases as nestCases } from '../../keel-nest/scripts/lib/batch-probes.js';
+import { withoutBatches } from '../../keel-core/test/helpers/batch-designs.js';
 
 const design = (name) => BATCH_DESIGNS.find((entry) => entry.name === name);
 
@@ -110,6 +111,7 @@ test('el borde solo lee el SOBRE: la lista sin leer, con su presencia y su maxIt
   assert.match(fileOf(files, 'Rest/ApiErrorMiddleware.cs'), /public static ErrorResponse Translate\(HttpContext context, Exception exception\)/);
   assert.match(fileOf(files, 'Rest/ApiErrorMiddleware.cs'), /middleware\.ToResponse\(PersistenceErrors\.Translate\(exception\) \?\? exception\)/);
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'product-catalog'));
+  withoutBatches(layers);
   const plain = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: 'postgresql' } }).files;
   assert.doesNotMatch(fileOf(plain, 'Rest/ApiErrorMiddleware.cs'), /Translate\(HttpContext/);
   assert.ok(!plain.some((file) => file.path.endsWith('Rest/Batch.cs')));

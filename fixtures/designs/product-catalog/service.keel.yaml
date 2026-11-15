@@ -1,7 +1,7 @@
 keel: "2.30"
 service:
   name: product-catalog
-  version: 1.1.0
+  version: 1.2.0
   description: Gestiona el catálogo de productos publicables de la tienda.
   domain: commerce
 layers:
@@ -9,3 +9,4 @@ layers:
   use-cases: use-cases.keel.yaml
   api: api.keel.yaml
   persistence: persistence.keel.yaml
+  security: security.keel.yaml

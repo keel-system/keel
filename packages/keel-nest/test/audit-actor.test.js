@@ -7,10 +7,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { planFixture } from './helpers/emitted.js';
+import { withoutBatches } from '../../keel-core/test/helpers/batch-designs.js';
 
 const withAuthorship = (authorship) =>
   planFixture('product-catalog', {
+    // Sin los lotes de la v1.2.0: el dueño de un trabajo también sale del actor, con autoría o sin ella.
     mutate: (layers) => {
+      withoutBatches(layers);
       layers.persistence.audit = { ...(layers.persistence.audit ?? {}), authorship };
     }
   });

@@ -23,6 +23,7 @@ import { handlerType, operations } from '../src/scaffold/services.js';
 import { sentinelOf } from '../src/scaffold/errors.js';
 import { FIXTURES_DIR, makeWorkspace, mountDesign } from './helpers/workspace.js';
 import { GENERATED_HEADER as GENERATED } from '../src/lib/go-source.js';
+import { withoutBatches } from '../../keel-core/test/helpers/batch-designs.js';
 
 const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
 
@@ -120,7 +121,11 @@ test('sin persistencia no hay repositorios, ni Dependencies, ni pgx', () => {
   assert.ok(file(plan, 'internal/domain/product_repository.go'));
   const workspace = makeWorkspace();
   const spec = mountDesign(workspace, 'product-catalog', { withoutLayers: ['persistence'] });
-  const bare = planService({ ...loadService(spec), workspace });
+  // product-catalog sin la security ni los lotes de su v1.2.0 (inc. 11 de PLAN-DSL-230-LOTES.md): un lote asíncrono exige persistencia.
+  const loaded = loadService(spec);
+  withoutBatches(loaded.layers);
+  delete loaded.manifest.layers.security;
+  const bare = planService({ ...loaded, workspace });
   assert.equal(bare.files.some((candidate) => candidate.path.startsWith('internal/infrastructure/')), false);
   assert.doesNotMatch(file(bare, 'internal/application/use_cases.go'), /Dependencies/);
   assert.doesNotMatch(file(bare, 'go.mod'), /pgx/);

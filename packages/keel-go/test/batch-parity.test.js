@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { loadService } from '@keel-system/keel-core';
 import { BATCH_ABORTED_MESSAGE, BATCH_ITEM_MALFORMED_MESSAGE, batchNote } from '@keel-system/keel-core/gen/batch';
-import { BATCH_DESIGNS } from '../../keel-core/test/helpers/batch-designs.js';
+import { BATCH_DESIGNS, withoutBatches } from '../../keel-core/test/helpers/batch-designs.js';
 import { planService } from '../src/scaffold/index.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
 import { BATCH_SABOTAGE_SPECS, BATCH_SUBJECTS, batchCases, batchProbeFile, batchProbePatch } from '../scripts/lib/batch-probes.js';
@@ -121,6 +121,7 @@ test('el borde solo lee el SOBRE: la lista sin leer, con su presencia y su maxIt
   assert.doesNotMatch(runner.slice(runner.indexOf('type BatchItem struct'), runner.indexOf('type BatchSummary')), /omit/);
   // El resto de proyectos no cambia.
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'product-catalog'));
+  withoutBatches(layers);
   const plain = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: 'postgresql' } }).files;
   assert.ok(!plain.some((file) => file.path === 'internal/httpapi/batch.go'));
   assert.doesNotMatch(fileOf(plain, 'internal/httpapi/reading.go'), /func rawList/);

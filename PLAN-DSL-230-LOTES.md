@@ -1,6 +1,6 @@
 # DSL 2.30: lotes con resultado por elemento (R5)
 
-**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 10 cerrados el 2026-11-14 (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores, con la fase B neutral en keel-core, y el contrato y el método); el 10b (D15, la idempotencia del lote síncrono) se cerró el 2026-11-15 en la parte neutral y en los cuatro generadores. Le sigue el 11. Al cerrar pasa a `completed_plans/`.
+**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 10 cerrados el 2026-11-14 (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores, con la fase B neutral en keel-core, y el contrato y el método); el 10b (D15, la idempotencia del lote síncrono) se cerró el 2026-11-15 en la parte neutral y en los cuatro generadores. Del 11 está hecha la fixture (product-catalog v1.2.0, en `--ready`); faltan sus corridas de control. Al cerrar pasa a `completed_plans/`.
 
 ## Contexto
 
@@ -628,12 +628,56 @@ Cierre del 10b:
 - **Los sujetos con clave se quedan en su propia lista** (`BATCH_KEY_DESIGNS`) en vez de pasar a `BATCH_DESIGNS`: las redes
   de los cuatro recorren las tres listas, y mezclarlas haría que cada `BATCH_SUBJECTS` (BA) tuviera que separarlos otra vez.
 
+Inc. 11, la fixture (2026-11-15):
+
+- **product-catalog pasa a la v1.2.0 y a `--ready` en verde** (13/13, y entra en `READY_FIXTURES`): `importProducts`
+  (sync, `per-item`, `maxItems` 500, con clave: D15) e `importCatalog` (async, `maxItems` 50000, con clave: D13), el tipo
+  `ProductDraft`, `sort: [sku:asc]` en `listProducts`, la persistencia escrita (`optimisticLocking: all`,
+  `timestamps: all`, `authorship: none`, que eran sus defaults) y una **capa security**. Hasta la v1.1.0 era una fixture
+  parcial: la revisión, el análisis de huecos, el careo, el registro estructural y `DESIGN.md` se hicieron enteros.
+  Escenarios nuevos: FL-PRD-008 (lote con tres fallos, repetición, clave reutilizada, sobre, carrera), FL-PRD-009 (el
+  trabajo, repetición, clave reutilizada, otro dueño, id inexistente, carrera) y FL-PRD-010 (401 y 403).
+- **La security lleva un rol** (`catalog-editor` con `catalog:manage`), aunque el diseño no distinga lectores de
+  escritores: sin roles el realm de prueba no siembra usuarios y el arnés ni emite `tokenFor` (`usesUserClient`), así que
+  ninguna corrida habría podido pedir su token. El rol da además el segundo usuario (`catalog-editor-2`) del 404 de otro
+  dueño (FL-PRD-009-D) y el `no-role` del 403.
+- **La fila `batch` de las cuatro matrices conserva `parity.skip`**, con el motivo nuevo: product-catalog no tiene gemelo
+  documental en `PAIRS`, y la paridad por marcadores necesita el par (lo mismo que el historial en la 2.29). Las filas de
+  `capability-coverage` de los lotes sí se borraron.
+- **Los sujetos derivados parten de product-catalog sin los lotes** (`withoutBatches` en `batch-designs.js`: sin las dos
+  operaciones, sin `ProductDraft`, sin security y sin el orden), como `withoutHistory` en la 2.29, para seguir midiendo
+  cada forma por separado.
+- **Un defecto del modelo neutral**: `resolveRoute` avisaba «endpoint POST sin successStatus» en un lote por elemento,
+  cuyo status lo pone el método (207 o 202). `CHK-API-POST-NO-STATUS` ya lo excluía; lo destapó
+  `design-generation-delta.test.js` al tener una fixture con lotes.
+- Las pruebas de evolución de los cuatro (`design-evolution.test.js`) suben la fixture 1.2.0 → 1.3.0 y su paso de esquema
+  crea también `batch_job` y `batch_item_result`.
+  En keel-go la prueba quita y devuelve la idempotencia en el YAML, así que allí el paso solo trae `idempotency_record`:
+  el lote asíncrono ya tenía `keel_timer` y las dos tablas de lotes en la base desplegada.
+- **Lo que destapó la fixture en las redes sin red** (ninguna fixture con lotes había pasado por ellas, solo los sujetos
+  derivados, que miden sus propias redes): el oráculo de rutas de keel-spring (`test/helpers/contract-table.js`) no sabía que
+  un lote con clave delega su 207 en `KeyedBatches` ni que el alta asíncrona responde 202 con `Location` desde `BatchJobs`;
+  el de keel-go no tenía `StatusMultiStatus` y su cotejo de DTOs no leía `*_item_result.go`; la lista de `java.lang` de
+  `java-syntax.test.js` no tenía `IllegalAccessException` (de `BatchRunner`); la prueba de `@Inject` de keel-nest miraba
+  todos los constructores de un archivo con una clase inyectable, también los de los valores y errores de `batch-jobs.ts`;
+  y `list-never-null` de keel-nest exigía `[]` a la lista de un lote, que es el sobre (su ausencia es el 400 de BA-7). La
+  paridad del contrato de keel-dotnet y keel-go compara ahora también las dos rutas del trabajo con keel-spring (salvo el
+  `sort` que el `Pageable` de Spring lee y los resultados no admiten), y los cotejos de esquema apartan `batch_job` y
+  `batch_item_result` como las del historial. Ningún defecto en lo emitido.
+- **Las pruebas que usaban product-catalog como «el diseño sin security»** (o sin persistencia, que el lote asíncrono
+  exige) lo cargan con `withoutBatches`; los `planFixture` de keel-nest, keel-dotnet y el arnés de keel-go lo hacen solos
+  cuando a la fixture le falta api, persistence o security. El derivado `product-catalog-authorship` de keel-go (autoría
+  sin seguridad) también.
+
 ## Para retomar
 
-Inc. 11, desde main: el diseño de contraste `product-catalog` v-siguiente con `importProducts` (`per-item`, sync) e
-`importCatalog` (async), y las corridas de control en los cuatro generadores (PostgreSQL y una con MySQL o MongoDB). Al tener
-una fixture que declare `batch`, se borran las filas de `capability-coverage` de los lotes y la fila `batch` de las matrices
-de paridad deja de llevar `parity.skip`. Merece la pena que una de las corridas declare la clave del lote síncrono (D15).
+Las corridas de control del inc. 11, que lanza el usuario: product-catalog v1.2.0 en los cuatro generadores sobre
+PostgreSQL y una más sobre MySQL o MongoDB (`keel-<tech> build specs/product-catalog`, `cd services/product-catalog-<tech>`,
+`/keel-generate-<tech>`). Qué mirar en ellas: si el agente sondea el trabajo con la convención o necesita un helper del arnés
+(como `ageDeletion` en la 2.28), si los escenarios de carrera (FL-PRD-008-E, FL-PRD-009-F) salen en verde sin forzar nada, si
+el 409 de la clave en curso aparece en la carrera del asíncrono (el contrato solo promete el mismo 202) y si algún agente
+manda el JSON reformateado en una repetición (la firma es de los bytes). Se registran en `docs/corridas/` con la huella de
+`corrida-metrics.js`; con las cinco en verde el plan pasa a `completed_plans/`.
 
 ## Verificación
 

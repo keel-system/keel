@@ -1,9 +1,9 @@
 // Los diseños DERIVADOS con los que se miden los lotes (DSL 2.30: `use-cases.<op>.batch`) en los cuatro generadores, el
 // mismo patrón que history-designs.js.
 //
-// Hasta el incremento 11 de PLAN-DSL-230-LOTES.md ninguna fixture los declara. Entonces product-catalog gana
-// `importProducts` e `importCatalog`, y estos sujetos siguen midiendo lo que ella no tenga: la rama documental y el lote
-// all-or-nothing.
+// Desde el incremento 11 de PLAN-DSL-230-LOTES.md product-catalog (v1.2.0) declara `importProducts` (sync, con clave) e
+// `importCatalog` (async), con una capa security. Estos sujetos parten de product-catalog SIN ellos (`withoutBatches`)
+// y siguen midiendo cada forma por separado: por elemento sin security, la rama documental y el lote all-or-nothing.
 
 /** Lo que hace falta para dar de alta un producto: el elemento del lote. */
 const PRODUCT_DRAFT = {
@@ -15,8 +15,24 @@ const PRODUCT_DRAFT = {
   }
 };
 
+/**
+ * Devuelve product-catalog a su forma de la v1.1.0, la de antes de los lotes: sin los dos lotes, sin `ProductDraft`, sin la
+ * capa security que entró con el trabajo asíncrono y sin el orden del listado. Los sujetos de abajo se midieron así, y lo
+ * que cada uno añade (la security del asíncrono, la clave) lo añade él.
+ */
+export function withoutBatches(layers) {
+  delete layers['use-cases'].operations.importProducts;
+  delete layers['use-cases'].operations.importCatalog;
+  delete layers['use-cases'].operations.listProducts.output.sort;
+  delete layers.domain.types.ProductDraft;
+  if (layers.api?.endpoints) delete layers.api.endpoints.importProducts;
+  if (layers.api?.endpoints) delete layers.api.endpoints.importCatalog;
+  delete layers.security;
+}
+
 /** product-catalog con `importProducts`, un lote de altas, sobre el modelo de persistencia `model`. */
 function catalogBatch(layers, model, atomicity) {
+  withoutBatches(layers);
   layers.persistence.default = { ...layers.persistence.default, model };
   layers.domain.types.ProductDraft = structuredClone(PRODUCT_DRAFT);
   layers['use-cases'].operations.importProducts = {

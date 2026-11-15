@@ -10,6 +10,12 @@ endpoints:
     method: POST
     path: /products/{id}/retire
     successStatus: 204
+  importProducts:
+    method: POST
+    path: /products/batch
+  importCatalog:
+    method: POST
+    path: /products/imports
 pagination:
   style: offset
   defaultSize: 20

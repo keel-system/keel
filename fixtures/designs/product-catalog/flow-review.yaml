@@ -1,0 +1,100 @@
+# Careo de flujos (flow-walkthrough.md) de la v1.2.0, pasada 1, completa. Hecho a mano al llevar la fixture a --ready
+# (incremento 11 de PLAN-DSL-230-LOTES.md, 2026-11-15), recorriendo cada flujo paso a paso contra el manifiesto, las
+# cinco capas y las convenciones, como lo hace keel-flow-review; las decisiones (resolution) son del diseñador. Lo que
+# el recorrido destapó antes de sellar ya está corregido en el documento: sin un rol, el realm de prueba no siembra
+# usuarios y ningún escenario podía pedir su token (security gana catalog-editor y FL-PRD-010-B); y la repetición de
+# un lote se reconoce por los bytes del cuerpo (convención «Repetir una petición»).
+reviewedAt: 1.2.0
+passes: 1
+scenariosSha256: 6418e191eacb0a7fdf797b1d513ce59ae8f0bdedcca6b483e90a0488075148af
+conventionsSha256: 5c57a3971e6b47c37ed23fc70549eddad241a52bef8772d420c4d917c82a26a4
+flows:
+  - { id: FL-PRD-001, sha256: fbe0d7e726a28244a6aa7f3aaa335c0ecdd6e4ff13b2c6e96ba196d02238a81a }
+  - { id: FL-PRD-001-B, sha256: 5aec8bdf6855e0799965617f52ac60e8901c5512613846b08f83e2c0f22fc14a }
+  - { id: FL-PRD-001-C, sha256: a8ce5513e206ccfdc54abc98f7fc3b9b69b597cc0251abcf12616db57a965d58 }
+  - { id: FL-PRD-001-D, sha256: fbe0156ddadc14d578fc24ad081c113dff3abead0e34e9b223a5b7d8ee968956 }
+  - { id: FL-PRD-001-E, sha256: bae5e5846d6ba04a66d6e60f941c94330c9c7a6a2e80e79f6cd458e7702270e9 }
+  - { id: FL-PRD-002, sha256: 79a1669bbeae0dca7e772ca9e4ece37578663e487dac4e74d67120186aeeb7c8 }
+  - { id: FL-PRD-002-B, sha256: 5b9313be347f489bfb2fce139d0a1c8bebb228b84ef8350a7bde495f5f448477 }
+  - { id: FL-PRD-002-C, sha256: 5ba2e84709839814d879799ff9dae4e4f7718507482f3ae6e6e1ebbc8427b0b7 }
+  - { id: FL-PRD-003, sha256: 1ea5b5d72fbd16f5dcd16a22259f42e2bbb1f55ea743ec081626aa95f29fbfd0 }
+  - { id: FL-PRD-004, sha256: e5f5aae19fa180c4c8c3ba3a37f46de92637007c464943a098c9f1303c9c6111 }
+  - { id: FL-PRD-004-B, sha256: fa21cc1d0b24c846afbcd86aac9b0deca38d1f160ab4c48dbc79cf86fb856955 }
+  - { id: FL-PRD-005, sha256: 0f0ae36a81a5ee784400f6782bec4320aabc32602f23ebc724e30afbd13678f7 }
+  - { id: FL-PRD-005-B, sha256: 00c710212176be9cb4355192d64d44d025619db59a6135b4d7c4902ffeec09db }
+  - { id: FL-PRD-005-C, sha256: a606a0113d6de7e5ba02e7faa6dcd74cd3618a10f2bfeb291792f90023893506 }
+  - { id: FL-PRD-006, sha256: c836d556f12ecd4b10427992286fd5040cd3fce1e3865e993f8ff03d4830da41 }
+  - { id: FL-PRD-006-B, sha256: 2b8d4f0a5dad0797e1935da1a8433b6426d11ac96e222d045c768cf359b62869 }
+  - { id: FL-PRD-006-C, sha256: df9b1c152f7c164d32cb7444aed0035149be8b9a7523a9dcd0b71ac156428206 }
+  - { id: FL-PRD-007, sha256: 704ee151a7a28cf5f8bb3127f51842b1f04208ffddaff6156f32969e460f6406 }
+  - { id: FL-PRD-007-B, sha256: e15840c94a78592e538625091cf6b46921938a7c05711ee4fb90dfbfa2e624ec }
+  - { id: FL-PRD-007-C, sha256: 9dfb2e031b5c26b34f796d16729d1255e90415782fe942730359819c8f963612 }
+  - { id: FL-PRD-007-D, sha256: 2f15a0df53efca4754e8148c40c84d50ae75a9b9540f18bc403b2755f0808263 }
+  - { id: FL-PRD-007-E, sha256: 1a576999f1e81a268f3ce092d40cca548db8554ad2e4d2128341af829a19062d }
+  - { id: FL-PRD-007-F, sha256: 184e3adde6fe5c69f32bc607715f9d079b465cbf5f5404fae3c2de8851011ffb }
+  - { id: FL-PRD-008, sha256: 891d25c555c287a4ad45f0c5a0172703aa646bab98a14494a24c4852bfbf8070 }
+  - { id: FL-PRD-008-B, sha256: c61100c8527c25ed633c0ddc7dfb429f806691692fdc111aa1ee8035e537c995 }
+  - { id: FL-PRD-008-C, sha256: 6cb5715fb5e58007a0a810616da0871285202fed56fead353f53eaa52d0a6044 }
+  - { id: FL-PRD-008-D, sha256: 197b993a4208da6ee28d3161d9a3d9614cd0c77b800fa619b49bfed748bebd4b }
+  - { id: FL-PRD-008-E, sha256: 754f54d340c96c3c852c8c81bcfefa3d4bb2e1b970a94fe260cd406582727126 }
+  - { id: FL-PRD-009, sha256: 6ebb62cb1e1b6acb2ed1fca16449dc9385073cbf71c81c96136936cf74dc779e }
+  - { id: FL-PRD-009-B, sha256: 7e83d91d5fe3d3e37ce9bb83f898f697a627626278222367e90549c37ed6136c }
+  - { id: FL-PRD-009-C, sha256: 8c66c6bdfd8f71537578e456b6ba7c2e700501c926d4f2291926f9987800c03a }
+  - { id: FL-PRD-009-D, sha256: a8eae9928c541c8812d2908cfda8ed398e4896b80d88234af6dec6766586cea4 }
+  - { id: FL-PRD-009-E, sha256: 15ee7b79108ab151239d63957ed05b107d79f894c3fbaacdd09043c719aad708 }
+  - { id: FL-PRD-009-F, sha256: 14ea9a1945d54147cb07e74ef8d494bf707ec4c6cb075423651eb2622bd3a6c1 }
+  - { id: FL-PRD-010, sha256: c4630480546656d1aab2cadfd55aa328f990cea549aa3a31139216f1f47c61c1 }
+  - { id: FL-PRD-010-B, sha256: 4a93691487ab34f73b4bfbf5d762a3b349e4d0318deb820c305387912d0b2a87 }
+findings:
+  - flow: FL-PRD-008-E
+    step: "When"
+    kind: unobservable
+    artifact: use-cases.operations.importProducts.idempotency
+    evidence: >-
+      Que las dos peticiones caigan en la misma ventana no se puede forzar desde fuera: si la primera termina antes de
+      que llegue la segunda, la segunda es una repetición secuencial y recibe el mismo 207, que el Then también admite.
+      En ese caso el escenario pasa sin haber ejercido el 409 de la clave en curso.
+    proposal: >-
+      Aceptarlo, como FL-PRD-003: la disyunción es cerrada y el conteo por la API (un solo RAC-0001 y un solo
+      RAC-0002) es lo que falla si nada arbitra la ventana. El 409 en curso lo mide la red de cada generador (BK-3).
+    resolution: accepted
+    reason: "Aceptado: el conteo discrimina, y el caso que el escenario no puede forzar está medido en BK-3 en los cuatro."
+  - flow: FL-PRD-009-F
+    step: "When"
+    kind: unobservable
+    artifact: use-cases.operations.importCatalog.idempotency
+    evidence: >-
+      Lo mismo en el trabajo: una segunda petición que llega tarde encuentra el trabajo creado y recibe el mismo 202. El
+      Then admite el 409 de la clave en curso para la que cae en la ventana del alta, que el contrato no fija
+      (wire-contract.md § Lotes asíncronos solo dice que la repetición responde el mismo 202).
+    proposal: >-
+      Aceptarlo: lo que el escenario afirma sin disyunción es que hay un solo trabajo (la misma Location si las dos son
+      202) y un solo RAC-0003.
+    resolution: accepted
+    reason: "Aceptado: un solo trabajo y un solo producto es lo que importa al cliente, gane quien gane la ventana."
+  - flow: FL-PRD-009-D
+    step: "When"
+    kind: unreachable-given
+    artifact: security.roles
+    evidence: >-
+      El When usa el token de «otro usuario con el rol catalog-editor». El diseño declara un rol y ninguna identidad de
+      negocio concreta; que haya dos usuarios distintos con el mismo rol es una convención del proveedor de prueba, no
+      del diseño.
+    proposal: >-
+      Aceptarlo apoyándose en el realm de prueba de los cuatro generadores, que siembra dos usuarios por rol
+      (catalog-editor y catalog-editor-2) y uno sin ninguno (no-role, el de FL-PRD-010-B).
+    resolution: accepted
+    reason: "Aceptado: es exactamente para lo que el realm siembra el segundo usuario de cada rol (secondUserOf de gen/identity-realm.js)."
+  - flow: FL-PRD-009
+    step: "Then 2"
+    kind: other
+    artifact: use-cases.operations.importCatalog.batch
+    evidence: >-
+      El trabajo lo procesa el cronómetro del servicio cuando vence su temporizador, no la petición, así que el Then
+      depende de cuánto tarda el sondeador en recogerlo; el diseño no fija ese tiempo (es del generador:
+      timer.max-sleep-ms y batch.chunk-size).
+    proposal: >-
+      Acotar la espera en el documento y no en el diseño: la convención «Trabajos asíncronos» sondea cada medio
+      segundo durante como mucho 60 segundos, el doble del sueño máximo del sondeador por defecto.
+    resolution: accepted
+    reason: "Aceptado: la convención ya lo fija; si una corrida necesita más de 60 s para tres elementos, es un hueco del generador."

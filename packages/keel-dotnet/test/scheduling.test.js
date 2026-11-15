@@ -25,6 +25,7 @@ import { scheduledServices, schedulerPath } from '../src/scaffold/scheduling.js'
 import { scheduleTimerClass } from '../src/scaffold/timer.js';
 import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { FIXTURES_DIR } from './helpers/workspace.js';
+import { withoutBatches } from '../../keel-core/test/helpers/batch-designs.js';
 
 const STACK = { database: 'postgresql', broker: 'rabbitmq' };
 const SCHEDULED = ['payout-runs', 'job-dispatch', 'job-dispatch-cycles', 'metering-digest'];
@@ -238,6 +239,7 @@ test('el reloj va el último en Program.cs, trae Cronos y espera a la pasada en 
 
 test('sin nada que corra por reloj no se genera el reloj', () => {
   const { manifest, layers } = design('product-catalog');
+  withoutBatches(layers); // un lote asíncrono exige persistencia
   delete manifest.layers.persistence;
   delete layers.persistence;
   const { model, files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: null });

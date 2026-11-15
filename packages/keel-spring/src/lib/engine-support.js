@@ -902,7 +902,7 @@ const SPRING_MECHANISMS = {
     emitter: 'src/scaffold/batch.js · src/scaffold/batch-jobs.js · src/scaffold/timer.js · src/scaffold/controllers.js',
     why: 'Un lote en una sola transacción, un elemento mal formado que tumba el lote entero, un fallo no declarado que no lo detiene, un 200 en vez del 207, un todo o nada sin transacción, un chunk que vuelve sobre lo confirmado, un cursor fuera de la transacción del elemento y unas rutas del trabajo que no miran el dueño compilan igual de bien y no rompen ningún escenario feliz.',
     parity: {
-      skip: 'ninguna fixture declara lotes hasta el incremento 11 de PLAN-DSL-230-LOTES.md: los sujetos son los diseños derivados de keel-core/test/helpers/batch-designs.js (catalog-batch y catalog-batch-mongo, el mismo diseño salvo el modelo; catalog-batch-atomic; catalog-batch-async y catalog-batch-async-mongo), que miden también keel-nest, keel-dotnet y keel-go; la forma la fija test/batch.test.js',
+      skip: 'product-catalog declara los dos modos desde el incremento 11 de PLAN-DSL-230-LOTES.md, pero solo en relacional y sin gemelo documental en PAIRS, así que la paridad por marcadores no tiene par que comparar: los sujetos que miden las dos ramas son los diseños derivados de keel-core/test/helpers/batch-designs.js (catalog-batch y catalog-batch-mongo, el mismo diseño salvo el modelo; catalog-batch-atomic; catalog-batch-async y catalog-batch-async-mongo), que miden también keel-nest, keel-dotnet y keel-go; la forma la fija test/batch.test.js',
       test: 'test/batch.test.js'
     },
     coverage: {

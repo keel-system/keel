@@ -67,7 +67,8 @@ for (const [name, stack] of SUBJECTS) {
     }
     assert.deepEqual(Object.keys(compose.services).sort(), Object.keys(springCompose.services).sort());
     for (const file of Object.keys(spring).filter((candidate) => /^deploy\/(otel|keycloak)\//.test(candidate) && !candidate.endsWith('.gitkeep'))) {
-      assert.equal(byPath[file]?.replaceAll('keel-go', 'keel-spring'), spring[file], file);
+      // El cliente de pruebas del realm lleva el nombre del proyecto (`<servicio>-go-test`), con roles en el diseño.
+      assert.equal(byPath[file]?.replaceAll('keel-go', 'keel-spring').replaceAll('-go-test"', '-spring-test"'), spring[file], file);
     }
   });
 }

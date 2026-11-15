@@ -14,6 +14,7 @@ import { makeWorkspace, mountDesign, runCommand } from './helpers/workspace.js';
 import { schemaStepSql } from '@keel-system/keel-core/gen/schema-steps';
 import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
 import { KEEL_TIMER } from '@keel-system/keel-core/gen/timer-store';
+import { BATCH_ITEM_RESULT, BATCH_JOB } from '@keel-system/keel-core/gen/batch-store';
 
 const SPEC = 'product-catalog';
 const rel = (...parts) => ['src', 'application', ...parts].join('/');
@@ -73,9 +74,11 @@ function evolveDesign(workspace) {
   ].join('\n');
   fs.writeFileSync(file('use-cases.keel.yaml'), useCases);
   const bump = (name, from, to) => fs.writeFileSync(file(name), fs.readFileSync(file(name), 'utf8').replaceAll(from, to));
-  bump('service.keel.yaml', 'version: 1.1.0', 'version: 1.2.0');
-  // Cambiar createProduct caduca lo aceptado en v1.1.0: una evolución lo reafirma.
-  bump('decisions.yaml', 'since: 1.1.0', 'since: 1.2.0');
+  bump('service.keel.yaml', 'version: 1.2.0', 'version: 1.3.0');
+  // Cambiar createProduct caduca lo aceptado en v1.2.0: una evolución lo reafirma.
+  bump('decisions.yaml', 'since: 1.2.0', 'since: 1.3.0');
+  // Sin getProduct, su regla de acceso nombraría una operación que ya no existe.
+  bump('security.keel.yaml', '    getProduct: { level: required, permissions: [catalog:manage] }\n', '');
 }
 
 test('la primera generación no deja EVOLUTION.md: todo es nuevo y el pipeline ya lo sabe', async () => {
@@ -118,7 +121,7 @@ test('--refresh --prune sobre un diseño evolucionado: el circuito entero', asyn
 
   // El traspaso al pipeline nombra las tres cosas, el delta y su plataforma.
   const evolution = read(workspace, EVOLUTION);
-  assert.match(evolution, /v1\.1\.0 → v1\.2\.0/);
+  assert.match(evolution, /v1\.2\.0 → v1\.3\.0/);
   assert.ok(evolution.includes(CREATE_HANDLER), 'EVOLUTION.md no nombra la fusión pendiente');
   assert.ok(evolution.includes(GET_HANDLER), 'EVOLUTION.md no nombra el huérfano a retirar');
   assert.ok(evolution.includes(COUNT_HANDLER), 'EVOLUTION.md no nombra el stub nuevo');
@@ -221,14 +224,14 @@ test('paridad con keel-spring: el mismo cambio del diseño, el mismo delta y las
 // ─── Los pasos de esquema de build (inc. 2b del plan 2.26) ───────────────────────────────────
 //
 // Una tabla del generador que una base ya desplegada no tiene llega como una migración de TypeORM que escribe build
-// (keel-core/gen/schema-steps.js). `product-catalog` emite `idempotency_record` y, desde el inc. 7 del plan 2.26, `keel_timer`
+// (keel-core/gen/schema-steps.js). `product-catalog` emite `idempotency_record`, desde el inc. 7 del plan 2.26 `keel_timer` y desde la v1.2.0 (DSL 2.30) `batch_job` y `batch_item_result`
 // (la purga del registro corre en el cronómetro); la baseline «desplegada» de la prueba no crea ninguna, como la de un proyecto completado antes de que el diseño ganara la idempotencia. La baseline imita la que
 // exporta schema-baseline.ts: el SQL en `JSON.stringify`, con las comillas de PostgreSQL escapadas.
 
 const MIGRATIONS = 'src/migrations';
 const BASELINE = `${MIGRATIONS}/1000000000000-baseline-schema.ts`;
 const AGENT_STEP = `${MIGRATIONS}/1790000000000-add-product-sku-index.ts`;
-const STEP = `${MIGRATIONS}/1790000000001-keel-idempotency-record-timer.ts`;
+const STEP = `${MIGRATIONS}/1790000000001-keel-idempotency-record-timer-batch-job-batch-item-result.ts`;
 
 const migrationClass = (className, statements) =>
   `import type { MigrationInterface, QueryRunner } from 'typeorm';\n\nexport class ${className} implements MigrationInterface {\n` +
@@ -249,8 +252,8 @@ test('pasos de esquema: sin baseline no hay paso; con ella, build escribe el de 
   fs.writeFileSync(project(workspace, AGENT_STEP), migrationClass('AddProductSkuIndex1790000000000', ['CREATE INDEX "ix" ON "products" ("id")']));
   await runBuild(workspace, { refresh: true });
   const step = read(workspace, STEP);
-  assert.match(step, /^\/\/ keel:generator-step idempotency_record keel_timer\n/);
-  assert.match(step, /export class KeelIdempotencyRecordTimer1790000000001 implements MigrationInterface \{\n {2}name = 'KeelIdempotencyRecordTimer1790000000001';/);
+  assert.match(step, /^\/\/ keel:generator-step idempotency_record keel_timer batch_job batch_item_result\n/);
+  assert.match(step, /export class KeelIdempotencyRecordTimerBatchJobBatchItemResult1790000000001 implements MigrationInterface \{\n {2}name = 'KeelIdempotencyRecordTimerBatchJobBatchItemResult1790000000001';/);
   assert.match(step, /CREATE TABLE IF NOT EXISTS idempotency_record \([\s\S]*PRIMARY KEY \(operation_scope, idempotency_key\)/);
   assert.match(step, /CREATE INDEX IF NOT EXISTS ix_idempotency_record_expires_at ON idempotency_record \(expires_at\)/);
   assert.match(step, /CREATE TABLE IF NOT EXISTS keel_timer \(/);
@@ -260,7 +263,7 @@ test('pasos de esquema: sin baseline no hay paso; con ella, build escribe el de 
   // con otra marca; lo vuelve a emitir tal cual, así que no queda huérfano.
   assert.equal(exists(workspace, EVOLUTION), false);
   await runBuild(workspace, { refresh: true });
-  assert.deepEqual(stepFiles(workspace), ['1790000000001-keel-idempotency-record-timer.ts']);
+  assert.deepEqual(stepFiles(workspace), ['1790000000001-keel-idempotency-record-timer-batch-job-batch-item-result.ts']);
   assert.equal(read(workspace, STEP), step);
   assert.equal(await runBuild(workspace, { check: true }), undefined, '--check en verde: el paso está al día');
 });
@@ -269,19 +272,19 @@ test('pasos de esquema: una baseline que ya crea la tabla no recibe paso, y el p
   const workspace = withFixture();
   await runBuild(workspace);
   // El escape de JSON.stringify de la baseline exportada (`\"idempotency_record\"`) no la esconde.
-  fs.writeFileSync(project(workspace, BASELINE), baselineCreating('idempotency_record', 'keel_timer'));
+  fs.writeFileSync(project(workspace, BASELINE), baselineCreating('idempotency_record', 'keel_timer', 'batch_job', 'batch_item_result'));
   await runBuild(workspace, { refresh: true });
   assert.deepEqual(stepFiles(workspace), []);
 
   // Un paso que ya se aplicó no cambia nunca: TypeORM no lo vuelve a leer.
   fs.writeFileSync(project(workspace, BASELINE), baselineCreating('products'));
   await runBuild(workspace, { refresh: true });
-  const first = `${MIGRATIONS}/1000000000001-keel-idempotency-record-timer.ts`;
+  const first = `${MIGRATIONS}/1000000000001-keel-idempotency-record-timer-batch-job-batch-item-result.ts`;
   const applied = `${read(workspace, first)}// aplicado con otro generador\n`;
   fs.writeFileSync(project(workspace, first), applied);
   await runBuild(workspace, { refresh: true });
   assert.equal(read(workspace, first), applied);
-  assert.deepEqual(stepFiles(workspace), ['1000000000001-keel-idempotency-record-timer.ts']);
+  assert.deepEqual(stepFiles(workspace), ['1000000000001-keel-idempotency-record-timer-batch-job-batch-item-result.ts']);
 });
 
 test('pasos de esquema: con evolución pendiente, EVOLUTION.md dice qué paso escribió build', async () => {
@@ -292,10 +295,10 @@ test('pasos de esquema: con evolución pendiente, EVOLUTION.md dice qué paso es
   evolveDesign(workspace);
   await runBuild(workspace, { refresh: true, prune: true });
   const md = read(workspace, EVOLUTION);
-  assert.match(md, /## Pasos de esquema de build[\s\S]*1000000000001-keel-idempotency-record-timer\.ts/);
+  assert.match(md, /## Pasos de esquema de build[\s\S]*1000000000001-keel-idempotency-record-timer-batch-job-batch-item-result\.ts/);
   // Un segundo build antes de entrar al proyecto ya no lo ve nuevo, pero lo arrastra.
   await runBuild(workspace, { refresh: true, prune: true });
-  assert.match(read(workspace, EVOLUTION), /1000000000001-keel-idempotency-record-timer\.ts/);
+  assert.match(read(workspace, EVOLUTION), /1000000000001-keel-idempotency-record-timer-batch-job-batch-item-result\.ts/);
 });
 
 // La promesa del 2b: la misma base desplegada recibe las MISMAS tablas con el MISMO SQL de los dos generadores. El de
@@ -309,12 +312,12 @@ test('pasos de esquema, paridad con keel-spring: las mismas tablas y el mismo SQ
   await runBuild(workspace, { refresh: true });
   await runBuild(workspace, { refresh: true }, buildSpring);
 
-  const nest = read(workspace, `${MIGRATIONS}/1000000000001-keel-idempotency-record-timer.ts`);
-  const spring = read(workspace, 'src/main/resources/db/migration/V2__keel_idempotency_record_timer.sql', 'spring');
+  const nest = read(workspace, `${MIGRATIONS}/1000000000001-keel-idempotency-record-timer-batch-job-batch-item-result.ts`);
+  const spring = read(workspace, 'src/main/resources/db/migration/V2__keel_idempotency_record_timer_batch_job_batch_item_result.sql', 'spring');
   const mark = (content) => content.split('\n')[0].replace(/^(\/\/|--) /, '');
   assert.equal(mark(nest), mark(spring), 'la cabecera nombra las mismas tablas');
   const nestStatements = [...nest.split('const STATEMENTS')[1].split('\n];')[0].matchAll(/`([^`]*)`/g)].map((match) => match[1]);
   const springSql = spring.split('\n').filter((line) => !line.startsWith('-- ')).join('\n').replace(/^\n/, '');
   assert.equal(`${nestStatements.join('\n\n')}\n`, springSql);
-  assert.equal(springSql, schemaStepSql('postgresql', [IDEMPOTENCY_RECORD, KEEL_TIMER]));
+  assert.equal(springSql, schemaStepSql('postgresql', [IDEMPOTENCY_RECORD, KEEL_TIMER, BATCH_JOB, BATCH_ITEM_RESULT]));
 });

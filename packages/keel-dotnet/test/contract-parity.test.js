@@ -43,7 +43,16 @@ for (const name of fixtureNames()) {
       return;
     }
     const served = routed.filter(servedOperation);
-    assert.deepEqual([...table.keys()], served.map((op) => op.name), 'una fila por operación servida, en el orden del diseño');
+    // Un lote asíncrono (DSL 2.30) sirve además las dos rutas de su trabajo, detrás de la operación.
+    const jobRoutes = (op) => (op.batch?.execution === 'async' ? [`${op.name}Job`, `${op.name}JobResults`] : []);
+    assert.deepEqual([...table.keys()], served.flatMap((op) => [op.name, ...jobRoutes(op)]), 'una fila por operación servida, en el orden del diseño');
+    for (const route of served.flatMap(jobRoutes)) {
+      const { handler, ...actual } = table.get(route);
+      // El Pageable de keel-spring lee también `sort`, que los resultados de un trabajo no admiten: van en orden de índice.
+      const expected = { ...springTable.get(route), query: springTable.get(route).query.filter((name) => name !== 'sort') };
+      delete expected.multipart;
+      assert.deepEqual(actual, expected, route);
+    }
     // Cada fila apunta a un endpoint que existe, en el archivo de su grupo.
     for (const [operation, row] of table) {
       const file = dotnet.files.find((f) => f.path.endsWith(`/Endpoints/${row.handler.className}.cs`));

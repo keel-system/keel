@@ -224,15 +224,12 @@ test('build estampa si el diseño estaba listo, por id y sin timestamps', async 
   await runBuild(workspace);
 
   const { design } = readManifest(workspace);
-  assert.equal(design.ready, false, 'la fixture no tiene careo ni DESIGN.md: no está lista');
+  // product-catalog está lista desde la v1.2.0 (inc. 11 de PLAN-DSL-230-LOTES.md), pero aquí solo se copia specs/:
+  // sin docs/<servicio>/DESIGN.md le falta ese criterio, y el estampado lo dice por id.
+  assert.equal(design.ready, false, 'el workspace no trae DESIGN.md: no está lista');
   assert.equal(design.acceptedUnready, true, 'solo se generó porque se pidió a sabiendas, y tiene que constar');
   assert.ok(design.version, 'la versión del diseño que se generó');
-  assert.ok(design.missing.includes('flow-review'));
-  assert.ok(design.missing.includes('design-doc'));
-  // product-catalog lista sin `sort` y tiene api sin security: dos decisiones que el
-  // generador tomaría por su cuenta, y el estampado lo dice.
-  assert.ok(design.missing.includes('undecided'));
-  assert.deepEqual(design.missing, [...design.missing].sort(), 'ordenados: dos builds, mismo archivo');
+  assert.deepEqual(design.missing, ['design-doc']);
 
   // Determinista: un segundo build sobre el mismo diseño deja el manifiesto byte a byte igual.
   const antes = fs.readFileSync(manifestPath(workspace), 'utf8');

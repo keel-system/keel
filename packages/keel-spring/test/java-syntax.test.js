@@ -35,7 +35,7 @@ const IMPLICIT = new Set([
   'UnsupportedOperationException', 'NullPointerException', 'ClassCastException',
   'NumberFormatException', 'InterruptedException', 'ArithmeticException', 'SecurityException',
   'IndexOutOfBoundsException', 'ArrayIndexOutOfBoundsException', 'ClassNotFoundException',
-  'CloneNotSupportedException', 'ReflectiveOperationException', 'NoSuchMethodException',
+  'CloneNotSupportedException', 'ReflectiveOperationException', 'NoSuchMethodException', 'IllegalAccessException',
   'Override', 'Deprecated', 'SuppressWarnings', 'FunctionalInterface', 'SafeVarargs'
 ]);
 

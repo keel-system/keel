@@ -3611,7 +3611,9 @@ export function resolveRoute(opName, op, api, targetEntity, warnings) {
 
   const explicit = api.endpoints?.[opName];
   if (explicit) {
-    if (explicit.method === 'POST' && explicit.successStatus == null) {
+    // Un lote por elemento (también el asíncrono) responde el status del método, 207 o 202 (batchSuccessStatus), no
+    // el de este endpoint: lo mismo que calla CHK-API-POST-NO-STATUS.
+    if (explicit.method === 'POST' && explicit.successStatus == null && op.batch?.atomicity !== 'per-item') {
       warnings.push(
         `Operación '${opName}': endpoint POST sin successStatus; se asume ${defaultStatus('POST', opName)}. Decláralo en api.keel.yaml si el contrato es otro.`
       );

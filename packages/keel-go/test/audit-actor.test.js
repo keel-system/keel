@@ -13,6 +13,7 @@ import { SYSTEM_ACTOR } from '@keel-system/keel-core/gen/relational';
 import { planService } from '../src/scaffold/index.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
 import { AUTHORSHIP_DESIGNS, FIXTURES_DIR, makeWorkspace } from './helpers/workspace.js';
+import { withoutBatches } from '../../keel-core/test/helpers/batch-designs.js';
 
 const workspace = makeWorkspace();
 
@@ -20,6 +21,11 @@ function plan(name, stack = null) {
   const design = AUTHORSHIP_DESIGNS.find((candidate) => candidate.name === name);
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, design?.from ?? name));
   design?.mutate(manifest, layers);
+  // product-catalog sin la security ni los lotes de su v1.2.0 (inc. 11 de PLAN-DSL-230-LOTES.md): el dueño de un trabajo también sale del actor.
+  if (name === 'product-catalog') {
+    withoutBatches(layers);
+    delete manifest.layers.security;
+  }
   return planService({ manifest, layers, workspace, ...(stack ? { stack } : {}) }).files;
 }
 

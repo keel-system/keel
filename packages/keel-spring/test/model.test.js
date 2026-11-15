@@ -6,6 +6,7 @@ import { loadService } from '@keel-system/keel-core';
 import { accessAuthority, buildModel, sharedExceptionFor } from '../src/lib/model.js';
 import { generate as generateServices } from '../src/scaffold/services.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
+import { withoutBatches } from '../../keel-core/test/helpers/batch-designs.js';
 
 test('accessAuthority: scopes como authorities SCOPE_ y mezclas', () => {
   assert.equal(accessAuthority({ level: 'service', scopes: ['product:read'] }), 'hasAnyAuthority("SCOPE_product:read")');
@@ -21,8 +22,16 @@ test('accessAuthority: scopes como authorities SCOPE_ y mezclas', () => {
 
 const fixtureDir = path.join(FIXTURES_DIR, 'product-catalog');
 
+/** product-catalog sin security ni lotes, la forma sobre la que se escribieron estas pruebas (ver scaffold.test.js). */
+function loadV110() {
+  const loaded = loadService(fixtureDir);
+  withoutBatches(loaded.layers);
+  delete loaded.manifest.layers.security;
+  return loaded;
+}
+
 function loadModel() {
-  const { manifest, layers, errors } = loadService(fixtureDir);
+  const { manifest, layers, errors } = loadV110();
   assert.deepEqual(errors, []);
   return buildModel({ manifest, layers });
 }
@@ -157,7 +166,7 @@ test('ruta base versionada y controller V1 por grupo', () => {
 // Carga el fixture y le aplica un parche de capas (+ las declara en el manifiesto),
 // para probar capas que el fixture compartido no trae.
 function loadModelWithLayers(patch) {
-  const { manifest, layers, errors } = loadService(fixtureDir);
+  const { manifest, layers, errors } = loadV110();
   assert.deepEqual(errors, []);
   const patchedManifest = structuredClone(manifest);
   const patched = structuredClone(layers);
@@ -386,7 +395,7 @@ test('un handler sobre una entidad interna inyecta el repositorio de la raíz, n
 // ─── http-clients: contrato estructurado, legacy en prosa y auth saliente ─────
 
 function loadModelWithHttpClients(httpClients) {
-  const { manifest, layers, errors } = loadService(fixtureDir);
+  const { manifest, layers, errors } = loadV110();
   assert.deepEqual(errors, []);
   const patchedManifest = structuredClone(manifest);
   patchedManifest.layers['http-clients'] = 'http-clients.keel.yaml';
@@ -496,7 +505,7 @@ test('http-clients oauth2: normalización de auth y enums inline registrados', (
 // Dominio con una relación a hija (lines → OrderLine) y un value object compuesto
 // (address → Address): los dos casos que el DTO plano del scaffolding no puede recortar.
 function loadModelWithExclude(exclude) {
-  const { manifest, layers, errors } = loadService(fixtureDir);
+  const { manifest, layers, errors } = loadV110();
   assert.deepEqual(errors, []);
   const patchedManifest = structuredClone(manifest);
   delete patchedManifest.layers.api;
@@ -595,7 +604,7 @@ test('exclude combina plano y dot-paths: aplica el plano y avisa de cada anidado
 });
 
 test('persistenceKind sale del catálogo, no del diseño: una sola fuente', () => {
-  const { manifest, layers } = loadService(fixtureDir);
+  const { manifest, layers } = loadV110();
 
   // Sin stack, el modelo asume relacional (el default del schema del DSL).
   assert.equal(buildModel({ manifest, layers }).persistenceKind, 'relational');

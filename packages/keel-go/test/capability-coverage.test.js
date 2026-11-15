@@ -30,11 +30,6 @@ const MOTIVOS = {
 };
 
 const EXCEPCIONES = new Map([
-  ['use-cases.operations.*.batch', { motivo: MOTIVOS.soloCadenas, porque: 'los lotes (DSL 2.30): keel-go genera sync desde el incremento 4 de PLAN-DSL-230-LOTES.md (async, en el 9), con los parches catalog-batch, catalog-batch-mongo y catalog-batch-atomic (keel-core/test/helpers/batch-designs.js); ninguna fixture los declara hasta el 11, y entonces esta fila se borra.' }],
-  ['use-cases.operations.*.batch.atomicity', { motivo: MOTIVOS.soloCadenas, porque: 'los lotes (DSL 2.30): keel-go genera sync desde el incremento 4 de PLAN-DSL-230-LOTES.md (async, en el 9), con los parches catalog-batch, catalog-batch-mongo y catalog-batch-atomic (keel-core/test/helpers/batch-designs.js); ninguna fixture los declara hasta el 11, y entonces esta fila se borra.' }],
-  ['use-cases.operations.*.batch.execution', { motivo: MOTIVOS.soloCadenas, porque: 'los lotes (DSL 2.30): keel-go genera sync desde el incremento 4 de PLAN-DSL-230-LOTES.md (async, en el 9), con los parches catalog-batch, catalog-batch-mongo y catalog-batch-atomic (keel-core/test/helpers/batch-designs.js); ninguna fixture los declara hasta el 11, y entonces esta fila se borra.' }],
-  ['use-cases.operations.*.batch.itemErrors', { motivo: MOTIVOS.soloCadenas, porque: 'los lotes (DSL 2.30): keel-go genera sync desde el incremento 4 de PLAN-DSL-230-LOTES.md (async, en el 9), con los parches catalog-batch, catalog-batch-mongo y catalog-batch-atomic (keel-core/test/helpers/batch-designs.js); ninguna fixture los declara hasta el 11, y entonces esta fila se borra.' }],
-  ['use-cases.operations.*.batch.output', { motivo: MOTIVOS.soloCadenas, porque: 'los lotes (DSL 2.30): keel-go genera sync desde el incremento 4 de PLAN-DSL-230-LOTES.md (async, en el 9), con los parches catalog-batch, catalog-batch-mongo y catalog-batch-atomic (keel-core/test/helpers/batch-designs.js); ninguna fixture los declara hasta el 11, y entonces esta fila se borra.' }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     { motivo: MOTIVOS.informativo, porque: 'solo entra en el comentario del mensaje de la suscripción (messaging.js): ningún lector depende de él.' }
