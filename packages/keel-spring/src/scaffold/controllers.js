@@ -9,7 +9,7 @@
 // @RestControllerAdvice central en infrastructure/rest.
 
 import { batchRequestClass, controllerBatchCall, BATCH_ITEM_COMPONENT } from './batch.js';
-import { controllerBatchJobMethods } from './batch-jobs.js';
+import { controllerBatchJobMethods, controllerKeyedBatchCall } from './batch-jobs.js';
 import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
 import { callsPaymentGateway } from '../lib/payments-model.js';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
@@ -158,7 +158,9 @@ function renderController(model, service) {
     // El bucle de los lotes (DSL 2.30).
     ...(methods.some((method) => method.includes('batchRunner.')) ? [['BatchRunner', 'batchRunner']] : []),
     // Los lotes asíncronos (DSL 2.30, fase B): el alta y las rutas del trabajo.
-    ...(methods.some((method) => method.includes('batchJobs.')) ? [['BatchJobs', 'batchJobs']] : [])
+    ...(methods.some((method) => method.includes('batchJobs.')) ? [['BatchJobs', 'batchJobs']] : []),
+    // Los lotes síncronos con clave (DSL 2.30, D15).
+    ...(methods.some((method) => method.includes('keyedBatches.')) ? [['KeyedBatches', 'keyedBatches']] : [])
   ];
 
   const body = `@RestController
@@ -360,14 +362,19 @@ function renderMethod(model, operation, imports) {
 
   if (batch) {
     // El cuerpo es el SOBRE (<Op>BatchRequest), con los elementos sin leer: los lee y valida BatchRunner uno a uno (D3).
-    // El mensaje de cada elemento lleva el elemento, la ruta, lo estampado y el resto del sobre.
-    imports.add('jakarta.validation.Valid');
-    imports.add('org.springframework.web.bind.annotation.RequestBody');
-    params.push(`@Valid @RequestBody ${batchRequestClass(operation)} request`);
+    // El mensaje de cada elemento lleva el elemento, la ruta, lo estampado y el resto del sobre. Con clave (D15), el cuerpo
+    // llega en bytes, porque su firma es la de la petición, y el sobre lo lee KeyedBatches.
     const args = components.map((component) =>
       component.batchItem ? BATCH_ITEM_COMPONENT : stamped(component) ? stampArg(component) : fromPath.has(component.name) ? component.name : `request.${component.name}()`
     );
-    const answer = controllerBatchCall(model, operation, { args, imports });
+    const keyed = Boolean(operation.batch.idempotency);
+    if (!keyed) {
+      imports.add('jakarta.validation.Valid');
+      imports.add('org.springframework.web.bind.annotation.RequestBody');
+      params.push(`@Valid @RequestBody ${batchRequestClass(operation)} request`);
+    }
+    const answer = keyed ? controllerKeyedBatchCall(model, operation, { args, imports }) : controllerBatchCall(model, operation, { args, imports });
+    if (keyed) params.push(...answer.params);
     for (const name of answer.responseImports) imports.add(name);
     return `${javadoc(operation.description, '    ')}${annotations.join('\n')}
     public ${answer.returnType} ${operation.name}(${params.join(', ')}) {

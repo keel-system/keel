@@ -150,10 +150,35 @@ function renderRunner(model) {
      */
     public <T> ResponseEntity<?> allOrNothing(String over, List<JsonNode> items, Class<T> itemType, HttpStatus successStatus,
             Function<T, Object> process) {
+        return allOrNothing(over, items, itemType, successStatus, process, Sink.NONE);
+    }
+
+    /**
+     * Lo que un lote todo o nada CON CLAVE (D15) hace además del bucle: dentro de la transacción del lote, guardar cada
+     * resultado y cerrar su trabajo; y, si el lote falla, descartar el trabajo para que la repetición lo vuelva a procesar.
+     */
+    interface Sink {
+
+        Sink NONE = new Sink() {
+        };
+
+        default void kept(BatchResponse.Item item) {
+        }
+
+        default void completed() {
+        }
+
+        default void discarded() {
+        }
+    }
+
+    <T> ResponseEntity<?> allOrNothing(String over, List<JsonNode> items, Class<T> itemType, HttpStatus successStatus,
+            Function<T, Object> process, Sink sink) {
         try {
-            List<BatchResponse.Item> results = ${transactional ? 'transaction.execute(status -> processAll(items, itemType, process))' : 'processAll(items, itemType, process)'};
+            List<BatchResponse.Item> results = ${transactional ? 'transaction.execute(status -> processAll(items, itemType, process, sink))' : 'processAll(items, itemType, process, sink)'};
             return ResponseEntity.status(successStatus).body(BatchResponse.of(results));
         } catch (ItemFailure failure) {
+            sink.discarded();
             ErrorResponse error = failure.invalid != null ? invalidResponse(failure.invalid) : translate(failure.error);
             List<String> details = List.of(over + "[" + failure.index + "]");
             return ResponseEntity.status(error.status())
@@ -161,7 +186,7 @@ function renderRunner(model) {
         }
     }
 
-    private <T> List<BatchResponse.Item> processAll(List<JsonNode> items, Class<T> itemType, Function<T, Object> process) {
+    private <T> List<BatchResponse.Item> processAll(List<JsonNode> items, Class<T> itemType, Function<T, Object> process, Sink sink) {
         List<BatchResponse.Item> results = new ArrayList<>(items.size());
         for (int index = 0; index < items.size(); index++) {
             T item;
@@ -170,12 +195,16 @@ function renderRunner(model) {
             } catch (InvalidItem invalid) {
                 throw new ItemFailure(index, invalid, null);
             }
+            BatchResponse.Item done;
             try {
-                results.add(BatchResponse.Item.succeeded(index, process.apply(item)));
+                done = BatchResponse.Item.succeeded(index, process.apply(item));
             } catch (RuntimeException ex) {
                 throw new ItemFailure(index, null, ex);
             }
+            results.add(done);
+            sink.kept(done);
         }
+        sink.completed();
         return results;
     }
 
@@ -390,6 +419,14 @@ export function requestComponents(operation) {
   return operation.bodyFields.filter((field) => !fromPath.has(field.name) && !field.resolvedIdentity);
 }
 
+/** La lambda que despacha UN elemento por el mediator y devuelve su result (null sin batch.output). */
+export function batchDispatch(operation, args) {
+  const message = `new ${operation.messageClass}(${args.join(', ')})`;
+  return operation.batch.resultFields.length > 0
+    ? `item -> mediator.dispatch(${message})`
+    : `item -> {\n                    mediator.dispatch(${message});\n                    return null;\n                }`;
+}
+
 /**
  * La llamada del controller a BatchRunner. `args` es la lista de argumentos del mensaje de UN elemento, ya resuelta por
  * el controller (el elemento, la ruta, lo estampado y el resto del sobre).
@@ -401,8 +438,7 @@ export function controllerBatchCall(model, operation, { args, imports }) {
   const itemField = operation.bodyFields.find((field) => field.name === batch.over);
   const typeImport = domainTypeImport(model, itemField);
   if (typeImport) imports.add(typeImport);
-  const message = `new ${operation.messageClass}(${args.join(', ')})`;
-  const dispatch = batch.resultFields.length > 0 ? `item -> mediator.dispatch(${message})` : `item -> {\n                    mediator.dispatch(${message});\n                    return null;\n                }`;
+  const dispatch = batchDispatch(operation, args);
   if (batch.atomicity === 'per-item') {
     imports.add('java.util.Set');
     const errors = batch.itemErrors.map(javaText).join(', ');

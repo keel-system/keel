@@ -28,8 +28,9 @@ import { parameterProfileValue } from '@keel-system/keel-core/gen/service-parame
 import { KAFKA_PRODUCER_TIMEOUTS } from '@keel-system/keel-core/gen/infra-catalog';
 import { usesHttpIdempotency } from './http-idempotency.js';
 import { usesTimer, TIMER_CONFIG_PARAMETERS, TIMER_SWITCH } from './timer.js';
-import { usesBatchJobs } from './batch-jobs.js';
-import { BATCH_PARAMETERS } from '@keel-system/keel-core/gen/batch-store';
+import { usesBatchJobs, usesKeyedBatches } from './batch-jobs.js';
+import { BATCH_PARAMETERS, BATCH_SYNC_STALE } from '@keel-system/keel-core/gen/batch-store';
+import { asyncBatchOperations } from '@keel-system/keel-core/gen/batch';
 import { usesCorrelation } from './correlation.js';
 import { instrumentationFor, usesTelemetry } from './telemetry.js';
 import { METRICS_TRANSPORT, OBSERVATIONS } from '../lib/telemetry-probes.js';
@@ -160,9 +161,10 @@ export function generate(model) {
       fragments.push(fragment(profile, 'timer', timerYaml(profile)));
     }
 
-    // Los lotes asíncronos (DSL 2.30, fase B): el tamaño del chunk y la retención de los trabajos terminados.
+    // Los lotes con trabajo (DSL 2.30: los asíncronos y los síncronos con clave): el tamaño del chunk, la retención de los
+    // trabajos terminados y cuándo se da por muerto un lote síncrono sin terminar.
     if (usesBatchJobs(model)) {
-      fragments.push(fragment(profile, 'batch', batchYaml(profile)));
+      fragments.push(fragment(profile, 'batch', batchYaml(model, profile)));
     }
 
     // Parámetros de DESPLIEGUE del servicio (`service.keel.yaml § parameters`). El fragmento
@@ -288,17 +290,28 @@ function timerYaml(profile) {
 }
 
 /**
- * parameters/<perfil>/batch.yaml: la mecánica de los lotes asíncronos (keel-core/gen/batch-store.js, la misma clave y
- * variable en los cuatro generadores).
+ * parameters/<perfil>/batch.yaml: la mecánica de los lotes con trabajo (keel-core/gen/batch-store.js, la misma clave y
+ * variable en los cuatro generadores). El chunk solo con lotes asíncronos; el umbral del lote muerto, solo con lotes
+ * síncronos con clave (D15).
  */
-function batchYaml(profile) {
-  const lines = [
-    '# Los lotes asíncronos (DSL 2.30): cuántos elementos procesa cada disparo y cuánto vive un trabajo terminado.',
-    '# El chunk tiene que caber en el arriendo del cronómetro (timer.lease-ms): uno más lento lo tomaría otra réplica.',
-    'batch:'
+function batchYaml(model, profile) {
+  const asynchronous = asyncBatchOperations(model).length > 0;
+  const lines = asynchronous
+    ? [
+        '# Los lotes asíncronos (DSL 2.30): cuántos elementos procesa cada disparo y cuánto vive un trabajo terminado.',
+        '# El chunk tiene que caber en el arriendo del cronómetro (timer.lease-ms): uno más lento lo tomaría otra réplica.'
+      ]
+    : ['# Los lotes con clave (DSL 2.30): cuánto vive un trabajo terminado.'];
+  if (usesKeyedBatches(model)) {
+    lines.push('# Un lote síncrono con clave sin terminar que nadie escribe desde hace más de sync-stale-ms se da por muerto, y su repetición lo sigue desde el cursor.');
+  }
+  lines.push('batch:');
+  const parameters = [
+    ...Object.entries(BATCH_PARAMETERS).filter(([name]) => asynchronous || name !== 'chunkSize').map(([, parameter]) => parameter),
+    ...(usesKeyedBatches(model) ? [BATCH_SYNC_STALE] : [])
   ];
   let parent = null;
-  for (const parameter of Object.values(BATCH_PARAMETERS)) {
+  for (const parameter of parameters) {
     const segments = parameter.key.split('.');
     if (segments.length === 3 && parent !== segments[1]) {
       parent = segments[1];

@@ -69,6 +69,8 @@ export function batchJobTestClass(model, { packages, document, engine, propertie
     `${packages.adapters}.${store}`,
     `${packages.handler}.${operation.handlerClass}`,
     `${packages.batch}.BatchJobRunner`,
+    `${packages.batch}.BatchJobSteps`,
+    'jakarta.validation.Validator',
     `${packages.batch}.BatchRunner`,
     `${packages.batch}.${jobClass}`,
     `${packages.batchStore}.BatchJobPurge`,
@@ -97,6 +99,7 @@ export function batchJobTestClass(model, { packages, document, engine, propertie
     '    @Autowired\n    private BatchJobStore jobs;',
     '    @Autowired\n    private BatchJobPurge purge;',
     '    @Autowired\n    private BatchRunner batchRunner;',
+    '    @Autowired\n    private Validator validator;',
     '    @Autowired\n    private TimerStore timers;',
     '    @Autowired\n    private UseCaseMediator mediator;',
     '    @Autowired\n    private PlatformTransactionManager transactionManager;',
@@ -163,7 +166,9 @@ export function batchJobTestClass(model, { packages, document, engine, propertie
         UUID id = submit(${body(...skus('JDD', 5))});
         assertFalse(fire(id).done(), "BJ-4: el primer chunk");
         // La réplica cae al escribir el resultado del elemento 3, a mitad del segundo chunk: el 2 ya está confirmado.
-        ${jobClass} crashing = new ${jobClass}(new BatchJobRunner(crashingAt(3), timers, batchRunner, mapper, transactionManager, ${PROBE_CHUNK_SIZE}), mediator);
+        BatchJobStore crashingStore = crashingAt(3);
+        BatchJobSteps crashingSteps = new BatchJobSteps(crashingStore, batchRunner, mapper, validator, transactionManager);
+        ${jobClass} crashing = new ${jobClass}(new BatchJobRunner(crashingStore, timers, crashingSteps, mapper, transactionManager, ${PROBE_CHUNK_SIZE}), mediator);
         assertThrows(ReplicaCrash.class, () -> crashing.handle(timer(id), Instant.now()), "BJ-4: la sonda simula la caída");
         as("alice");
         assertEquals(3, cursor(id), "BJ-4: lo confirmado antes de caer queda");

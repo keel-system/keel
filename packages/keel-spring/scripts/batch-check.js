@@ -11,7 +11,8 @@
 //   npm run batch-check --workspace packages/keel-spring
 //
 // Diseños: catalog-batch (relacional, per-item), catalog-batch-mongo (documental, per-item) y catalog-batch-atomic
-// (relacional, all-or-nothing). Necesita podman o docker, y JDK.
+// (relacional, all-or-nothing); los asíncronos catalog-batch-async y -mongo (BJ-*); y los síncronos con clave
+// catalog-batch-keyed, -keyed-mongo y catalog-batch-atomic-keyed (BA-* y BK-*). Necesita podman o docker, y JDK.
 //
 // --sabotage=<id> rompe lo emitido conservando la forma (sigue compilando), y verde significa que cae en EXACTAMENTE sus
 // casos de BATCH_SABOTAGES que este diseño ejecuta (casesOf): ni uno más ni uno menos.
@@ -23,7 +24,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { loadService } from '@keel-system/keel-core';
-import { BATCH_SABOTAGES, BATCH_JOB_SABOTAGES } from '@keel-system/keel-core/gen/batch';
+import { BATCH_SABOTAGES, BATCH_JOB_SABOTAGES, BATCH_KEY_SABOTAGES } from '@keel-system/keel-core/gen/batch';
 import { tmpDir } from '../test/helpers/tmp.js';
 import { buildModel } from '../src/lib/model.js';
 import { scaffoldService } from '../src/scaffold/index.js';
@@ -31,7 +32,8 @@ import { databaseHealthProbe } from '../src/lib/stack-catalog.js';
 import { conexionPerezosa } from '../src/lib/claim-probes.js';
 import { CLASS_NAME, PACKAGE_LEAF, batchOperations, batchTestClass, casesOf, probeHandler } from '../src/lib/batch-probes.js';
 import { JOB_CLASS_NAME, batchJobTestClass, jobCasesOf } from '../src/lib/batch-job-probes.js';
-import { BATCH_DESIGNS, BATCH_JOB_DESIGNS } from '../../keel-core/test/helpers/batch-designs.js';
+import { KEY_CLASS_NAME, batchKeyTestClass, keyCasesOf } from '../src/lib/batch-key-probes.js';
+import { BATCH_DESIGNS, BATCH_JOB_DESIGNS, BATCH_KEY_DESIGNS } from '../../keel-core/test/helpers/batch-designs.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(here, '..', '..', '..', 'fixtures', 'designs');
@@ -66,20 +68,40 @@ const SABOTAGES = {
     ]
   ],
   // all-or-nothing sin la transacción que abarca el lote: cada elemento se confirma en la suya.
-  'ba-atomic-no-tx': [['BatchRunner.java', 'transaction.execute(status -> processAll(items, itemType, process))', 'processAll(items, itemType, process)']],
+  'ba-atomic-no-tx': [['BatchRunner.java', 'transaction.execute(status -> processAll(items, itemType, process, sink))', 'processAll(items, itemType, process, sink)']],
   // Fase B. Cada disparo empieza en el principio de su chunk y no en el cursor: tras una caída a mitad de chunk reprocesa lo
   // ya confirmado.
   'bj-no-resume': [['BatchJobRunner.java', 'int index = job.nextIndex();', 'int index = job.nextIndex() - job.nextIndex() % chunkSize;']],
   // El efecto en su transacción, y el cursor con el resultado en otra, después.
   'bj-cursor-outside-tx': [
     [
-      'BatchJobRunner.java',
+      'BatchJobSteps.java',
       'Boolean kept = transaction.execute(status -> {\n                Object result = process.apply(item);\n                return keep(status, jobId, index, BatchResponse.Item.succeeded(index, result));\n            });',
       'Object result = transaction.execute(status -> process.apply(item));\n            Boolean kept = transaction.execute(status -> keep(status, jobId, index, BatchResponse.Item.succeeded(index, result)));'
     ]
   ],
   // Las rutas del trabajo no miran el dueño.
-  'bj-foreign-reader': [['BatchJobs.java', 'store.owned(jobId, operation, owner())', 'store.job(jobId).filter(found -> operation.equals(found.operation()))']]
+  'bj-foreign-reader': [['BatchJobs.java', 'store.owned(jobId, operation, owner())', 'store.job(jobId).filter(found -> operation.equals(found.operation()))']],
+  // D15. La repetición de un lote terminado lo vuelve a procesar en vez de responder lo guardado.
+  'bk-replay-reprocess': [
+    [
+      'KeyedBatches.java',
+      'if (started.replay()) {\n            return ResponseEntity.status(HttpStatus.MULTI_STATUS).body(steps.stored(started.id()));\n        }\n        for (int index = started.from();',
+      'if (started.replay()) {\n            return runner.perItem(items, itemType, itemErrors, process);\n        }\n        for (int index = started.from();'
+    ]
+  ],
+  // Un lote en marcha se toma igual que uno muerto.
+  'bk-steal-running': [['KeyedBatches.java', 'store.takeOver(job.id(), staleMs)', 'store.takeOver(job.id(), 0L)']],
+  // La reanudación empieza en el principio y no en el cursor.
+  'bk-no-resume': [['KeyedBatches.java', 'for (int index = started.from(); index < items.size(); index++) {', 'for (int index = 0; index < items.size(); index++) {']],
+  // El todo o nada que falla deja su trabajo.
+  'bk-keep-failed': [
+    [
+      'KeyedBatches.java',
+      'public void discarded() {\n                    transaction.executeWithoutResult(status -> store.discard(id));',
+      'public void discarded() {\n                    transaction.executeWithoutResult(status -> { });'
+    ]
+  ]
 };
 
 function run(command, commandArgs, options = {}) {
@@ -136,13 +158,13 @@ function readResults(projectDir, className) {
   return cases;
 }
 
-/** El caso de una prueba por su prefijo: `ba7_sobre_perItem` → BA-7, `bj4_…` → BJ-4. */
+/** El caso de una prueba por su prefijo: `ba7_sobre_perItem` → BA-7, `bj4_…` → BJ-4, `bk1_…` → BK-1. */
 const caseOf = (testName) => {
-  const match = /^b([aj])(\d+)_/.exec(testName);
+  const match = /^b([ajk])(\d+)_/.exec(testName);
   return match ? `B${match[1].toUpperCase()}-${match[2]}` : '?';
 };
 
-const designs = [...BATCH_DESIGNS, ...BATCH_JOB_DESIGNS];
+const designs = [...BATCH_DESIGNS, ...BATCH_JOB_DESIGNS, ...BATCH_KEY_DESIGNS];
 const design = designs.find((candidate) => candidate.name === designName);
 if (!design) {
   console.error(`No hay ningún diseño de lotes '${designName}'. Los hay: ${designs.map((d) => d.name).join(', ')}.`);
@@ -168,10 +190,12 @@ const document = (service.layers.persistence?.default?.model ?? 'relational') ==
 const engine = document ? 'mongodb' : database;
 const stack = { database: engine, ...(Object.values(service.layers['use-cases']?.operations ?? {}).some((op) => op.cache) ? { cache: 'redis' } : {}) };
 const model = buildModel({ manifest: service.manifest, layers: service.layers, stack });
-// Un sujeto de la fase B ejecuta los BJ-* (su operación es asíncrona); uno de la fase A, los BA-*.
+// Un sujeto de la fase B ejecuta los BJ-* (su operación es asíncrona); uno de la fase A, los BA-*, y uno con clave (D15),
+// además los BK-*.
 const asynchronous = jobCasesOf(model).length > 0;
-const cases = asynchronous ? jobCasesOf(model) : casesOf(model);
-const SABOTAGE_CASES = { ...BATCH_SABOTAGES, ...BATCH_JOB_SABOTAGES };
+const keyed = keyCasesOf(model).length > 0;
+const cases = asynchronous ? jobCasesOf(model) : [...casesOf(model), ...keyCasesOf(model)];
+const SABOTAGE_CASES = { ...BATCH_SABOTAGES, ...BATCH_JOB_SABOTAGES, ...BATCH_KEY_SABOTAGES };
 let expected = null;
 if (sabotage) {
   expected = (SABOTAGE_CASES[sabotage] ?? []).filter((id) => cases.includes(id));
@@ -256,11 +280,12 @@ const testDir = path.join(projectDir, 'src/test/java', ...model.service.basePack
 fs.mkdirSync(testDir, { recursive: true });
 const doubles = agentPorts(projectDir);
 if (doubles.length > 0) console.log(`  (dobles de los puertos del agente: ${doubles.map((port) => port.type).join(', ')})`);
-const classes = [asynchronous ? JOB_CLASS_NAME : CLASS_NAME];
+const classes = [asynchronous ? JOB_CLASS_NAME : CLASS_NAME, ...(keyed ? [KEY_CLASS_NAME] : [])];
 const testClass = asynchronous
   ? batchJobTestClass(model, { packages, document, engine, properties, doubles })
   : batchTestClass(model, { packages, document, properties, doubles });
 fs.writeFileSync(path.join(testDir, `${classes[0]}.java`), testClass, 'utf8');
+if (keyed) fs.writeFileSync(path.join(testDir, `${KEY_CLASS_NAME}.java`), batchKeyTestClass(model, { packages, document, engine, properties, doubles }), 'utf8');
 
 console.log(`batch-check · ${designName} (${engine}) · ${runtime.runtime} · casos ${cases.join(', ')}`);
 const frontend = composeUp(runtime.frontends, projectDir);

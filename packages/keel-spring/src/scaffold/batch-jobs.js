@@ -16,9 +16,16 @@
 //
 // Lo que no cambia respecto al lote síncrono: el handler procesa UN elemento, cada elemento se lee y valida con BatchRunner
 // y su fallo se traduce con ApiExceptionHandler, así que «falla solo su elemento» y «detiene el lote» significan lo mismo.
+//
+// El lote SÍNCRONO con clave (D15, incremento 10b) usa el mismo almacén, sin temporizador: `KeyedBatches` crea su trabajo,
+// procesa cada elemento con los mismos pasos que el procesador (`BatchJobSteps`: efecto, valla y resultado en UNA
+// transacción) y responde lo guardado (`batchStoredBody`), así que la primera petición, la repetición y la que reanuda
+// responden lo mismo.
 
 import {
   asyncBatchOperations,
+  batchJobStoreOperations,
+  keyedSyncBatchOperations,
   batchJobPaths,
   BATCH_JOB_PARAM,
   BATCH_ACCEPTED_STATUS
@@ -30,8 +37,11 @@ import {
   BATCH_JOB_STATUSES,
   BATCH_PARAMETERS,
   BATCH_STORE_ENGINES,
+  BATCH_SYNC_STALE,
+  BATCH_ANONYMOUS_OWNER,
   batchKind,
-  batchStatements
+  batchStatements,
+  batchSyncStatements
 } from '@keel-system/keel-core/gen/batch-store';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { idempotencyOutcomeCode } from '@keel-system/keel-core/gen/declared-errors';
@@ -40,7 +50,7 @@ import { IDEMPOTENCY_HEADER } from '@keel-system/keel-core/gen/request-idempoten
 import { javaFile, javaPath, subPackage } from './render.js';
 import { messageComponents, messagePackage } from './services.js';
 import { MEDIATOR_PKG, INTERFACES_PKG } from './mediator.js';
-import { BATCH_PKG, batchRequestClass } from './batch.js';
+import { BATCH_PKG, batchRequestClass, batchDispatch } from './batch.js';
 import { domainTypeImport } from './entities.js';
 
 export const BATCH_STORE_PKG = 'infrastructure.persistence.batch';
@@ -53,8 +63,14 @@ const javaText = (text) => `"${text.replaceAll('\\', '\\\\').replaceAll('"', '\\
 const isDocument = (model) => model.persistenceKind === 'document';
 const value = ({ key, default: fallback }) => `@Value("\${${key}:${fallback}}")`;
 
-/** ¿Tiene el servicio algún lote asíncrono? */
-export const usesBatchJobs = (model) => Boolean(model.layersPresent?.persistence) && asyncBatchOperations(model).length > 0;
+/** ¿Usa el servicio el almacén de trabajos? Con un lote asíncrono o un lote síncrono con clave (D15). */
+export const usesBatchJobs = (model) => Boolean(model.layersPresent?.persistence) && batchJobStoreOperations(model).length > 0;
+
+/** ¿Tiene el servicio algún lote asíncrono? El alta, el procesador y las dos rutas del trabajo. */
+const usesAsyncBatchJobs = (model) => usesBatchJobs(model) && asyncBatchOperations(model).length > 0;
+
+/** ¿Tiene el servicio algún lote síncrono con clave (D15)? */
+export const usesKeyedBatches = (model) => usesBatchJobs(model) && keyedSyncBatchOperations(model).length > 0;
 
 /** La constante del `kind` del temporizador de los trabajos de una operación, en `TimerKinds`. */
 export const batchKindConstant = (operationName) => `BATCH_${constantOf(operationName)}`;
@@ -74,19 +90,20 @@ export const BATCH_PURGE_TARGET = { pkg: BATCH_STORE_PKG, className: 'BatchJobPu
 export const batchJobClass = (operation) => `${capital(operation.name)}BatchJob`;
 
 /**
- * Lo que un diseño con lotes asíncronos no puede generar con este stack, o []: las sentencias son las del cronómetro
- * (PostgreSQL y MySQL, medidas con timer-sql-check) y el documental es MongoDB; el sobre guardado es el CUERPO, así que lo
- * que el mensaje lea de la ruta no viajaría al trabajo.
+ * Lo que un diseño con lotes asíncronos o síncronos con clave no puede generar con este stack, o []: las sentencias son
+ * las del cronómetro (PostgreSQL y MySQL, medidas con timer-sql-check) y el documental es MongoDB; el sobre guardado de un
+ * lote asíncrono es el CUERPO, así que lo que el mensaje lea de la ruta no viajaría al trabajo.
  */
 export function batchJobStackErrors(model) {
-  if (asyncBatchOperations(model).length === 0) return [];
+  if (batchJobStoreOperations(model).length === 0) return [];
   const errors = [];
+  const what = asyncBatchOperations(model).length > 0 ? 'execution: async' : 'idempotency en un lote síncrono';
   if (!model.layersPresent.persistence) {
-    errors.push('use-cases: batch (execution: async, DSL 2.30): el trabajo vive en la base del servicio, y este diseño no tiene capa persistence.');
+    errors.push(`use-cases: batch (${what}, DSL 2.30): el trabajo vive en la base del servicio, y este diseño no tiene capa persistence.`);
   } else if (!isDocument(model) && !BATCH_STORE_ENGINES.includes(model.stack?.database)) {
     errors.push(
-      `use-cases: batch (execution: async, DSL 2.30): el almacén de los trabajos tiene sentencias medidas para ${BATCH_STORE_ENGINES.join(', ')}, ` +
-        `y no para '${model.stack?.database}'. Elige uno de esos motores o declara execution: sync.`
+      `use-cases: batch (${what}, DSL 2.30): el almacén de los trabajos tiene sentencias medidas para ${BATCH_STORE_ENGINES.join(', ')}, ` +
+        `y no para '${model.stack?.database}'. Elige uno de esos motores, o declara execution: sync sin idempotency.`
     );
   }
   for (const { operation } of asyncBatchOperations(model)) {
@@ -112,26 +129,41 @@ export function batchJobStackErrors(model) {
 export function generate(model) {
   if (!usesBatchJobs(model)) return [];
   const document = isDocument(model);
-  const operations = model.services.flatMap((service) => service.operations).filter((operation) => operation.batch?.execution === 'async');
-  return [
+  const all = model.services.flatMap((service) => service.operations);
+  const stored = new Set(batchJobStoreOperations(model).map(({ operation }) => operation));
+  const operations = all.filter((operation) => operation.batch?.execution === 'async');
+  const files = [
     storeInterface(model),
     document ? mongoStore(model) : jdbcStore(model),
     ...(document ? [] : schemaEntities(model)),
     purge(model),
-    jobView(model),
-    notFound(model),
-    keyReused(model, operations),
-    jobs(model),
-    runner(model),
-    ...operations.map((operation) => jobHandler(model, operation))
+    steps(model),
+    keyReused(model, all.filter((operation) => stored.has(operation.name)))
   ];
+  if (usesAsyncBatchJobs(model)) {
+    files.push(jobView(model), notFound(model), jobs(model), runner(model), ...operations.map((operation) => jobHandler(model, operation)));
+  }
+  if (usesKeyedBatches(model)) files.push(inProgress(model, all.filter((operation) => operation.batch && operation.batch.execution !== 'async' && operation.batch.idempotency)), keyedBatches(model));
+  return files;
 }
 
 // ─── El almacén ──────────────────────────────────────────────────────────────
 
 function storeInterface(model) {
+  const keyed = usesKeyedBatches(model)
+    ? `
+
+    /**
+     * Toma un lote síncrono con clave sin terminar que nadie escribe desde hace más de {@code staleMs} (D15), con la hora
+     * de la base. false: sigue en marcha.
+     */
+    boolean takeOver(UUID id, long staleMs);
+
+    /** Borra un trabajo sin terminar: el de un lote todo o nada con clave que falló, para liberar su clave (D15). */
+    boolean discard(UUID id);`
+    : '';
   const body = `/**
- * Los trabajos de los lotes asíncronos (DSL 2.30) y sus resultados (\`${BATCH_JOB.table}\` y \`${BATCH_ITEM_RESULT.table}\`),
+ * Los trabajos de los lotes (DSL 2.30: los asíncronos y los síncronos con clave) y sus resultados (\`${BATCH_JOB.table}\` y \`${BATCH_ITEM_RESULT.table}\`),
  * detrás de un puerto: las sentencias son las de keel-core, iguales en los cuatro generadores, y toda hora es la de la base.
  *
  * <p>Se une a la transacción en curso: el alta va con el temporizador del trabajo, y el resultado y el avance de cada
@@ -182,7 +214,7 @@ public interface BatchJobStore {
     long resultsCount(UUID jobId);
 
     /** La purga (D10): los trabajos terminados hace más de {@code retentionDays}, con sus resultados. Nunca uno en marcha. */
-    int purge(int retentionDays);
+    int purge(int retentionDays);${keyed}
 }`;
   return {
     path: javaPath(model, BATCH_STORE_PKG, 'BatchJobStore'),
@@ -193,8 +225,22 @@ public interface BatchJobStore {
 function jdbcStore(model) {
   const engine = model.stack.database;
   const mysql = engine === 'mysql';
-  const S = batchStatements(engine);
-  const names = ['insertJob', 'byKey', 'releaseKey', 'job', 'ownedJob', 'insertResult', 'advance', 'finish', 'resultsPage', 'resultsCount', 'purgeResults', 'purgeJobs'];
+  const keyed = usesKeyedBatches(model);
+  const S = { ...batchStatements(engine), ...(keyed ? batchSyncStatements(engine) : {}) };
+  const names = ['insertJob', 'byKey', 'releaseKey', 'job', 'ownedJob', 'insertResult', 'advance', 'finish', 'resultsPage', 'resultsCount', 'purgeResults', 'purgeJobs', ...(keyed ? ['takeOver', 'discardJob'] : [])];
+  const keyedMethods = keyed
+    ? `
+
+    @Override
+    public boolean takeOver(UUID id, long staleMs) {
+        return jdbc.sql(TAKE_OVER).param("id", uuid(id)).param("staleMs", staleMs).update() == 1;
+    }
+
+    @Override
+    public boolean discard(UUID id) {
+        return jdbc.sql(DISCARD_JOB).param("id", uuid(id)).update() == 1;
+    }`
+    : '';
   const constants = names.map((name) => `    private static final String ${constantOf(name)} = ${javaText(S[name])};`).join('\n');
   const binding = mysql
     ? `    // MySQL: el uuid es binary(16) (el orden de bytes de Hibernate) y la hora un datetime(6) con la hora UTC.
@@ -241,7 +287,7 @@ function jdbcStore(model) {
     'org.springframework.stereotype.Component'
   ];
   const body = `/**
- * Los trabajos de los lotes asíncronos sobre ${mysql ? 'MySQL' : 'PostgreSQL'}, con las sentencias de keel-core
+ * Los trabajos de los lotes sobre ${mysql ? 'MySQL' : 'PostgreSQL'}, con las sentencias de keel-core
  * ({@code batch-store.js}) TAL CUAL: son contrato con los otros generadores, que comparten las tablas, y las mide
  * {@code timer-sql-check} contra el motor. No las reescribas aquí.
  *
@@ -337,7 +383,7 @@ ${constants}
     public int purge(int retentionDays) {
         jdbc.sql(PURGE_RESULTS).param("retentionDays", retentionDays).update();
         return jdbc.sql(PURGE_JOBS).param("retentionDays", retentionDays).update();
-    }
+    }${keyedMethods}
 
     /** Una fila del trabajo, con las columnas que leen el procesador y las rutas. */
     private static Job readJob(ResultSet rs) throws SQLException {
@@ -463,6 +509,26 @@ ${BATCH_ITEM_RESULT.columns.filter((spec) => spec.name !== 'job_id').map((spec) 
 
 function mongoStore(model) {
   const { job, result } = BATCH_JOB_COLLECTIONS;
+  const keyedMethods = usesKeyedBatches(model)
+    ? `
+
+    @Override
+    public boolean takeOver(UUID id, long staleMs) {
+        Instant now = timers.dbNow();
+        Query dead = new Query(Criteria.where("_id").is(id.toString()).and("finished_at").is(null).and("updated_at").lte(Date.from(now.minusMillis(staleMs))));
+        return mongo.updateFirst(dead, new Update().set("updated_at", Date.from(now)), JOBS).getModifiedCount() == 1;
+    }
+
+    @Override
+    public boolean discard(UUID id) {
+        Query open = new Query(Criteria.where("_id").is(id.toString()).and("finished_at").is(null));
+        if (mongo.remove(open, JOBS).getDeletedCount() != 1) {
+            return false;
+        }
+        mongo.remove(new Query(Criteria.where("job_id").is(id.toString())), RESULTS);
+        return true;
+    }`
+    : '';
   const indexLine = (collection, spec) => {
     const keys = spec.keys.map(([key, direction]) => `\n                .on("${key}", Sort.Direction.${direction > 0 ? 'ASC' : 'DESC'})`).join('');
     const unique = spec.unique ? '\n                .unique()' : '';
@@ -492,7 +558,7 @@ function mongoStore(model) {
     `${subPackage(model, TIMER_PKG)}.TimerStore`
   ];
   const body = `/**
- * Los trabajos de los lotes asíncronos sobre MongoDB, con la forma documental de keel-core
+ * Los trabajos de los lotes sobre MongoDB, con la forma documental de keel-core
  * ({@code BATCH_JOB_COLLECTIONS}): los nombres de campo son los de las columnas, el trabajo lleva su id (texto) en
  * {@code _id} y cada resultado la clave aplanada {@code <job>|<índice>}, que hace que el motor rechace un segundo resultado
  * del mismo elemento. La unicidad de la clave de idempotencia es PARCIAL: en MongoDB dos ausentes sí chocan.
@@ -625,7 +691,7 @@ ${result.indexes.map((spec) => indexLine('RESULTS', spec)).join('\n')}
         }
         mongo.remove(new Query(Criteria.where("job_id").in(ids)), RESULTS);
         return (int) mongo.remove(new Query(Criteria.where("_id").in(ids)), JOBS).getDeletedCount();
-    }
+    }${keyedMethods}
 
     private static Job readJob(Document document) {
         Date finished = document.getDate("finished_at");
@@ -716,8 +782,8 @@ function keyReused(model, operations) {
   const canonical = FRAMEWORK_ERRORS.idempotencyReuse;
   const codes = operations.map((operation) => `"${operation.name}", "${idempotencyOutcomeCode(model, operation.name, canonical)}"`);
   const body = `/**
- * La misma clave de idempotencia de un lote asíncrono con un contenido DISTINTO (DSL 2.30, D13): no es un reintento, y
- * devolver el trabajo de la primera petición contestaría a una pregunta que el cliente no hizo. El code es el que declara
+ * La misma clave de idempotencia de un lote con un contenido DISTINTO (DSL 2.30, D13 y D15): no es un reintento, y
+ * devolver la respuesta de la primera petición contestaría a una pregunta que el cliente no hizo. El code es el que declara
  * cada operación para este desenlace, o el canónico (docs/framework-errors.md).
  */
 public class BatchJobKeyReusedException extends ConflictException {
@@ -743,35 +809,21 @@ function jobs(model) {
     `${subPackage(model, TIMER_PKG)}.TimerStore`,
     `${subPackage(model, 'domain.identity')}.Uuids`,
     `${subPackage(model, DTO_PKG)}.PagedResponse`,
-    'jakarta.validation.ConstraintViolation',
-    'jakarta.validation.ConstraintViolationException',
-    'jakarta.validation.Validator',
-    'java.io.ByteArrayInputStream',
-    'java.io.InputStream',
     'java.net.URI',
     'java.nio.charset.StandardCharsets',
-    'java.security.MessageDigest',
-    'java.security.NoSuchAlgorithmException',
-    'java.util.HexFormat',
     'java.util.List',
     'java.util.Optional',
-    'java.util.Set',
     'java.util.UUID',
     'org.springframework.dao.DataIntegrityViolationException',
     'org.springframework.data.domain.AuditorAware',
     'org.springframework.data.domain.PageImpl',
     'org.springframework.data.domain.Pageable',
-    'org.springframework.http.HttpHeaders',
-    'org.springframework.http.HttpInputMessage',
     'org.springframework.http.ResponseEntity',
-    'org.springframework.http.converter.HttpMessageNotReadableException',
     'org.springframework.stereotype.Component',
     'org.springframework.transaction.PlatformTransactionManager',
     'org.springframework.transaction.support.TransactionTemplate',
     'org.springframework.web.servlet.support.ServletUriComponentsBuilder',
-    'tools.jackson.core.JacksonException',
-    'tools.jackson.databind.JsonNode',
-    'tools.jackson.databind.ObjectMapper'
+    'tools.jackson.databind.JsonNode'
   ];
   const body = `/**
  * Los lotes asíncronos (DSL 2.30, fase B) vistos desde la API: el alta del trabajo y las dos rutas que lo leen.
@@ -794,17 +846,15 @@ public class BatchJobs {
 
     private final BatchJobStore store;
     private final TimerStore timers;
-    private final ObjectMapper mapper;
-    private final Validator validator;
+    private final BatchJobSteps steps;
     private final AuditorAware<String> auditor;
     private final TransactionTemplate transaction;
 
-    public BatchJobs(BatchJobStore store, TimerStore timers, ObjectMapper mapper, Validator validator, AuditorAware<String> auditor,
+    public BatchJobs(BatchJobStore store, TimerStore timers, BatchJobSteps steps, AuditorAware<String> auditor,
             PlatformTransactionManager transactionManager) {
         this.store = store;
         this.timers = timers;
-        this.mapper = mapper;
-        this.validator = validator;
+        this.steps = steps;
         this.auditor = auditor;
         this.transaction = new TransactionTemplate(transactionManager);
     }
@@ -816,10 +866,10 @@ public class BatchJobs {
      */
     public <R> ResponseEntity<BatchJobView> submit(String operation, String kind, byte[] body, Class<R> requestType,
             java.util.function.Function<R, List<JsonNode>> itemsOf, String keySource, String clientKey, Long ttlSeconds) {
-        R request = readEnvelope(body, requestType);
+        R request = steps.readEnvelope(body, requestType);
         int total = itemsOf.apply(request).size();
         String owner = owner();
-        String signature = signature(body);
+        String signature = BatchJobSteps.signature(body);
         String key = "payload-hash".equals(keySource) ? signature : clientKey;
         Long ttlMs = key == null || ttlSeconds == null ? null : ttlSeconds * 1000L;
         String input = new String(body, StandardCharsets.UTF_8);
@@ -873,7 +923,7 @@ public class BatchJobs {
     public PagedResponse<BatchResponse.Item> results(String operation, UUID jobId, Pageable pageable) {
         BatchJobStore.Job job = owned(operation, jobId);
         List<BatchResponse.Item> items = store.results(job.id(), pageable.getPageSize(), pageable.getOffset()).stream()
-                .map(this::item)
+                .map(steps::item)
                 .toList();
         return PagedResponse.from(new PageImpl<>(items, pageable, store.resultsCount(job.id())));
     }
@@ -882,54 +932,9 @@ public class BatchJobs {
         return store.owned(jobId, operation, owner()).orElseThrow(() -> new BatchJobNotFoundException(jobId));
     }
 
-    private BatchResponse.Item item(BatchJobStore.Result result) {
-        JsonNode value = result.result() == null ? null : mapper.readTree(result.result());
-        return new BatchResponse.Item(result.index(), result.status(), value, result.errorCode(), result.message());
-    }
-
     /** El dueño: el actor de autoría de la petición (el sujeto del token). */
     private String owner() {
         return auditor.getCurrentAuditor().orElseThrow();
-    }
-
-    /**
-     * El sobre como lo leería el borde: Jackson con el ObjectMapper de la aplicación y después Bean Validation sobre la
-     * LISTA (presencia y maxItems), no sobre sus elementos, que los valida el procesador uno a uno.
-     */
-    private <R> R readEnvelope(byte[] body, Class<R> requestType) {
-        R request;
-        try {
-            request = mapper.readValue(body, requestType);
-        } catch (JacksonException malformed) {
-            throw new HttpMessageNotReadableException(${javaText(FRAMEWORK_RESPONSES.malformed.message)}, malformed, new HttpInputMessage() {
-                @Override
-                public InputStream getBody() {
-                    return new ByteArrayInputStream(body);
-                }
-
-                @Override
-                public HttpHeaders getHeaders() {
-                    return new HttpHeaders();
-                }
-            });
-        }
-        if (request == null) {
-            throw new ConstraintViolationException("El cuerpo del lote es obligatorio", Set.of());
-        }
-        Set<ConstraintViolation<R>> violations = validator.validate(request);
-        if (!violations.isEmpty()) {
-            throw new ConstraintViolationException(violations);
-        }
-        return request;
-    }
-
-    /** La firma de la petición (D13): el sha256 en hexadecimal de los bytes del cuerpo, como batchRequestSignature de keel-core. */
-    static String signature(byte[] body) {
-        try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body));
-        } catch (NoSuchAlgorithmException unreachable) {
-            throw new IllegalStateException(unreachable);
-        }
     }
 }`;
   return { path: javaPath(model, BATCH_PKG, 'BatchJobs'), content: javaFile(subPackage(model, BATCH_PKG), imports, body) };
@@ -962,7 +967,6 @@ function runner(model) {
     ...auth.imports,
     'java.util.List',
     'java.util.Set',
-    'java.util.UUID',
     'java.util.function.Function',
     'java.util.function.Supplier',
     'org.springframework.beans.factory.annotation.Autowired',
@@ -971,7 +975,6 @@ function runner(model) {
     'org.springframework.security.core.context.SecurityContextHolder',
     'org.springframework.stereotype.Component',
     'org.springframework.transaction.PlatformTransactionManager',
-    'org.springframework.transaction.TransactionStatus',
     'org.springframework.transaction.support.TransactionTemplate',
     'tools.jackson.databind.JsonNode',
     'tools.jackson.databind.ObjectMapper'
@@ -996,24 +999,19 @@ function runner(model) {
 @Component
 public class BatchJobRunner {
 
-    /** Lo que deja un elemento: seguir, o parar el disparo (terminado, o el trabajo es de otra réplica). */
-    private enum Step {
-        NEXT, STOP
-    }
-
     private final BatchJobStore store;
     private final TimerStore timers;
-    private final BatchRunner items;
+    private final BatchJobSteps steps;
     private final ObjectMapper mapper;
     private final TransactionTemplate transaction;
     private final int chunkSize;
 
     @Autowired
-    public BatchJobRunner(BatchJobStore store, TimerStore timers, BatchRunner items, ObjectMapper mapper,
+    public BatchJobRunner(BatchJobStore store, TimerStore timers, BatchJobSteps steps, ObjectMapper mapper,
             PlatformTransactionManager transactionManager, ${value(BATCH_PARAMETERS.chunkSize)} int chunkSize) {
         this.store = store;
         this.timers = timers;
-        this.items = items;
+        this.steps = steps;
         this.mapper = mapper;
         this.transaction = new TransactionTemplate(transactionManager);
         this.chunkSize = chunkSize;
@@ -1035,7 +1033,7 @@ public class BatchJobRunner {
             int index = job.nextIndex();
             int end = Math.min(job.total(), index + chunkSize);
             for (; index < end; index++) {
-                if (processItem(job.id(), index, nodes.get(index), itemType, itemErrors, item -> process.apply(request, item)) == Step.STOP) {
+                if (steps.process(job.id(), index, nodes.get(index), itemType, itemErrors, item -> process.apply(request, item)) != BatchJobSteps.Step.NEXT) {
                     return TimerOutcome.finished();
                 }
             }
@@ -1045,55 +1043,6 @@ public class BatchJobRunner {
             }
             return TimerOutcome.rescheduleAt(timers.dbNow());
         });
-    }
-
-    private <T> Step processItem(UUID jobId, int index, JsonNode node, Class<T> itemType, Set<String> itemErrors, Function<T, Object> process) {
-        T item;
-        try {
-            item = items.read(node, itemType);
-        } catch (BatchRunner.InvalidItem invalid) {
-            return failed(jobId, index, BatchRunner.VALIDATION_ERROR, invalid.getMessage(), false);
-        }
-        try {
-            Boolean kept = transaction.execute(status -> {
-                Object result = process.apply(item);
-                return keep(status, jobId, index, BatchResponse.Item.succeeded(index, result));
-            });
-            return Boolean.TRUE.equals(kept) ? Step.NEXT : Step.STOP;
-        } catch (RuntimeException ex) {
-            BatchRunner.Failure failure = items.failureOf(index, ex, itemErrors);
-            return failed(jobId, index, failure.item().error(), failure.item().message(), failure.stops());
-        }
-    }
-
-    /** Un elemento que falla: su resultado y el avance, en su transacción; si detiene el lote, también el final (D4). */
-    private Step failed(UUID jobId, int index, String code, String message, boolean stops) {
-        Boolean kept = transaction.execute(status -> {
-            if (!keep(status, jobId, index, BatchResponse.Item.failed(index, code, message))) {
-                return false;
-            }
-            if (stops) {
-                store.finish(jobId, "${aborted}");
-            }
-            return true;
-        });
-        return Boolean.TRUE.equals(kept) && !stops ? Step.NEXT : Step.STOP;
-    }
-
-    /**
-     * La valla y el resultado de un elemento, en la transacción en curso: primero el avance del cursor, que toma la fila del
-     * trabajo, y después el resultado. false (y la transacción marcada para revertir): el cursor ya no estaba en
-     * {@code index}, así que el trabajo lo procesa otra réplica.
-     */
-    private boolean keep(TransactionStatus status, UUID jobId, int index, BatchResponse.Item item) {
-        boolean ok = "succeeded".equals(item.status());
-        if (!store.advance(jobId, index, ok ? 1 : 0, ok ? 0 : 1)) {
-            status.setRollbackOnly();
-            return false;
-        }
-        String result = item.result() == null ? null : mapper.writeValueAsString(item.result());
-        store.insertResult(jobId, index, item.status(), item.error(), item.message(), result);
-        return true;
     }
 
     /** El disparo corre como el dueño del trabajo: el actor de autoría de cada elemento (el trabajo no tiene token). */
@@ -1181,6 +1130,474 @@ public class ${className} implements TimerHandler {
     }
 }`;
   return { path: javaPath(model, BATCH_PKG, className), content: javaFile(subPackage(model, BATCH_PKG), [...imports], body) };
+}
+
+// ─── Los pasos de un elemento ────────────────────────────────────────────────
+
+function steps(model) {
+  const { aborted } = BATCH_JOB_STATUSES;
+  const imports = [
+    `${subPackage(model, BATCH_STORE_PKG)}.BatchJobStore`,
+    'jakarta.validation.ConstraintViolation',
+    'jakarta.validation.ConstraintViolationException',
+    'jakarta.validation.Validator',
+    'java.io.ByteArrayInputStream',
+    'java.io.InputStream',
+    'java.security.MessageDigest',
+    'java.security.NoSuchAlgorithmException',
+    'java.util.ArrayList',
+    'java.util.HexFormat',
+    'java.util.List',
+    'java.util.Set',
+    'java.util.UUID',
+    'java.util.function.Function',
+    'org.springframework.http.HttpHeaders',
+    'org.springframework.http.HttpInputMessage',
+    'org.springframework.http.converter.HttpMessageNotReadableException',
+    'org.springframework.stereotype.Component',
+    'org.springframework.transaction.PlatformTransactionManager',
+    'org.springframework.transaction.TransactionStatus',
+    'org.springframework.transaction.support.TransactionTemplate',
+    'tools.jackson.core.JacksonException',
+    'tools.jackson.databind.JsonNode',
+    'tools.jackson.databind.ObjectMapper'
+  ];
+  const body = `/**
+ * Lo que comparten el procesador de los lotes asíncronos y los lotes síncronos con clave (DSL 2.30, D9 y D15): leer el
+ * sobre como el borde, firmarlo, procesar UN elemento y rehacer la respuesta desde lo guardado.
+ *
+ * <p>Cada elemento va en UNA transacción con tres cosas: su efecto (el despacho por el mediator, que se une a ella), el
+ * avance del cursor y su resultado. El avance es la VALLA: solo avanza si el cursor sigue donde lo dejó quien procesa, y si
+ * no —otra réplica o la repetición de la petición se llevó el trabajo— el elemento revierte entero, efecto incluido.
+ *
+ * <p>No lo edites: lo regenera build.
+ */
+@Component
+public class BatchJobSteps {
+
+    /** Lo que deja un elemento: seguir, parar (el lote se detuvo, D4) o perder el trabajo (la valla). */
+    public enum Step {
+        NEXT, STOP, LOST
+    }
+
+    /** La valla perdida dentro de una transacción que abarca el lote (el todo o nada con clave): la revierte entera. */
+    static final class FenceLost extends RuntimeException {
+
+        FenceLost() {
+            super(null, null, false, false);
+        }
+    }
+
+    private final BatchJobStore store;
+    private final BatchRunner runner;
+    private final ObjectMapper mapper;
+    private final Validator validator;
+    private final TransactionTemplate transaction;
+
+    public BatchJobSteps(BatchJobStore store, BatchRunner runner, ObjectMapper mapper, Validator validator,
+            PlatformTransactionManager transactionManager) {
+        this.store = store;
+        this.runner = runner;
+        this.mapper = mapper;
+        this.validator = validator;
+        this.transaction = new TransactionTemplate(transactionManager);
+    }
+
+    /**
+     * Un elemento con su efecto, el avance del cursor y su resultado en UNA transacción. Fallan solo su elemento los codes
+     * de {@code itemErrors} y ${FRAMEWORK_ERRORS.validation.code}; cualquier otro fallo detiene el lote ({@code ${aborted}},
+     * D4) con su code o ${FRAMEWORK_ERRORS.batchAborted.code}.
+     */
+    public <T> Step process(UUID jobId, int index, JsonNode node, Class<T> itemType, Set<String> itemErrors, Function<T, Object> process) {
+        T item;
+        try {
+            item = runner.read(node, itemType);
+        } catch (BatchRunner.InvalidItem invalid) {
+            return failed(jobId, index, BatchRunner.VALIDATION_ERROR, invalid.getMessage(), false);
+        }
+        try {
+            Boolean kept = transaction.execute(status -> {
+                Object result = process.apply(item);
+                return keep(status, jobId, index, BatchResponse.Item.succeeded(index, result));
+            });
+            return Boolean.TRUE.equals(kept) ? Step.NEXT : Step.LOST;
+        } catch (RuntimeException ex) {
+            BatchRunner.Failure failure = runner.failureOf(index, ex, itemErrors);
+            return failed(jobId, index, failure.item().error(), failure.item().message(), failure.stops());
+        }
+    }
+
+    /** Un elemento que falla: su resultado y el avance, en su transacción; si detiene el lote, también el final (D4). */
+    private Step failed(UUID jobId, int index, String code, String message, boolean stops) {
+        Boolean kept = transaction.execute(status -> {
+            if (!keep(status, jobId, index, BatchResponse.Item.failed(index, code, message))) {
+                return false;
+            }
+            if (stops) {
+                store.finish(jobId, "${aborted}");
+            }
+            return true;
+        });
+        if (!Boolean.TRUE.equals(kept)) {
+            return Step.LOST;
+        }
+        return stops ? Step.STOP : Step.NEXT;
+    }
+
+    /**
+     * La valla y el resultado de un elemento, en la transacción en curso: primero el avance del cursor, que toma la fila del
+     * trabajo, y después el resultado. false (y la transacción marcada para revertir): el cursor ya no estaba en
+     * {@code index}, así que el trabajo lo procesa otro.
+     */
+    private boolean keep(TransactionStatus status, UUID jobId, int index, BatchResponse.Item item) {
+        if (!advance(jobId, item)) {
+            status.setRollbackOnly();
+            return false;
+        }
+        return true;
+    }
+
+    /** La valla y el resultado de un elemento dentro de la transacción del lote todo o nada con clave: perderla la revierte. */
+    void keepInLot(UUID jobId, BatchResponse.Item item) {
+        if (!advance(jobId, item)) {
+            throw new FenceLost();
+        }
+    }
+
+    private boolean advance(UUID jobId, BatchResponse.Item item) {
+        boolean ok = "succeeded".equals(item.status());
+        if (!store.advance(jobId, item.index(), ok ? 1 : 0, ok ? 0 : 1)) {
+            return false;
+        }
+        String result = item.result() == null ? null : mapper.writeValueAsString(item.result());
+        store.insertResult(jobId, item.index(), item.status(), item.error(), item.message(), result);
+        return true;
+    }
+
+    /**
+     * La respuesta de un lote síncrono con clave rehecha desde lo guardado (D15, batchStoredBody de keel-core): los
+     * resultados en orden de índice y, si se detuvo, un {@code notAttempted} por cada elemento desde el cursor.
+     */
+    public BatchResponse stored(UUID jobId) {
+        BatchJobStore.Job job = store.job(jobId).orElseThrow();
+        List<BatchResponse.Item> items = new ArrayList<>(store.results(jobId, job.total(), 0).stream().map(this::item).toList());
+        if ("${aborted}".equals(job.status())) {
+            for (int index = job.nextIndex(); index < job.total(); index++) {
+                items.add(BatchResponse.Item.notAttempted(index));
+            }
+        }
+        return BatchResponse.of(items);
+    }
+
+    /** Un resultado guardado, como viaja en el cable. */
+    public BatchResponse.Item item(BatchJobStore.Result result) {
+        JsonNode value = result.result() == null ? null : mapper.readTree(result.result());
+        return new BatchResponse.Item(result.index(), result.status(), value, result.errorCode(), result.message());
+    }
+
+    /**
+     * El sobre como lo leería el borde: Jackson con el ObjectMapper de la aplicación y después Bean Validation sobre la
+     * LISTA (presencia y maxItems), no sobre sus elementos, que se validan uno a uno. Un sobre mal formado es un 400 sin
+     * trabajo.
+     */
+    public <R> R readEnvelope(byte[] body, Class<R> requestType) {
+        R request;
+        try {
+            request = mapper.readValue(body, requestType);
+        } catch (JacksonException malformed) {
+            throw new HttpMessageNotReadableException(${javaText(FRAMEWORK_RESPONSES.malformed.message)}, malformed, new HttpInputMessage() {
+                @Override
+                public InputStream getBody() {
+                    return new ByteArrayInputStream(body);
+                }
+
+                @Override
+                public HttpHeaders getHeaders() {
+                    return new HttpHeaders();
+                }
+            });
+        }
+        if (request == null) {
+            throw new ConstraintViolationException("El cuerpo del lote es obligatorio", Set.of());
+        }
+        Set<ConstraintViolation<R>> violations = validator.validate(request);
+        if (!violations.isEmpty()) {
+            throw new ConstraintViolationException(violations);
+        }
+        return request;
+    }
+
+    /** La firma de la petición (D13): el sha256 en hexadecimal de los bytes del cuerpo, como batchRequestSignature de keel-core. */
+    public static String signature(byte[] body) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body));
+        } catch (NoSuchAlgorithmException unreachable) {
+            throw new IllegalStateException(unreachable);
+        }
+    }
+}`;
+  return { path: javaPath(model, BATCH_PKG, 'BatchJobSteps'), content: javaFile(subPackage(model, BATCH_PKG), imports, body) };
+}
+
+// ─── El lote síncrono con clave (D15) ────────────────────────────────────────
+
+function inProgress(model, operations) {
+  const canonical = FRAMEWORK_ERRORS.idempotencyRace;
+  const codes = operations.map((operation) => `"${operation.name}", "${idempotencyOutcomeCode(model, operation.name, canonical)}"`);
+  const body = `/**
+ * La repetición de un lote síncrono con clave mientras el primero sigue en marcha (DSL 2.30, D15): todavía no hay respuesta
+ * que devolver, y procesarlo a la vez lo repartiría entre dos peticiones. Es la semántica de una operación sola con clave.
+ * El code es el que declara cada operación para este desenlace, o el canónico (docs/framework-errors.md).
+ */
+public class BatchKeyInProgressException extends ConflictException {
+
+    private static final Map<String, String> CODES = Map.of(${codes.join(', ')});
+
+    public BatchKeyInProgressException(String operation, String key) {
+        super("Otra petición con la clave de idempotencia " + operation + "/" + key + " está procesando el lote",
+                CODES.getOrDefault(operation, "${canonical.code}"), ${canonical.http}, new Object[] {operation, key});
+    }
+}`;
+  return {
+    path: javaPath(model, BATCH_PKG, 'BatchKeyInProgressException'),
+    content: javaFile(subPackage(model, BATCH_PKG), ['java.util.Map', `${subPackage(model, 'domain.errors')}.ConflictException`], body)
+  };
+}
+
+function keyedBatches(model) {
+  const secured = Boolean(model.layersPresent.security);
+  const { completed } = BATCH_JOB_STATUSES;
+  const imports = [
+    `${subPackage(model, BATCH_STORE_PKG)}.BatchJobStore`,
+    `${subPackage(model, 'domain.identity')}.Uuids`,
+    'java.nio.charset.StandardCharsets',
+    'java.util.List',
+    'java.util.Optional',
+    'java.util.Set',
+    'java.util.UUID',
+    'java.util.function.Function',
+    'org.springframework.beans.factory.annotation.Value',
+    'org.springframework.dao.DataIntegrityViolationException',
+    'org.springframework.http.HttpStatus',
+    'org.springframework.http.ResponseEntity',
+    'org.springframework.stereotype.Component',
+    'org.springframework.transaction.PlatformTransactionManager',
+    'org.springframework.transaction.support.TransactionTemplate',
+    'tools.jackson.databind.JsonNode',
+    ...(secured ? ['org.springframework.data.domain.AuditorAware'] : [])
+  ];
+  const atomic = keyedSyncBatchOperations(model).some(({ batch }) => batch.atomicity === 'all-or-nothing');
+  const perItem = keyedSyncBatchOperations(model).some(({ batch }) => batch.atomicity === 'per-item');
+  const perItemMethod = `
+
+    /**
+     * Un lote {@code per-item} con clave: como {@link BatchRunner#perItem}, con cada elemento confirmado junto a su resultado
+     * y el avance del cursor, y la respuesta rehecha de lo guardado. Sin clave, el lote de siempre.
+     */
+    public <T> ResponseEntity<BatchResponse> perItem(String operation, byte[] body, String keySource, String clientKey, Long ttlSeconds,
+            List<JsonNode> items, Class<T> itemType, Set<String> itemErrors, Function<T, Object> process) {
+        String signature = BatchJobSteps.signature(body);
+        String key = keyOf(keySource, clientKey, signature);
+        if (key == null) {
+            return runner.perItem(items, itemType, itemErrors, process);
+        }
+        Started started = start(operation, key, signature, ttlSeconds, body, items.size());
+        if (started.replay()) {
+            return ResponseEntity.status(HttpStatus.MULTI_STATUS).body(steps.stored(started.id()));
+        }
+        for (int index = started.from(); index < items.size(); index++) {
+            BatchJobSteps.Step step = steps.process(started.id(), index, items.get(index), itemType, itemErrors, process);
+            if (step == BatchJobSteps.Step.LOST) {
+                // Otra petición con la misma clave tomó el trabajo (D15): lo termina ella.
+                throw new BatchKeyInProgressException(operation, key);
+            }
+            if (step == BatchJobSteps.Step.STOP) {
+                return ResponseEntity.status(HttpStatus.MULTI_STATUS).body(steps.stored(started.id()));
+            }
+        }
+        transaction.executeWithoutResult(status -> store.finish(started.id(), "${completed}"));
+        return ResponseEntity.status(HttpStatus.MULTI_STATUS).body(steps.stored(started.id()));
+    }`;
+  const atomicMethod = `
+
+    /**
+     * Un lote {@code all-or-nothing} con clave: como {@link BatchRunner#allOrNothing}, con los resultados, el cursor y el
+     * final del trabajo en la transacción del lote. Si falla no queda nada confirmado, y su trabajo se descarta en otra:
+     * la repetición lo vuelve a procesar en vez de devolver un lote que nunca se confirmó.
+     */
+    public <T> ResponseEntity<?> allOrNothing(String operation, String over, byte[] body, String keySource, String clientKey,
+            Long ttlSeconds, List<JsonNode> items, Class<T> itemType, HttpStatus successStatus, Function<T, Object> process) {
+        String signature = BatchJobSteps.signature(body);
+        String key = keyOf(keySource, clientKey, signature);
+        if (key == null) {
+            return runner.allOrNothing(over, items, itemType, successStatus, process);
+        }
+        Started started = start(operation, key, signature, ttlSeconds, body, items.size());
+        if (started.replay()) {
+            return ResponseEntity.status(successStatus).body(steps.stored(started.id()));
+        }
+        UUID id = started.id();
+        try {
+            return runner.allOrNothing(over, items, itemType, successStatus, process, new BatchRunner.Sink() {
+                @Override
+                public void kept(BatchResponse.Item item) {
+                    steps.keepInLot(id, item);
+                }
+
+                @Override
+                public void completed() {
+                    store.finish(id, "${completed}");
+                }
+
+                @Override
+                public void discarded() {
+                    transaction.executeWithoutResult(status -> store.discard(id));
+                }
+            });
+        } catch (BatchJobSteps.FenceLost lost) {
+            throw new BatchKeyInProgressException(operation, key);
+        } catch (RuntimeException failed) {
+            // Un fallo al confirmar no es de ningún elemento, y el lote tampoco quedó confirmado: su trabajo se descarta igual.
+            transaction.executeWithoutResult(status -> store.discard(id));
+            throw failed;
+        }
+    }`;
+  const body = `/**
+ * Los lotes SÍNCRONOS con clave de idempotencia (DSL 2.30, D15): la clave la guarda el TRABAJO ({@code ${BATCH_JOB.table}}),
+ * como en un lote asíncrono, sin temporizador. La petición crea su trabajo en una transacción propia y procesa cada
+ * elemento con {@link BatchJobSteps}; la respuesta se rehace siempre de lo guardado, así que es la misma para la primera
+ * petición, la repetición y la que reanuda.
+ *
+ * <p>La repetición: con la misma firma y el trabajo terminado, la respuesta guardada sin procesar nada; con otra firma,
+ * el error de la clave reutilizada; sin terminar y escrito hace menos de {@code ${BATCH_SYNC_STALE.key}}, el error de la
+ * clave en curso (409); sin terminar y más viejo, quien lo procesaba murió: lo toma y sigue desde el cursor.
+ *
+ * <p>No lo edites: lo regenera build.
+ */
+@Component
+public class KeyedBatches {
+${secured ? '' : `
+    /** El dueño de un lote sin capa security: no hay llamante, y la clave la acota solo la operación. */
+    private static final String OWNER = "${BATCH_ANONYMOUS_OWNER}";
+`}
+    /** El trabajo de la petición: su id, desde qué elemento sigue y si ya terminó (la repetición responde lo guardado). */
+    private record Started(UUID id, int from, boolean replay) {
+    }
+
+    private final BatchJobStore store;
+    private final BatchJobSteps steps;
+    private final BatchRunner runner;${secured ? '\n    private final AuditorAware<String> auditor;' : ''}
+    private final TransactionTemplate transaction;
+    private final long staleMs;
+
+    public KeyedBatches(BatchJobStore store, BatchJobSteps steps, BatchRunner runner, ${secured ? 'AuditorAware<String> auditor, ' : ''}PlatformTransactionManager transactionManager,
+            ${value(BATCH_SYNC_STALE)} long staleMs) {
+        this.store = store;
+        this.steps = steps;
+        this.runner = runner;${secured ? '\n        this.auditor = auditor;' : ''}
+        this.transaction = new TransactionTemplate(transactionManager);
+        this.staleMs = staleMs;
+    }
+
+    /** El sobre del lote como lo leería el borde: uno mal formado es un 400 sin trabajo. */
+    public <R> R read(byte[] body, Class<R> requestType) {
+        return steps.readEnvelope(body, requestType);
+    }${perItem ? perItemMethod : ''}${atomic ? atomicMethod : ''}
+
+    /** La clave del lote: la cabecera, o la firma del cuerpo si la clave es el contenido. null: sin clave. */
+    private static String keyOf(String keySource, String clientKey, String signature) {
+        return "payload-hash".equals(keySource) ? signature : clientKey;
+    }
+
+    /** El trabajo de la petición: el de la clave, si lo hay, o uno nuevo, en una transacción propia. */
+    private Started start(String operation, String key, String signature, Long ttlSeconds, byte[] body, int total) {
+        String owner = owner();
+        Long ttlMs = ttlSeconds == null ? null : ttlSeconds * 1000L;
+        String input = new String(body, StandardCharsets.UTF_8);
+        try {
+            return transaction.execute(status -> {
+                store.releaseKey(operation, owner, key);
+                return repeat(operation, owner, key, signature).orElseGet(() -> {
+                    UUID id = Uuids.v7();
+                    store.insert(id, operation, owner, key, signature, ttlMs, input, total);
+                    return new Started(id, 0, false);
+                });
+            });
+        } catch (DataIntegrityViolationException race) {
+            // Dos peticiones con la misma clave a la vez: la que pierde espera a la ganadora en la unicidad del motor y
+            // encuentra su trabajo, en marcha.
+            return transaction.execute(status -> repeat(operation, owner, key, signature).orElseThrow(() -> race));
+        }
+    }
+
+    /** El trabajo vivo de la clave (D15, batchSyncRepeat de keel-core). */
+    private Optional<Started> repeat(String operation, String owner, String key, String signature) {
+        return store.byKey(operation, owner, key).map(hit -> {
+            if (!hit.signature().equals(signature)) {
+                throw new BatchJobKeyReusedException(operation, key);
+            }
+            BatchJobStore.Job job = store.job(hit.id()).orElseThrow();
+            if (job.finishedAt() != null) {
+                return new Started(job.id(), job.total(), true);
+            }
+            if (!store.takeOver(job.id(), staleMs)) {
+                throw new BatchKeyInProgressException(operation, key);
+            }
+            return new Started(job.id(), job.nextIndex(), false);
+        });
+    }
+
+    /** El dueño del trabajo: ${secured ? 'el actor de autoría de la petición (el sujeto del token)' : 'sin capa security, la operación sola acota la clave'}. */
+    private String owner() {
+        return ${secured ? 'auditor.getCurrentAuditor().orElseThrow()' : 'OWNER'};
+    }
+}`;
+  return { path: javaPath(model, BATCH_PKG, 'KeyedBatches'), content: javaFile(subPackage(model, BATCH_PKG), imports, body) };
+}
+
+/**
+ * La llamada del controller a KeyedBatches para un lote síncrono con clave: el cuerpo llega en BYTES (su firma es la de la
+ * petición, D13) y el sobre lo lee KeyedBatches como el borde. `args` es la lista de argumentos del mensaje de UN elemento.
+ */
+export function controllerKeyedBatchCall(model, operation, { args, imports }) {
+  const batch = operation.batch;
+  imports.add(`${subPackage(model, BATCH_PKG)}.KeyedBatches`);
+  imports.add(`${subPackage(model, BATCH_PKG)}.${batchRequestClass(operation)}`);
+  imports.add('org.springframework.web.bind.annotation.RequestBody');
+  const itemField = operation.bodyFields.find((field) => field.name === batch.over);
+  const typeImport = domainTypeImport(model, itemField);
+  if (typeImport) imports.add(typeImport);
+  const clientKey = batch.idempotency.keySource === 'client-key';
+  if (clientKey) imports.add('org.springframework.web.bind.annotation.RequestHeader');
+  const params = ['@RequestBody byte[] body', ...(clientKey ? [`@RequestHeader(value = "${IDEMPOTENCY_HEADER}", required = false) String idempotencyKey`] : [])];
+  const key = `${javaText(batch.idempotency.keySource)}, ${clientKey ? 'idempotencyKey' : 'null'}, ${batch.idempotency.ttlSeconds ? `${batch.idempotency.ttlSeconds}L` : 'null'}`;
+  const dispatch = batchDispatch(operation, args);
+  const read = `${batchRequestClass(operation)} request = keyedBatches.read(body, ${batchRequestClass(operation)}.class);`;
+  const op = javaText(operation.name);
+  if (batch.atomicity === 'per-item') {
+    imports.add('java.util.Set');
+    return {
+      params,
+      returnType: 'ResponseEntity<BatchResponse>',
+      responseImports: [`${subPackage(model, BATCH_PKG)}.BatchResponse`, 'org.springframework.http.ResponseEntity'],
+      call: `// Lote con clave (DSL 2.30, D15): la repetición responde lo guardado en su trabajo.
+        ${read}
+        return keyedBatches.perItem(${op}, body, ${key}, request.${batch.over}(), ${batch.itemType}.class,
+                Set.of(${batch.itemErrors.map(javaText).join(', ')}),
+                ${dispatch});`
+    };
+  }
+  imports.add('org.springframework.http.HttpStatus');
+  return {
+    params,
+    returnType: 'ResponseEntity<?>',
+    responseImports: ['org.springframework.http.ResponseEntity'],
+    call: `// Lote con clave (DSL 2.30, D15): la repetición responde lo guardado en su trabajo.
+        ${read}
+        return keyedBatches.allOrNothing(${op}, ${javaText(batch.over)}, body, ${key}, request.${batch.over}(), ${batch.itemType}.class,
+                HttpStatus.valueOf(${operation.route.status}),
+                ${dispatch});`
+  };
 }
 
 // ─── El controller ───────────────────────────────────────────────────────────

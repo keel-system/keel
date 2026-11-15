@@ -1,6 +1,6 @@
 # DSL 2.30: lotes con resultado por elemento (R5)
 
-**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 10 cerrados el 2026-11-14 (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores, con la fase B neutral en keel-core, y el contrato y el método); el 10b va por la parte neutral (D15, la idempotencia del lote síncrono); le siguen los cuatro generadores. Al cerrar pasa a `completed_plans/`.
+**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 10 cerrados el 2026-11-14 (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores, con la fase B neutral en keel-core, y el contrato y el método); el 10b (D15, la idempotencia del lote síncrono) tiene hechas la parte neutral y keel-spring (2026-11-15); le siguen keel-nest, keel-dotnet y keel-go. Al cerrar pasa a `completed_plans/`.
 
 ## Contexto
 
@@ -491,9 +491,38 @@ Incremento 10b, parte neutral (keel-core, D15):
   `bk-steal-running`, `bk-no-resume`, `bk-keep-failed`); sujetos en `BATCH_KEY_DESIGNS` (`catalog-batch-keyed`, `-mongo` y
   `catalog-batch-atomic-keyed`, sin capa security: dueño `BATCH_ANONYMOUS_OWNER`).
 
+Incremento 10b en keel-spring (D15):
+
+- **`KeyedBatches`** (`src/scaffold/batch-jobs.js`) es el lote síncrono con clave: crea o encuentra el trabajo en una
+  transacción propia (`start`, la repetición de `batchSyncRepeat` con `byKey`, `job` y `takeOver`), procesa desde el cursor y
+  responde siempre lo guardado. La carrera del alta la arbitra la unicidad, como en el asíncrono, y la que pierde encuentra
+  el trabajo en marcha: 409 en curso. Una valla perdida a mitad de lote (otra petición lo tomó) también es el 409 en curso.
+  Sin clave en la petición (la cabecera ausente) es el lote de siempre, sin trabajo.
+- **El cuerpo llega en bytes** (`@RequestBody byte[]`, como el alta asíncrona) y el sobre lo lee `KeyedBatches.read` con el
+  lector del borde: el 400 del sobre de un lote con clave lleva el mensaje `invalidParams`, como el del asíncrono, y no el
+  `invalidBody` del lote sin clave. Los otros tres tienen que hacer lo mismo.
+- **`BatchJobSteps`** reúne lo que comparten el procesador asíncrono y el lote con clave: leer y firmar el sobre, el paso de
+  un elemento (efecto, avance y resultado en una transacción, ahora con tres desenlaces: `NEXT`, `STOP` y `LOST`, la valla
+  perdida) y la respuesta rehecha (`stored`, `batchStoredBody`). `BatchJobs` y `BatchJobRunner` la usan; el sabotaje
+  `bj-cursor-outside-tx` apunta ahora a `BatchJobSteps.java`.
+- **El todo o nada con clave** reutiliza el bucle de `BatchRunner` con un `Sink` (guardar cada resultado y cerrar el trabajo
+  dentro de la transacción del lote; descartarlo si falla). Un fallo al confirmar, que no es de ningún elemento, también
+  descarta el trabajo.
+- **El dueño**: `BATCH_ANONYMOUS_OWNER` sin capa security; con ella, el actor de autoría (`AuditorAwareConfig` se emite
+  también para un lote con clave con security).
+- **Lo que se emite solo con clave**: `takeOver`/`discard` en el puerto y en los dos adaptadores, `BatchKeyInProgressException`
+  (el code declarado o el canónico) y `batch.sync-stale-ms` en `batch.yaml`. Un proyecto con solo lotes con clave no lleva el
+  chunk, ni `BatchJobs`, ni el procesador, ni `TimerKinds` del lote; sí la purga de `batch_job`. La frontera de stack
+  (`batchJobStackErrors`) rechaza también un lote con clave sobre un motor sin sentencias.
+- Red: `test/batch.test.js` (seis casos nuevos); `batch-check` con los sujetos de `BATCH_KEY_DESIGNS`
+  (`src/lib/batch-key-probes.js`, `BatchKeyCheckTest` junto a `BatchCheckTest`): BA-* y BK-1 a BK-4 en verde en PostgreSQL,
+  MySQL y MongoDB, y BA-6, BA-7 y BK-5 en PostgreSQL y MySQL; `bk-replay-reprocess` en BK-1, `bk-steal-running` en BK-3,
+  `bk-no-resume` en BK-4 (PostgreSQL y MongoDB) y `bk-keep-failed` en BK-5, exactamente. La petición que muere a mitad de
+  lote es un `Error` lanzado por el gancho del handler tras el efecto del segundo elemento.
+
 ## Para retomar
 
-Inc. 10b en los generadores, uno tras otro desde main (keel-spring, keel-nest, keel-dotnet, keel-go). En cada uno: el lote
+Inc. 10b en keel-nest, keel-dotnet y keel-go, uno tras otro desde main (keel-spring hecho). En cada uno: el lote
 síncrono con clave (D15) sobre el almacén de trabajos que ya emite para el asíncrono (`usesBatchJobs` pasa a
 `batchJobStoreOperations`), sin temporizador; la repetición con `batchSyncRepeat` resuelta por `byKey`, `job` y `takeOver` (las de `batchSyncStatements`, con `BATCH_SYNC_STALE` en su configuración);
 el 207 rehecho con `batchStoredBody`; el todo o nada con `discardJob`; `syncIdempotency: true` en su frontera; los sujetos de
