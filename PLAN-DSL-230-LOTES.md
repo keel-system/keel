@@ -1,6 +1,6 @@
 # DSL 2.30: lotes con resultado por elemento (R5)
 
-**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 10 cerrados el 2026-11-14 (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores, con la fase B neutral en keel-core, y el contrato y el método); el 10b (D15, la idempotencia del lote síncrono) tiene hechas la parte neutral, keel-spring, keel-nest y keel-dotnet (2026-11-15); le sigue keel-go. Al cerrar pasa a `completed_plans/`.
+**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 10 cerrados el 2026-11-14 (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores, con la fase B neutral en keel-core, y el contrato y el método); el 10b (D15, la idempotencia del lote síncrono) tiene hechas la parte neutral, keel-spring, keel-nest y keel-dotnet (2026-11-15, commit e911ce67); le sigue keel-go. Al cerrar pasa a `completed_plans/`.
 
 ## Contexto
 
@@ -587,9 +587,9 @@ Incremento 10b en keel-dotnet (D15):
   `scripts/lib/batch-key-probes.js`: un `[Fact]` por caso (`BatchKey_BK4_…`) en la clase de sondas, contando trabajos y
   resultados como diferencia, y la muerte a mitad de lote es el `CrashingBatchJobStore` de las sondas BJ con `CrashAt = 1`.
   Medido: BK-1 a BK-5 y BA-* en verde en PostgreSQL (49 sondas) y MySQL (51), y `bk-replay-reprocess` en BK-1,
-  `bk-steal-running` en BK-3, `bk-no-resume` en BK-4 y `bk-keep-failed` en BK-5, exactamente, en los dos motores. MongoDB
-  (`doc-check --only=catalog-batch-keyed-mongo`, 28 sondas) en verde; sus tres sabotajes quedaron lanzados sin leer el
-  resultado: repetirlos (`doc-check --sabotage=bk-replay-reprocess|bk-steal-running|bk-no-resume`) antes de keel-go.
+  `bk-steal-running` en BK-3, `bk-no-resume` en BK-4 y `bk-keep-failed` en BK-5, exactamente, en los dos motores. En MongoDB
+  (`doc-check --only=catalog-batch-keyed-mongo`, 28 sondas) en verde, y los tres que tienen sujeto documental, exactos
+  (`bk-keep-failed` no: el todo o nada con clave solo tiene sujeto relacional).
 
 ## Para retomar
 
