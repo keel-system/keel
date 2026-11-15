@@ -22,6 +22,8 @@ import { storeDir } from '../../src/lib/relational-engine.js';
 import { repositoryArgs, repositoryParam } from '../../src/scaffold/repositories.js';
 import { goExported } from '../../src/lib/go-projection.js';
 import { PROBE_RECONCILIATION } from './reconciliation-probes.js';
+import { BATCH_SYNC_STALE } from '@keel-system/keel-core/gen/batch-store';
+import { usesKeyedBatches } from '../../src/scaffold/batch-jobs.js';
 
 /** Lo que el nombre de un elemento pide al handler de la sonda: fallar con algo que el diseño no declara (BA-4). */
 export const UNDECLARED_FAILURE_NAME = 'BOOM';
@@ -288,7 +290,7 @@ ${code}
 // las Transactions de la sonda.
 func batchHandler() http.Handler {
 	logger := slog.New(slog.DiscardHandler)
-	useCases := application.NewUseCases(logger, application.Dependencies{Transactor: probeTx, ${repositoryParam(product)[0].toUpperCase() + repositoryParam(product).slice(1)}: ${repository}})
+	useCases := application.NewUseCases(logger, application.Dependencies{Transactor: probeTx, ${repositoryParam(product)[0].toUpperCase() + repositoryParam(product).slice(1)}: ${repository}${usesKeyedBatches(model) ? `, BatchJobs: NewBatchJobStore(probeTx, ${BATCH_SYNC_STALE.default})` : ''}})
 	return httpapi.NewHandler(&health.Probes{}, useCases, logger)
 }
 

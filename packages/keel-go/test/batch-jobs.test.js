@@ -152,7 +152,9 @@ test('el avance del cursor (la valla) va ANTES que el resultado, en la transacci
   for (const name of ['catalog-batch-async', 'catalog-batch-async-mongo']) {
     const { files } = plan(name);
     const store = fileOf(files, '/batch_jobs.go');
-    assert.match(store, /"owner": auditActor\(ctx\)|\{Key: "owner", Value: auditActor\(ctx\)\}/, name);
+    assert.match(store, /"owner": batchJobOwner\(ctx\)|\{Key: "owner", Value: batchJobOwner\(ctx\)\}/, name);
+    // Con capa security (un asíncrono la exige), el dueño es el actor de autoría.
+    assert.match(store, /func batchJobOwner\(ctx context\.Context\) string \{\n\treturn auditActor\(ctx\)\n\}/, name);
     assert.ok(files.some((file) => file.path.endsWith('/audit_actor.go')), name);
   }
 });

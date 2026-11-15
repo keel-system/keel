@@ -22,9 +22,35 @@
 // Lo que no cambia respecto al lote síncrono: el handler procesa UN elemento, cada elemento se lee con `readBatchItem` (el
 // `wire.Unmarshal` del borde) y su fallo se traduce con `errorResponse` y `batchFailureOf` (batch.go), así que «falla solo su
 // elemento» y «detiene el lote» significan lo mismo.
+//
+// El lote SÍNCRONO con clave (D15, incremento 10b) usa el mismo almacén, sin temporizador (`Insert` sin `Kind` no arma
+// ninguno): `runKeyedPerItem` y `runKeyedAllOrNothing`, en el mismo batch_jobs.go de la API, crean su trabajo, procesan cada
+// elemento con los mismos pasos que el procesador (`processBatchItem`: efecto, valla y resultado en UNA transacción) y
+// responden lo guardado (`storedBatchResponse`, batchStoredBody de keel-core), así que la primera petición, la repetición y
+// la que reanuda responden lo mismo. El umbral del lote muerto lo guarda el almacén (`batch.sync-stale-ms`), y el dueño sin
+// capa security es el anónimo de keel-core (`batchJobOwner`).
 
-import { asyncBatchOperations, batchJobPaths, BATCH_JOB_PARAM, BATCH_ACCEPTED_STATUS } from '@keel-system/keel-core/gen/batch';
-import { BATCH_JOB, BATCH_ITEM_RESULT, BATCH_JOB_COLLECTIONS, BATCH_JOB_STATUSES, BATCH_PARAMETERS, BATCH_STORE_ENGINES, batchKind, batchStatements } from '@keel-system/keel-core/gen/batch-store';
+import {
+  asyncBatchOperations,
+  batchJobStoreOperations,
+  keyedSyncBatchOperations,
+  batchJobPaths,
+  BATCH_JOB_PARAM,
+  BATCH_ACCEPTED_STATUS
+} from '@keel-system/keel-core/gen/batch';
+import {
+  BATCH_JOB,
+  BATCH_ITEM_RESULT,
+  BATCH_JOB_COLLECTIONS,
+  BATCH_JOB_STATUSES,
+  BATCH_PARAMETERS,
+  BATCH_STORE_ENGINES,
+  BATCH_SYNC_STALE,
+  BATCH_ANONYMOUS_OWNER,
+  batchKind,
+  batchStatements,
+  batchSyncStatements
+} from '@keel-system/keel-core/gen/batch-store';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { idempotencyOutcomeCode } from '@keel-system/keel-core/gen/declared-errors';
 import { IDEMPOTENCY_HEADER } from '@keel-system/keel-core/gen/request-idempotency';
@@ -51,11 +77,32 @@ export const BATCH_JOB_STORE_VAR = 'batchJobStore';
 export const asyncOperations = (model) =>
   (model.services ?? []).flatMap((service) => service.operations ?? []).filter((operation) => operation.batch?.execution === 'async');
 
-/** ¿Tiene el servicio algún lote asíncrono? Sin persistencia no hay dónde guardar el trabajo (lo rechaza la frontera). */
-export const usesBatchJobs = (model) => Boolean(model.layersPresent?.persistence) && asyncBatchOperations(model).length > 0;
+/**
+ * ¿Usa el servicio el almacén de trabajos? Con un lote asíncrono o un lote síncrono con clave (D15). Sin persistencia no hay
+ * dónde guardar el trabajo (lo rechaza la frontera).
+ */
+export const usesBatchJobs = (model) => Boolean(model.layersPresent?.persistence) && batchJobStoreOperations(model).length > 0;
+
+/** ¿Tiene el servicio algún lote asíncrono? El alta, el procesador, su temporizador y las dos rutas del trabajo. */
+export const usesAsyncBatchJobs = (model) => usesBatchJobs(model) && asyncBatchOperations(model).length > 0;
+
+/** ¿Tiene el servicio algún lote síncrono con clave (D15)? */
+export const usesKeyedBatches = (model) => usesBatchJobs(model) && keyedSyncBatchOperations(model).length > 0;
 
 /** ¿Es la operación un lote asíncrono que se genera? */
-export const isAsyncBatch = (model, operation) => operation.batch?.execution === 'async' && usesBatchJobs(model);
+export const isAsyncBatch = (model, operation) => operation.batch?.execution === 'async' && usesAsyncBatchJobs(model);
+
+/** ¿Es la operación un lote síncrono con clave que se genera (D15)? */
+export const isKeyedBatch = (model, operation) =>
+  Boolean(operation.batch && operation.batch.execution !== 'async' && operation.batch.idempotency) && usesKeyedBatches(model);
+
+/** Las operaciones síncronas con clave del modelo, enteras. */
+export const keyedOperations = (model) =>
+  (model.services ?? []).flatMap((service) => service.operations ?? []).filter((operation) => operation.batch && operation.batch.execution !== 'async' && operation.batch.idempotency);
+
+/** ¿Procesa alguien elementos uno a uno sobre el almacén (el procesador asíncrono o un lote con clave per-item)? */
+const usesItemSteps = (model) =>
+  usesAsyncBatchJobs(model) || (usesKeyedBatches(model) && keyedOperations(model).some((operation) => operation.batch.atomicity === 'per-item'));
 
 /** La constante del `kind` del temporizador de los trabajos de una operación, en kinds.go: `KindBatchImportProducts`. */
 export const batchKindConstant = (operationName) => `KindBatch${pascalCase(operationName)}`;
@@ -74,14 +121,15 @@ export const jobResultsEndpoint = (operation) => `${goUnexported(operation.name)
  * `stamped(operation)` dice qué lleva el mensaje que estampa la petición (identidad, versiones, alcance).
  */
 export function batchJobStackErrors(model, stamped) {
-  if (asyncBatchOperations(model).length === 0) return [];
+  if (batchJobStoreOperations(model).length === 0) return [];
   const errors = [];
+  const what = asyncBatchOperations(model).length > 0 ? 'execution: async' : 'idempotency en un lote síncrono';
   if (!model.layersPresent?.persistence) {
-    errors.push('use-cases: batch (execution: async, DSL 2.30): el trabajo vive en la base del servicio, y este diseño no tiene capa persistence.');
+    errors.push(`use-cases: batch (${what}, DSL 2.30): el trabajo vive en la base del servicio, y este diseño no tiene capa persistence.`);
   } else if (!isDocument(model) && !BATCH_STORE_ENGINES.includes(model.stack?.database)) {
     errors.push(
-      `use-cases: batch (execution: async, DSL 2.30): el almacén de los trabajos tiene sentencias medidas para ${BATCH_STORE_ENGINES.join(', ')}, ` +
-        `y no para '${model.stack?.database}'. Elige uno de esos motores o declara execution: sync.`
+      `use-cases: batch (${what}, DSL 2.30): el almacén de los trabajos tiene sentencias medidas para ${BATCH_STORE_ENGINES.join(', ')}, ` +
+        `y no para '${model.stack?.database}'. Elige uno de esos motores, o declara execution: sync sin idempotency.`
     );
   }
   for (const operation of asyncOperations(model)) {
@@ -109,23 +157,39 @@ const reusedCode = (model, operation) => idempotencyOutcomeCode(model, operation
 /** El centinela Go de un code (el de errors.js, sin importarlo: errors.js importa este módulo). */
 const sentinel = (code) => `Err${goExported(String(code).toLowerCase())}`;
 
-/** Los centinelas del dominio que pone el generador para los lotes asíncronos (errors.js los emite). */
+/** El code de la clave en curso de una operación (D15): el que declara el diseño para ese desenlace, o el canónico. */
+const inProgressCode = (model, operation) => idempotencyOutcomeCode(model, operation.name, FRAMEWORK_ERRORS.idempotencyRace);
+
+/** Las operaciones que guardan su clave en el trabajo: las asíncronas y las síncronas con clave, enteras. */
+const storedOperations = (model) => [...asyncOperations(model), ...keyedOperations(model)];
+
+/** Los centinelas del dominio que pone el generador para los lotes con trabajo (errors.js los emite). */
 export function batchJobSentinels(model) {
   if (!usesBatchJobs(model)) return [];
   const declared = new Set((model.errors ?? []).map((error) => error.code));
-  const list = [
-    {
-      name: sentinel(FRAMEWORK_ERRORS.batchJobNotFound.code),
-      doc: 'el trabajo de un lote asíncrono no existe, ya se purgó o lo creó otro llamante (DSL 2.30, D11): los tres casos responden igual, para no decirle a nadie que un trabajo ajeno existe.',
-      ...FRAMEWORK_ERRORS.batchJobNotFound
-    }
-  ];
+  const list = usesAsyncBatchJobs(model)
+    ? [
+        {
+          name: sentinel(FRAMEWORK_ERRORS.batchJobNotFound.code),
+          doc: 'el trabajo de un lote asíncrono no existe, ya se purgó o lo creó otro llamante (DSL 2.30, D11): los tres casos responden igual, para no decirle a nadie que un trabajo ajeno existe.',
+          ...FRAMEWORK_ERRORS.batchJobNotFound
+        }
+      ]
+    : [];
   const reuse = FRAMEWORK_ERRORS.idempotencyReuse;
-  if (asyncOperations(model).some((operation) => operation.batch.idempotency && !declared.has(reusedCode(model, operation)))) {
+  if (storedOperations(model).some((operation) => operation.batch.idempotency && !declared.has(reusedCode(model, operation)))) {
     list.push({
       name: sentinel(reuse.code),
       doc: 'la misma clave de idempotencia con un contenido distinto. Lo usa la operación que no declara un code propio para este conflicto.',
       ...reuse
+    });
+  }
+  const race = FRAMEWORK_ERRORS.idempotencyRace;
+  if (keyedOperations(model).some((operation) => !declared.has(inProgressCode(model, operation)))) {
+    list.push({
+      name: sentinel(race.code),
+      doc: 'la misma clave de idempotencia mientras la primera petición sigue en marcha. Lo usa la operación que no declara un code propio para este conflicto.',
+      ...race
     });
   }
   return list;
@@ -135,15 +199,15 @@ export function batchJobSentinels(model) {
 export function batchJobDependencyRows(model) {
   if (!usesBatchJobs(model)) return [];
   return [
-    { text: `\t// ${BATCH_JOBS.field} es el almacén de los trabajos de los lotes asíncronos (DSL 2.30): el alta, sus rutas y el procesador.` },
+    { text: `\t// ${BATCH_JOBS.field} es el almacén de los trabajos de los lotes (DSL 2.30): los asíncronos y los síncronos con clave.` },
     { indent: '\t', cells: [BATCH_JOBS.field, BATCH_JOBS.port] }
   ];
 }
 
 /** El acceso de UseCases al almacén de los trabajos (use-cases.js). */
 export const BATCH_JOBS_ACCESSOR = `
-// ${BATCH_JOBS.field} es el almacén de los trabajos de los lotes asíncronos (DSL 2.30): lo usan el alta, las rutas del trabajo y el
-// procesador, que viven en la entrada HTTP.
+// ${BATCH_JOBS.field} es el almacén de los trabajos de los lotes (DSL 2.30): lo usan el alta, las rutas del trabajo y el
+// procesador de los asíncronos, y los lotes síncronos con clave, que viven en la entrada HTTP.
 func (uc *UseCases) ${BATCH_JOBS.field}() ${BATCH_JOBS.port} {
 	return uc.batchJobs
 }
@@ -184,16 +248,15 @@ export function batchKindRows(model) {
  */
 export function batchJobTimerWiring(model, purgeKind) {
   if (!usesBatchJobs(model)) return { code: '', handlers: [], recurrings: [] };
-  const { store } = layout(model);
-  return {
-    code: `	batchSettings, err := ${store.name}.BatchSettingsFrom(cfg)
-	if err != nil {
-		return fmt.Errorf("la configuración de los lotes asíncronos: %w", err)
-	}
-	// El procesador de los trabajos es de la API: vuelve a leer el sobre con el lector del endpoint y traduce el fallo de cada
+  // batchSettings ya lo leyó el arranque antes del almacén (batchJobStoreWiring).
+  const runner = usesAsyncBatchJobs(model)
+    ? `	// El procesador de los trabajos es de la API: vuelve a leer el sobre con el lector del endpoint y traduce el fallo de cada
 	// elemento con su errorResponse.
 	batchJobs := httpapi.NewBatchJobRunner(useCases, logger, batchSettings.ChunkSize)
-	// La purga de los trabajos terminados (D10): UNA réplica por tick, la que gana su fila.
+`
+    : '';
+  return {
+    code: `${runner}	// La purga de los trabajos terminados (D10): UNA réplica por tick, la que gana su fila.
 	purgeBatchJob, err := timer.NewRecurring(timer.${purgeKind}, batchSettings.PurgeCron, func(ctx context.Context) error {
 		_, err := ${BATCH_JOB_STORE_VAR}.Purge(ctx, batchSettings.RetentionDays)
 		return err
@@ -207,10 +270,19 @@ export function batchJobTimerWiring(model, purgeKind) {
   };
 }
 
-/** La declaración del almacén en el arranque, antes de los casos de uso (server.js). */
+/**
+ * La configuración de los lotes y la declaración del almacén en el arranque, antes de los casos de uso (server.js): la purga
+ * y el procesador la leen después (batchJobTimerWiring), y el almacén guarda el umbral del lote muerto (D15).
+ */
 export function batchJobStoreWiring(model) {
   if (!usesBatchJobs(model)) return '';
-  return `	${BATCH_JOB_STORE_VAR} := ${layout(model).store.name}.NewBatchJobStore(transactions)\n`;
+  const { store } = layout(model);
+  return `	batchSettings, err := ${store.name}.BatchSettingsFrom(cfg)
+	if err != nil {
+		return fmt.Errorf("la configuración de los lotes: %w", err)
+	}
+	${BATCH_JOB_STORE_VAR} := ${store.name}.NewBatchJobStore(transactions${usesKeyedBatches(model) ? ', batchSettings.SyncStaleMs' : ''})
+`;
 }
 
 // ─── Lo que emite build ──────────────────────────────────────────────────────────────────────────
@@ -219,16 +291,18 @@ export function generate(model) {
   if (!usesBatchJobs(model)) return [];
   const { domain, httpapi, store } = layout(model);
   const document = isDocument(model);
+  const asynchronous = usesAsyncBatchJobs(model);
   const timerPkg = { dir: 'internal/infrastructure/timer', name: 'timer' };
+  // El colector de imports de go-source.js deja solo los que el cuerpo usa: en Go uno sin usar no compila.
   return [
-    { path: `${domain.dir}/batch_job.go`, content: packageFile(model, domain, { imports: ['context', 'time', 'github.com/google/uuid'], body: domainBody() }) },
+    { path: `${domain.dir}/batch_job.go`, content: packageFile(model, domain, { imports: ['context', 'time', 'github.com/google/uuid'], body: domainBody(model) }) },
     {
       path: `${store.dir}/batch_jobs.go`,
       content: packageFile(model, store, {
         imports: document
           ? ['context', 'errors', 'fmt', 'strconv', 'strings', 'time', 'github.com/google/uuid', 'go.mongodb.org/mongo-driver/v2/bson', { path: 'go.mongodb.org/mongo-driver/v2/mongo', name: 'mongodriver' }, 'go.mongodb.org/mongo-driver/v2/mongo/options', 'internal/domain', 'internal/platform/config']
           : ['context', 'database/sql', 'errors', 'fmt', 'strconv', 'strings', 'time', 'github.com/google/uuid', 'internal/domain', 'internal/platform/config'],
-        body: `${document ? mongoStoreBody() : sqlStoreBody(model)}${SETTINGS_BODY}`
+        body: `${document ? mongoStoreBody(model) : sqlStoreBody(model)}${ownerBody(model)}${settingsBody(model)}`
       })
     },
     {
@@ -251,30 +325,42 @@ export function generate(model) {
           'internal/application',
           'internal/domain',
           'internal/platform/wire',
-          ...(usesHttpSecurity(model) ? ['internal/platform/security'] : [])
+          ...(asynchronous && usesHttpSecurity(model) ? ['internal/platform/security'] : [])
         ],
         body: httpBody(model)
       })
     },
-    { path: `${timerPkg.dir}/batch_job.go`, content: packageFile(model, timerPkg, { imports: ['context', 'time', 'github.com/google/uuid'], body: TIMER_HANDLER_BODY }) },
-    ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/batch.yaml`, content: batchYaml(profile) }))
+    ...(asynchronous ? [{ path: `${timerPkg.dir}/batch_job.go`, content: packageFile(model, timerPkg, { imports: ['context', 'time', 'github.com/google/uuid'], body: TIMER_HANDLER_BODY }) }] : []),
+    ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/batch.yaml`, content: batchYaml(model, profile) }))
   ];
 }
 
 // ─── La configuración ────────────────────────────────────────────────────────────────────────────
 
 /**
- * config/parameters/<perfil>/batch.yaml: la mecánica de los lotes asíncronos (keel-core/gen/batch-store.js, la misma clave
- * y variable en los cuatro generadores). Es, línea a línea, el `batch.yaml` de los otros tres.
+ * config/parameters/<perfil>/batch.yaml: la mecánica de los lotes con trabajo (keel-core/gen/batch-store.js, la misma clave
+ * y variable en los cuatro generadores). Es, línea a línea, el `batch.yaml` de los otros tres: el chunk solo con lotes
+ * asíncronos; el umbral del lote muerto, solo con lotes síncronos con clave (D15).
  */
-export function batchYaml(profile) {
-  const lines = [
-    '# Los lotes asíncronos (DSL 2.30): cuántos elementos procesa cada disparo y cuánto vive un trabajo terminado.',
-    '# El chunk tiene que caber en el arriendo del cronómetro (timer.lease-ms): uno más lento lo tomaría otra réplica.',
-    'batch:'
+export function batchYaml(model, profile) {
+  const asynchronous = asyncBatchOperations(model).length > 0;
+  const keyed = usesKeyedBatches(model);
+  const lines = asynchronous
+    ? [
+        '# Los lotes asíncronos (DSL 2.30): cuántos elementos procesa cada disparo y cuánto vive un trabajo terminado.',
+        '# El chunk tiene que caber en el arriendo del cronómetro (timer.lease-ms): uno más lento lo tomaría otra réplica.'
+      ]
+    : ['# Los lotes con clave (DSL 2.30): cuánto vive un trabajo terminado.'];
+  if (keyed) {
+    lines.push('# Un lote síncrono con clave sin terminar que nadie escribe desde hace más de sync-stale-ms se da por muerto, y su repetición lo sigue desde el cursor.');
+  }
+  lines.push('batch:');
+  const parameters = [
+    ...Object.entries(BATCH_PARAMETERS).filter(([name]) => asynchronous || name !== 'chunkSize').map(([, parameter]) => parameter),
+    ...(keyed ? [BATCH_SYNC_STALE] : [])
   ];
   let parent = null;
-  for (const parameter of Object.values(BATCH_PARAMETERS)) {
+  for (const parameter of parameters) {
     const segments = parameter.key.split('.');
     if (segments.length === 3 && parent !== segments[1]) {
       parent = segments[1];
@@ -288,22 +374,68 @@ export function batchYaml(profile) {
 
 const P = BATCH_PARAMETERS;
 
-const SETTINGS_BODY = `
-// BatchSettings es la mecánica de los lotes asíncronos del perfil (config/parameters/<perfil>/batch.yaml), con las claves y
-// los defaults de keel-core (BATCH_PARAMETERS), los mismos en los cuatro generadores.
+/** El dueño de un trabajo (D11, D15): el actor de autoría con capa security; sin ella, el anónimo de keel-core. */
+function ownerBody(model) {
+  if (usesHttpSecurity(model)) {
+    return `
+// batchJobOwner es el dueño de un trabajo (D11): el actor de autoría de la petición que lo crea, y el único que lo ve.
+func batchJobOwner(ctx context.Context) string {
+	return auditActor(ctx)
+}
+`;
+  }
+  return `
+// batchJobOwnerAnonymous es el dueño de un lote sin capa security (D15): no hay llamante, y la clave la acota solo la operación.
+const batchJobOwnerAnonymous = ${goString(BATCH_ANONYMOUS_OWNER)}
+
+// batchJobOwner es el dueño de un trabajo: sin capa security, siempre el mismo.
+func batchJobOwner(context.Context) string {
+	return batchJobOwnerAnonymous
+}
+`;
+}
+
+function settingsBody(model) {
+  const keyed = usesKeyedBatches(model);
+  const S = BATCH_SYNC_STALE;
+  const fields = alignRows([
+    { text: '\t// ChunkSize es cuántos elementos procesa cada disparo del temporizador de un trabajo (D9): por debajo del arriendo del' },
+    { text: '\t// cronómetro.' },
+    { indent: '\t', cells: ['ChunkSize', 'int'] },
+    { text: '\t// RetentionDays es cuántos días vive un trabajo TERMINADO con sus resultados (D10).' },
+    { indent: '\t', cells: ['RetentionDays', 'int'] },
+    { text: '\t// PurgeCron es el cron (seis campos, en UTC) de su purga.' },
+    { indent: '\t', cells: ['PurgeCron', 'string'] },
+    ...(keyed
+      ? [
+          { text: '\t// SyncStaleMs es cuántos milisegundos sin escribirse hacen falta para dar por muerto un lote síncrono con clave sin' },
+          { text: '\t// terminar (D15).' },
+          { indent: '\t', cells: ['SyncStaleMs', 'int'] }
+        ]
+      : [])
+  ]);
+  const defaults = [
+    `ChunkSize: ${P.chunkSize.default}`,
+    `RetentionDays: ${P.retentionDays.default}`,
+    `PurgeCron: ${goString(P.purgeCron.default)}`,
+    ...(keyed ? [`SyncStaleMs: ${S.default}`] : [])
+  ];
+  const stale = keyed
+    ? `
+	if settings.SyncStaleMs, err = batchPositive(cfg, ${goString(S.key)}, settings.SyncStaleMs); err != nil {
+		return BatchSettings{}, err
+	}`
+    : '';
+  return `
+// BatchSettings es la mecánica de los lotes con trabajo del perfil (config/parameters/<perfil>/batch.yaml), con las claves y
+// los defaults de keel-core (BATCH_PARAMETERS${keyed ? ' y BATCH_SYNC_STALE' : ''}), los mismos en los cuatro generadores.
 type BatchSettings struct {
-	// ChunkSize es cuántos elementos procesa cada disparo del temporizador de un trabajo (D9): por debajo del arriendo del
-	// cronómetro.
-	ChunkSize int
-	// RetentionDays es cuántos días vive un trabajo TERMINADO con sus resultados (D10).
-	RetentionDays int
-	// PurgeCron es el cron (seis campos, en UTC) de su purga.
-	PurgeCron string
+${fields.join('\n')}
 }
 
 // BatchSettingsFrom lee la mecánica de los lotes al ARRANCAR: un número que no es un entero positivo no deja arrancar.
 func BatchSettingsFrom(cfg *config.Config) (BatchSettings, error) {
-	settings := BatchSettings{ChunkSize: ${P.chunkSize.default}, RetentionDays: ${P.retentionDays.default}, PurgeCron: ${goString(P.purgeCron.default)}}
+	settings := BatchSettings{${defaults.join(', ')}}
 	if value, ok := cfg.Value(${goString(P.purgeCron.key)}); ok && strings.TrimSpace(value) != "" {
 		settings.PurgeCron = strings.TrimSpace(value)
 	}
@@ -313,7 +445,7 @@ func BatchSettingsFrom(cfg *config.Config) (BatchSettings, error) {
 	}
 	if settings.RetentionDays, err = batchPositive(cfg, ${goString(P.retentionDays.key)}, settings.RetentionDays); err != nil {
 		return BatchSettings{}, err
-	}
+	}${stale}
 	return settings, nil
 }
 
@@ -330,11 +462,13 @@ func batchPositive(cfg *config.Config, key string, fallback int) (int, error) {
 	return n, nil
 }
 `;
+}
 
 // ─── El dominio ──────────────────────────────────────────────────────────────────────────────────
 
-function domainBody() {
+function domainBody(model) {
   const S = BATCH_JOB_STATUSES;
+  const keyed = usesKeyedBatches(model);
   const job = alignRows([
     { indent: '\t', cells: ['ID', 'uuid.UUID'] },
     { indent: '\t', cells: ['Operation', 'string'] },
@@ -351,7 +485,8 @@ function domainBody() {
   const draft = alignRows([
     { indent: '\t', cells: ['ID', 'uuid.UUID'] },
     { indent: '\t', cells: ['Operation', 'string'] },
-    { text: '\t// Kind es el kind del temporizador de UNA vez que lo procesa (batch:<operación>).' },
+    { text: '\t// Kind es el kind del temporizador de UNA vez que lo procesa (batch:<operación>); vacío, sin temporizador: lo' },
+    { text: '\t// procesa la petición (un lote síncrono con clave, D15).' },
     { indent: '\t', cells: ['Kind', 'string'] },
     { text: '\t// Key es la clave de idempotencia del lote (D13); nil, sin clave.' },
     { indent: '\t', cells: ['Key', '*string'] },
@@ -372,8 +507,8 @@ function domainBody() {
     { indent: '\t', cells: ['Result', '*string'] }
   ]);
   return `
-// Los estados de un trabajo de un lote asíncrono (DSL 2.30, keel-core/gen/batch-store.js). Un lote asíncrono es per-item
-// (D14), así que no hay «revertido».
+// Los estados de un trabajo de un lote (DSL 2.30, keel-core/gen/batch-store.js). Un lote asíncrono es per-item (D14), y el
+// todo o nada con clave que falla borra su trabajo, así que no hay «revertido».
 const (
 	// BatchJobQueued es un trabajo creado: nada procesado todavía.
 	BatchJobQueued = ${goString(S.queued)}
@@ -433,7 +568,16 @@ type BatchJobStore interface {
 	// Results son los resultados de una página, en orden de índice.
 	Results(ctx context.Context, jobID uuid.UUID, pageable Pageable) (Page[BatchJobResult], error)
 	// Purge borra los trabajos terminados hace más de retentionDays, con sus resultados (D10). Nunca uno en marcha.
-	Purge(ctx context.Context, retentionDays int) (int64, error)
+	Purge(ctx context.Context, retentionDays int) (int64, error)${
+    keyed
+      ? `
+	// TakeOver toma un lote síncrono con clave sin terminar que nadie escribe desde hace más de batch.sync-stale-ms (D15), con
+	// la hora de la base. false: sigue en marcha.
+	TakeOver(ctx context.Context, id uuid.UUID) (bool, error)
+	// Discard borra el trabajo de un todo o nada con clave que no se confirmó (D15): libera la clave. Nunca uno terminado.
+	Discard(ctx context.Context, id uuid.UUID) (bool, error)`
+      : ''
+  }
 }
 `;
 }
@@ -445,10 +589,19 @@ const SQL_NAMES = ['insertJob', 'byKey', 'releaseKey', 'job', 'ownedJob', 'inser
 /** La constante Go de una sentencia de los lotes: `batchSQLInsertJob`. */
 export const batchStatementConstant = (name) => `batchSQL${name[0].toUpperCase()}${name.slice(1)}`;
 
+/** Las sentencias del almacén del modelo: las del lote síncrono con clave (D15), solo si lo hay. */
+export function batchStatementsOf(model) {
+  const engine = relationalEngine(model);
+  const keyed = usesKeyedBatches(model);
+  const S = { ...batchStatements(engine), ...(keyed ? batchSyncStatements(engine) : {}) };
+  return [...SQL_NAMES, ...(keyed ? ['takeOver', 'discardJob'] : [])].map((name) => ({ name, sql: S[name] }));
+}
+
 function sqlStoreBody(model) {
-  const S = batchStatements(relationalEngine(model));
+  const S = Object.fromEntries(batchStatementsOf(model).map(({ name, sql }) => [name, sql]));
   const d = sqlDialect(model);
-  const constants = SQL_NAMES.flatMap((name) => [
+  const keyed = usesKeyedBatches(model);
+  const constants = Object.keys(S).flatMap((name) => [
     { text: `\t// ${batchStatementConstant(name)} es la sentencia «${name}» de keel-core.` },
     { indent: '\t', cells: [batchStatementConstant(name), `= ${goString(S[name])}`] }
   ]);
@@ -461,31 +614,37 @@ const (
 ${alignRows(constants).join('\n')}
 )
 
-// BatchJobStore son los trabajos de los lotes asíncronos sobre ${d.label}: implementa domain.BatchJobStore por la transacción
-// abierta en el contexto, como el cronómetro y el historial. El dueño es el actor de autoría (auditActor).
+// BatchJobStore son los trabajos de los lotes sobre ${d.label}: implementa domain.BatchJobStore por la transacción abierta en el
+// contexto, como el cronómetro y el historial. El dueño es batchJobOwner.
 type BatchJobStore struct {
-	tx *Transactions
+	tx *Transactions${
+    keyed
+      ? `
+	// syncStaleMs es el umbral del lote síncrono con clave muerto (batch.sync-stale-ms, D15).
+	syncStaleMs int`
+      : ''
+  }
 }
 
 var _ domain.BatchJobStore = (*BatchJobStore)(nil)
 
-// NewBatchJobStore construye el almacén sobre las transacciones del servicio.
-func NewBatchJobStore(tx *Transactions) *BatchJobStore {
-	return &BatchJobStore{tx: tx}
+// NewBatchJobStore construye el almacén sobre las transacciones del servicio${keyed ? ', con el umbral del lote muerto' : ''}.
+func NewBatchJobStore(tx *Transactions${keyed ? ', syncStaleMs int' : ''}) *BatchJobStore {
+	return &BatchJobStore{tx: tx${keyed ? ', syncStaleMs: syncStaleMs' : ''}}
 }
 
 // ByKey implementa domain.BatchJobStore.
 func (s *BatchJobStore) ByKey(ctx context.Context, operation, key string) (domain.BatchJobKey, bool, error) {
 	var hit domain.BatchJobKey
 	var signature sql.NullString
-	found, err := s.row(ctx, ${c('byKey')}, map[string]any{"operation": operation, "owner": auditActor(ctx), "key": key}, &hit.ID, &signature)
+	found, err := s.row(ctx, ${c('byKey')}, map[string]any{"operation": operation, "owner": batchJobOwner(ctx), "key": key}, &hit.ID, &signature)
 	hit.Signature = signature.String
 	return hit, found, err
 }
 
 // ReleaseKey implementa domain.BatchJobStore.
 func (s *BatchJobStore) ReleaseKey(ctx context.Context, operation, key string) error {
-	_, err := s.write(ctx, ${c('releaseKey')}, map[string]any{"operation": operation, "owner": auditActor(ctx), "key": key})
+	_, err := s.write(ctx, ${c('releaseKey')}, map[string]any{"operation": operation, "owner": batchJobOwner(ctx), "key": key})
 	return err
 }
 
@@ -499,10 +658,18 @@ func (s *BatchJobStore) Insert(ctx context.Context, job domain.NewBatchJob) erro
 		ttl = job.KeyTTL.Milliseconds()
 	}
 	return s.tx.write(ctx, func(q DBTX) error {
-		values := map[string]any{"id": job.ID, "operation": job.Operation, "owner": auditActor(ctx), "key": key, "signature": job.Signature, "ttlMs": ttl, "input": job.Input, "total": job.Total}
+		values := map[string]any{"id": job.ID, "operation": job.Operation, "owner": batchJobOwner(ctx), "key": key, "signature": job.Signature, "ttlMs": ttl, "input": job.Input, "total": job.Total}
 		if _, err := timerExec(ctx, q, ${c('insertJob')}, values); err != nil {
 			return err
-		}
+		}${
+      keyed
+        ? `
+		if job.Kind == "" {
+			// Un lote síncrono con clave (D15): sin temporizador, lo procesa la petición.
+			return nil
+		}`
+        : ''
+    }
 		var now time.Time
 		if err := q.QueryRowContext(ctx, timerDBNow).Scan(&now); err != nil {
 			return err
@@ -518,7 +685,7 @@ func (s *BatchJobStore) Job(ctx context.Context, id uuid.UUID) (domain.BatchJob,
 
 // Owned implementa domain.BatchJobStore: solo un trabajo de esa operación y del llamante.
 func (s *BatchJobStore) Owned(ctx context.Context, id uuid.UUID, operation string) (domain.BatchJob, bool, error) {
-	return s.job(ctx, ${c('ownedJob')}, map[string]any{"id": id, "operation": operation, "owner": auditActor(ctx)})
+	return s.job(ctx, ${c('ownedJob')}, map[string]any{"id": id, "operation": operation, "owner": batchJobOwner(ctx)})
 }
 
 // Advance implementa domain.BatchJobStore: la valla del elemento.
@@ -591,7 +758,23 @@ func (s *BatchJobStore) Purge(ctx context.Context, retentionDays int) (int64, er
 	})
 	return purged, err
 }
+${
+  keyed
+    ? `
+// TakeOver implementa domain.BatchJobStore: toma el lote muerto con la hora de la base.
+func (s *BatchJobStore) TakeOver(ctx context.Context, id uuid.UUID) (bool, error) {
+	touched, err := s.write(ctx, ${c('takeOver')}, map[string]any{"id": id, "staleMs": s.syncStaleMs})
+	return touched == 1, err
+}
 
+// Discard implementa domain.BatchJobStore.
+func (s *BatchJobStore) Discard(ctx context.Context, id uuid.UUID) (bool, error) {
+	touched, err := s.write(ctx, ${c('discardJob')}, map[string]any{"id": id})
+	return touched == 1, err
+}
+`
+    : ''
+}
 // job lee un trabajo con una de las dos sentencias que lo leen entero.
 func (s *BatchJobStore) job(ctx context.Context, statement string, values map[string]any) (domain.BatchJob, bool, error) {
 	var job domain.BatchJob
@@ -658,8 +841,9 @@ func textOf(text sql.NullString) *string {
 
 // ─── El almacén documental ───────────────────────────────────────────────────────────────────────
 
-function mongoStoreBody() {
+function mongoStoreBody(model) {
   const { job, result } = BATCH_JOB_COLLECTIONS;
+  const keyed = usesKeyedBatches(model);
   const collections = alignRows([
     { indent: '\t', cells: ['batchJobCollection', `= ${goString(job.collection)}`] },
     { indent: '\t', cells: ['batchResultCollection', `= ${goString(result.collection)}`] }
@@ -673,18 +857,23 @@ const (
 ${collections.join('\n')}
 )
 
-// BatchJobStore son los trabajos de los lotes asíncronos sobre MongoDB: implementa domain.BatchJobStore por la sesión de la
-// transacción abierta en el contexto. La hora es la del servidor ($$NOW, la del cronómetro). El dueño es el actor de
-// autoría (auditActor).
+// BatchJobStore son los trabajos de los lotes sobre MongoDB: implementa domain.BatchJobStore por la sesión de la transacción
+// abierta en el contexto. La hora es la del servidor ($$NOW, la del cronómetro). El dueño es batchJobOwner.
 type BatchJobStore struct {
-	tx *Transactions
+	tx *Transactions${
+    keyed
+      ? `
+	// syncStaleMs es el umbral del lote síncrono con clave muerto (batch.sync-stale-ms, D15).
+	syncStaleMs int`
+      : ''
+  }
 }
 
 var _ domain.BatchJobStore = (*BatchJobStore)(nil)
 
-// NewBatchJobStore construye el almacén sobre las transacciones del servicio.
-func NewBatchJobStore(tx *Transactions) *BatchJobStore {
-	return &BatchJobStore{tx: tx}
+// NewBatchJobStore construye el almacén sobre las transacciones del servicio${keyed ? ', con el umbral del lote muerto' : ''}.
+func NewBatchJobStore(tx *Transactions${keyed ? ', syncStaleMs int' : ''}) *BatchJobStore {
+	return &BatchJobStore{tx: tx${keyed ? ', syncStaleMs: syncStaleMs' : ''}}
 }
 
 // ByKey implementa domain.BatchJobStore.
@@ -694,7 +883,7 @@ func (s *BatchJobStore) ByKey(ctx context.Context, operation, key string) (domai
 		return domain.BatchJobKey{}, false, err
 	}
 	live := bson.A{bson.D{{Key: "key_expires_at", Value: nil}}, bson.D{{Key: "key_expires_at", Value: bson.D{{Key: "$gt", Value: bson.NewDateTimeFromTime(now)}}}}}
-	filter := bson.D{{Key: "operation", Value: operation}, {Key: "owner", Value: auditActor(ctx)}, {Key: "idempotency_key", Value: key}, {Key: "$or", Value: live}}
+	filter := bson.D{{Key: "operation", Value: operation}, {Key: "owner", Value: batchJobOwner(ctx)}, {Key: "idempotency_key", Value: key}, {Key: "$or", Value: live}}
 	raw, err := jobs.FindOne(ctx, filter).Raw()
 	if errors.Is(err, mongodriver.ErrNoDocuments) {
 		return domain.BatchJobKey{}, false, nil
@@ -717,7 +906,7 @@ func (s *BatchJobStore) ReleaseKey(ctx context.Context, operation, key string) e
 	if err != nil {
 		return err
 	}
-	filter := bson.D{{Key: "operation", Value: operation}, {Key: "owner", Value: auditActor(ctx)}, {Key: "idempotency_key", Value: key}, {Key: "key_expires_at", Value: bson.D{{Key: "$lte", Value: bson.NewDateTimeFromTime(now)}}}}
+	filter := bson.D{{Key: "operation", Value: operation}, {Key: "owner", Value: batchJobOwner(ctx)}, {Key: "idempotency_key", Value: key}, {Key: "key_expires_at", Value: bson.D{{Key: "$lte", Value: bson.NewDateTimeFromTime(now)}}}}
 	return s.tx.write(ctx, func(ctx context.Context) error {
 		_, err := jobs.UpdateMany(ctx, filter, bson.D{{Key: "$unset", Value: bson.D{{Key: "idempotency_key", Value: ""}}}})
 		return err
@@ -730,7 +919,7 @@ func (s *BatchJobStore) Insert(ctx context.Context, job domain.NewBatchJob) erro
 	if err != nil {
 		return err
 	}
-	document := bson.D{{Key: "_id", Value: job.ID.String()}, {Key: "operation", Value: job.Operation}, {Key: "owner", Value: auditActor(ctx)}, {Key: "status", Value: domain.BatchJobQueued}}
+	document := bson.D{{Key: "_id", Value: job.ID.String()}, {Key: "operation", Value: job.Operation}, {Key: "owner", Value: batchJobOwner(ctx)}, {Key: "status", Value: domain.BatchJobQueued}}
 	// Sin clave el campo no existe: el índice parcial solo mira los trabajos que tienen una.
 	if job.Key != nil {
 		document = append(document, bson.E{Key: "idempotency_key", Value: *job.Key})
@@ -755,7 +944,15 @@ func (s *BatchJobStore) Insert(ctx context.Context, job domain.NewBatchJob) erro
 	return s.tx.write(ctx, func(ctx context.Context) error {
 		if _, err := jobs.InsertOne(ctx, document); err != nil {
 			return err
-		}
+		}${
+      keyed
+        ? `
+		if job.Kind == "" {
+			// Un lote síncrono con clave (D15): sin temporizador, lo procesa la petición.
+			return nil
+		}`
+        : ''
+    }
 		return s.tx.armTimer(ctx, job.Kind, job.ID, now)
 	})
 }
@@ -767,7 +964,7 @@ func (s *BatchJobStore) Job(ctx context.Context, id uuid.UUID) (domain.BatchJob,
 
 // Owned implementa domain.BatchJobStore: solo un trabajo de esa operación y del llamante.
 func (s *BatchJobStore) Owned(ctx context.Context, id uuid.UUID, operation string) (domain.BatchJob, bool, error) {
-	return s.find(ctx, bson.D{{Key: "_id", Value: id.String()}, {Key: "operation", Value: operation}, {Key: "owner", Value: auditActor(ctx)}})
+	return s.find(ctx, bson.D{{Key: "_id", Value: id.String()}, {Key: "operation", Value: operation}, {Key: "owner", Value: batchJobOwner(ctx)}})
 }
 
 // Advance implementa domain.BatchJobStore: la valla del elemento.
@@ -900,7 +1097,47 @@ func (s *BatchJobStore) Purge(ctx context.Context, retentionDays int) (int64, er
 	})
 	return purged, err
 }
+${
+  keyed
+    ? `
+// TakeOver implementa domain.BatchJobStore: toma el lote muerto con la hora del servidor.
+func (s *BatchJobStore) TakeOver(ctx context.Context, id uuid.UUID) (bool, error) {
+	now, jobs, err := s.prepare(ctx)
+	if err != nil {
+		return false, err
+	}
+	stale := bson.NewDateTimeFromTime(now.Add(-time.Duration(s.syncStaleMs) * time.Millisecond))
+	filter := bson.D{{Key: "_id", Value: id.String()}, {Key: "finished_at", Value: nil}, {Key: "updated_at", Value: bson.D{{Key: "$lte", Value: stale}}}}
+	var matched int64
+	err = s.tx.write(ctx, func(ctx context.Context) error {
+		result, err := jobs.UpdateOne(ctx, filter, bson.D{{Key: "$set", Value: bson.D{{Key: "updated_at", Value: bson.NewDateTimeFromTime(now)}}}})
+		if err == nil {
+			matched = result.MatchedCount
+		}
+		return err
+	})
+	return matched == 1, err
+}
 
+// Discard implementa domain.BatchJobStore.
+func (s *BatchJobStore) Discard(ctx context.Context, id uuid.UUID) (bool, error) {
+	jobs, err := s.tx.collection(batchJobCollection)
+	if err != nil {
+		return false, err
+	}
+	var deleted int64
+	err = s.tx.write(ctx, func(ctx context.Context) error {
+		result, err := jobs.DeleteOne(ctx, bson.D{{Key: "_id", Value: id.String()}, {Key: "finished_at", Value: nil}})
+		if err == nil {
+			deleted = result.DeletedCount
+		}
+		return err
+	})
+	return deleted == 1, err
+}
+`
+    : ''
+}
 // prepare es la hora del servidor y la colección de los trabajos.
 func (s *BatchJobStore) prepare(ctx context.Context) (time.Time, *mongodriver.Collection, error) {
 	jobs, err := s.tx.collection(batchJobCollection)
@@ -972,6 +1209,152 @@ func nullText(text *string) any {
 // ─── La entrada HTTP: el alta, las dos rutas y el procesador ─────────────────────────────────────
 
 function httpBody(model) {
+  const asynchronous = usesAsyncBatchJobs(model);
+  const keyed = usesKeyedBatches(model);
+  const steps = usesItemSteps(model);
+  return `
+// Los lotes con trabajo (DSL 2.30; wire-contract.md § Lotes): ${[
+    ...(asynchronous ? ['los asíncronos (el trabajo en el cable, el alta, las dos rutas que lo leen y el procesador que lo recorre por partes sobre el cronómetro)'] : []),
+    ...(keyed ? ['los síncronos con clave (D15: su clave y su respuesta las guarda el trabajo, sin temporizador)'] : [])
+  ].join(', y ')}.
+${sharedHttpBody(model, steps)}${asynchronous ? asyncHttpBody(model) : ''}${keyed ? keyedHttpBody(model) : ''}`;
+}
+
+/** Lo que comparten el alta asíncrona, el procesador y los lotes con clave: el cuerpo, su firma, el paso de un elemento. */
+function sharedHttpBody(model, steps) {
+  const { aborted } = BATCH_JOB_STATUSES;
+  const stepsCode = steps
+    ? `
+// errBatchFenceLost es el cursor que ya no está donde lo dejó quien procesa: otra réplica, o la repetición de la petición, se
+// llevó el trabajo. Revierte el elemento entero, efecto incluido.
+var errBatchFenceLost = errors.New("el trabajo lo procesa otro")
+
+// batchStep es lo que deja un elemento: seguir, parar (el lote se detuvo, D4) o perder el trabajo (la valla).
+type batchStep int
+
+const (
+	batchNext batchStep = iota
+	batchStop
+	batchLost
+)
+
+// processBatchItem es un elemento de un lote con trabajo (D9, D15), en UNA transacción con su efecto (el despacho por su
+// caso de uso, que se une a ella), el avance del cursor y su resultado. El avance es la VALLA: solo avanza si el cursor sigue
+// donde lo dejó quien procesa, y si no —otra réplica, o la repetición de la petición, se llevó el trabajo— el elemento
+// revierte entero. Fallan solo su elemento los codes de itemErrors y ${FRAMEWORK_ERRORS.validation.code}; cualquier otro fallo detiene el
+// lote (${aborted}, D4).
+func processBatchItem[T, M any](r *http.Request, a *api, store domain.BatchJobStore, jobID uuid.UUID, index int, raw jsontext.Value, msg M, itemErrors []string, process func(context.Context, M, T) (any, error)) (batchStep, error) {
+	item, problem := readBatchItem[T](raw)
+	if problem != "" {
+		return a.failedBatchItem(r.Context(), store, jobID, batchFailed(index, validationCode, problem), false)
+	}
+	err := a.useCases.InTransaction(r.Context(), func(ctx context.Context) error {
+		result, err := process(ctx, msg, item)
+		if err != nil {
+			return err
+		}
+		return keepBatchItem(ctx, store, jobID, batchSucceeded(index, result))
+	})
+	switch {
+	case err == nil:
+		return batchNext, nil
+	case errors.Is(err, errBatchFenceLost):
+		return batchLost, nil
+	case errors.Is(err, context.Canceled) && r.Context().Err() != nil:
+		return batchStop, err
+	}
+	failure, stops := batchFailureOf(index, a.errorResponse(r, err), itemErrors)
+	return a.failedBatchItem(r.Context(), store, jobID, failure, stops)
+}
+
+// failedBatchItem guarda el resultado de un elemento que falló y avanza el cursor, en su transacción; si detiene el lote,
+// también el final (${aborted}, D4).
+func (a *api) failedBatchItem(ctx context.Context, store domain.BatchJobStore, jobID uuid.UUID, item BatchItem, stops bool) (batchStep, error) {
+	err := a.useCases.InTransaction(ctx, func(ctx context.Context) error {
+		if err := keepBatchItem(ctx, store, jobID, item); err != nil {
+			return err
+		}
+		if stops {
+			_, err := store.Finish(ctx, jobID, domain.BatchJobAborted)
+			return err
+		}
+		return nil
+	})
+	switch {
+	case errors.Is(err, errBatchFenceLost):
+		return batchLost, nil
+	case err != nil:
+		return batchStop, err
+	case stops:
+		return batchStop, nil
+	}
+	return batchNext, nil
+}
+`
+    : `
+// errBatchFenceLost es el cursor que ya no está donde lo dejó quien procesa: la repetición de la petición se llevó el trabajo.
+// Revierte el lote entero.
+var errBatchFenceLost = errors.New("el trabajo lo procesa otro")
+`;
+  return `
+// readBatchBody lee los BYTES del cuerpo tal como llegaron (su firma es la de la petición, D13) y los vuelve a poner en un
+// clon de la petición, para el lector de la operación.
+func readBatchBody(r *http.Request) ([]byte, *http.Request, error) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return nil, nil, err
+		}
+		return nil, nil, malformed(err)
+	}
+	envelope := r.Clone(r.Context())
+	envelope.Body = io.NopCloser(bytes.NewReader(body))
+	return body, envelope, nil
+}
+
+// batchSignature es la firma de la petición (D13): el sha256 de los bytes del cuerpo, como batchRequestSignature de keel-core.
+func batchSignature(body []byte) string {
+	digest := sha256.Sum256(body)
+	return hex.EncodeToString(digest[:])
+}
+
+// batchItemOf es un resultado guardado, como viaja en el cable.
+func batchItemOf(row domain.BatchJobResult) BatchItem {
+	item := BatchItem{Index: row.Index, Status: row.Status, Error: row.ErrorCode, Message: row.Message}
+	if row.Result != nil {
+		item.Result = jsontext.Value(*row.Result)
+	}
+	return item
+}
+${stepsCode}
+// keepBatchItem es la valla y el resultado de un elemento, en la transacción en curso: primero el avance del cursor, que
+// toma la fila del trabajo, y después el resultado (con el resultado primero, un elemento que ya escribió otro chocaría en la
+// clave primaria antes de llegar a la valla). Si el cursor ya no estaba en su índice, la transacción revierte entera.
+func keepBatchItem(ctx context.Context, store domain.BatchJobStore, jobID uuid.UUID, item BatchItem) error {
+	advanced, err := store.Advance(ctx, jobID, item.Index, item.Status == "succeeded")
+	if err != nil {
+		return err
+	}
+	if !advanced {
+		return errBatchFenceLost
+	}
+	result := domain.BatchJobResult{Index: item.Index, Status: item.Status, ErrorCode: item.Error, Message: item.Message}
+	if item.Result != nil {
+		data, err := wire.Marshal(item.Result)
+		if err != nil {
+			return err
+		}
+		text := string(data)
+		result.Result = &text
+	}
+	return store.InsertResult(ctx, jobID, result)
+}
+`;
+}
+
+/** El alta, las dos rutas y el procesador de los lotes asíncronos. */
+function asyncHttpBody(model) {
   const { aborted } = BATCH_JOB_STATUSES;
   const security = usesHttpSecurity(model);
   const view = alignRows([
@@ -1010,9 +1393,6 @@ func asBatchJobOwner(ctx context.Context, _ string) context.Context {
 }`;
   const runners = asyncOperations(model).map((operation) => runnerBody(model, operation));
   return `
-// Los lotes asíncronos (DSL 2.30, fase B; wire-contract.md § Lotes asíncronos): el trabajo en el cable, el alta, las dos
-// rutas que lo leen y el procesador que lo recorre por partes sobre el cronómetro.
-
 // BatchJobView es el trabajo de un lote asíncrono en el cable: su estado y su resumen. notAttempted solo cuenta en un
 // trabajo ${aborted}: lo que queda por procesar de uno en marcha no se ha intentado todavía, pero tampoco se ha descartado
 // (batchJobView de keel-core). Sus claves salen siempre, null donde no aplica.
@@ -1040,23 +1420,15 @@ ${spec.join('\n')}
 // clave del lote (D13) y crea el trabajo y su temporizador de una vez en UNA transacción. Responde ${BATCH_ACCEPTED_STATUS} con el trabajo y
 // su URL en Location.
 func (a *api) submitBatchJob(w http.ResponseWriter, r *http.Request, spec batchJobSpec, read func(*http.Request) (int, error)) error {
-	body, err := io.ReadAll(r.Body)
+	body, envelope, err := readBatchBody(r)
 	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			return err
-		}
-		return malformed(err)
+		return err
 	}
-	envelope := r.Clone(r.Context())
-	envelope.Body = io.NopCloser(bytes.NewReader(body))
 	total, err := read(envelope)
 	if err != nil {
 		return err
 	}
-	// La firma de la petición (D13): el sha256 de los bytes del cuerpo, como batchRequestSignature de keel-core.
-	digest := sha256.Sum256(body)
-	job := domain.NewBatchJob{Operation: spec.operation, Kind: spec.kind, Signature: hex.EncodeToString(digest[:]), Input: string(body), Total: total}
+	job := domain.NewBatchJob{Operation: spec.operation, Kind: spec.kind, Signature: batchSignature(body), Input: string(body), Total: total}
 	switch spec.keySource {
 	case "payload-hash":
 		job.Key = &job.Signature
@@ -1160,10 +1532,7 @@ func (a *api) batchJobResults(w http.ResponseWriter, r *http.Request, operation 
 	}
 	items := make([]BatchItem, len(page.Items))
 	for i, row := range page.Items {
-		items[i] = BatchItem{Index: row.Index, Status: row.Status, Error: row.ErrorCode, Message: row.Message}
-		if row.Result != nil {
-			items[i].Result = jsontext.Value(*row.Result)
-		}
+		items[i] = batchItemOf(row)
 	}
 	return writeJSON(w, http.StatusOK, application.PagedResponse[BatchItem]{Items: items, Page: page.Number, Size: page.Size, TotalElements: page.TotalElements, TotalPages: page.TotalPages})
 }
@@ -1186,19 +1555,13 @@ func batchJobNotFound(id uuid.UUID) error {
 	return domain.Errorf(domain.${sentinel(FRAMEWORK_ERRORS.batchJobNotFound.code)}, "No hay ningún trabajo %s", id)
 }
 
-// errBatchFenceLost es el cursor que ya no está donde lo dejó este disparo: otra réplica se llevó el trabajo. Revierte el
-// elemento entero, efecto incluido, y para el disparo.
-var errBatchFenceLost = errors.New("el trabajo lo procesa otra réplica")
-
 // BatchJobRunner es el procesador de los trabajos de los lotes asíncronos (DSL 2.30, D9): un disparo del temporizador de un
 // trabajo procesa un CHUNK desde el cursor y dice si queda trabajo (rearmar para ya) o si terminó (borrar el
 // temporizador). Es el commit interval y el restart de Spring Batch sobre el cronómetro, sin la librería.
 //
-// Cada elemento va en UNA transacción con tres cosas: su efecto (el despacho por su caso de uso, que se une a ella), el
-// avance del cursor y su resultado. El avance es la VALLA: solo avanza si el cursor sigue donde lo dejó este disparo, y si
-// no —otra réplica le quitó el trabajo al vencer su arriendo— el elemento revierte entero. Si la réplica cae a mitad de
-// chunk, lo confirmado queda y el siguiente disparo sigue desde el cursor: ningún elemento se aplica dos veces ni se queda
-// sin resultado. Corre sin token: el actor de autoría de cada elemento es el dueño del trabajo.
+// Cada elemento lo procesa processBatchItem: su efecto, el avance del cursor (la valla) y su resultado en UNA transacción.
+// Si la réplica cae a mitad de chunk, lo confirmado queda y el siguiente disparo sigue desde el cursor: ningún elemento se
+// aplica dos veces ni se queda sin resultado. Corre sin token: el actor de autoría de cada elemento es el dueño del trabajo.
 type BatchJobRunner struct {
 	api       *api
 	chunkSize int
@@ -1233,8 +1596,9 @@ func runBatchChunk[T, M any](ctx context.Context, b *BatchJobRunner, jobID uuid.
 	index := job.NextIndex
 	end := min(job.Total, index+b.chunkSize)
 	for ; index < end; index++ {
-		next, err := processBatchItem(request, b, store, job.ID, index, items[index], msg, itemErrors, process)
-		if err != nil || !next {
+		// Parar (el lote se detuvo) o perder la valla (el trabajo es de otra réplica) acaban el disparo.
+		step, err := processBatchItem(request, b.api, store, job.ID, index, items[index], msg, itemErrors, process)
+		if err != nil || step != batchNext {
 			return false, err
 		}
 	}
@@ -1245,77 +1609,278 @@ func runBatchChunk[T, M any](ctx context.Context, b *BatchJobRunner, jobID uuid.
 	return true, nil
 }
 
-// processBatchItem es un elemento: true para seguir, false para parar el disparo (el elemento detuvo el lote, o el trabajo
-// es de otra réplica).
-func processBatchItem[T, M any](r *http.Request, b *BatchJobRunner, store domain.BatchJobStore, jobID uuid.UUID, index int, raw jsontext.Value, msg M, itemErrors []string, process func(context.Context, M, T) (any, error)) (bool, error) {
-	item, problem := readBatchItem[T](raw)
-	if problem != "" {
-		return b.failed(r.Context(), store, jobID, batchFailed(index, validationCode, problem), false)
-	}
-	err := b.api.useCases.InTransaction(r.Context(), func(ctx context.Context) error {
-		result, err := process(ctx, msg, item)
-		if err != nil {
-			return err
-		}
-		return keepBatchItem(ctx, store, jobID, batchSucceeded(index, result))
-	})
-	switch {
-	case err == nil:
-		return true, nil
-	case errors.Is(err, errBatchFenceLost):
-		return false, nil
-	case errors.Is(err, context.Canceled) && r.Context().Err() != nil:
-		return false, err
-	}
-	failure, stops := batchFailureOf(index, b.api.errorResponse(r, err), itemErrors)
-	return b.failed(r.Context(), store, jobID, failure, stops)
-}
-
-// failed guarda el resultado de un elemento que falló y avanza el cursor, en su transacción; si detiene el lote, también el
-// final (${aborted}, D4). true para seguir.
-func (b *BatchJobRunner) failed(ctx context.Context, store domain.BatchJobStore, jobID uuid.UUID, item BatchItem, stops bool) (bool, error) {
-	err := b.api.useCases.InTransaction(ctx, func(ctx context.Context) error {
-		if err := keepBatchItem(ctx, store, jobID, item); err != nil {
-			return err
-		}
-		if stops {
-			_, err := store.Finish(ctx, jobID, domain.BatchJobAborted)
-			return err
-		}
-		return nil
-	})
-	if errors.Is(err, errBatchFenceLost) {
-		return false, nil
-	}
-	return err == nil && !stops, err
-}
-
-// keepBatchItem es la valla y el resultado de un elemento, en la transacción en curso: primero el avance del cursor, que
-// toma la fila del trabajo, y después el resultado (con el resultado primero, un elemento que ya escribió otra réplica
-// chocaría en la clave primaria antes de llegar a la valla). Si el cursor ya no estaba en su índice, la transacción revierte
-// entera.
-func keepBatchItem(ctx context.Context, store domain.BatchJobStore, jobID uuid.UUID, item BatchItem) error {
-	advanced, err := store.Advance(ctx, jobID, item.Index, item.Status == "succeeded")
-	if err != nil {
-		return err
-	}
-	if !advanced {
-		return errBatchFenceLost
-	}
-	result := domain.BatchJobResult{Index: item.Index, Status: item.Status, ErrorCode: item.Error, Message: item.Message}
-	if item.Result != nil {
-		data, err := wire.Marshal(item.Result)
-		if err != nil {
-			return err
-		}
-		text := string(data)
-		result.Result = &text
-	}
-	return store.InsertResult(ctx, jobID, result)
-}
-
 ${owner}
 `;
+}
+
+/** Los lotes síncronos con clave (D15): el trabajo de la petición, la repetición y el bucle sobre lo guardado. */
+function keyedHttpBody(model) {
+  const operations = keyedOperations(model);
+  const perItem = operations.some((operation) => operation.batch.atomicity === 'per-item');
+  const atomic = operations.some((operation) => operation.batch.atomicity === 'all-or-nothing');
+  const spec = alignRows([
+    { indent: '\t', cells: ['operation', 'string'] },
+    { text: '\t// keySource es de dónde sale la clave del lote: client-key o payload-hash.' },
+    { indent: '\t', cells: ['keySource', 'string'] },
+    { text: '\t// ttlSeconds es cuánto vale la clave; 0, sin ventana.' },
+    { indent: '\t', cells: ['ttlSeconds', 'int'] },
+    { text: '\t// reused es el error de la misma clave con otro contenido.' },
+    { indent: '\t', cells: ['reused', '*domain.Error'] },
+    { text: '\t// inProgress es el error de la misma clave mientras la primera petición sigue en marcha.' },
+    { indent: '\t', cells: ['inProgress', '*domain.Error'] }
+  ]);
+  const started = alignRows([
+    { indent: '\t', cells: ['id', 'uuid.UUID'] },
+    { indent: '\t', cells: ['from', 'int'] },
+    { indent: '\t', cells: ['replay', 'bool'] }
+  ]);
+  const perItemCode = perItem
+    ? `
+// runKeyedPerItem es un lote per-item con clave: como runPerItem, con cada elemento confirmado junto a su resultado y el
+// avance del cursor, y la respuesta rehecha de lo guardado. Sin clave, el lote de siempre.
+func runKeyedPerItem[T, M any](a *api, r *http.Request, spec keyedBatchSpec, body []byte, msg M, items []jsontext.Value, itemErrors []string, process func(context.Context, M, T) (any, error)) (BatchResponse, error) {
+	each := func(ctx context.Context, item T) (any, error) {
+		return process(ctx, msg, item)
+	}
+	signature := batchSignature(body)
+	key := keyedBatchKey(r, spec, signature)
+	if key == "" {
+		// Sin la cabecera de la clave: el lote de siempre, sin trabajo.
+		return runPerItem(a, r, items, itemErrors, each)
+	}
+	started, err := a.startKeyedBatch(r.Context(), spec, key, signature, body, len(items))
+	if err != nil {
+		return BatchResponse{}, err
+	}
+	store := a.useCases.${BATCH_JOBS.field}()
+	if started.replay {
+		// La repetición de un lote terminado: lo guardado, sin procesar nada.
+		return storedBatchResponse(r.Context(), store, started.id)
+	}
+	for index := started.from; index < len(items); index++ {
+		step, err := processBatchItem(r, a, store, started.id, index, items[index], msg, itemErrors, process)
+		if err != nil {
+			return BatchResponse{}, err
+		}
+		if step == batchLost {
+			// Otra petición con la misma clave tomó el trabajo (D15): lo termina ella.
+			return BatchResponse{}, keyedBatchInProgress(spec, key)
+		}
+		if step == batchStop {
+			return storedBatchResponse(r.Context(), store, started.id)
+		}
+	}
+	err = a.useCases.InTransaction(r.Context(), func(ctx context.Context) error {
+		_, err := store.Finish(ctx, started.id, domain.BatchJobCompleted)
+		return err
+	})
+	if err != nil {
+		return BatchResponse{}, err
+	}
+	return storedBatchResponse(r.Context(), store, started.id)
+}
+`
+    : '';
+  const atomicCode = atomic
+    ? `
+// runKeyedAllOrNothing es un lote all-or-nothing con clave: como runAllOrNothing, con los resultados, el cursor y el final
+// del trabajo en la transacción del lote. Si no se confirma no queda nada, y su trabajo se descarta en otra: la repetición
+// lo vuelve a procesar en vez de devolver un lote que nunca se confirmó.
+func runKeyedAllOrNothing[T, M any](a *api, r *http.Request, spec keyedBatchSpec, over string, body []byte, msg M, items []jsontext.Value, process func(context.Context, M, T) (any, error)) (*BatchResponse, *ErrorResponse, error) {
+	each := func(ctx context.Context, item T) (any, error) {
+		return process(ctx, msg, item)
+	}
+	signature := batchSignature(body)
+	key := keyedBatchKey(r, spec, signature)
+	if key == "" {
+		// Sin la cabecera de la clave: el lote de siempre, sin trabajo.
+		return runAllOrNothing(a, r, over, items, a.useCases.InTransaction, each, nil)
+	}
+	started, err := a.startKeyedBatch(r.Context(), spec, key, signature, body, len(items))
+	if err != nil {
+		return nil, nil, err
+	}
+	store := a.useCases.${BATCH_JOBS.field}()
+	if started.replay {
+		// La repetición de un todo o nada confirmado: la respuesta guardada, sin procesar nada.
+		stored, err := storedBatchResponse(r.Context(), store, started.id)
+		return &stored, nil, err
+	}
+	id := started.id
+	sink := &batchSink{
+		kept: func(ctx context.Context, item BatchItem) error {
+			return keepBatchItem(ctx, store, id, item)
+		},
+		completed: func(ctx context.Context) error {
+			_, err := store.Finish(ctx, id, domain.BatchJobCompleted)
+			return err
+		},
+	}
+	_, failed, err := runAllOrNothing(a, r, over, items, a.useCases.InTransaction, each, sink)
+	if errors.Is(err, errBatchFenceLost) {
+		// Otra petición con la misma clave tomó el trabajo (D15): lo termina ella.
+		return nil, nil, keyedBatchInProgress(spec, key)
+	}
+	if err != nil || failed != nil {
+		// No quedó confirmado (un elemento falló, o el commit): su trabajo se descarta.
+		if discard := a.discardKeyedBatch(r.Context(), id); discard != nil {
+			return nil, nil, errors.Join(err, discard)
+		}
+		return nil, failed, err
+	}
+	stored, err := storedBatchResponse(r.Context(), store, id)
+	return &stored, nil, err
+}
+
+// discardKeyedBatch borra el trabajo de un todo o nada con clave que no se confirmó, en su transacción y sin la cancelación
+// de la petición: libera la clave.
+func (a *api) discardKeyedBatch(ctx context.Context, id uuid.UUID) error {
+	return a.useCases.InTransaction(context.WithoutCancel(ctx), func(ctx context.Context) error {
+		_, err := a.useCases.${BATCH_JOBS.field}().Discard(ctx, id)
+		return err
+	})
+}
+`
+    : '';
+  return `
+// keyedBatchSpec es lo que un lote síncrono con clave sabe de su operación (D15).
+type keyedBatchSpec struct {
+${spec.join('\n')}
+}
+
+// keyedBatchStart es el trabajo de la petición: su id, desde qué elemento sigue y si ya terminó (la repetición responde lo
+// guardado).
+type keyedBatchStart struct {
+${started.join('\n')}
+}
+
+// keyedBatchKey es la clave del lote: la cabecera, o la firma del cuerpo si la clave es el contenido. "" sin clave.
+func keyedBatchKey(r *http.Request, spec keyedBatchSpec, signature string) string {
+	if spec.keySource == "payload-hash" {
+		return signature
+	}
+	return strings.TrimSpace(r.Header.Get(${goString(IDEMPOTENCY_HEADER)}))
+}
+
+// keyedBatchInProgress es la repetición de un lote con clave mientras el primero sigue en marcha (D15): todavía no hay
+// respuesta que devolver, y procesarlo a la vez lo repartiría entre dos peticiones.
+func keyedBatchInProgress(spec keyedBatchSpec, key string) error {
+	return domain.Errorf(spec.inProgress, "Otra petición con la clave de idempotencia %s/%s está procesando el lote", spec.operation, key)
+}
+
+// startKeyedBatch es el trabajo de la petición, en una transacción propia: el de la clave, si lo hay, o uno nuevo, sin
+// temporizador. Dos peticiones con la misma clave a la vez: la que pierde choca con la unicidad del motor y encuentra el
+// trabajo de la ganadora, en marcha.
+func (a *api) startKeyedBatch(ctx context.Context, spec keyedBatchSpec, key, signature string, body []byte, total int) (keyedBatchStart, error) {
+	store := a.useCases.${BATCH_JOBS.field}()
+	id, err := uuid.NewV7()
+	if err != nil {
+		return keyedBatchStart{}, err
+	}
+	job := domain.NewBatchJob{ID: id, Operation: spec.operation, Key: &key, Signature: signature, Input: string(body), Total: total}
+	if spec.ttlSeconds > 0 {
+		ttl := time.Duration(spec.ttlSeconds) * time.Second
+		job.KeyTTL = &ttl
+	}
+	var started keyedBatchStart
+	err = a.useCases.InTransaction(ctx, func(ctx context.Context) error {
+		if err := store.ReleaseKey(ctx, spec.operation, key); err != nil {
+			return err
+		}
+		found, ok, err := repeatKeyedBatch(ctx, store, spec, key, signature)
+		if err != nil || ok {
+			started = found
+			return err
+		}
+		started = keyedBatchStart{id: id}
+		return store.Insert(ctx, job)
+	})
+	if err == nil || errors.Is(err, spec.reused) || errors.Is(err, spec.inProgress) || errors.Is(err, context.Canceled) {
+		return started, err
+	}
+	var winner keyedBatchStart
+	found := false
+	retry := a.useCases.InTransaction(ctx, func(ctx context.Context) error {
+		var err error
+		winner, found, err = repeatKeyedBatch(ctx, store, spec, key, signature)
+		return err
+	})
+	if retry != nil {
+		return keyedBatchStart{}, retry
+	}
+	if !found {
+		return keyedBatchStart{}, err
+	}
+	return winner, nil
+}
+
+// repeatKeyedBatch es el trabajo vivo de la clave (D15, batchSyncRepeat de keel-core): terminado, la respuesta guardada; con
+// otra firma, la clave reutilizada; sin terminar y escrito hace poco, la clave en curso; sin terminar y más viejo, quien lo
+// procesaba murió: lo toma y sigue desde el cursor.
+func repeatKeyedBatch(ctx context.Context, store domain.BatchJobStore, spec keyedBatchSpec, key, signature string) (keyedBatchStart, bool, error) {
+	hit, found, err := store.ByKey(ctx, spec.operation, key)
+	if err != nil || !found {
+		return keyedBatchStart{}, false, err
+	}
+	if hit.Signature != signature {
+		return keyedBatchStart{}, false, domain.Errorf(spec.reused, "La clave de idempotencia %s/%s ya se usó con un contenido distinto", spec.operation, key)
+	}
+	job, found, err := store.Job(ctx, hit.ID)
+	if err != nil || !found {
+		return keyedBatchStart{}, false, err
+	}
+	if job.FinishedAt != nil {
+		return keyedBatchStart{id: job.ID, from: job.Total, replay: true}, true, nil
+	}
+	taken, err := store.TakeOver(ctx, job.ID)
+	if err != nil {
+		return keyedBatchStart{}, false, err
+	}
+	if !taken {
+		return keyedBatchStart{}, false, keyedBatchInProgress(spec, key)
+	}
+	return keyedBatchStart{id: job.ID, from: job.NextIndex}, true, nil
+}
+
+// storedBatchResponse es la respuesta de un lote con clave rehecha desde lo guardado (D15, batchStoredBody de keel-core):
+// los resultados en orden de índice y, si se detuvo, un notAttempted por cada elemento desde el cursor.
+func storedBatchResponse(ctx context.Context, store domain.BatchJobStore, jobID uuid.UUID) (BatchResponse, error) {
+	job, found, err := store.Job(ctx, jobID)
+	if err != nil {
+		return BatchResponse{}, err
+	}
+	if !found {
+		return BatchResponse{}, fmt.Errorf("el trabajo %s no existe", jobID)
+	}
+	page, err := store.Results(ctx, jobID, domain.Pageable{Size: int32(job.Total)})
+	if err != nil {
+		return BatchResponse{}, err
+	}
+	items := make([]BatchItem, 0, job.Total)
+	for _, row := range page.Items {
+		items = append(items, batchItemOf(row))
+	}
+	if job.Status == domain.BatchJobAborted {
+		for index := job.NextIndex; index < job.Total; index++ {
+			items = append(items, BatchItem{Index: index, Status: "notAttempted"})
+		}
+	}
+	return newBatchResponse(items), nil
+}
+${perItemCode}${atomicCode}`;
+}
+
+/** La literal de keyedBatchSpec de una operación síncrona con clave (la escribe su endpoint, en endpoints.js). */
+export function keyedBatchSpecLiteral(model, operation) {
+  const idempotency = operation.batch.idempotency;
+  const fields = [
+    `operation: ${goString(operation.name)}`,
+    `keySource: ${goString(idempotency.keySource)}`,
+    ...(idempotency.ttlSeconds ? [`ttlSeconds: ${idempotency.ttlSeconds}`] : []),
+    `reused: domain.${sentinel(reusedCode(model, operation))}`,
+    `inProgress: domain.${sentinel(inProgressCode(model, operation))}`
+  ];
+  return `keyedBatchSpec{${fields.join(', ')}}`;
 }
 
 /** El disparo de los trabajos de una operación: el lector, los itemErrors y el despacho de UN elemento. */

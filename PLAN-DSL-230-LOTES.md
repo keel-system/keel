@@ -1,6 +1,6 @@
 # DSL 2.30: lotes con resultado por elemento (R5)
 
-**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 10 cerrados el 2026-11-14 (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores, con la fase B neutral en keel-core, y el contrato y el método); el 10b (D15, la idempotencia del lote síncrono) tiene hechas la parte neutral, keel-spring, keel-nest y keel-dotnet (2026-11-15, commit e911ce67); le sigue keel-go. Al cerrar pasa a `completed_plans/`.
+**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 10 cerrados el 2026-11-14 (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores, con la fase B neutral en keel-core, y el contrato y el método); el 10b (D15, la idempotencia del lote síncrono) se cerró el 2026-11-15 en la parte neutral y en los cuatro generadores. Le sigue el 11. Al cerrar pasa a `completed_plans/`.
 
 ## Contexto
 
@@ -591,19 +591,49 @@ Incremento 10b en keel-dotnet (D15):
   (`doc-check --only=catalog-batch-keyed-mongo`, 28 sondas) en verde, y los tres que tienen sujeto documental, exactos
   (`bk-keep-failed` no: el todo o nada con clave solo tiene sujeto relacional).
 
+Incremento 10b en keel-go (D15):
+
+- **Todo en `internal/httpapi/batch_jobs.go`**, con partes condicionales porque staticcheck caza una función sin usar: lo
+  compartido (`readBatchBody`, `batchSignature`, `batchItemOf`, `keepBatchItem` y, con algún paso por elemento,
+  `processBatchItem` y `failedBatchItem` con tres desenlaces `batchNext|batchStop|batchLost`), lo asíncrono y lo de la clave
+  (`startKeyedBatch`, `repeatKeyedBatch`, `storedBatchResponse`, `runKeyedPerItem`, `runKeyedAllOrNothing`,
+  `discardKeyedBatch`). `processBatchItem` recibe ahora `*api` en vez del procesador, así que `bj-cursor-outside-tx` busca
+  `a.useCases`. Un proyecto solo con lotes con clave no lleva el alta, el procesador, `timer.NewBatchJob`, la interfaz
+  `detached` del sondeador ni `PagedResponse` (`usesAsyncBatchJobs`); sí el almacén y su purga (`usesBatchJobs`).
+- **El umbral del lote muerto lo guarda el almacén**: el arranque lee `BatchSettingsFrom(cfg)` antes de construirlo
+  (`NewBatchJobStore(tx, syncStaleMs)`), y `TakeOver(ctx, id)` no lo recibe. Así la API no necesita la configuración y el
+  sabotaje `bk-steal-running` va en el almacén (multiplica el umbral por cero). `Insert` con `Kind` vacío no arma
+  temporizador.
+- **El dueño es `batchJobOwner(ctx)`**, en el archivo del almacén: el actor de autoría con security; sin ella, el anónimo de
+  keel-core, y entonces `audit_actor.go` no se emite. En Go el almacén toma el dueño del contexto (`auditActor`), y sin
+  security ese actor es `system:<correlación>`, distinto en cada petición: la clave no se habría encontrado nunca.
+- **El todo o nada con clave** pasa un `*batchSink` (`kept`, `completed`) a `runAllOrNothing`, dentro de la transacción
+  del lote; el endpoint de siempre pasa `nil`. Un fallo (de un elemento o al confirmar) descarta el trabajo en otra
+  transacción, sin la cancelación de la petición; la valla perdida es el 409 en curso y no descarta nada.
+- **El 400 del sobre** de un lote con clave usa `violations{params: true}` (`invalidParams`), como el asíncrono y los otros tres.
+- Red: `test/batch-keys.test.js` (10 casos, contra los otros tres: frontera, casos BK, nota, `batch.yaml`, contrato byte a
+  byte, sentencias tal cual, lo que no se emite sin asíncronos, endpoint, dueño anónimo, frontera de stack y sabotajes
+  aplicables). Los sujetos de `BATCH_KEY_DESIGNS` en `UNCOVERED_BRANCHES` (`go-syntax`, `go-idioms`, `uncovered-branches`,
+  `go-check`), en `db-check` y en `doc-check` con `scripts/lib/batch-key-probes.js` (`batch_key_probe_test.go` por el
+  `http.Handler` entero; la muerte a mitad de lote, un almacén envuelto en las Dependencies que falla al escribir el resultado
+  del segundo elemento). Medido: BK-1 a BK-5 y BA-* en verde en PostgreSQL (31 y 24 sondas), MySQL (32 y 25) y
+  MongoDB (25), y `bk-replay-reprocess` en BK-1, `bk-steal-running` en BK-3, `bk-no-resume` en BK-4 y `bk-keep-failed` en BK-5,
+  exactamente, en los tres (el último, solo relacional). `go-check --fixtures` en verde sobre los tres sujetos con clave.
+
+Cierre del 10b:
+
+- **El contrato de `BATCH_KEY_DESIGNS`** entra en `keel-nest/test/openapi.test.js`: el mismo documento en los cuatro, la tabla
+  de rutas y las formas del cable, como los demás sujetos de lotes. La huella golden de keel-nest ya se regeneró con la parte
+  neutral (`wire-contract.md`).
+- **Los sujetos con clave se quedan en su propia lista** (`BATCH_KEY_DESIGNS`) en vez de pasar a `BATCH_DESIGNS`: las redes
+  de los cuatro recorren las tres listas, y mezclarlas haría que cada `BATCH_SUBJECTS` (BA) tuviera que separarlos otra vez.
+
 ## Para retomar
 
-Inc. 10b en keel-go, desde main (keel-spring, keel-nest y keel-dotnet hechos). En él: el lote
-síncrono con clave (D15) sobre el almacén de trabajos que ya emite para el asíncrono (`usesBatchJobs` pasa a
-`batchJobStoreOperations`), sin temporizador; la repetición con `batchSyncRepeat` resuelta por `byKey`, `job` y `takeOver` (las de `batchSyncStatements`, con `BATCH_SYNC_STALE` en su configuración);
-el 207 rehecho con `batchStoredBody`; el todo o nada con `discardJob`; `syncIdempotency: true` en su frontera; los sujetos de
-`BATCH_KEY_DESIGNS` en su red (`batch-check` en keel-spring, `db-check`/`doc-check` en los otros) con BK-1 a BK-5 y los
-cuatro `bk-*` cayendo exactamente en sus casos; y su paridad contra los anteriores. La muerte a mitad de lote de la sonda
-no es un error del handler (Go captura como TypeScript y C#): un almacén que lanza al escribir el resultado del segundo
-elemento, como en keel-nest y keel-dotnet. El contrato de `BATCH_KEY_DESIGNS` entra en `keel-nest/test/openapi.test.js`
-cuando los cuatro lo generen (hoy lo comparan los `batch-keys.test.js` de keel-nest y keel-dotnet con los anteriores). Cuando los cuatro lo generen, los
-sujetos pasan a `BATCH_DESIGNS`, la huella golden de keel-nest se regenera (`wire-contract.md` cambió) y sigue el inc. 11
-(diseño de contraste y corridas). Las filas de `capability-coverage` de los lotes se borran en el inc. 11.
+Inc. 11, desde main: el diseño de contraste `product-catalog` v-siguiente con `importProducts` (`per-item`, sync) e
+`importCatalog` (async), y las corridas de control en los cuatro generadores (PostgreSQL y una con MySQL o MongoDB). Al tener
+una fixture que declare `batch`, se borran las filas de `capability-coverage` de los lotes y la fila `batch` de las matrices
+de paridad deja de llevar `parity.skip`. Merece la pena que una de las corridas declare la clave del lote síncrono (D15).
 
 ## Verificación
 

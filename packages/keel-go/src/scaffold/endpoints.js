@@ -37,7 +37,7 @@ import { callerResolution } from './use-cases.js';
 import { EXPECTED_VERSIONS, carriesExpectedVersions, endpointPrelude, returnsVersioned } from './conditional-writes.js';
 import { readScopeEndpointLines } from './read-scope.js';
 import { BATCH_ITEM_COMPONENT } from './batch.js';
-import { batchJobEndpoints, batchJobRouteRows } from './batch-jobs.js';
+import { batchJobEndpoints, batchJobRouteRows, isKeyedBatch, keyedBatchSpecLiteral } from './batch-jobs.js';
 import { batchSuccessStatus } from '@keel-system/keel-core/gen/batch';
 
 /** ¿Resuelve esta operación la identidad del llamante contra las credenciales del recurso (resolvedBy)? */
@@ -137,7 +137,7 @@ export function generate(model) {
 function renderEndpoint(model, operation, plan) {
   // Un lote (DSL 2.30) responde BatchResponse (o el error del culpable), no el resultado del caso de uso.
   if (operation.batch?.execution === 'async') return batchJobEndpoints(model, operation, plan);
-  if (operation.batch) return renderBatchEndpoint(model, operation);
+  if (operation.batch) return renderBatchEndpoint(model, operation, plan);
   const { method, path, status } = operation.route;
   const full = `${model.api.routeBase}${path}`;
   const variable = operation.messageKind === 'query' ? 'query' : 'cmd';
@@ -192,7 +192,7 @@ ${lines.join('\n')}
  * elementos sin leer; el bucle (batch.go) los lee, valida y despacha uno a uno, cada uno en su copia del mensaje. Un lote
  * por elemento responde siempre 207; uno todo o nada, su successStatus o el error del culpable, con el status que lleva.
  */
-function renderBatchEndpoint(model, operation) {
+function renderBatchEndpoint(model, operation, plan) {
   const { method, path, status } = operation.route;
   const batch = operation.batch;
   const item = goExported(BATCH_ITEM_COMPONENT);
@@ -205,6 +205,7 @@ function renderBatchEndpoint(model, operation) {
     `		return ${returning ? call : `nil, ${call}`}`,
     '	}'
   ].join('\n');
+  if (isKeyedBatch(model, operation)) return renderKeyedBatchEndpoint(model, operation, plan);
   const lines = [`	cmd, items, err := ${readerName(operation)}(r)`, '	if err != nil {', '		return err', '	}'];
   if (entryGateField(model, operation.name, 'HTTP')) lines.push(`	cmd.EntryGate = application.${entryGateConstant('HTTP')}`);
   if (batch.atomicity === 'per-item') {
@@ -213,7 +214,7 @@ function renderBatchEndpoint(model, operation) {
   } else {
     lines.push(
       '	// Todo o nada: la transacción del lote la abre InTransaction, y los casos de uso que despacha se unen a ella.',
-      `	body, failed, err := runAllOrNothing(a, r, ${goString(batch.over)}, items, a.useCases.InTransaction, ${process})`,
+      `	body, failed, err := runAllOrNothing(a, r, ${goString(batch.over)}, items, a.useCases.InTransaction, ${process}, nil)`,
       '	if err != nil {',
       '		return err',
       '	}',
@@ -226,6 +227,62 @@ function renderBatchEndpoint(model, operation) {
   }
   return `// ${endpointName(operation)} atiende ${method} ${model.api.routeBase}${path} (${operation.name}), un lote: lee el sobre y despacha el caso
 // de uso una vez por elemento (batch.go). Solo traduce; la lógica de cada elemento es del handler.
+func (a *api) ${endpointName(operation)}(w http.ResponseWriter, r *http.Request) error {
+${lines.join('\n')}
+}`;
+}
+
+/**
+ * El endpoint de un lote síncrono con clave (DSL 2.30, D15): los BYTES del cuerpo (su firma es la de la petición), el sobre
+ * leído de ellos como el borde, y el bucle sobre el trabajo de batch_jobs.go, que guarda la clave y la respuesta. Sin la
+ * cabecera de la clave, el lote de siempre.
+ */
+function renderKeyedBatchEndpoint(model, operation, plan) {
+  const { method, path, status } = operation.route;
+  const batch = operation.batch;
+  const item = goExported(BATCH_ITEM_COMPONENT);
+  const call = `a.useCases.${useCaseField(operation)}.Handle(ctx, msg)`;
+  const returning = operation.messageKind !== 'command';
+  plan.uses.add('malformed');
+  const process = [
+    `func(ctx context.Context, msg application.${messageType(operation)}, item domain.${batch.itemType}) (any, error) {`,
+    `		msg.${item} = item`,
+    `		return ${returning ? call : `nil, ${call}`}`,
+    '	}'
+  ].join('\n');
+  const lines = [
+    '	// Lote con clave (DSL 2.30, D15): la repetición responde lo guardado en su trabajo.',
+    '	body, envelope, err := readBatchBody(r)',
+    '	if err != nil {',
+    '		return err',
+    '	}',
+    `	cmd, items, err := ${readerName(operation)}(envelope)`,
+    '	if err != nil {',
+    '		return err',
+    '	}'
+  ];
+  if (entryGateField(model, operation.name, 'HTTP')) lines.push(`	cmd.EntryGate = application.${entryGateConstant('HTTP')}`);
+  const spec = keyedBatchSpecLiteral(model, operation);
+  if (batch.atomicity === 'per-item') {
+    const itemErrors = batch.itemErrors.length > 0 ? `[]string{${batch.itemErrors.map(goString).join(', ')}}` : 'nil';
+    lines.push(`	response, err := runKeyedPerItem(a, r, ${spec}, body, cmd, items, ${itemErrors}, ${process})`, '	if err != nil {', '		return err', '	}', '	return writeJSON(w, batchMultiStatus, response)');
+  } else {
+    lines.push(
+      '	// Todo o nada: la transacción del lote la abre runAllOrNothing, y los casos de uso que despacha se unen a ella.',
+      `	result, failed, err := runKeyedAllOrNothing(a, r, ${spec}, ${goString(batch.over)}, body, cmd, items, ${process})`,
+      '	if err != nil {',
+      '		return err',
+      '	}',
+      '	if failed != nil {',
+      '		writeErrorResponse(w, *failed)',
+      '		return nil',
+      '	}',
+      `	return writeJSON(w, ${statusOf(status)}, result)`
+    );
+  }
+  return `// ${endpointName(operation)} atiende ${method} ${model.api.routeBase}${path} (${operation.name}), un lote con clave: lee el sobre y
+// despacha el caso de uso una vez por elemento sobre su trabajo (batch_jobs.go). Solo traduce; la lógica de cada elemento es
+// del handler.
 func (a *api) ${endpointName(operation)}(w http.ResponseWriter, r *http.Request) error {
 ${lines.join('\n')}
 }`;
@@ -549,7 +606,7 @@ function renderReader(model, operation, plan) {
       plan.uses.add('violations');
       // El sobre de un lote asíncrono (DSL 2.30) se valida como los parámetros: el mensaje invalidParams de keel-spring, que
       // no tiene MethodParameter con el que construir el del cuerpo.
-      out.push(`	inBody := violations{${operation.batch?.execution === 'async' ? 'params: true' : ''}}`, ...bodyChecks, ...returnErr('err = inBody.err()'));
+      out.push(`	inBody := violations{${operation.batch?.execution === 'async' || isKeyedBatch(model, operation) ? 'params: true' : ''}}`, ...bodyChecks, ...returnErr('err = inBody.err()'));
     } else out.push(...bodyChecks);
   }
   out.push(...queryRequired, ...queryLines);

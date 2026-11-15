@@ -26,7 +26,7 @@ import { HISTORY_DESIGNS } from '../../keel-core/test/helpers/history-designs.js
 import { BATCH_ACCEPTED_STATUS, BATCH_ITEM_STATUSES, BATCH_MULTI_STATUS, batchContractClause, batchJobPaths } from '@keel-system/keel-core/gen/batch';
 import { BATCH_JOB_STATUSES } from '@keel-system/keel-core/gen/batch-store';
 import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
-import { BATCH_DESIGNS, BATCH_JOB_DESIGNS } from '../../keel-core/test/helpers/batch-designs.js';
+import { BATCH_DESIGNS, BATCH_JOB_DESIGNS, BATCH_KEY_DESIGNS } from '../../keel-core/test/helpers/batch-designs.js';
 import { planFixture, transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 import { tmpDir } from './helpers/tmp.js';
@@ -371,7 +371,7 @@ test('cards-history: el email de la ficha es una ruta personal del historial', (
 // SIEMPRE con 207 y `all-or-nothing` con su status; el asíncrono, 202 con Location y las dos rutas del trabajo, que el
 // controlador de keel-nest sirve de verdad; los errores del diseño no salen como respuestas del lote (viajan en su
 // elemento); y sin deriva para CHK-DOCS-OPENAPI-DRIFT.
-for (const derived of [...BATCH_DESIGNS, ...BATCH_JOB_DESIGNS]) {
+for (const derived of [...BATCH_DESIGNS, ...BATCH_JOB_DESIGNS, ...BATCH_KEY_DESIGNS]) {
   test(`${derived.name}: el openapi describe el lote con la forma del cable, el mismo en los cuatro generadores`, async () => {
     const load = () => {
       const service = loadService(path.join(FIXTURES_DIR, derived.from));

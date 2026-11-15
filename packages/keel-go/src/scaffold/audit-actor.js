@@ -41,8 +41,10 @@ export function usesDeclaredAuthorship(model) {
 
 export function generate(model) {
   // El historial (DSL 2.29) reutiliza este actor aunque el diseño no pida autoría en las filas: D5.
-  // Y los lotes asíncronos (DSL 2.30, D11): el dueño de un trabajo es el actor de autoría.
-  if (!usesAuthorship(model) && !(usesPersistence(model) && usesHistory(model)) && !usesBatchJobs(model)) return [];
+  // Y los lotes con trabajo con capa security (DSL 2.30, D11 y D15): el dueño de un trabajo es el actor de autoría. Sin
+  // security, el dueño de un lote con clave es el anónimo de keel-core, y un asíncrono siempre tiene security.
+  const batchOwner = usesBatchJobs(model) && usesHttpSecurity(model);
+  if (!usesAuthorship(model) && !(usesPersistence(model) && usesHistory(model)) && !batchOwner) return [];
   const { store } = layout(model);
   const security = usesHttpSecurity(model);
   const correlation = usesCorrelation(model);

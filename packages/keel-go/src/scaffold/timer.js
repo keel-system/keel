@@ -70,7 +70,7 @@ import { agingSweeps } from '@keel-system/keel-core/gen/aging-targets';
 import { DRAIN_CASES, claimDrains, clusterRecurrings, scheduledByTimer, timerPurges, timerSchedules, usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { pascalCase } from '@keel-system/keel-core/gen';
 import { BATCH_JOB } from '@keel-system/keel-core/gen/batch-store';
-import { batchJobTimerWiring, batchKindRows, usesBatchJobs } from './batch-jobs.js';
+import { batchJobTimerWiring, batchKindRows, usesAsyncBatchJobs } from './batch-jobs.js';
 
 export { usesDeadlines, usesTimer, deadlineHandlerNote, lateTransitionNote, deadlineOf };
 
@@ -727,7 +727,7 @@ func (r *reader) flag(key string, fallback bool) bool {
 function pollerBody(model) {
   const correlated = usesCorrelation(model);
   // Los trabajos de los lotes asíncronos (DSL 2.30) corren FUERA de la transacción del sondeador: cada elemento abre la suya.
-  const detached = usesBatchJobs(model);
+  const detached = usesAsyncBatchJobs(model);
   return `
 // parser lee el cron de seis campos de los cuatro servidores del diseño: segundo, minuto, hora, día del mes, mes y día
 // de la semana.

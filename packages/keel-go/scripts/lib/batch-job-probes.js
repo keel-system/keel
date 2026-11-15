@@ -54,7 +54,7 @@ export const BATCH_JOB_SABOTAGE_SPECS = {
   // El efecto en su transacción, y el cursor con el resultado en otra, después.
   'bj-cursor-outside-tx': both({
     files: JOBS,
-    from: `	err := b.api.useCases.InTransaction(r.Context(), func(ctx context.Context) error {
+    from: `	err := a.useCases.InTransaction(r.Context(), func(ctx context.Context) error {
 		result, err := process(ctx, msg, item)
 		if err != nil {
 			return err
@@ -63,13 +63,13 @@ export const BATCH_JOB_SABOTAGE_SPECS = {
 	})
 `,
     to: `	var result any
-	err := b.api.useCases.InTransaction(r.Context(), func(ctx context.Context) error {
+	err := a.useCases.InTransaction(r.Context(), func(ctx context.Context) error {
 		var err error
 		result, err = process(ctx, msg, item)
 		return err
 	})
 	if err == nil {
-		err = b.api.useCases.InTransaction(r.Context(), func(ctx context.Context) error {
+		err = a.useCases.InTransaction(r.Context(), func(ctx context.Context) error {
 			return keepBatchItem(ctx, store, jobID, batchSucceeded(index, result))
 		})
 	}
@@ -79,13 +79,13 @@ export const BATCH_JOB_SABOTAGE_SPECS = {
   'bj-foreign-reader': {
     relational: {
       files: STORE,
-      from: 'return s.job(ctx, batchSQLOwnedJob, map[string]any{"id": id, "operation": operation, "owner": auditActor(ctx)})',
+      from: 'return s.job(ctx, batchSQLOwnedJob, map[string]any{"id": id, "operation": operation, "owner": batchJobOwner(ctx)})',
       to: 'return s.job(ctx, batchSQLJob, map[string]any{"id": id})',
       expect: /_BJ\d+_/
     },
     document: {
       files: STORE,
-      from: '{Key: "operation", Value: operation}, {Key: "owner", Value: auditActor(ctx)}})',
+      from: '{Key: "operation", Value: operation}, {Key: "owner", Value: batchJobOwner(ctx)}})',
       to: '{Key: "operation", Value: operation}})',
       expect: /_BJ\d+_/
     }

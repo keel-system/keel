@@ -56,7 +56,7 @@ test('los sujetos pasan la frontera de keel-go y su sonda ejecuta los MISMOS cas
   assert.deepEqual([...BATCH_SUBJECTS.relational, ...BATCH_SUBJECTS.document].sort(), BATCH_DESIGNS.map((entry) => entry.name).sort());
 });
 
-test('la frontera: async se genera (incremento 9) y la idempotencia del lote síncrono entero no la genera nadie todavía', () => {
+test('la frontera: async y la clave del lote síncrono se generan (batch-jobs.test.js, batch-keys.test.js); payload-field no', () => {
   const asynchronous = load('catalog-batch', (layers) => {
     layers['use-cases'].operations.importProducts.batch.execution = 'async';
   });
@@ -64,7 +64,11 @@ test('la frontera: async se genera (incremento 9) y la idempotencia del lote sí
   const idempotent = load('catalog-batch', (layers) => {
     layers['use-cases'].operations.importProducts.idempotency = { keySource: 'client-key', ttlSeconds: 3600 };
   });
-  assert.match(checkSupportedFeatures(idempotent.manifest, idempotent.layers).errors.join('\n'), /importProducts\.batch con idempotency \(DSL 2\.30, D15\): keel-go/);
+  assert.deepEqual(checkSupportedFeatures(idempotent.manifest, idempotent.layers).errors, []);
+  const field = load('catalog-batch', (layers) => {
+    layers['use-cases'].operations.importProducts.idempotency = { keySource: 'payload-field', keyField: 'items' };
+  });
+  assert.match(checkSupportedFeatures(field.manifest, field.layers).errors.join('\n'), /importProducts\.idempotency en un lote \(DSL 2\.30, D13\)/);
 });
 
 test('el handler procesa UN elemento: el mensaje lleva el elemento y devuelve el ItemResult, con la MISMA nota que los otros tres', () => {

@@ -132,8 +132,9 @@ func newBatchResponse(items []BatchItem) BatchResponse {
 // que se despachan con su contexto se unen a ella). El primer fallo la revierte entera y el desenlace es su error, con la
 // ruta del elemento culpable en details (items[7]); sin fallos, el mismo cuerpo que un lote por elemento, con el
 // successStatus del endpoint. Un fallo AL CONFIRMAR no es de ningún elemento: vuelve como error, sin índice, y lo
-// responde writeError como el de cualquier operación.
-func runAllOrNothing[T any](a *api, r *http.Request, over string, items []jsontext.Value, within func(context.Context, func(context.Context) error) error, process func(context.Context, T) (any, error)) (*BatchResponse, *ErrorResponse, error) {
+// responde writeError como el de cualquier operación. Con sink (un lote con clave, D15), cada resultado y el final del
+// trabajo se guardan dentro de la misma transacción: un fallo del sink la revierte entera y vuelve tal cual.
+func runAllOrNothing[T any](a *api, r *http.Request, over string, items []jsontext.Value, within func(context.Context, func(context.Context) error) error, process func(context.Context, T) (any, error), sink *batchSink) (*BatchResponse, *ErrorResponse, error) {
 	var results []BatchItem
 	err := within(r.Context(), func(ctx context.Context) error {
 		// Desde cero en cada intento: un conflicto transitorio repite la transacción entera.
@@ -151,7 +152,16 @@ func runAllOrNothing[T any](a *api, r *http.Request, over string, items []jsonte
 				// Ya traducido y sin causa: la transacción que revierte no lo vuelve a traducir.
 				return &batchItemFailure{index: index, response: a.errorResponse(r, err)}
 			}
-			results = append(results, batchSucceeded(index, result))
+			kept := batchSucceeded(index, result)
+			results = append(results, kept)
+			if sink != nil {
+				if err := sink.kept(ctx, kept); err != nil {
+					return err
+				}
+			}
+		}
+		if sink != nil {
+			return sink.completed(ctx)
 		}
 		return nil
 	})
@@ -166,6 +176,13 @@ func runAllOrNothing[T any](a *api, r *http.Request, over string, items []jsonte
 	}
 	body := newBatchResponse(results)
 	return &body, nil, nil
+}
+
+// batchSink es lo que guarda un lote all-or-nothing con clave (DSL 2.30, D15) DENTRO de su transacción: el resultado de cada
+// elemento y el final del trabajo. Si el lote falla, la transacción se lo lleva todo.
+type batchSink struct {
+	kept      func(context.Context, BatchItem) error
+	completed func(context.Context) error
 }
 
 // batchItemFailure es el fallo de un elemento de un lote all-or-nothing: revierte la transacción y lleva su índice hasta

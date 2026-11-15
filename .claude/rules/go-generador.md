@@ -142,3 +142,27 @@ envuelto en las Dependencies que cae al escribir el resultado del elemento 3; BJ
 gancho del handler de la sonda, que mueve el cursor por otra conexión). La sonda síncrona deja fuera las operaciones
 asíncronas (`batchOperations` frente a `allBatchOperations`). Los sujetos de `BATCH_JOB_DESIGNS` están en
 `UNCOVERED_BRANCHES` (go-syntax, uncovered-branches y go-check).
+
+## Lotes síncronos con clave (DSL 2.30, incremento 10b de `PLAN-DSL-230-LOTES.md`, D15)
+
+`usesBatchJobs` significa ahora «almacén de trabajos» (lotes asíncronos o síncronos con clave, `batchJobStoreOperations`): las
+Dependencies, `UseCases.BatchJobs()`, la purga y el almacén. Lo que es solo del asíncrono (el alta, las rutas, el procesador,
+`timer.NewBatchJob`, la interfaz `detached` del sondeador y `PagedResponse`) pregunta `usesAsyncBatchJobs`. Todo vive en el
+mismo `internal/httpapi/batch_jobs.go`, con partes condicionales (staticcheck caza una función sin usar): lo compartido
+(`readBatchBody`, `batchSignature`, `batchItemOf`, `keepBatchItem` y, con algún paso por elemento, `processBatchItem` y
+`failedBatchItem` con sus tres desenlaces `batchNext|batchStop|batchLost`), lo asíncrono y lo de la clave
+(`startKeyedBatch`, `repeatKeyedBatch`, `storedBatchResponse`, `runKeyedPerItem`, `runKeyedAllOrNothing`,
+`discardKeyedBatch`). `processBatchItem` recibe ahora `*api`, así que `bj-cursor-outside-tx` busca `a.useCases`.
+
+El arranque lee `BatchSettingsFrom(cfg)` ANTES de construir el almacén (`batchJobStoreWiring`), porque el umbral del lote
+muerto lo guarda el almacén: `NewBatchJobStore(tx, syncStaleMs)` y `TakeOver(ctx, id)` sin parámetro. `Insert` con `Kind` vacío
+no arma ningún temporizador. El dueño ya no es `auditActor(ctx)` a pelo sino `batchJobOwner(ctx)`, en el mismo archivo del
+almacén: el actor con security; sin ella, `batchJobOwnerAnonymous` (`BATCH_ANONYMOUS_OWNER`), y entonces no se emite
+`audit_actor.go` (sin nadie que lo llame sería una función muerta). El todo o nada con clave pasa a `runAllOrNothing` un
+`*batchSink` (`kept`, `completed`) dentro de la transacción del lote; el endpoint de siempre pasa `nil`. El lector del sobre
+de un lote con clave usa `violations{params: true}`, como el asíncrono.
+
+La sonda (`scripts/lib/batch-key-probes.js`, `batch_key_probe_test.go`) entra por el `http.Handler` entero con la cabecera de
+la clave, cuenta trabajos y resultados como diferencia y mata la petición con un almacén envuelto en las Dependencies que
+falla al escribir el resultado del segundo elemento (`keyCrashAt`). La sonda síncrona (`batch-probes.js`) da a los sujetos
+con clave su almacén de trabajos, porque el endpoint lo pide también sin la cabecera.
