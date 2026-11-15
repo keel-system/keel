@@ -406,6 +406,10 @@ de la llamada al puerto que dice la nota, sin otra lectura del almacén ni un or
 devuelve es el error de no encontrado; ningún handler escribe una entrada (las escribe el adaptador) → si lo hay,
 `remaining`.
 
+**Los lotes** (DSL 2.30) tampoco tienen script: en cada handler cuya nota diga «Lote», el handler procesa el elemento
+del mensaje sin recorrer una lista, sin abrir una transacción y sin capturar un error para convertirlo en un resultado
+(capturarlo compila, y el lote sigue donde el diseño dice que se detiene) → si lo hay, `remaining`.
+
 **Ejecuta `bash infra/check-logging.sh`.** Se genera siempre y tiene cuatro reglas, más una quinta si el diseño marca
 campos `personal`:
 

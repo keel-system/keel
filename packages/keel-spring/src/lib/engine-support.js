@@ -897,6 +897,31 @@ const SPRING_MECHANISMS = {
         why: 'cards-history-mongo, cards-history-anonymize-mongo y vault-history-scoped-mongo contra Spring Data MongoDB en un replica set real, con las MISMAS sondas que la rama relacional: la entrada en la transacción de MongoTransactionManager, el orden por at y _id, el filtro sobre fields.path y fields.top. Falsado con los mismos sabotajes, cada uno en exactamente sus casos (hi-anonymize-miss sobre cards-history-anonymize-mongo, añadido en el incremento 2)'
       }
     }
+  },
+  batch: {
+    emitter: 'src/scaffold/batch.js · src/scaffold/batch-jobs.js · src/scaffold/timer.js · src/scaffold/controllers.js',
+    why: 'Un lote en una sola transacción, un elemento mal formado que tumba el lote entero, un fallo no declarado que no lo detiene, un 200 en vez del 207, un todo o nada sin transacción, un chunk que vuelve sobre lo confirmado, un cursor fuera de la transacción del elemento y unas rutas del trabajo que no miran el dueño compilan igual de bien y no rompen ningún escenario feliz.',
+    parity: {
+      skip: 'ninguna fixture declara lotes hasta el incremento 11 de PLAN-DSL-230-LOTES.md: los sujetos son los diseños derivados de keel-core/test/helpers/batch-designs.js (catalog-batch y catalog-batch-mongo, el mismo diseño salvo el modelo; catalog-batch-atomic; catalog-batch-async y catalog-batch-async-mongo), que miden también keel-nest, keel-dotnet y keel-go; la forma la fija test/batch.test.js',
+      test: 'test/batch.test.js'
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'batch-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'catalog-batch (por elemento) y catalog-batch-atomic (todo o nada) con MockMvc contra el motor: BA-1 a BA-7, con el sobre leído como List<JsonNode> y cada elemento con el mismo ObjectMapper y Validator que el borde; y catalog-batch-async con el temporizador disparado a mano y el chunk a 2: BJ-1 a BJ-9, la caída a mitad de chunk (BJ-4) y la réplica que se lleva el trabajo (BJ-5) incluidas. Las sentencias de batch_job las mide además timer-sql-check (batch-fence, batch-key-expiry, batch-purge-live, batch-finish-twice). Falsado: ba-one-tx en BA-2, BA-4 y BA-5 (un error capturado marca la transacción de Spring para revertir), ba-validate-whole en BA-3, ba-continue-on-undeclared en BA-4, ba-status en BA-1, ba-atomic-no-tx en BA-6, bj-no-resume en BJ-4, bj-cursor-outside-tx en BJ-4 y BJ-5 y bj-foreign-reader en BJ-6'
+      },
+      document: {
+        state: 'verificado',
+        net: 'batch-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'catalog-batch-mongo y catalog-batch-async-mongo contra Spring Data MongoDB en un replica set real, con las MISMAS sondas que la rama relacional. Medido aquí: mover el cursor fuera de la transacción del elemento da un WriteConflict en vez de cero filas, y la transacción de fallo vuelve a chocar con la valla, así que el elemento revierte igual. Falsado con los mismos sabotajes, cada uno en exactamente sus casos'
+      }
+    }
   }
 };
 

@@ -31,7 +31,7 @@ import { EXPECTED_VERSIONS, carriesExpectedVersions, readerLine, returnsVersione
 import { READ_SCOPE_PROPERTY, readScopeStamp } from './read-scope.js';
 import { BATCH_ITEM_COMPONENT } from './batch.js';
 import { batchJobEndpoints, batchJobRouteRows, isAsyncBatch } from './batch-jobs.js';
-import { BATCH_ACCEPTED_STATUS } from '@keel-system/keel-core/gen/batch';
+import { batchSuccessStatus } from '@keel-system/keel-core/gen/batch';
 
 // Los tipos base que en C# son tipos de VALOR: un ausente se escribe `T?` (Nullable<T>), no una referencia nula.
 const VALUE_BASES = new Set(['int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json']);
@@ -533,8 +533,9 @@ export function routeRow(model, operation) {
     operation: operation.name,
     method: operation.route.method,
     path: `${model.api.routeBase}${operation.route.path}`,
-    status: operation.route.status,
-    location: returnsLocation(model, operation),
+    // Un lote (DSL 2.30): el per-item responde 207 y el alta asíncrona 202 con la URL del trabajo.
+    status: batchSuccessStatus(operation),
+    location: operation.batch?.execution === 'async' || returnsLocation(model, operation),
     query,
     body: asBody ? (bodyRequired ? 'required' : 'optional') : null
   };
@@ -553,7 +554,7 @@ function routesFile(model) {
     if (!isAsyncBatch(model, operation)) return [line(row, `${endpointsClass(service)}.${csMember(operation.name)}`)];
     // Un lote asíncrono (DSL 2.30): el alta responde 202 con la URL del trabajo, y cuelgan de ella sus dos rutas.
     return [
-      line({ ...row, status: BATCH_ACCEPTED_STATUS, location: true }, `${endpointsClass(service)}.${csMember(operation.name)}`),
+      line(row, `${endpointsClass(service)}.${csMember(operation.name)}`),
       ...batchJobRouteRows(model, operation).map((job) => line(job, `${endpointsClass(service)}.${job.member}`))
     ];
   });

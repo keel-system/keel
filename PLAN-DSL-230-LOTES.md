@@ -1,6 +1,6 @@
 # DSL 2.30: lotes con resultado por elemento (R5)
 
-**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 9 cerrados el 2026-11-14 (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores, con la fase B neutral en keel-core); el siguiente es el 10 (contrato y método). Al cerrar pasa a `completed_plans/`.
+**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 10 cerrados el 2026-11-14 (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores, con la fase B neutral en keel-core, y el contrato y el método); el siguiente es el 10b (idempotencia del lote síncrono, D13). Al cerrar pasa a `completed_plans/`.
 
 ## Contexto
 
@@ -128,6 +128,7 @@ Son secuenciales y desde main, sin worktrees. Cada uno se cierra con «Para reto
 | 5 | Fase B en keel-core: `execution: async`, `batch-store.js`, sentencias, `timer-plan`, reglas `-NO-AUTH`, casos `BJ-*` | `timer-sql-check --sabotage=batch-*` |
 | 6-9 | Fase B en los cuatro: el trabajo, el procesador por chunks en el cronómetro, las dos rutas, la purga y D11 | Sonda de dos réplicas (reanudación tras matar una a mitad de chunk) y `--sabotage=bj-no-resume\|bj-cursor-outside-tx\|bj-foreign-reader` |
 | 10 | Contrato y método: `keel-nest/test/openapi.test.js` en los cuatro, guía Postman de `/keel-docs`, pregunta de `/keel-design`, tabla de `/keel-recover`, agentes de código y de calidad. `methodology.md` documenta cuándo `sync` y cuándo `async` | Pruebas de cadenas y lint de redocly |
+| 10b | Idempotencia del lote `sync` (D13): la repetición devuelve el 207 entero guardado. Lo neutral en keel-core y una pieza por generador, como la fase B | BA-8 en `batch-check`, y en `db-check`/`doc-check` de los otros tres, con su sabotaje |
 | 11 | Diseño de contraste `product-catalog` v-siguiente con `importProducts` (`per-item`, sync) y `importCatalog` (async). Corridas de control en los cuatro generadores (PostgreSQL y una con MySQL o MongoDB) | 5 corridas en verde, `docs/corridas/` |
 
 ## Riesgos que medir pronto
@@ -441,14 +442,41 @@ Incremento 9 (keel-go `async`):
   BJ-4, `bj-cursor-outside-tx` en BJ-4 y BJ-5 y `bj-foreign-reader` en BJ-6, exactamente, en los tres motores. Los sujetos
   de `BATCH_JOB_DESIGNS` en `UNCOVERED_BRANCHES` (go-check y go-syntax).
 
+Incremento 10 (contrato y método):
+
+- **El status de éxito de un lote es una sola función** (`batchSuccessStatus` en `gen/batch.js`: 202 el asíncrono, 207 el
+  `per-item`, el de la ruta el resto). La usan `gen/openapi.js` y las tablas de rutas de keel-nest (`ROUTES`), keel-dotnet
+  (`ApiRoutes`) y keel-go. Medirlo destapó que las tres decían `200` en un lote `per-item` mientras el contrato y la respuesta
+  decían `207`, y que keel-nest no marcaba el `Location` del alta asíncrona. Ninguna red lo veía: las tablas solo deciden
+  el 404 frente al 405, y el status real lo pone el endpoint.
+- **`keel-nest/test/openapi.test.js`** cubre los cinco sujetos de lotes: el mismo documento en los cuatro, sin `$ref`
+  colgados, la tabla de rutas con el mismo status y `Location`, `<Op>BatchResponse`/`BatchSummary`/`<Op>BatchItem`/`BatchJob`
+  con las claves de `WIRE_SHAPES` (las cinco del elemento requeridas), los estados de `BATCH_JOB_STATUSES`, las dos rutas del
+  trabajo con su 404 `BATCH_JOB_NOT_FOUND`, la misma `security` que el alta y servidas por el controlador de keel-nest, los
+  `itemErrors` fuera de las respuestas del lote, y sin deriva para `CHK-DOCS-OPENAPI-DRIFT`.
+- **La fila `batch` de la matriz de paridad** (`gen/mechanisms.js`, con la red `batch-check` de keel-spring) en los cuatro:
+  verificada y falsada en sus dos ramas con lo medido en los incrementos 1 a 9; `parity.skip` hasta que una fixture la
+  declare (inc. 11). keel-go ata sus celdas a `BATCH_SABOTAGE_SPECS` y `BATCH_JOB_SABOTAGE_SPECS` en `FALSIFIED_BY`.
+- **Método**: `methodology.md` (cuándo `sync` y cuándo `async`, y el lote en la fila de comportamiento estructural),
+  `dsl/use-cases.md` (los cuatro generadores traen los dos modos; la idempotencia del lote síncrono todavía se rechaza), la
+  pregunta de `/keel-design` (atomicidad, `itemErrors` y modo), `/keel-docs` y su guía de Postman (el 207 por elemento, el
+  sondeo del trabajo con `pm.execution.setNextRequest` y un tope de intentos, el 404 del trabajo ajeno), la fila de evidencia
+  de `/keel-recover` y los agentes de código y de calidad de los cuatro (el handler procesa un elemento; nada de bucle,
+  transacción ni captura del error).
+- **El lint de redocly** de los contratos de lotes no se pasó: el usuario lo dejó fuera. Lo cubren los oráculos de
+  `openapi.test.js`, y los documentos salen del mismo `openapi.js` que pasó el lint en la 2.29.
+- **D13 en `sync` (BA-8) tenía que entrar «tras la fase B» y no tenía incremento**: pasa a ser el 10b, antes de las corridas,
+  para que estas midan la 2.30 sin un hueco conocido.
+
 ## Para retomar
 
-Inc. 10, contrato y método: `keel-nest/test/openapi.test.js` en los cuatro, la guía de Postman de `/keel-docs`, la pregunta
-de `/keel-design`, la tabla de `/keel-recover`, los agentes de código y de calidad de los cuatro y `methodology.md` (cuándo
-`sync` y cuándo `async`), y la fila de los lotes en el catálogo neutral de la matriz de paridad (`gen/mechanisms.js`), que
-obliga a los cuatro. La huella golden de keel-nest sigue atrasada desde antes de la 2.30 (`npm run golden --workspace
-packages/keel-nest -- --check`): regenerarla en su propio commit. Las filas de `capability-coverage` de los lotes se borran
-en el inc. 11.
+Inc. 10b, idempotencia del lote síncrono (D13): con `idempotency` (`client-key` o `payload-hash`) en un lote `sync`, la
+repetición devuelve el 207 entero guardado sin volver a procesarlo, la misma clave con otro cuerpo es
+`IDEMPOTENCY_KEY_REUSED`, y `batchFrontierErrors` deja de rechazarla. Primero lo neutral en keel-core (dónde se guarda la
+respuesta: el registro de idempotencia que ya existe o una columna nueva; BA-8 y su sabotaje), después los cuatro
+generadores en orden, cada uno con BA-8 en su red. Después, el inc. 11 (diseño de contraste y corridas). La huella golden
+de keel-nest sigue atrasada desde antes de la 2.30 (`npm run golden --workspace packages/keel-nest -- --check`): va en su
+propio commit. Las filas de `capability-coverage` de los lotes se borran en el inc. 11.
 
 ## Verificación
 

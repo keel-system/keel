@@ -828,6 +828,31 @@ export const MECHANISMS = {
         why: 'cards-history-mongo, cards-history-anonymize-mongo y vault-history-scoped-mongo contra el driver de MongoDB en un replica set real, con las MISMAS sondas que la rama relacional: la entrada en la sesión de la transacción, el orden por at y _id, el filtro sobre fields.path y fields.top y el índice de la lectura en DOCUMENT_INDEXES. Medido aquí: con Collection<Document> el insertOne del _id de texto no compila, y solo doc-check lo ve. Falsado con los mismos sabotajes, cada uno en exactamente sus casos (hi-anonymize-miss sobre cards-history-anonymize-mongo)'
       }
     }
+  },
+  batch: {
+    emitter: 'src/scaffold/batch.js · src/scaffold/batch-jobs.js · src/scaffold/timer.js · src/scaffold/controllers.js',
+    why: 'Un lote en una sola transacción, un elemento mal formado que tumba el lote entero, un fallo no declarado que no lo detiene, un 200 en vez del 207, un todo o nada sin transacción, un chunk que vuelve sobre lo confirmado, un cursor fuera de la transacción del elemento y unas rutas del trabajo que no miran el dueño compilan igual de bien y no rompen ningún escenario feliz.',
+    parity: {
+      skip: 'ninguna fixture declara lotes hasta el incremento 11 de PLAN-DSL-230-LOTES.md: los sujetos son los diseños derivados de keel-core/test/helpers/batch-designs.js (catalog-batch y catalog-batch-mongo, el mismo diseño salvo el modelo; catalog-batch-atomic; catalog-batch-async y catalog-batch-async-mongo), los MISMOS que mide keel-spring; test/batch-parity.test.js y test/batch-jobs.test.js fijan la forma y la comparan con keel-spring (los casos, la nota, el contrato, las sentencias y el bucle emitido EJECUTADO contra batchResponse)',
+      test: 'test/batch-parity.test.js'
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'catalog-batch y catalog-batch-atomic (scripts/lib/batch-probes.js) y catalog-batch-async (scripts/lib/batch-job-probes.js) contra PostgreSQL y MySQL: BA-1 a BA-7 y BJ-1 a BJ-9. Medido aquí: en TypeORM un error capturado no marca la transacción, así que ba-one-tx solo se ve donde el MOTOR la aborta tras el duplicado (BATCH_ONE_TX). Falsado: ba-one-tx en BA-2 y BA-5 en PostgreSQL (en MySQL no es observable, y el veredicto lo dice), ba-validate-whole en BA-3, ba-continue-on-undeclared en BA-4, ba-status en BA-1, ba-atomic-no-tx en BA-6, bj-no-resume en BJ-4, bj-cursor-outside-tx en BJ-4 y BJ-5 y bj-foreign-reader en BJ-6'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'catalog-batch-mongo y catalog-batch-async-mongo contra el driver de MongoDB en un replica set real, con las MISMAS sondas; el almacén calcula la hora con $$NOW y la clave del trabajo es un índice único y parcial en DOCUMENT_INDEXES. Falsado con los mismos sabotajes, cada uno en exactamente sus casos (ba-one-tx en BA-2 y BA-5)'
+      }
+    }
   }
 };
 

@@ -822,6 +822,31 @@ export const MECHANISMS = {
         why: 'cards-history-mongo, cards-history-anonymize-mongo y vault-history-scoped-mongo contra MongoDB.Driver en un replica set real, con las MISMAS sondas que la rama relacional: la entrada en la sesión de la transacción, el orden por at y _id, el filtro sobre fields.path y fields.top y el índice de la lectura en DocumentIndexes, que la comprobación de los índices vivos mira contra CHANGE_HISTORY_COLLECTION de keel-core, direcciones incluidas. La hora es de milisegundos, así que el desempate es el id, y Guid.CreateVersion7() no crece dentro de un mismo milisegundo: el id de la entrada sale de HistorySupport.NextId(), monótono en el proceso. En las dos cards doc-check juzga solo los casos HI y los del ciclo de vida, por el mismo hueco de la sonda general que cards-logical-mongo. Falsado con los mismos sabotajes, cada uno en exactamente sus casos'
       }
     }
+  },
+  batch: {
+    emitter: 'src/scaffold/batch.js · src/scaffold/batch-jobs.js · src/scaffold/timer.js',
+    why: 'Un lote en una sola transacción, un elemento mal formado que tumba el lote entero, un fallo no declarado que no lo detiene, un 200 en vez del 207, un todo o nada sin transacción, un chunk que vuelve sobre lo confirmado, un cursor fuera de la transacción del elemento y unas rutas del trabajo que no miran el dueño compilan igual de bien y no rompen ningún escenario feliz.',
+    parity: {
+      skip: 'ninguna fixture declara lotes hasta el incremento 11 de PLAN-DSL-230-LOTES.md: los sujetos son los diseños derivados de keel-core/test/helpers/batch-designs.js (catalog-batch y catalog-batch-mongo, el mismo diseño salvo el modelo; catalog-batch-atomic; catalog-batch-async y catalog-batch-async-mongo), los MISMOS que miden keel-spring y keel-nest; test/batch-parity.test.js y test/batch-jobs.test.js fijan la forma y la comparan con los dos (los casos, la nota, el contrato y las sentencias)',
+      test: 'test/batch-parity.test.js'
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'catalog-batch y catalog-batch-atomic (scripts/lib/batch-probes.js, un [Fact] por caso, el endpoint emitido con el ApiErrorMiddleware delante) y catalog-batch-async (scripts/lib/batch-job-probes.js) contra PostgreSQL y MySQL: BA-1 a BA-7 y BJ-1 a BJ-9. Medido aquí: EF Core abre un savepoint antes de cada SaveChanges en una transacción ajena y deja la fila rechazada en el change tracker, así que ba-one-tx cae solo en BA-2 (BATCH_ONE_TX); por eso cada elemento del procesador va en su ámbito. Falsado: ba-one-tx en BA-2, ba-validate-whole en BA-3, ba-continue-on-undeclared en BA-4, ba-status en BA-1, ba-atomic-no-tx en BA-6, bj-no-resume en BJ-4, bj-cursor-outside-tx en BJ-4 y BJ-5 y bj-foreign-reader en BJ-6'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'catalog-batch-mongo y catalog-batch-async-mongo contra MongoDB.Driver en un replica set real, con las MISMAS sondas; la comprobación de los índices vivos mira las colecciones del trabajo contra BATCH_JOB_COLLECTIONS de keel-core. Falsado con los mismos sabotajes, cada uno en exactamente sus casos (ba-one-tx en BA-2 y BA-5)'
+      }
+    }
   }
 };
 

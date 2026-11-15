@@ -27,6 +27,7 @@ import { MULTIPART_READING_TS } from './storage.js';
 import { REQUEST_READING_TS, ROUTES_TS, usesApi } from './rest-support.js';
 import { CALLER_IDENTITY_TS, callerResolution } from './security.js';
 import { controllerBatchCall, atomicTransaction } from './batch.js';
+import { batchSuccessStatus } from '@keel-system/keel-core/gen/batch';
 import { controllerBatchJobMethods, usesBatchJobs } from './batch-jobs.js';
 import { TRANSACTION_CONTEXT_TS } from './repositories.js';
 
@@ -577,7 +578,7 @@ function routesFile(model) {
             .flatMap((c) => (c.pageable ? (operation.historyOf ? ['page', 'size'] : ['page', 'size', 'sort']) : [c.name]));
       rows.push(
         `  { operation: ${tsString(operation.name)}, method: ${tsString(operation.route.method)}, path: ${tsString(`${model.api.routeBase}${operation.route.path}`)}, ` +
-          `status: ${operation.route.status}, location: ${returnsLocation(model, operation)}, query: [${query.map(tsString).join(', ')}], ` +
+          `status: ${batchSuccessStatus(operation)}, location: ${operation.batch?.execution === 'async' || returnsLocation(model, operation)}, query: [${query.map(tsString).join(', ')}], ` +
           `body: ${asBody ? (bodyRequired ? "'required'" : "'optional'") : 'null'} }`
       );
     }

@@ -41,6 +41,17 @@ export const BATCH_ITEM_MALFORMED_MESSAGE = 'El elemento no tiene la forma que e
 /** El status del alta de un lote asíncrono (D8): el trabajo queda creado y se procesa después. */
 export const BATCH_ACCEPTED_STATUS = 202;
 
+/**
+ * El status con que responde el éxito de una operación, lote o no: el asíncrono, 202; el `per-item`, SIEMPRE 207 (D1); el
+ * resto, el de su ruta. Lo leen el contrato y las tablas de rutas de los generadores, para que digan lo mismo.
+ */
+export function batchSuccessStatus(operation) {
+  const batch = operation.batch;
+  if (batch?.execution === 'async') return BATCH_ACCEPTED_STATUS;
+  if (batch?.atomicity === 'per-item') return BATCH_MULTI_STATUS;
+  return operation.route.status;
+}
+
 // ─── Desde las capas ─────────────────────────────────────────────────────────
 
 /** Las operaciones que declaran `batch`: `{ operation, op, batch }`, en su orden. */

@@ -28,7 +28,7 @@ import {
 } from './conditional-writes.js';
 import { lifecycleContractClause } from './data-lifecycle.js';
 import { HISTORY_CHANGES, HISTORY_CHANGE_FIELDS, HISTORY_ENTRY_FIELDS, historyContractClause, historyPersonalPaths } from './history.js';
-import { BATCH_ACCEPTED_STATUS, BATCH_ITEM_STATUSES, BATCH_JOB_PARAM, BATCH_MULTI_STATUS, batchContractClause, batchJobPaths } from './batch.js';
+import { BATCH_ITEM_STATUSES, BATCH_JOB_PARAM, batchContractClause, batchJobPaths, batchSuccessStatus } from './batch.js';
 import { BATCH_JOB_STATUSES } from './batch-store.js';
 
 const API_KEY_HEADER = 'X-API-Key';
@@ -183,7 +183,7 @@ function responses(context, operation, inputs) {
   const perItem = batch?.atomicity === 'per-item';
   // Un lote asíncrono (D8) responde 202 con el trabajo y su URL: no procesa nada en la petición.
   const asynchronous = batch?.execution === 'async';
-  const status = String(asynchronous ? BATCH_ACCEPTED_STATUS : perItem ? BATCH_MULTI_STATUS : operation.route.status);
+  const status = String(batchSuccessStatus(operation));
   const success = { description: successDescription(context.model, operation) };
   const dto = batch ? null : operation.responseDto;
   if (batch) success.content = { 'application/json': { schema: asynchronous ? batchJobSchema(context) : batchResponseSchema(context, operation) } };

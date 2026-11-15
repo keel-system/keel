@@ -23,6 +23,10 @@ import { DATA_LIFECYCLE_DESIGNS } from '../../keel-core/test/helpers/data-lifecy
 import { deletedRootOf } from '@keel-system/keel-core/gen/data-lifecycle';
 import { HISTORY_CHANGES, HISTORY_ENTRY_FIELDS, historyPersonalPaths } from '@keel-system/keel-core/gen/history';
 import { HISTORY_DESIGNS } from '../../keel-core/test/helpers/history-designs.js';
+import { BATCH_ACCEPTED_STATUS, BATCH_ITEM_STATUSES, BATCH_MULTI_STATUS, batchContractClause, batchJobPaths } from '@keel-system/keel-core/gen/batch';
+import { BATCH_JOB_STATUSES } from '@keel-system/keel-core/gen/batch-store';
+import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
+import { BATCH_DESIGNS, BATCH_JOB_DESIGNS } from '../../keel-core/test/helpers/batch-designs.js';
 import { planFixture, transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 import { tmpDir } from './helpers/tmp.js';
@@ -361,3 +365,85 @@ test('cards-history: el email de la ficha es una ruta personal del historial', (
   const entry = YAML.parse(nest.files.find((f) => f.path === DOC).content).components.schemas.ContactCardHistoryEntry;
   assert.ok(entry.properties.changes['x-personal-fields'].includes('email'));
 });
+
+// Los lotes (DSL 2.30): sus sujetos son los diseños derivados que miden los cuatro generadores, los síncronos y los
+// asíncronos. El mismo documento en los cuatro; el lote responde la forma del cable (wire-contract.md § Lotes), `per-item`
+// SIEMPRE con 207 y `all-or-nothing` con su status; el asíncrono, 202 con Location y las dos rutas del trabajo, que el
+// controlador de keel-nest sirve de verdad; los errores del diseño no salen como respuestas del lote (viajan en su
+// elemento); y sin deriva para CHK-DOCS-OPENAPI-DRIFT.
+for (const derived of [...BATCH_DESIGNS, ...BATCH_JOB_DESIGNS]) {
+  test(`${derived.name}: el openapi describe el lote con la forma del cable, el mismo en los cuatro generadores`, async () => {
+    const load = () => {
+      const service = loadService(path.join(FIXTURES_DIR, derived.from));
+      derived.mutate(service.layers);
+      return service;
+    };
+    const { manifest, layers } = load();
+    const database = layers.persistence?.default?.model === 'document' ? 'mongodb' : 'postgresql';
+    const documents = [planSpring, planDotnet, planGo].map((plan) => {
+      const service = load();
+      return plan({ ...service, workspace: FIXTURES_DIR, stack: { database } }).files.find((f) => f.path === DOC)?.content;
+    });
+    const nest = planFixture(derived.from, { mutate: derived.mutate, stack: { database } });
+    const fromNest = nest.files.find((f) => f.path === DOC).content;
+    for (const other of documents) assert.equal(other, fromNest, 'el mismo contrato en los cuatro generadores');
+
+    const document = YAML.parse(fromNest);
+    assert.deepEqual(danglingRefs(document), []);
+    const schemas = document.components.schemas;
+    const { ROUTES } = await transpileTree(nest.files).load('src/infrastructure/rest/routes.ts');
+    const batches = nest.model.services.flatMap((s) => s.operations).filter((op) => op.batch && op.route);
+    assert.ok(batches.length > 0, 'el sujeto tiene un lote');
+    for (const operation of batches) {
+      const { batch } = operation;
+      const name = operation.name[0].toUpperCase() + operation.name.slice(1);
+      const full = `${nest.model.api.routeBase}${operation.route.path}`;
+      const op = document.paths[full][operation.route.method.toLowerCase()];
+      const asynchronous = batch.execution === 'async';
+      const status = asynchronous ? BATCH_ACCEPTED_STATUS : batch.atomicity === 'per-item' ? BATCH_MULTI_STATUS : operation.route.status;
+      // La tabla de rutas que EJECUTA keel-nest dice el mismo status y el mismo Location que el contrato.
+      const row = ROUTES.find((route) => route.operation === operation.name);
+      assert.equal(row.status, status, `${operation.name}: el status de la tabla de rutas`);
+      assert.equal(row.location, asynchronous, `${operation.name}: Location en la tabla de rutas`);
+      const success = op.responses[String(status)];
+      assert.ok(success, `${operation.name}: responde ${status}`);
+      assert.ok(success.description.includes(batchContractClause(batch)), `${operation.name}: la cláusula del lote`);
+      assert.match(op.responses['400'].description, new RegExp(`el sobre del lote: '${batch.over}'`));
+      // Los errores de itemErrors viajan en su elemento: no son respuestas del lote.
+      const answered = Object.entries(op.responses).filter(([code]) => Number(code) >= 400).map(([, response]) => response.description).join('\n');
+      for (const code of batch.itemErrors) assert.ok(!answered.includes(`\`${code}\``), `${operation.name}: ${code} no es una respuesta del lote`);
+      if (batch.execution !== 'async') {
+        assert.deepEqual(success.content['application/json'].schema, { $ref: `#/components/schemas/${name}BatchResponse` });
+        assert.deepEqual(Object.keys(schemas[`${name}BatchResponse`].properties), [...WIRE_SHAPES.batchResponse]);
+      } else {
+        assert.ok(success.headers?.Location, `${operation.name}: Location del trabajo`);
+        assert.deepEqual(success.content['application/json'].schema, { $ref: '#/components/schemas/BatchJob' });
+        assert.deepEqual(Object.keys(schemas.BatchJob.properties), [...WIRE_SHAPES.batchJob]);
+        assert.deepEqual(schemas.BatchJob.properties.status.enum, Object.values(BATCH_JOB_STATUSES));
+        const paths = batchJobPaths(full);
+        const controllers = nest.files.filter((f) => f.path.startsWith('src/infrastructure/rest/controllers/')).map((f) => f.content).join('\n');
+        for (const [route, operationId] of [[paths.status, `${operation.name}Job`], [paths.results, `${operation.name}JobResults`]]) {
+          const job = document.paths[route]?.get;
+          assert.ok(job, `${operation.name}: GET ${route}`);
+          assert.equal(job.operationId, operationId);
+          assert.ok(job.responses['404'].description.includes('BATCH_JOB_NOT_FOUND'), `${operationId}: el 404 de lo ajeno`);
+          assert.deepEqual(job.security, op.security, `${operationId}: la misma regla que el alta`);
+          const nestRoute = route.slice(nest.model.api.routeBase.length).replace(/\{([^}]+)\}/g, ':$1').replace(/^\//, '');
+          assert.ok(controllers.includes(`@Get('${nestRoute}')`), `${operationId}: keel-nest sirve ${route}`);
+        }
+        const results = document.paths[paths.results].get.responses['200'].content['application/json'].schema;
+        assert.deepEqual(results, { $ref: `#/components/schemas/Paged${name}BatchItem` });
+      }
+      assert.deepEqual(Object.keys(schemas.BatchSummary.properties), [...WIRE_SHAPES.batchSummary]);
+      const item = schemas[`${name}BatchItem`];
+      assert.deepEqual(Object.keys(item.properties), [...WIRE_SHAPES.batchItem]);
+      assert.deepEqual(item.required, [...WIRE_SHAPES.batchItem], 'las cinco claves siempre, con null donde no aplica');
+      assert.deepEqual(item.properties.status.enum, [...BATCH_ITEM_STATUSES]);
+    }
+
+    const docsDir = tmpDir('keel-openapi-ba-');
+    fs.writeFileSync(path.join(docsDir, 'openapi.yaml'), fromNest);
+    const { findings } = checkDerivedCoherence({ layers: { api: layers.api, 'use-cases': layers['use-cases'], domain: layers.domain }, manifest, docsDir });
+    assert.deepEqual(findings.filter((finding) => finding.id === 'CHK-DOCS-OPENAPI-DRIFT').map((finding) => finding.message), []);
+  });
+}

@@ -38,7 +38,7 @@ import { EXPECTED_VERSIONS, carriesExpectedVersions, endpointPrelude, returnsVer
 import { readScopeEndpointLines } from './read-scope.js';
 import { BATCH_ITEM_COMPONENT } from './batch.js';
 import { batchJobEndpoints, batchJobRouteRows } from './batch-jobs.js';
-import { BATCH_ACCEPTED_STATUS } from '@keel-system/keel-core/gen/batch';
+import { batchSuccessStatus } from '@keel-system/keel-core/gen/batch';
 
 /** ¿Resuelve esta operación la identidad del llamante contra las credenciales del recurso (resolvedBy)? */
 export function resolvesCaller(model, operation) {
@@ -62,7 +62,7 @@ const TEXT_READERS = {
 };
 
 // Las constantes de net/http de los status de éxito.
-export const STATUS_CONSTANTS = { 200: 'http.StatusOK', 201: 'http.StatusCreated', 202: 'http.StatusAccepted', 204: 'http.StatusNoContent' };
+export const STATUS_CONSTANTS = { 200: 'http.StatusOK', 201: 'http.StatusCreated', 202: 'http.StatusAccepted', 204: 'http.StatusNoContent', 207: 'http.StatusMultiStatus' };
 const METHOD_CONSTANTS = { GET: 'http.MethodGet', POST: 'http.MethodPost', PUT: 'http.MethodPut', PATCH: 'http.MethodPatch', DELETE: 'http.MethodDelete' };
 
 const statusOf = (status) => STATUS_CONSTANTS[status] ?? String(status);
@@ -598,8 +598,8 @@ export function routeRow(model, operation) {
     operation: operation.name,
     method: operation.route.method,
     path: `${model.api.routeBase}${operation.route.path}`,
-    // El alta de un lote asíncrono responde 202 con el trabajo (DSL 2.30).
-    status: operation.batch?.execution === 'async' ? BATCH_ACCEPTED_STATUS : operation.route.status,
+    // Un lote (DSL 2.30): el per-item responde 207 y el alta asíncrona 202 con el trabajo.
+    status: batchSuccessStatus(operation),
     location: operation.batch?.execution === 'async' || returnsLocation(model, operation),
     query,
     body: asBody ? (bodyRequired ? 'required' : 'optional') : null

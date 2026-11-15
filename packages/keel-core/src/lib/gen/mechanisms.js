@@ -47,6 +47,8 @@ export const NETS = {
     'npm run lifecycle-check — el CICLO DE VIDA DEL DATO (DSL 2.28) contra el motor con el contexto del perfil local: las lecturas vivas y su total, la clave que se libera, la restauración con su ventana, la lectura por referencia, la vida sumada al alcance, la retención y sus dos réplicas, y el valor personal fuera de los logs (LC-1 a LC-10, RT-1 a RT-4, PD-2)',
   'history-check':
     'npm run history-check — el HISTORIAL DE CAMBIOS (DSL 2.29) contra el motor con el contexto del perfil local: la entrada en la transacción de la escritura, el diff, lo que no entra, el autor, la página con su orden y sus filtros, la lectura acotada como la ficha, la restauración y la retención que se lleva o anonimiza el historial (HI-1 a HI-10)',
+  'batch-check':
+    'npm run batch-check — los LOTES (DSL 2.30) contra el motor: el 207 por elemento, la validación de cada elemento, la transacción por elemento o la que abarca el lote, el lote que se detiene (BA-1 a BA-9), y el trabajo asíncrono con su alta idempotente, el chunk sobre el cronómetro, la reanudación desde el cursor, la valla y el dueño (BJ-1 a BJ-9)',
   corrida: 'una corrida en vivo: no es determinista ni repetible en CI, así que nombra cuál',
   ninguna: 'nadie lo ejecuta'
 };
@@ -181,6 +183,10 @@ export const MECHANISM_CATALOG = {
   },
   history: {
     title: 'Historial de cambios (DSL 2.29): una entrada por escritura confirmada en su misma transacción, con el diff del agregado, el autor, la página ordenada y filtrada, la lectura acotada como la ficha y la retención que se lo lleva o lo anonimiza',
+    axis: 'model'
+  },
+  batch: {
+    title: 'Lotes con resultado por elemento (DSL 2.30): el 207 con una transacción por elemento o una que abarca el lote, cada elemento validado y traducido como la operación sola, y el trabajo asíncrono por chunks sobre el cronómetro con su cursor como valla, su clave y su dueño',
     axis: 'model'
   }
 };

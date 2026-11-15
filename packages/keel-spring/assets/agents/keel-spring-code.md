@@ -103,6 +103,14 @@ corto a romper un escenario que ya estaba en verde.
    la raíz como su ficha —viva y acotada si va en `reads`— y devuelve la página ya ordenada y filtrada; su vacío
    es el error de no encontrado del diseño. Nada de ordenar, filtrar ni leer el almacén por otra vía. El `before`
    y el `after` de un campo `personal` tampoco van a un log.
+   **Los lotes** (DSL 2.30). Con `batch`, el handler de la operación procesa **un** elemento: su mensaje
+   lleva `item()` en vez de la lista, y devuelve `<Op>ItemResult` si el diseño declara `batch.output`. El bucle, la
+   transacción de cada elemento (o la que abarca el lote), la validación del elemento, la traducción de su fallo y
+   el 207 o el 202 son de build: nada de recorrer la lista, abrir una transacción ni capturar el error para
+   convertirlo en un resultado. Un error de `itemErrors` se lanza como cualquier otro, y el que no está en la
+   lista detiene el lote: lánzalo y no lo captures. En un lote `async` el handler corre fuera de la petición y
+   sin token (el actor de autoría es quien creó el trabajo): lo que necesite tiene que venir en el mensaje. El
+   trabajo, su cursor y sus dos rutas también son de build.
    Al crear un servicio de dominio sigue `{{keel:docs}}/conventions/domain-services.md`; antes de
    paralelizar I/O en un handler consulta `{{keel:docs}}/conventions/virtual-threads.md` (solo
    query handlers con 2+ operaciones independientes).

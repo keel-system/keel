@@ -197,6 +197,15 @@ Si el diseño declara `api.concurrency`, las escrituras listadas comparan la ver
 - Tras borrar la raíz, el historial da el mismo **404** que su ficha, no una página vacía; una raíz ajena, el error de su `readMiss`.
 - Un valor de una ruta de `x-personal-fields` en un ejemplo es **inventado** y reconocible, como el de un campo `x-personal`.
 
+### Lotes (`batch`)
+
+- Un lote `per-item` se asserta con **207** siempre, también si todo salió bien, y por elemento: `items[i].index`, `status` y, en los fallidos, `error` y `message`; `summary` cuadra con los `items` (`succeeded + failed + notAttempted === total`). Nunca se asserta un 200 ni un 4xx del lote por un elemento malo.
+- El escenario de fallo parcial manda en **un mismo lote** el elemento que falla solo él (un `code` de `itemErrors`, o uno mal formado, que sale `failed` con `VALIDATION_ERROR`) entre dos válidos, y asserta que los válidos se confirmaron leyéndolos después. Dos elementos con la misma clave natural en el lote: falla siempre el **segundo**.
+- Un `all-or-nothing` con un elemento malo responde el error de ese elemento con `items[<i>]` en `details`, y el flujo comprueba después que **ninguno** del lote existe.
+- El `400` del lote solo sale por el sobre: sin el campo `over`, o con un elemento más que `maxItems`.
+- Un lote **`async`**: el alta asserta **202**, guarda `id` y `Location` en variables y **sondea** `GET …/jobs/{{jobId}}` con `pm.execution.setNextRequest` sobre sí misma hasta que `status` sea `completed` o `aborted`, con un **tope de intentos** contado en una variable (sin tope, un trabajo atascado cuelga la colección). Después lee `…/jobs/{{jobId}}/results` y asserta por elemento como en el 207. Si la operación tiene `idempotency`, repetir el alta con la misma clave devuelve **202** con el **mismo** `id`.
+- El trabajo de otro llamante, un id inventado o uno purgado responden **404** `BATCH_JOB_NOT_FOUND`: el escenario del lector ajeno usa el `token_<rol>-other` como en las lecturas acotadas.
+
 ### Carpeta «Operaciones»
 
 Una request por endpoint de `api` (explícito o derivado de `auto`) que ningún
