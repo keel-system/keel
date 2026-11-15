@@ -47,6 +47,7 @@ export function batchJobCases(model) {
 
 const RUNNER = /infrastructure[\\/]rest[\\/]batch[\\/]batch-job-runner\.ts$/;
 const JOBS = /infrastructure[\\/]rest[\\/]batch[\\/]batch-jobs\.ts$/;
+const STEPS = /infrastructure[\\/]rest[\\/]batch[\\/]batch-job-steps\.ts$/;
 const SAME = (spec) => ({ relational: spec, document: spec });
 
 /** El texto que se busca y se sustituye en lo emitido, por sabotaje y por almacén (relational | document). */
@@ -56,7 +57,7 @@ export const BATCH_JOB_SABOTAGE_SPECS = {
   'bj-no-resume': SAME([RUNNER, 'let index = job.nextIndex;', 'let index = job.nextIndex - (job.nextIndex % this.settings.chunkSize);']),
   // El efecto en su transacción, y el cursor con el resultado en otra, después.
   'bj-cursor-outside-tx': SAME([
-    RUNNER,
+    STEPS,
     'await this.transactions.inTransaction(async () => {\n        const result = await process(item);\n        await this.keep(jobId, index, BatchItem.succeeded(index, result));\n      });',
     'const result = await this.transactions.inTransaction(() => process(item));\n      await this.transactions.inTransaction(() => this.keep(jobId, index, BatchItem.succeeded(index, result)));'
   ]),

@@ -14,7 +14,7 @@ import { batchStatements } from '@keel-system/keel-core/gen/batch-store';
 import { BATCH_JOB_DESIGNS } from '../../keel-core/test/helpers/batch-designs.js';
 import { planService } from '../src/scaffold/index.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
-import { BATCH_JOB_RUNNER_TS, SQL_BATCH_JOB_STORE_TS, MONGO_BATCH_JOB_STORE_TS } from '../src/scaffold/batch-jobs.js';
+import { BATCH_JOB_STEPS_TS, SQL_BATCH_JOB_STORE_TS, MONGO_BATCH_JOB_STORE_TS } from '../src/scaffold/batch-jobs.js';
 import { TIMER_POLLER_TS, TIMER_MODULE_TS, TIMER_KINDS_TS } from '../src/scaffold/timer.js';
 import { batchJobCases, BATCH_JOB_SABOTAGE_SPECS } from '../scripts/lib/batch-job-probes.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
@@ -116,8 +116,9 @@ test('el alta firma el texto del cuerpo: http-platform lo guarda y el controlado
 });
 
 test('el avance del cursor (la valla) va ANTES que el resultado, en la transacción del elemento', () => {
-  const runner = fileOf(plan('catalog-batch-async').files, BATCH_JOB_RUNNER_TS);
-  const keep = runner.slice(runner.indexOf('private async keep('));
+  const steps = fileOf(plan('catalog-batch-async').files, BATCH_JOB_STEPS_TS);
+  const keep = steps.slice(steps.indexOf('  async keep('));
+  assert.ok(keep.length > 0);
   assert.ok(keep.indexOf('this.store.advance(') < keep.indexOf('this.store.insertResult('));
 });
 

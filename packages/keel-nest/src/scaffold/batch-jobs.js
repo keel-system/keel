@@ -16,6 +16,11 @@
 //   · `<Op>BatchJob`: el `TimerHandler` de cada operación asíncrona, que sabe leer el sobre guardado y construir el
 //     mensaje de UN elemento con el lector que exporta el controlador.
 //
+// El lote SÍNCRONO con clave (D15, incremento 10b) usa el mismo almacén, sin temporizador: `KeyedBatches` crea su trabajo,
+// procesa cada elemento con el paso que comparte con el procesador (`BatchJobSteps`: efecto, valla y resultado en UNA
+// transacción) y responde siempre lo guardado, así que la primera petición, la repetición y la que reanuda tras una
+// muerte a mitad de lote responden lo mismo.
+//
 // Lo que no cambia respecto al lote síncrono: el handler procesa UN elemento, cada elemento se lee con el MISMO
 // `read<Elemento>` del borde y su fallo se traduce con ApiExceptionFilter (batch.ts: `readBatchItem`, `itemFailure`), así
 // que «falla solo su elemento» y «detiene el lote» significan lo mismo.
@@ -23,16 +28,27 @@
 // Este módulo no importa a otros emisores (controllers.js, timer.js y application.js lo importan a él): las rutas de lo
 // que importa lo emitido van escritas aquí.
 
-import { asyncBatchOperations, batchJobPaths, BATCH_JOB_PARAM, BATCH_ACCEPTED_STATUS } from '@keel-system/keel-core/gen/batch';
 import {
+  asyncBatchOperations,
+  batchJobStoreOperations,
+  keyedSyncBatchOperations,
+  batchJobPaths,
+  BATCH_JOB_PARAM,
+  BATCH_ACCEPTED_STATUS,
+  BATCH_MULTI_STATUS
+} from '@keel-system/keel-core/gen/batch';
+import {
+  BATCH_ANONYMOUS_OWNER,
   BATCH_JOB,
   BATCH_ITEM_RESULT,
   BATCH_JOB_COLLECTIONS,
   BATCH_JOB_STATUSES,
   BATCH_PARAMETERS,
   BATCH_STORE_ENGINES,
+  BATCH_SYNC_STALE,
   batchKind,
-  batchStatements
+  batchStatements,
+  batchSyncStatements
 } from '@keel-system/keel-core/gen/batch-store';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { idempotencyOutcomeCode } from '@keel-system/keel-core/gen/declared-errors';
@@ -51,6 +67,8 @@ export const BATCH_JOB_ORM_TS = classPath(STORE_DIR, 'BatchJobOrm');
 export const BATCH_SETTINGS_TS = classPath(STORE_DIR, 'BatchSettings');
 export const BATCH_JOBS_TS = classPath(REST_DIR, 'BatchJobs');
 export const BATCH_JOB_RUNNER_TS = classPath(REST_DIR, 'BatchJobRunner');
+export const BATCH_JOB_STEPS_TS = classPath(REST_DIR, 'BatchJobSteps');
+export const KEYED_BATCHES_TS = classPath(REST_DIR, 'KeyedBatches');
 
 // Las rutas de lo que importa lo emitido (ver la cabecera).
 const BATCH_TS = 'src/infrastructure/rest/batch.ts';
@@ -84,8 +102,21 @@ const nestPath = (path) => path.replace(/\{([^}]+)\}/g, ':$1').replace(/^\//, ''
 const asyncOperations = (model) =>
   (model.services ?? []).flatMap((service) => service.operations ?? []).filter((operation) => operation.batch?.execution === 'async');
 
-/** ¿Tiene el servicio algún lote asíncrono? Sin persistencia no hay dónde guardar el trabajo (lo rechaza la frontera). */
-export const usesBatchJobs = (model) => Boolean(model.layersPresent?.persistence) && asyncBatchOperations(model).length > 0;
+/**
+ * ¿Usa el servicio el almacén de trabajos? Con un lote asíncrono o un lote síncrono con clave (D15). Sin persistencia no
+ * hay dónde guardar el trabajo (lo rechaza la frontera).
+ */
+export const usesBatchJobs = (model) => Boolean(model.layersPresent?.persistence) && batchJobStoreOperations(model).length > 0;
+
+/** ¿Tiene el servicio algún lote asíncrono? El alta, el procesador y las dos rutas del trabajo. */
+export const usesAsyncBatchJobs = (model) => usesBatchJobs(model) && asyncBatchOperations(model).length > 0;
+
+/** ¿Tiene el servicio algún lote síncrono con clave (D15)? */
+export const usesKeyedBatches = (model) => usesBatchJobs(model) && keyedSyncBatchOperations(model).length > 0;
+
+/** Las operaciones síncronas con clave del modelo, enteras. */
+const keyedOperations = (model) =>
+  (model.services ?? []).flatMap((service) => service.operations ?? []).filter((operation) => operation.batch && operation.batch.execution !== 'async' && operation.batch.idempotency);
 
 /** La constante del `kind` del temporizador de los trabajos de una operación, en TimerKinds. */
 export const batchKindConstant = (operationName) => `BATCH_${constantOf(operationName)}`;
@@ -115,19 +146,21 @@ function controllerOf(model, operation) {
 }
 
 /**
- * Lo que un diseño con lotes asíncronos no puede generar con este stack, o []: las sentencias son las del cronómetro
- * (PostgreSQL y MySQL, medidas con timer-sql-check) y el documental es MongoDB; el sobre guardado es el CUERPO, así que lo
- * que el mensaje lea de la ruta o estampe de la petición no viajaría al trabajo. El mismo criterio que keel-spring.
+ * Lo que un diseño con lotes asíncronos o síncronos con clave no puede generar con este stack, o []: las sentencias son
+ * las del cronómetro (PostgreSQL y MySQL, medidas con timer-sql-check) y el documental es MongoDB; el sobre guardado de un
+ * lote asíncrono es el CUERPO, así que lo que el mensaje lea de la ruta o estampe de la petición no viajaría al trabajo.
+ * El mismo criterio que keel-spring.
  */
 export function batchJobStackErrors(model, messageComponents) {
-  if (asyncBatchOperations(model).length === 0) return [];
+  if (batchJobStoreOperations(model).length === 0) return [];
   const errors = [];
+  const what = asyncBatchOperations(model).length > 0 ? 'execution: async' : 'idempotency en un lote síncrono';
   if (!model.layersPresent.persistence) {
-    errors.push('use-cases: batch (execution: async, DSL 2.30): el trabajo vive en la base del servicio, y este diseño no tiene capa persistence.');
+    errors.push(`use-cases: batch (${what}, DSL 2.30): el trabajo vive en la base del servicio, y este diseño no tiene capa persistence.`);
   } else if (!isDocument(model) && !BATCH_STORE_ENGINES.includes(model.stack?.database)) {
     errors.push(
-      `use-cases: batch (execution: async, DSL 2.30): el almacén de los trabajos tiene sentencias medidas para ${BATCH_STORE_ENGINES.join(', ')}, ` +
-        `y no para '${model.stack?.database}'. Elige uno de esos motores o declara execution: sync.`
+      `use-cases: batch (${what}, DSL 2.30): el almacén de los trabajos tiene sentencias medidas para ${BATCH_STORE_ENGINES.join(', ')}, ` +
+        `y no para '${model.stack?.database}'. Elige uno de esos motores, o declara execution: sync sin idempotency.`
     );
   }
   for (const operation of asyncOperations(model)) {
@@ -153,14 +186,20 @@ export function generate(model) {
   if (!usesBatchJobs(model)) return [];
   const document = isDocument(model);
   return [
-    { path: BATCH_JOB_STORE_TS, content: storeFile() },
-    document ? { path: MONGO_BATCH_JOB_STORE_TS, content: mongoStoreFile() } : { path: SQL_BATCH_JOB_STORE_TS, content: sqlStoreFile(model) },
+    { path: BATCH_JOB_STORE_TS, content: storeFile(model) },
+    document ? { path: MONGO_BATCH_JOB_STORE_TS, content: mongoStoreFile(model) } : { path: SQL_BATCH_JOB_STORE_TS, content: sqlStoreFile(model) },
     ...(document ? [] : [{ path: BATCH_JOB_ORM_TS, content: ormFile(model) }]),
-    { path: BATCH_SETTINGS_TS, content: settingsFile() },
-    { path: BATCH_JOBS_TS, content: jobsFile(model) },
-    { path: BATCH_JOB_RUNNER_TS, content: runnerFile(model) },
-    ...asyncOperations(model).map((operation) => ({ path: batchJobPath(operation), content: jobHandlerFile(model, operation) })),
-    ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/batch.yaml`, content: batchYaml(profile) }))
+    { path: BATCH_SETTINGS_TS, content: settingsFile(model) },
+    { path: BATCH_JOB_STEPS_TS, content: stepsFile(model) },
+    ...(usesAsyncBatchJobs(model)
+      ? [
+          { path: BATCH_JOBS_TS, content: jobsFile(model) },
+          { path: BATCH_JOB_RUNNER_TS, content: runnerFile(model) },
+          ...asyncOperations(model).map((operation) => ({ path: batchJobPath(operation), content: jobHandlerFile(model, operation) }))
+        ]
+      : []),
+    ...(usesKeyedBatches(model) ? [{ path: KEYED_BATCHES_TS, content: keyedFile(model) }] : []),
+    ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/batch.yaml`, content: batchYaml(model, profile) }))
   ];
 }
 
@@ -192,15 +231,14 @@ export function batchJobBindings(model) {
 /** Lo que el cronómetro ofrece además a los lotes (TimerModule, global): `{ imports, providers, exports }`. */
 export function batchJobTimerProviders(model) {
   if (!usesBatchJobs(model)) return { imports: [], providers: [], exports: [] };
+  const classes = [
+    ...(usesAsyncBatchJobs(model) ? [{ symbol: 'BatchJobs', from: BATCH_JOBS_TS }, { symbol: 'BatchJobRunner', from: BATCH_JOB_RUNNER_TS }] : []),
+    ...(usesKeyedBatches(model) ? [{ symbol: 'KeyedBatches', from: KEYED_BATCHES_TS }] : [])
+  ];
   return {
-    imports: [
-      { symbol: 'BATCH_SETTINGS', from: BATCH_SETTINGS_TS },
-      { symbol: 'batchSettings', from: BATCH_SETTINGS_TS },
-      { symbol: 'BatchJobs', from: BATCH_JOBS_TS },
-      { symbol: 'BatchJobRunner', from: BATCH_JOB_RUNNER_TS }
-    ],
-    providers: ['{ provide: BATCH_SETTINGS, useValue: batchSettings(configuration) }', 'BatchJobs', 'BatchJobRunner'],
-    exports: ['BATCH_SETTINGS', 'BatchJobs', 'BatchJobRunner']
+    imports: [{ symbol: 'BATCH_SETTINGS', from: BATCH_SETTINGS_TS }, { symbol: 'batchSettings', from: BATCH_SETTINGS_TS }, ...classes],
+    providers: ['{ provide: BATCH_SETTINGS, useValue: batchSettings(configuration) }', ...classes.map((entry) => entry.symbol)],
+    exports: ['BATCH_SETTINGS', ...classes.map((entry) => entry.symbol)]
   };
 }
 
@@ -261,17 +299,29 @@ export class ${className} implements RecurringTimerHandler {
 // ─── La configuración ────────────────────────────────────────────────────────
 
 /**
- * config/parameters/<perfil>/batch.yaml: la mecánica de los lotes asíncronos (keel-core/gen/batch-store.js, la misma clave
- * y variable en los cuatro generadores). Es, línea a línea, el `batch.yaml` de keel-spring.
+ * config/parameters/<perfil>/batch.yaml: la mecánica de los lotes con trabajo (keel-core/gen/batch-store.js, la misma clave
+ * y variable en los cuatro generadores). Es, línea a línea, el `batch.yaml` de keel-spring: el chunk solo con lotes
+ * asíncronos; el umbral del lote muerto, solo con lotes síncronos con clave (D15).
  */
-export function batchYaml(profile) {
-  const lines = [
-    '# Los lotes asíncronos (DSL 2.30): cuántos elementos procesa cada disparo y cuánto vive un trabajo terminado.',
-    '# El chunk tiene que caber en el arriendo del cronómetro (timer.lease-ms): uno más lento lo tomaría otra réplica.',
-    'batch:'
+export function batchYaml(model, profile) {
+  const asynchronous = asyncBatchOperations(model).length > 0;
+  const keyed = usesKeyedBatches(model);
+  const lines = asynchronous
+    ? [
+        '# Los lotes asíncronos (DSL 2.30): cuántos elementos procesa cada disparo y cuánto vive un trabajo terminado.',
+        '# El chunk tiene que caber en el arriendo del cronómetro (timer.lease-ms): uno más lento lo tomaría otra réplica.'
+      ]
+    : ['# Los lotes con clave (DSL 2.30): cuánto vive un trabajo terminado.'];
+  if (keyed) {
+    lines.push('# Un lote síncrono con clave sin terminar que nadie escribe desde hace más de sync-stale-ms se da por muerto, y su repetición lo sigue desde el cursor.');
+  }
+  lines.push('batch:');
+  const parameters = [
+    ...Object.entries(BATCH_PARAMETERS).filter(([name]) => asynchronous || name !== 'chunkSize').map(([, parameter]) => parameter),
+    ...(keyed ? [BATCH_SYNC_STALE] : [])
   ];
   let parent = null;
-  for (const parameter of Object.values(BATCH_PARAMETERS)) {
+  for (const parameter of parameters) {
     const segments = parameter.key.split('.');
     if (segments.length === 3 && parent !== segments[1]) {
       parent = segments[1];
@@ -283,8 +333,9 @@ export function batchYaml(profile) {
   return `${lines.join('\n')}\n`;
 }
 
-function settingsFile() {
+function settingsFile(model) {
   const P = BATCH_PARAMETERS;
+  const keyed = usesKeyedBatches(model);
   return tsModule(
     BATCH_SETTINGS_TS,
     [{ symbol: 'Configuration', from: CONFIG_TS, type: true }],
@@ -298,7 +349,13 @@ export interface BatchSettings {
   /** Cuántos días vive un trabajo TERMINADO con sus resultados (D10). */
   readonly retentionDays: number;
   /** El cron (seis campos, en UTC) de su purga. */
-  readonly purgeCron: string;
+  readonly purgeCron: string;${
+    keyed
+      ? `
+  /** Cuántos milisegundos sin escribir dan por muerto un lote síncrono con clave sin terminar (D15). */
+  readonly syncStaleMs: number;`
+      : ''
+  }
 }
 
 /** Lee los lotes del perfil. Un valor que no es un entero positivo no deja arrancar. */
@@ -306,7 +363,9 @@ export function batchSettings(configuration: Configuration): BatchSettings {
   return {
     chunkSize: positive(configuration, ${tsString(P.chunkSize.key)}, ${P.chunkSize.default}),
     retentionDays: positive(configuration, ${tsString(P.retentionDays.key)}, ${P.retentionDays.default}),
-    purgeCron: text(configuration, ${tsString(P.purgeCron.key)}, ${tsString(P.purgeCron.default)})
+    purgeCron: text(configuration, ${tsString(P.purgeCron.key)}, ${tsString(P.purgeCron.default)})${
+      keyed ? `,\n    syncStaleMs: positive(configuration, ${tsString(BATCH_SYNC_STALE.key)}, ${BATCH_SYNC_STALE.default})` : ''
+    }
   };
 }
 
@@ -327,7 +386,19 @@ function text(configuration: Configuration, key: string, fallback: string): stri
 
 // ─── El almacén ──────────────────────────────────────────────────────────────
 
-function storeFile() {
+function storeFile(model) {
+  const keyed = usesKeyedBatches(model)
+    ? `
+
+  /**
+   * La repetición de un lote síncrono con clave sin terminar (D15): lo toma si nadie lo escribe desde hace más de
+   * \`staleMs\` (con la hora de la base). false: sigue en marcha.
+   */
+  abstract takeOver(id: string, staleMs: number): Promise<boolean>;
+
+  /** El todo o nada con clave que falla: borra su trabajo sin terminar, y la repetición lo vuelve a procesar. */
+  abstract discard(id: string): Promise<boolean>;`
+    : '';
   return tsModule(
     BATCH_JOB_STORE_TS,
     [],
@@ -399,7 +470,7 @@ export abstract class BatchJobStore {
   abstract resultsCount(jobId: string): Promise<number>;
 
   /** La purga (D10): los trabajos terminados hace más de \`retentionDays\`, con sus resultados. Nunca uno en marcha. */
-  abstract purge(retentionDays: number): Promise<number>;
+  abstract purge(retentionDays: number): Promise<number>;${keyed}
 }`
   );
 }
@@ -409,7 +480,20 @@ const SQL_NAMES = ['insertJob', 'byKey', 'releaseKey', 'job', 'ownedJob', 'inser
 function sqlStoreFile(model) {
   const engine = model.stack.database;
   const mysql = engine === 'mysql';
-  const S = batchStatements(engine);
+  const keyed = usesKeyedBatches(model);
+  const S = { ...batchStatements(engine), ...(keyed ? batchSyncStatements(engine) : {}) };
+  const names = [...SQL_NAMES, ...(keyed ? ['takeOver', 'discardJob'] : [])];
+  const keyedMethods = keyed
+    ? `
+
+  async takeOver(id: string, staleMs: number): Promise<boolean> {
+    return (await this.exec(SQL.takeOver, { id: uuid(id), staleMs })).affected === 1;
+  }
+
+  async discard(id: string): Promise<boolean> {
+    return (await this.exec(SQL.discardJob, { id: uuid(id) })).affected === 1;
+  }`
+    : '';
   const codec = mysql
     ? `// MySQL: el uuid es binary(16) (el orden de bytes de Hibernate y del UUID_BINARY de las entidades) y la hora un
 // datetime(6) con la hora UTC; el driver convierte un Date en los dos sentidos con \`timezone: 'Z'\`.
@@ -453,7 +537,7 @@ const marker = (position: number): string => \`$\${position}\`;`;
  * aquí. Llevan marcadores nombrados (\`:id\`); \`bind\` los pasa al estilo del driver al ejecutar.
  */
 const SQL = {
-${SQL_NAMES.map((name) => `  ${name}: ${tsString(S[name])}`).join(',\n')}
+${names.map((name) => `  ${name}: ${tsString(S[name])}`).join(',\n')}
 } as const;
 
 ${codec}
@@ -565,7 +649,7 @@ export class SqlBatchJobStore extends BatchJobStore {
       await this.run(manager, SQL.purgeResults, { retentionDays });
       return (await this.run(manager, SQL.purgeJobs, { retentionDays })).affected;
     });
-  }
+  }${keyedMethods}
 }`
   );
 }
@@ -629,8 +713,25 @@ ${resultFields.join('\n\n')}
   );
 }
 
-function mongoStoreFile() {
+function mongoStoreFile(model) {
   const { job, result } = BATCH_JOB_COLLECTIONS;
+  const keyedMethods = usesKeyedBatches(model)
+    ? `
+
+  async takeOver(id: string, staleMs: number): Promise<boolean> {
+    const now = await this.dbNow();
+    const updated = await this.jobs.updateOne(
+      { _id: id, finished_at: null, updated_at: { $lte: new Date(now.getTime() - staleMs) } },
+      { $set: { updated_at: now } },
+      { session: this.session }
+    );
+    return updated.modifiedCount === 1;
+  }
+
+  async discard(id: string): Promise<boolean> {
+    return (await this.jobs.deleteOne({ _id: id, finished_at: null }, { session: this.session })).deletedCount === 1;
+  }`
+    : '';
   return tsModule(
     MONGO_BATCH_JOB_STORE_TS,
     [
@@ -792,7 +893,7 @@ export class MongoBatchJobStore extends BatchJobStore {
       await this.itemResults.deleteMany({ job_id: { $in: ids } }, { session });
       return (await this.jobs.deleteMany({ _id: { $in: ids } }, { session })).deletedCount;
     });
-  }
+  }${keyedMethods}
 }`
   );
 }
@@ -801,27 +902,22 @@ export class MongoBatchJobStore extends BatchJobStore {
 
 function jobsFile(model) {
   const notFound = FRAMEWORK_ERRORS.batchJobNotFound;
-  const canonical = FRAMEWORK_ERRORS.idempotencyReuse;
-  const operations = asyncOperations(model);
-  const codes = operations.map((operation) => `  ${tsString(operation.name)}: ${tsString(idempotencyOutcomeCode(model, operation.name, canonical))}`);
   return tsModule(
     BATCH_JOBS_TS,
     [
-      { symbol: 'createHash', from: 'node:crypto' },
       { symbol: 'Inject', from: '@nestjs/common' },
       { symbol: 'Injectable', from: '@nestjs/common' },
       { symbol: 'NotFoundException', from: classPath(ERRORS_DIR, 'NotFoundException') },
-      { symbol: 'ConflictException', from: classPath(ERRORS_DIR, 'ConflictException') },
       { symbol: 'DomainException', from: DOMAIN_EXCEPTION_TS },
-      { symbol: 'MalformedRequestError', from: REQUEST_ERRORS_TS },
-      { symbol: 'RequestValidationError', from: REQUEST_ERRORS_TS },
-      { symbol: 'BatchItem', from: BATCH_TS },
+      { symbol: 'BatchItem', from: BATCH_TS, type: true },
       { symbol: 'BatchSummary', from: BATCH_TS },
       { symbol: 'PagedResponse', from: PAGED_RESPONSE_TS },
       { symbol: 'Pageable', from: PAGE_TS, type: true },
       { symbol: 'pageOf', from: PAGE_TS },
-      { symbol: 'RawJson', from: 'src/domain/support/raw-json.ts' },
-      { symbol: 'parseWireJson', from: WIRE_TS },
+      { symbol: 'BatchJobKeyReusedException', from: BATCH_JOB_STEPS_TS },
+      { symbol: 'storedItem', from: BATCH_JOB_STEPS_TS },
+      { symbol: 'batchSignature', from: BATCH_JOB_STEPS_TS },
+      { symbol: 'readBatchEnvelope', from: BATCH_JOB_STEPS_TS },
       { symbol: 'Uuids', from: UUIDS_TS },
       { symbol: 'currentActor', from: AUDIT_ACTOR_TS },
       { symbol: 'TransactionContext', from: TRANSACTION_CONTEXT_TS },
@@ -857,47 +953,6 @@ export class BatchJobNotFoundException extends NotFoundException {
   constructor(jobId: string) {
     super(\`No hay ningún trabajo \${jobId}\`, { code: ${tsString(notFound.code)}, httpStatus: ${notFound.http}, args: [jobId] });
   }
-}
-
-/** El code de la clave reutilizada de cada operación: el que declara el diseño para ese desenlace, o el canónico. */
-const KEY_REUSED_CODES: Readonly<Record<string, string>> = {
-${codes.join(',\n')}
-};
-
-/**
- * La misma clave de idempotencia de un lote asíncrono con un contenido DISTINTO (D13): no es un reintento, y devolver el
- * trabajo de la primera petición contestaría a una pregunta que el cliente no hizo.
- */
-export class BatchJobKeyReusedException extends ConflictException {
-  constructor(operation: string, key: string) {
-    super(\`La clave de idempotencia \${operation}/\${key} ya se usó con un contenido distinto\`, {
-      code: KEY_REUSED_CODES[operation] ?? ${tsString(canonical.code)},
-      httpStatus: ${canonical.http},
-      args: [operation, key]
-    });
-  }
-}
-
-/** La firma de la petición (D13): el sha256 en hexadecimal de los bytes del cuerpo, como batchRequestSignature de keel-core. */
-export function batchSignature(body: string): string {
-  return createHash('sha256').update(body, 'utf8').digest('hex');
-}
-
-/**
- * El TEXTO del cuerpo tal como llegó: lo guarda el lector JSON de http-platform.ts en la petición. Sin él no hay lote que
- * firmar ni guardar: la petición es malformada, como el @RequestBody byte[] obligatorio de keel-spring.
- */
-export function rawBodyOf(request: object): string {
-  const raw = (request as { readonly rawBody?: unknown }).rawBody;
-  if (typeof raw !== 'string') throw new MalformedRequestError();
-  return raw;
-}
-
-/** La cabecera ${IDEMPOTENCY_HEADER} de la petición, o null si no llega o va en blanco. */
-export function idempotencyKeyOf(request: { readonly headers: Readonly<Record<string, unknown>> }): string | null {
-  const value = request.headers[${tsString(IDEMPOTENCY_HEADER.toLowerCase())}];
-  const key = Array.isArray(value) ? value[0] : value;
-  return typeof key === 'string' && key.trim() !== '' ? key.trim() : null;
 }
 
 /**
@@ -986,11 +1041,7 @@ export class BatchJobs {
   async results(operation: string, jobId: string, pageable: Pageable): Promise<PagedResponse<BatchItem>> {
     const job = await this.owned(operation, jobId);
     const rows = await this.store.results(job.id, pageable.size, pageable.page * pageable.size);
-    const items = rows.map((row) =>
-      row.status === 'succeeded'
-        ? BatchItem.succeeded(row.index, row.result == null ? null : RawJson.of(row.result))
-        : BatchItem.failed(row.index, row.errorCode ?? '', row.message)
-    );
+    const items = rows.map(storedItem);
     const page = pageOf(items, pageable, await this.store.resultsCount(job.id));
     return new PagedResponse(page.items, page.page, page.size, page.totalElements, page.totalPages);
   }
@@ -1000,27 +1051,6 @@ export class BatchJobs {
     if (job == null) throw new BatchJobNotFoundException(jobId);
     return job;
   }
-}
-
-/**
- * El sobre como lo leería el borde: el JSON del cable y el lector de la operación, que valida la LISTA (presencia y
- * maxItems) y no sus elementos, que los valida el procesador uno a uno. Un cuerpo que no es JSON es malformado; una cota
- * de la lista incumplida, el ${FRAMEWORK_ERRORS.validation.code} del sobre con el mensaje de las restricciones declaradas
- * (el de keel-spring, que lo valida fuera del cuerpo de la petición).
- */
-export function readBatchEnvelope<E>(body: string, readEnvelope: (body: unknown) => E): E {
-  let parsed: unknown;
-  try {
-    parsed = parseWireJson(body);
-  } catch {
-    throw new MalformedRequestError();
-  }
-  try {
-    return readEnvelope(parsed);
-  } catch (error) {
-    if (error instanceof RequestValidationError && error.source === 'body') throw new RequestValidationError(error.details, 'params');
-    throw error;
-  }
 }`
   );
 }
@@ -1028,65 +1058,48 @@ export function readBatchEnvelope<E>(body: string, readEnvelope: (body: unknown)
 // ─── El procesador ───────────────────────────────────────────────────────────
 
 function runnerFile(model) {
-  const { completed, aborted } = BATCH_JOB_STATUSES;
+  const { completed } = BATCH_JOB_STATUSES;
   const security = Boolean(model.layersPresent?.security);
   return tsModule(
     BATCH_JOB_RUNNER_TS,
     [
       { symbol: 'Inject', from: '@nestjs/common' },
       { symbol: 'Injectable', from: '@nestjs/common' },
-      { symbol: 'BatchItem', from: BATCH_TS },
-      { symbol: 'InvalidBatchItem', from: BATCH_TS },
-      { symbol: 'VALIDATION_ERROR', from: BATCH_TS },
-      { symbol: 'itemFailure', from: BATCH_TS },
-      { symbol: 'readBatchItem', from: BATCH_TS },
       { symbol: 'parseWireJson', from: WIRE_TS },
-      { symbol: 'toWireJson', from: WIRE_TS },
       ...(security ? [{ symbol: 'SecurityContext', from: SECURITY_CONTEXT_TS }] : []),
       { symbol: 'TransactionContext', from: TRANSACTION_CONTEXT_TS },
       { symbol: 'BATCH_SETTINGS', from: BATCH_SETTINGS_TS },
       { symbol: 'BatchSettings', from: BATCH_SETTINGS_TS, type: true },
       { symbol: 'BatchJobStore', from: BATCH_JOB_STORE_TS },
+      { symbol: 'BatchJobSteps', from: BATCH_JOB_STEPS_TS },
       { symbol: 'ClaimedTimer', from: TIMER_STORE_TS, type: true },
       { symbol: 'TimerOutcome', from: TIMER_STORE_TS },
       { symbol: 'TimerStore', from: TIMER_STORE_TS }
     ],
-    `/** El cursor ya no estaba donde lo dejó este disparo: otra réplica se llevó el trabajo. Revierte el elemento entero. */
-class FenceLost extends Error {
-  constructor() {
-    super('El trabajo lo procesa otra réplica');
-    this.name = 'FenceLost';
-  }
-}
-
-/** Lo que deja un elemento: seguir, o parar el disparo (terminado, o el trabajo es de otra réplica). */
-type Step = 'next' | 'stop';
-
-/**
+    `/**
  * Un disparo del temporizador de un trabajo (DSL 2.30, D9): procesa un CHUNK desde el cursor y dice si queda trabajo
  * (rearmar para ya) o si terminó (borrar el temporizador). Es el *commit interval* y el *restart* de Spring Batch sobre el
  * cronómetro, sin la librería.
  *
- * Cada elemento va en UNA transacción con tres cosas: su efecto (el despacho por el mediator, que se une a ella), el avance
- * del cursor y su resultado. El avance es la VALLA: solo avanza si el cursor sigue donde lo dejó este disparo, y si no
- * —otra réplica le quitó el trabajo al vencer su arriendo— el elemento revierte entero, efecto incluido. Si la réplica cae
+ * Cada elemento lo procesa BatchJobSteps: su efecto, el avance del cursor (la valla) y su resultado en UNA transacción. Si
+ * otra réplica le quitó el trabajo al vencer su arriendo, el elemento revierte entero y el disparo para. Si la réplica cae
  * a mitad de chunk, lo confirmado queda y el siguiente disparo sigue desde el cursor: ningún elemento se aplica dos veces
- * ni se queda sin resultado.
- *
- * Fallan solo su elemento los codes de \`itemErrors\` y ${FRAMEWORK_ERRORS.validation.code}; cualquier otro fallo detiene el
- * trabajo (\`${aborted}\`, D4) con su code o ${FRAMEWORK_ERRORS.batchAborted.code}. Corre sin token: el actor de autoría de
- * cada elemento es el dueño del trabajo.
+ * ni se queda sin resultado. Corre sin token: el actor de autoría de cada elemento es el dueño del trabajo.
  *
  * No lo edites: lo regenera build.
  */
 @Injectable()
 export class BatchJobRunner {
+  private readonly steps: BatchJobSteps;
+
   constructor(
     @Inject(BatchJobStore) private readonly store: BatchJobStore,
     @Inject(TimerStore) private readonly timers: TimerStore,
     @Inject(TransactionContext) private readonly transactions: TransactionContext,
     @Inject(BATCH_SETTINGS) private readonly settings: BatchSettings
-  ) {}
+  ) {
+    this.steps = new BatchJobSteps(store, transactions);
+  }
 
   /**
    * Un disparo. \`readEnvelope\` vuelve a leer el sobre guardado con el lector de la operación e \`itemsOf\` saca de él la
@@ -1109,8 +1122,9 @@ export class BatchJobRunner {
       let index = job.nextIndex;
       const end = Math.min(job.total, index + this.settings.chunkSize);
       for (; index < end; index++) {
-        const step = await this.processItem(job.id, index, values[index], readItem, itemErrors, (item) => process(envelope, item));
-        if (step === 'stop') return TimerOutcome.finished();
+        const step = await this.steps.process(job.id, index, values[index], readItem, itemErrors, (item) => process(envelope, item));
+        // Terminado (D4), o el trabajo es de otra réplica (la valla): este disparo no tiene nada más que hacer.
+        if (step !== 'next') return TimerOutcome.finished();
       }
       if (index >= job.total) {
         await this.transactions.inTransaction(() => this.store.finish(job.id, '${completed}'));
@@ -1119,8 +1133,147 @@ export class BatchJobRunner {
       return TimerOutcome.rescheduleAt(await this.timers.dbNow());
     });
   }
+}
 
-  private async processItem<T>(
+/** El disparo corre como el dueño del trabajo: el actor de autoría de cada elemento (el trabajo no tiene token). */
+function asOwner<T>(owner: string, work: () => Promise<T>): Promise<T> {
+${
+  security
+    ? `  return SecurityContext.runWith({ kind: 'token', name: owner, authorities: new Set<string>(), claims: { sub: owner } }, work);`
+    : `  void owner;
+  return work();`
+}
+}`
+  );
+}
+
+// ─── Lo que comparten el procesador y el lote síncrono con clave ─────────────
+
+function stepsFile(model) {
+  const { aborted } = BATCH_JOB_STATUSES;
+  const canonical = FRAMEWORK_ERRORS.idempotencyReuse;
+  const codes = batchJobStoreOperations(model).map(({ operation }) => `  ${tsString(operation)}: ${tsString(idempotencyOutcomeCode(model, operation, canonical))}`);
+  return tsModule(
+    BATCH_JOB_STEPS_TS,
+    [
+      { symbol: 'createHash', from: 'node:crypto' },
+      { symbol: 'ConflictException', from: classPath(ERRORS_DIR, 'ConflictException') },
+      { symbol: 'MalformedRequestError', from: REQUEST_ERRORS_TS },
+      { symbol: 'RequestValidationError', from: REQUEST_ERRORS_TS },
+      { symbol: 'BatchItem', from: BATCH_TS },
+      { symbol: 'BatchResponse', from: BATCH_TS },
+      { symbol: 'InvalidBatchItem', from: BATCH_TS },
+      { symbol: 'VALIDATION_ERROR', from: BATCH_TS },
+      { symbol: 'itemFailure', from: BATCH_TS },
+      { symbol: 'readBatchItem', from: BATCH_TS },
+      { symbol: 'RawJson', from: 'src/domain/support/raw-json.ts' },
+      { symbol: 'parseWireJson', from: WIRE_TS },
+      { symbol: 'toWireJson', from: WIRE_TS },
+      { symbol: 'TransactionContext', from: TRANSACTION_CONTEXT_TS, type: true },
+      { symbol: 'BatchJobResult', from: BATCH_JOB_STORE_TS, type: true },
+      { symbol: 'BatchJobStore', from: BATCH_JOB_STORE_TS, type: true }
+    ],
+    `/** El code de la clave reutilizada de cada operación: el que declara el diseño para ese desenlace, o el canónico. */
+const KEY_REUSED_CODES: Readonly<Record<string, string>> = {
+${codes.join(',\n')}
+};
+
+/**
+ * La misma clave de idempotencia de un lote con un contenido DISTINTO (D13, D15): no es un reintento, y devolver el trabajo
+ * de la primera petición contestaría a una pregunta que el cliente no hizo.
+ */
+export class BatchJobKeyReusedException extends ConflictException {
+  constructor(operation: string, key: string) {
+    super(\`La clave de idempotencia \${operation}/\${key} ya se usó con un contenido distinto\`, {
+      code: KEY_REUSED_CODES[operation] ?? ${tsString(canonical.code)},
+      httpStatus: ${canonical.http},
+      args: [operation, key]
+    });
+  }
+}
+
+/** La firma de la petición (D13): el sha256 en hexadecimal de los bytes del cuerpo, como batchRequestSignature de keel-core. */
+export function batchSignature(body: string): string {
+  return createHash('sha256').update(body, 'utf8').digest('hex');
+}
+
+/**
+ * El TEXTO del cuerpo tal como llegó: lo guarda el lector JSON de http-platform.ts en la petición. Sin él no hay lote que
+ * firmar ni guardar: la petición es malformada, como el @RequestBody byte[] obligatorio de keel-spring.
+ */
+export function rawBodyOf(request: object): string {
+  const raw = (request as { readonly rawBody?: unknown }).rawBody;
+  if (typeof raw !== 'string') throw new MalformedRequestError();
+  return raw;
+}
+
+/** La cabecera ${IDEMPOTENCY_HEADER} de la petición, o null si no llega o va en blanco. */
+export function idempotencyKeyOf(request: { readonly headers: Readonly<Record<string, unknown>> }): string | null {
+  const value = request.headers[${tsString(IDEMPOTENCY_HEADER.toLowerCase())}];
+  const key = Array.isArray(value) ? value[0] : value;
+  return typeof key === 'string' && key.trim() !== '' ? key.trim() : null;
+}
+
+/**
+ * El sobre como lo leería el borde: el JSON del cable y el lector de la operación, que valida la LISTA (presencia y
+ * maxItems) y no sus elementos, que se validan uno a uno. Un cuerpo que no es JSON es malformado; una cota de la lista
+ * incumplida, el ${FRAMEWORK_ERRORS.validation.code} del sobre con el mensaje de las restricciones declaradas (el de
+ * keel-spring, que lo valida fuera del cuerpo de la petición).
+ */
+export function readBatchEnvelope<E>(body: string, readEnvelope: (body: unknown) => E): E {
+  let parsed: unknown;
+  try {
+    parsed = parseWireJson(body);
+  } catch {
+    throw new MalformedRequestError();
+  }
+  try {
+    return readEnvelope(parsed);
+  } catch (error) {
+    if (error instanceof RequestValidationError && error.source === 'body') throw new RequestValidationError(error.details, 'params');
+    throw error;
+  }
+}
+
+/** Un resultado guardado, como viaja en el cable. */
+export function storedItem(row: BatchJobResult): BatchItem {
+  return row.status === 'succeeded'
+    ? BatchItem.succeeded(row.index, row.result == null ? null : RawJson.of(row.result))
+    : BatchItem.failed(row.index, row.errorCode ?? '', row.message);
+}
+
+/** El cursor ya no estaba donde lo dejó quien procesa: otra réplica u otra petición se llevó el trabajo. */
+export class FenceLost extends Error {
+  constructor() {
+    super('El trabajo lo procesa otro');
+    this.name = 'FenceLost';
+  }
+}
+
+/** Lo que deja un elemento: seguir, parar (el lote se detuvo, D4) o perder el trabajo (la valla). */
+export type Step = 'next' | 'stop' | 'lost';
+
+/**
+ * Lo que comparten el procesador de los lotes asíncronos y los lotes síncronos con clave (DSL 2.30, D9 y D15): procesar UN
+ * elemento y rehacer la respuesta desde lo guardado.
+ *
+ * Cada elemento va en UNA transacción con tres cosas: su efecto (el despacho por el mediator, que se une a ella), el avance
+ * del cursor y su resultado. El avance es la VALLA: solo avanza si el cursor sigue donde lo dejó quien procesa, y si no
+ * —otra réplica o la repetición de la petición se llevó el trabajo— el elemento revierte entero, efecto incluido.
+ *
+ * Fallan solo su elemento los codes de \`itemErrors\` y ${FRAMEWORK_ERRORS.validation.code}; cualquier otro fallo detiene el
+ * lote (\`${aborted}\`, D4) con su code o ${FRAMEWORK_ERRORS.batchAborted.code}.
+ *
+ * No lo edites: lo regenera build.
+ */
+export class BatchJobSteps {
+  constructor(
+    private readonly store: BatchJobStore,
+    private readonly transactions: TransactionContext
+  ) {}
+
+  /** Un elemento con su efecto, el avance del cursor y su resultado en UNA transacción. */
+  async process<T>(
     jobId: string,
     index: number,
     value: unknown,
@@ -1142,7 +1295,7 @@ export class BatchJobRunner {
       });
       return 'next';
     } catch (error) {
-      if (error instanceof FenceLost) return 'stop';
+      if (error instanceof FenceLost) return 'lost';
       const failure = itemFailure(index, error, itemErrors);
       return this.failed(jobId, index, failure.item.error ?? '', failure.item.message, failure.stops);
     }
@@ -1156,7 +1309,7 @@ export class BatchJobRunner {
         if (stops) await this.store.finish(jobId, '${aborted}');
       });
     } catch (error) {
-      if (error instanceof FenceLost) return 'stop';
+      if (error instanceof FenceLost) return 'lost';
       throw error;
     }
     return stops ? 'stop' : 'next';
@@ -1164,23 +1317,243 @@ export class BatchJobRunner {
 
   /**
    * La valla y el resultado de un elemento, en la transacción en curso: primero el avance del cursor, que toma la fila del
-   * trabajo, y después el resultado. Si el cursor ya no estaba en \`index\`, lanza y la transacción revierte entera.
+   * trabajo, y después el resultado. Si el cursor ya no estaba en \`index\`, lanza FenceLost y la transacción revierte entera.
    */
-  private async keep(jobId: string, index: number, item: BatchItem): Promise<void> {
+  async keep(jobId: string, index: number, item: BatchItem): Promise<void> {
     const ok = item.status === 'succeeded';
     if (!(await this.store.advance(jobId, index, ok ? 1 : 0, ok ? 0 : 1))) throw new FenceLost();
     await this.store.insertResult(jobId, index, item.status, item.error, item.message, item.result == null ? null : toWireJson(item.result));
   }
+
+  /**
+   * La respuesta de un lote síncrono con clave rehecha desde lo guardado (D15, batchStoredBody de keel-core): los
+   * resultados en orden de índice y, si se detuvo, un \`notAttempted\` por cada elemento desde el cursor.
+   */
+  async stored(jobId: string): Promise<BatchResponse> {
+    const job = await this.store.job(jobId);
+    if (job == null) throw new Error(\`El trabajo \${jobId} desapareció mientras se respondía\`);
+    const items = (await this.store.results(jobId, job.total, 0)).map(storedItem);
+    if (job.status === '${aborted}') for (let index = job.nextIndex; index < job.total; index++) items.push(BatchItem.notAttempted(index));
+    return BatchResponse.of(items);
+  }
+}`
+  );
 }
 
-/** El disparo corre como el dueño del trabajo: el actor de autoría de cada elemento (el trabajo no tiene token). */
-function asOwner<T>(owner: string, work: () => Promise<T>): Promise<T> {
-${
-  security
-    ? `  return SecurityContext.runWith({ kind: 'token', name: owner, authorities: new Set<string>(), claims: { sub: owner } }, work);`
-    : `  void owner;
-  return work();`
+// ─── El lote síncrono con clave (D15) ────────────────────────────────────────
+
+function keyedFile(model) {
+  const secured = Boolean(model.layersPresent?.security);
+  const { completed } = BATCH_JOB_STATUSES;
+  const canonical = FRAMEWORK_ERRORS.idempotencyRace;
+  const operations = keyedOperations(model);
+  const codes = operations.map((operation) => `  ${tsString(operation.name)}: ${tsString(idempotencyOutcomeCode(model, operation.name, canonical))}`);
+  const atomic = operations.some((operation) => operation.batch.atomicity === 'all-or-nothing');
+  const perItem = operations.some((operation) => operation.batch.atomicity === 'per-item');
+  const perItemMethod = `
+
+  /**
+   * Un lote \`per-item\` con clave: como \`perItem\` de batch.ts, con cada elemento confirmado junto a su resultado y el
+   * avance del cursor, y la respuesta rehecha de lo guardado. Sin clave, el lote de siempre.
+   */
+  async perItem<T>(
+    operation: string,
+    body: string,
+    keySource: string,
+    clientKey: string | null,
+    ttlSeconds: number | null,
+    items: readonly unknown[],
+    readItem: (value: unknown) => T | null,
+    itemErrors: ReadonlySet<string>,
+    process: (item: T) => Promise<unknown>
+  ): Promise<BatchResponse> {
+    const signature = batchSignature(body);
+    const key = keyOf(keySource, clientKey, signature);
+    if (key == null) return perItem(items, readItem, itemErrors, process);
+    const started = await this.start(operation, key, signature, ttlSeconds, body, items.length);
+    if (started.replay) return this.steps.stored(started.id);
+    for (let index = started.from; index < items.length; index++) {
+      const step = await this.steps.process(started.id, index, items[index], readItem, itemErrors, process);
+      // Otra petición con la misma clave tomó el trabajo (D15): lo termina ella.
+      if (step === 'lost') throw new BatchKeyInProgressException(operation, key);
+      if (step === 'stop') return this.steps.stored(started.id);
+    }
+    await this.transactions.inTransaction(() => this.store.finish(started.id, '${completed}'));
+    return this.steps.stored(started.id);
+  }`;
+  const atomicMethod = `
+
+  /**
+   * Un lote \`all-or-nothing\` con clave: como \`allOrNothing\` de batch.ts, con los resultados, el cursor y el final del
+   * trabajo en la transacción del lote. Si falla no queda nada confirmado, y su trabajo se descarta en otra: la repetición
+   * lo vuelve a procesar en vez de devolver un lote que nunca se confirmó.
+   */
+  async allOrNothing<T>(
+    operation: string,
+    over: string,
+    body: string,
+    keySource: string,
+    clientKey: string | null,
+    ttlSeconds: number | null,
+    items: readonly unknown[],
+    readItem: (value: unknown) => T | null,
+    process: (item: T) => Promise<unknown>
+  ): Promise<AtomicOutcome> {
+    const signature = batchSignature(body);
+    const key = keyOf(keySource, clientKey, signature);
+    if (key == null) return allOrNothing(over, items, readItem, this.transactions, process);
+    const started = await this.start(operation, key, signature, ttlSeconds, body, items.length);
+    if (started.replay) return { ok: true, body: await this.steps.stored(started.id) };
+    const id = started.id;
+    let outcome: AtomicOutcome;
+    try {
+      outcome = await allOrNothing(over, items, readItem, this.transactions, process, {
+        kept: (item) => this.steps.keep(id, item.index, item),
+        completed: async () => {
+          await this.store.finish(id, '${completed}');
+        }
+      });
+    } catch (error) {
+      if (error instanceof FenceLost) throw new BatchKeyInProgressException(operation, key);
+      // Un fallo al confirmar no es de ningún elemento, y el lote tampoco quedó confirmado: su trabajo se descarta igual.
+      await this.discard(id);
+      throw error;
+    }
+    if (!outcome.ok) {
+      await this.discard(id);
+      return outcome;
+    }
+    return { ok: true, body: await this.steps.stored(id) };
+  }
+
+  /** El trabajo de un todo o nada que no se confirmó, fuera: libera la clave. */
+  private async discard(id: string): Promise<void> {
+    await this.transactions.inTransaction(() => this.store.discard(id));
+  }`;
+  return tsModule(
+    KEYED_BATCHES_TS,
+    [
+      { symbol: 'Inject', from: '@nestjs/common' },
+      { symbol: 'Injectable', from: '@nestjs/common' },
+      { symbol: 'ConflictException', from: classPath(ERRORS_DIR, 'ConflictException') },
+      { symbol: 'DomainException', from: DOMAIN_EXCEPTION_TS },
+      { symbol: 'BatchResponse', from: BATCH_TS, type: true },
+      ...(perItem ? [{ symbol: 'perItem', from: BATCH_TS }] : []),
+      ...(atomic ? [{ symbol: 'allOrNothing', from: BATCH_TS }, { symbol: 'AtomicOutcome', from: BATCH_TS, type: true }] : []),
+      { symbol: 'Uuids', from: UUIDS_TS },
+      ...(secured ? [{ symbol: 'currentActor', from: AUDIT_ACTOR_TS }] : []),
+      { symbol: 'TransactionContext', from: TRANSACTION_CONTEXT_TS },
+      { symbol: 'BATCH_SETTINGS', from: BATCH_SETTINGS_TS },
+      { symbol: 'BatchSettings', from: BATCH_SETTINGS_TS, type: true },
+      { symbol: 'BatchJobStore', from: BATCH_JOB_STORE_TS },
+      { symbol: 'BatchJobKeyReusedException', from: BATCH_JOB_STEPS_TS },
+      { symbol: 'BatchJobSteps', from: BATCH_JOB_STEPS_TS },
+      { symbol: 'FenceLost', from: BATCH_JOB_STEPS_TS },
+      { symbol: 'batchSignature', from: BATCH_JOB_STEPS_TS },
+      { symbol: 'readBatchEnvelope', from: BATCH_JOB_STEPS_TS }
+    ],
+    `/** El code de la clave en curso de cada operación: el que declara el diseño para ese desenlace, o el canónico. */
+const IN_PROGRESS_CODES: Readonly<Record<string, string>> = {
+${codes.join(',\n')}
+};
+
+/**
+ * La repetición de un lote síncrono con clave mientras el primero sigue en marcha (DSL 2.30, D15): todavía no hay respuesta
+ * que devolver, y procesarlo a la vez lo repartiría entre dos peticiones. Es la semántica de una operación sola con clave.
+ * El code es el que declara cada operación para este desenlace, o el canónico (docs/framework-errors.md).
+ */
+export class BatchKeyInProgressException extends ConflictException {
+  constructor(operation: string, key: string) {
+    super(\`Otra petición con la clave de idempotencia \${operation}/\${key} está procesando el lote\`, {
+      code: IN_PROGRESS_CODES[operation] ?? ${tsString(canonical.code)},
+      httpStatus: ${canonical.http},
+      args: [operation, key]
+    });
+  }
 }
+${
+  secured
+    ? ''
+    : `
+/** El dueño de un lote sin capa security: no hay llamante, y la clave la acota solo la operación. */
+const OWNER = ${tsString(BATCH_ANONYMOUS_OWNER)};
+`
+}
+/** El trabajo de la petición: su id, desde qué elemento sigue y si ya terminó (la repetición responde lo guardado). */
+interface Started {
+  readonly id: string;
+  readonly from: number;
+  readonly replay: boolean;
+}
+
+/** La clave del lote: la cabecera, o la firma del cuerpo si la clave es el contenido. null: sin clave. */
+function keyOf(keySource: string, clientKey: string | null, signature: string): string | null {
+  return keySource === 'payload-hash' ? signature : clientKey;
+}
+
+/**
+ * Los lotes SÍNCRONOS con clave de idempotencia (DSL 2.30, D15): la clave la guarda el TRABAJO (\`${BATCH_JOB.table}\`), como
+ * en un lote asíncrono, sin temporizador. La petición crea su trabajo en una transacción propia y procesa cada elemento con
+ * BatchJobSteps; la respuesta se rehace siempre de lo guardado, así que es la misma para la primera petición, la repetición
+ * y la que reanuda.
+ *
+ * La repetición: con la misma firma y el trabajo terminado, la respuesta guardada sin procesar nada; con otra firma, el
+ * error de la clave reutilizada; sin terminar y escrito hace menos de \`${BATCH_SYNC_STALE.key}\`, el error de la clave en
+ * curso (409); sin terminar y más viejo, quien lo procesaba murió: lo toma y sigue desde el cursor.
+ *
+ * No lo edites: lo regenera build.
+ */
+@Injectable()
+export class KeyedBatches {
+  private readonly steps: BatchJobSteps;
+
+  constructor(
+    @Inject(BatchJobStore) private readonly store: BatchJobStore,
+    @Inject(TransactionContext) private readonly transactions: TransactionContext,
+    @Inject(BATCH_SETTINGS) private readonly settings: BatchSettings
+  ) {
+    this.steps = new BatchJobSteps(store, transactions);
+  }
+
+  /** El sobre del lote como lo leería el borde: uno mal formado es un 400 sin trabajo. */
+  read<E>(body: string, readEnvelope: (body: unknown) => E): E {
+    return readBatchEnvelope(body, readEnvelope);
+  }${perItem ? perItemMethod : ''}${atomic ? atomicMethod : ''}
+
+  /** El trabajo de la petición: el de la clave, si lo hay, o uno nuevo, en una transacción propia. */
+  private async start(operation: string, key: string, signature: string, ttlSeconds: number | null, body: string, total: number): Promise<Started> {
+    const owner = ${secured ? 'currentActor()' : 'OWNER'};
+    const ttlMs = ttlSeconds == null ? null : ttlSeconds * 1000;
+    try {
+      return await this.transactions.inTransaction(async () => {
+        await this.store.releaseKey(operation, owner, key);
+        const found = await this.repeat(operation, owner, key, signature);
+        if (found != null) return found;
+        const id = Uuids.v7();
+        await this.store.insert(id, operation, owner, key, signature, ttlMs, body, total);
+        return { id, from: 0, replay: false };
+      });
+    } catch (error) {
+      if (error instanceof DomainException) throw error;
+      // Dos peticiones con la misma clave a la vez: la que pierde choca con la unicidad del motor y encuentra el trabajo de
+      // la ganadora, en marcha.
+      const found = await this.transactions.inTransaction(() => this.repeat(operation, owner, key, signature));
+      if (found == null) throw error;
+      return found;
+    }
+  }
+
+  /** El trabajo vivo de la clave (D15, batchSyncRepeat de keel-core). */
+  private async repeat(operation: string, owner: string, key: string, signature: string): Promise<Started | null> {
+    const hit = await this.store.byKey(operation, owner, key);
+    if (hit == null) return null;
+    if (hit.signature !== signature) throw new BatchJobKeyReusedException(operation, key);
+    const job = await this.store.job(hit.id);
+    if (job == null) return null;
+    if (job.finishedAt != null) return { id: job.id, from: job.total, replay: true };
+    if (!(await this.store.takeOver(job.id, this.settings.syncStaleMs))) throw new BatchKeyInProgressException(operation, key);
+    return { id: job.id, from: job.nextIndex, replay: false };
+  }
 }`
   );
 }
@@ -1261,7 +1634,7 @@ export function controllerBatchJobMethods(model, operation, { decorator, readerN
     { symbol: 'FastifyReply', from: 'fastify', type: true },
     { symbol: 'BatchJobs', from: BATCH_JOBS_TS },
     { symbol: 'BatchJobView', from: BATCH_JOBS_TS, type: true },
-    { symbol: 'rawBodyOf', from: BATCH_JOBS_TS },
+    { symbol: 'rawBodyOf', from: BATCH_JOB_STEPS_TS },
     { symbol: 'BatchItem', from: BATCH_TS, type: true },
     { symbol: 'PagedResponse', from: PAGED_RESPONSE_TS, type: true },
     { symbol: 'TimerKinds', from: TIMER_KINDS_TS },
@@ -1269,7 +1642,7 @@ export function controllerBatchJobMethods(model, operation, { decorator, readerN
     { symbol: 'readPageable', from: PAGEABLE_READING_TS },
     { symbol: 'text', from: 'src/infrastructure/rest/request-reading.ts' }
   );
-  if (idempotency?.keySource === 'client-key') imports.push({ symbol: 'idempotencyKeyOf', from: BATCH_JOBS_TS });
+  if (idempotency?.keySource === 'client-key') imports.push({ symbol: 'idempotencyKeyOf', from: BATCH_JOB_STEPS_TS });
   const keySource = idempotency ? tsString(idempotency.keySource) : 'null';
   const clientKey = idempotency?.keySource === 'client-key' ? 'idempotencyKeyOf(request)' : 'null';
   const ttl = idempotency?.ttlSeconds ?? 'null';
@@ -1307,5 +1680,51 @@ export function controllerBatchJobMethods(model, operation, { decorator, readerN
   @HttpCode(200)
   async ${operation.name}JobResults(@Param() params: Record<string, string>, @Query() query: Record<string, unknown>): Promise<PagedResponse<BatchItem>> {
     return this.batchJobs.results(${op}, ${jobId}, readPageable(query, ${defaults}));
+  }`;
+}
+
+/**
+ * El método del controlador de un lote SÍNCRONO con clave (D15): el cuerpo llega como TEXTO (su firma es la de la petición,
+ * como en el alta asíncrona) y el sobre lo lee KeyedBatches con el lector de la operación. `imports` es la lista del
+ * controlador; `readerName`, el lector del sobre; `itemReader`, el del elemento; `dispatch`, el despacho de UNO.
+ */
+export function controllerKeyedBatchMethod(model, operation, { decorator, readerName, itemReader, dispatch, imports, doc }) {
+  const batch = operation.batch;
+  const idempotency = batch.idempotency;
+  imports.push(
+    { symbol: 'Req', from: '@nestjs/common' },
+    { symbol: 'Res', from: '@nestjs/common' },
+    { symbol: 'FastifyRequest', from: 'fastify', type: true },
+    { symbol: 'FastifyReply', from: 'fastify', type: true },
+    { symbol: 'KeyedBatches', from: KEYED_BATCHES_TS },
+    { symbol: 'rawBodyOf', from: BATCH_JOB_STEPS_TS },
+    { symbol: 'BatchResponse', from: BATCH_TS, type: true }
+  );
+  const clientKey = idempotency.keySource === 'client-key';
+  if (clientKey) imports.push({ symbol: 'idempotencyKeyOf', from: BATCH_JOB_STEPS_TS });
+  const key = `${tsString(idempotency.keySource)}, ${clientKey ? 'idempotencyKeyOf(request)' : 'null'}, ${idempotency.ttlSeconds ?? 'null'}`;
+  const op = tsString(operation.name);
+  const read = `    // Lote con clave (DSL 2.30, D15): la repetición responde lo guardado en su trabajo.
+    const body = rawBodyOf(request);
+    const envelope = this.keyedBatches.read(body, (parsed) => ${readerName}(params, query, parsed));`;
+  const params = '@Param() params: Record<string, string>, @Query() query: Record<string, unknown>, @Req() request: FastifyRequest, @Res({ passthrough: true }) reply: FastifyReply';
+  if (batch.atomicity === 'per-item') {
+    return `${doc}  @${decorator}(${tsString(nestPath(operation.route.path))})
+  @HttpCode(${BATCH_MULTI_STATUS})
+  async ${operation.name}(${params}): Promise<BatchResponse> {
+${read}
+    void reply;
+    return this.keyedBatches.perItem(${op}, body, ${key}, envelope.${batch.over}, ${itemReader}, new Set<string>([${batch.itemErrors.map(tsString).join(', ')}]), ${dispatch});
+  }`;
+  }
+  imports.push({ symbol: 'ErrorResponse', from: 'src/infrastructure/rest/error-response.ts', type: true });
+  return `${doc}  @${decorator}(${tsString(nestPath(operation.route.path))})
+  @HttpCode(${operation.route.status})
+  async ${operation.name}(${params}): Promise<BatchResponse | ErrorResponse> {
+${read}
+    const outcome = await this.keyedBatches.allOrNothing(${op}, ${tsString(batch.over)}, body, ${key}, envelope.${batch.over}, ${itemReader}, ${dispatch});
+    if (outcome.ok) return outcome.body;
+    void reply.status(outcome.error.status);
+    return outcome.error;
   }`;
 }

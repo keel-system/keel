@@ -28,7 +28,7 @@ import { REQUEST_READING_TS, ROUTES_TS, usesApi } from './rest-support.js';
 import { CALLER_IDENTITY_TS, callerResolution } from './security.js';
 import { controllerBatchCall, atomicTransaction } from './batch.js';
 import { batchSuccessStatus } from '@keel-system/keel-core/gen/batch';
-import { controllerBatchJobMethods, usesBatchJobs } from './batch-jobs.js';
+import { controllerBatchJobMethods, controllerKeyedBatchMethod, usesAsyncBatchJobs, usesBatchJobs, usesKeyedBatches } from './batch-jobs.js';
 import { TRANSACTION_CONTEXT_TS } from './repositories.js';
 
 export const VALUE_READERS_TS = 'src/infrastructure/rest/value-readers.ts';
@@ -39,6 +39,9 @@ const BATCH_ITEM = 'item';
 
 /** ¿Es la operación un lote asíncrono que se genera (DSL 2.30, fase B)? */
 const isAsyncBatch = (model, operation) => operation.batch?.execution === 'async' && usesBatchJobs(model);
+
+/** ¿Es la operación un lote síncrono con clave que se genera (DSL 2.30, D15)? */
+const isKeyedBatch = (model, operation) => Boolean(operation.batch && operation.batch.execution !== 'async' && operation.batch.idempotency) && usesKeyedBatches(model);
 
 const DECORATOR_BY_METHOD ={ GET: 'Get', POST: 'Post', PUT: 'Put', PATCH: 'Patch', DELETE: 'Delete' };
 
@@ -60,7 +63,7 @@ export function generate(model) {
   if ((model.valueObjects ?? []).length > 0) files.push(valueReaders(model));
   // Los resultados de un trabajo de un lote asíncrono (DSL 2.30) se leen también por páginas.
   const pageable =
-    usesBatchJobs(model) ||
+    usesAsyncBatchJobs(model) ||
     (model.services ?? []).some((service) =>
       (service.operations ?? []).some((operation) => operation.route && messageComponents(model, operation).some((c) => c.pageable))
     );
@@ -203,14 +206,16 @@ function renderController(model, service, routed) {
   const resolving = callerResolution(model) != null && routed.some((operation) => resolvesCaller(model, operation) || scopeResolvesCaller(model, operation));
   if (resolving) imports.push({ symbol: 'CallerIdentityResolver', from: CALLER_IDENTITY_TS });
   // El lote todo o nada (DSL 2.30) abre una transacción alrededor de sus despachos, que se unen a ella.
-  const atomic = atomicTransaction(model) && routed.some((operation) => operation.batch?.atomicity === 'all-or-nothing');
+  const atomic = atomicTransaction(model) && routed.some((operation) => operation.batch?.atomicity === 'all-or-nothing' && !isKeyedBatch(model, operation));
   if (atomic) imports.push({ symbol: 'TransactionContext', from: TRANSACTION_CONTEXT_TS });
   const injected = [
     '@Inject(UseCaseMediator) private readonly mediator: UseCaseMediator',
     ...(resolving ? ['@Inject(CallerIdentityResolver) private readonly callerIdentity: CallerIdentityResolver'] : []),
     ...(atomic ? ['@Inject(TransactionContext) private readonly transactions: TransactionContext'] : []),
     // Los lotes asíncronos (DSL 2.30, fase B): el alta y las rutas del trabajo.
-    ...(routed.some((operation) => isAsyncBatch(model, operation)) ? ['@Inject(BatchJobs) private readonly batchJobs: BatchJobs'] : [])
+    ...(routed.some((operation) => isAsyncBatch(model, operation)) ? ['@Inject(BatchJobs) private readonly batchJobs: BatchJobs'] : []),
+    // Los lotes síncronos con clave (DSL 2.30, D15).
+    ...(routed.some((operation) => isKeyedBatch(model, operation)) ? ['@Inject(KeyedBatches) private readonly keyedBatches: KeyedBatches'] : [])
   ];
   const constructor = injected.length === 1 ? `  constructor(${injected[0]}) {}` : `  constructor(\n    ${injected.join(',\n    ')}\n  ) {}`;
   const body = `${tsdoc(`Operaciones HTTP de ${service.controllerClass.replace(/V1Controller$/, '')}. Solo traduce: lee la petición, despacha el caso de uso y devuelve su resultado.`)}@Controller(${tsString(model.api.routeBase.replace(/^\//, ''))})
@@ -242,6 +247,19 @@ function renderMethod(model, operation, imports, readers) {
     // Un lote asíncrono (DSL 2.30, fase B): el alta firma el TEXTO del cuerpo (D13) y lo guarda; las dos rutas del trabajo
     // cuelgan de la suya. El lector del sobre se exporta: el procesador lo vuelve a usar sobre lo guardado.
     return controllerBatchJobMethods(model, operation, { decorator, readerName, imports, doc: tsdoc(operation.description, '  ') });
+  }
+  if (isKeyedBatch(model, operation)) {
+    // Un lote síncrono con clave (DSL 2.30, D15): el cuerpo como texto, la clave y la respuesta guardada en su trabajo.
+    const itemReader = `read${operation.batch.itemType}`;
+    imports.push({ symbol: itemReader, from: VALUE_READERS_TS });
+    const message = 'envelope.message(item)';
+    const dispatch = operation.batch.resultFields.length > 0
+      ? `(item) => this.mediator.dispatch(${message})`
+      : `async (item) => {
+        await this.mediator.dispatch(${message});
+        return null;
+      }`;
+    return controllerKeyedBatchMethod(model, operation, { decorator, readerName, itemReader, dispatch, imports, doc: tsdoc(operation.description, '  ') });
   }
   if (batch) return renderBatchMethod(model, operation, decorator, readerName, imports);
 

@@ -64,6 +64,15 @@ function batchBody(model, transactional) {
 export type AtomicOutcome = { readonly ok: true; readonly body: BatchResponse } | { readonly ok: false; readonly error: ErrorResponse };
 
 /**
+ * Lo que guarda un lote todo o nada con clave (DSL 2.30, D15) DENTRO de su transacción: el resultado de cada elemento y el
+ * final del trabajo. Si el lote falla, la transacción se lo lleva todo.
+ */
+export interface AtomicSink {
+  kept(item: BatchItem): Promise<void>;
+  completed(): Promise<void>;
+}
+
+/**
  * Un lote \`all-or-nothing\`: todos los elementos en UNA transacción${transactional ? '' : ' (sin persistencia no hay ninguna que abrir)'}. El
  * primer fallo la revierte entera y el desenlace es su error, con la ruta del elemento culpable en \`details\`
  * (\`items[7]\`); sin fallos, el mismo cuerpo que un lote por elemento, con el \`successStatus\` del endpoint.
@@ -75,7 +84,8 @@ export async function allOrNothing<T>(
   items: readonly unknown[],
   read: (value: unknown) => T | null,
   ${transactional ? 'transactions: TransactionContext' : '_transactions: null'},
-  process: (item: T) => Promise<unknown>
+  process: (item: T) => Promise<unknown>,
+  sink: AtomicSink | null = null
 ): Promise<AtomicOutcome> {
   const work = async (): Promise<BatchItem[]> => {
     const results: BatchItem[] = [];
@@ -86,12 +96,16 @@ export async function allOrNothing<T>(
       } catch (error) {
         throw new ItemFailure(index, invalidResponse(error as InvalidBatchItem));
       }
+      let kept: BatchItem;
       try {
-        results.push(BatchItem.succeeded(index, await process(item)));
+        kept = BatchItem.succeeded(index, await process(item));
       } catch (error) {
         throw new ItemFailure(index, translate(error), error);
       }
+      results.push(kept);
+      if (sink != null) await sink.kept(kept);
     }
+    if (sink != null) await sink.completed();
     return results;
   };
   try {

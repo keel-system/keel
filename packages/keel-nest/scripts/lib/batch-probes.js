@@ -20,6 +20,8 @@ import { CONTAINER_TS, MEDIATOR_TS } from '../../src/scaffold/mediator.js';
 import { handlerPath } from '../../src/scaffold/services.js';
 import { EXCEPTION_FILTER_TS } from '../../src/scaffold/rest-support.js';
 import { quoteIdentifierFor } from '@keel-system/keel-core/gen/relational';
+import { KEYED_BATCHES_TS, SQL_BATCH_JOB_STORE_TS, MONGO_BATCH_JOB_STORE_TS } from '../../src/scaffold/batch-jobs.js';
+import { BATCH_SYNC_STALE } from '@keel-system/keel-core/gen/batch-store';
 
 const js = (value) => JSON.stringify(value);
 
@@ -150,6 +152,13 @@ export function batchBlock(model, ctx, { document, engine, adapterOf }) {
   dist('ApiExceptionFilter', EXCEPTION_FILTER_TS);
   dist(controller.symbol, controller.from);
   for (const operation of operations) dist(operation.handlerClass, handlerPath(operation));
+  // Un lote con clave (D15) lee el TEXTO del cuerpo de la petición y lo procesa KeyedBatches; sin la cabecera de la clave,
+  // es el lote de siempre.
+  const keyed = operations.filter((operation) => operation.batch.idempotency).map((operation) => operation.name);
+  if (keyed.length > 0) {
+    dist('KeyedBatches', KEYED_BATCHES_TS);
+    dist(document ? 'MongoBatchJobStore' : 'SqlBatchJobStore', document ? MONGO_BATCH_JOB_STORE_TS : SQL_BATCH_JOB_STORE_TS);
+  }
   const table = document ? null : quoteIdentifierFor(engine, product.tableName);
   const clear = document ? `await database.collection(${js(product.collectionName)}).deleteMany({})` : `await dataSource.query(${js(`DELETE FROM ${table}`)})`;
   const count = document
@@ -226,7 +235,13 @@ ${code}
 {
   const batchProducts = ${adapterOf(product)};
   const batchMediator = new UseCaseMediator(UseCaseContainer.of([${operations.map((operation) => `new ${operation.handlerClass}(batchProducts)`).join(', ')}]), tx);
-  const batchController = new ${controller.symbol}(batchMediator, tx);
+  const batchController = new ${controller.symbol}(batchMediator, tx);${
+    keyed.length > 0
+      ? `
+  batchController.keyedBatches = new KeyedBatches(new ${document ? 'MongoBatchJobStore' : 'SqlBatchJobStore'}(tx), tx, { chunkSize: 100, retentionDays: 7, purgeCron: '0 0 0 * * *', syncStaleMs: ${BATCH_SYNC_STALE.default} });`
+      : ''
+  }
+  const keyedMethods = new Set(${js(keyed)});
   const batchErrors = new ApiExceptionFilter();
   const UNDECLARED_FAILURE_NAME = ${js(UNDECLARED_FAILURE_NAME)};
   // Como lo llama Nest: el cuerpo ya leído, el status del decorador salvo que el método lo fije en el reply, y un fallo
@@ -235,7 +250,9 @@ ${code}
     const reply = { code: null, status(value) { this.code = value; return this; }, header() { return this; } };
     const body = typeof content === 'string' ? JSON.parse(content) : content;
     try {
-      const answer = await batchController[method]({}, {}, body, reply);
+      const answer = keyedMethods.has(method)
+        ? await batchController[method]({}, {}, { rawBody: typeof content === 'string' ? content : JSON.stringify(content), headers: {} }, reply)
+        : await batchController[method]({}, {}, body, reply);
       return { status: reply.code ?? Reflect.getMetadata('__httpCode__', ${controller.symbol}.prototype[method]), json: JSON.parse(JSON.stringify(answer)) };
     } catch (error) {
       const response = batchErrors.translate(error);
