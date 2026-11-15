@@ -341,3 +341,24 @@ elemento resuelve el suyo en su ámbito); BJ-5, el gancho `AfterEffect` del hand
 doc-check compara las colecciones de `BATCH_JOB_COLLECTIONS` (claves, unicidad y filtro parcial). Medido: BJ-1 a BJ-9 en verde
 en PostgreSQL, MySQL y MongoDB, y `bj-no-resume` en BJ-4, `bj-cursor-outside-tx` en BJ-4 y BJ-5 y `bj-foreign-reader` en BJ-6,
 exactamente, en los tres.
+
+## Lotes síncronos con clave (DSL 2.30, incremento 10b de `PLAN-DSL-230-LOTES.md`, D15)
+
+`usesBatchJobs` significa ahora «almacén de trabajos» (lotes asíncronos o síncronos con clave, `batchJobStoreOperations`);
+lo que es solo del asíncrono (el alta, el procesador, su temporizador, las rutas, `PagedResponse` y `PageableReading` por los
+resultados) pregunta `usesAsyncBatchJobs`. `BatchJobs.cs` se partió: `BatchJobSteps.cs` lleva lo que comparten los dos (los
+bytes del cuerpo y su firma, la cabecera, `BatchJobKeyReusedException`, `FenceLostException` y el paso de UN elemento, cada uno
+en su ámbito, con tres desenlaces `BatchStep.Next|Stop|Lost`, y `Stored`, la respuesta rehecha con `batchStoredBody`); el
+sabotaje `bj-cursor-outside-tx` apunta ahora a `BatchJobSteps.cs`. `KeyedBatches.cs` (Api/Rest) es el lote con clave: crea o
+encuentra el trabajo en una transacción propia (`ReleaseKey`, `ByKey`, `Job`, `TakeOver`), procesa desde el cursor y responde
+siempre lo guardado; sin la cabecera es el lote de siempre. El endpoint lee los BYTES (`BatchJobRequests.Body`) y el lector del
+sobre los parsea con `ViolationSource.Params`, como el asíncrono. El todo o nada con clave pasa un `IAtomicSink` a
+`BatchRunner.AllOrNothing` (parámetro explícito antes del `CancellationToken`, por CA1068) y descarta el trabajo si no se
+confirma. `BatchJobRunner` y `KeyedBatches` construyen `BatchJobSteps` en una PROPIEDAD y no en un inicializador de campo: un
+parámetro del constructor primario usado en los dos sitios es CS9124, error con `TreatWarningsAsErrors`. `SyncStaleMs`,
+`TakeOver`, `Discard` y sus sentencias solo se emiten con lotes con clave; `AuditActor`, solo con security (sin ella el dueño
+es `BATCH_ANONYMOUS_OWNER`).
+
+La sonda (`scripts/lib/batch-key-probes.js`) llama al endpoint emitido con la cabecera de la clave y cuenta trabajos y
+resultados como DIFERENCIA (la clase comparte base con las demás); la muerte a mitad de lote es el `CrashingBatchJobStore` de
+las sondas BJ con `CrashAt = 1`, que ahora se emite para todo sujeto con almacén de trabajos.

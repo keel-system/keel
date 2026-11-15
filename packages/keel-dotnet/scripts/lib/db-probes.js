@@ -52,6 +52,7 @@ import { lifecycleFixtureRegistration, lifecycleProbeBlock, lifecycleProbeUsings
 import { historyProbeBlock, historyProbeUsings } from './history-probes.js';
 import { batchFixtureRegistration, batchProbeBlock, batchProbeUsings, batchProjectReference } from './batch-probes.js';
 import { batchJobFixtureRegistration, batchJobProbeBlock, batchJobProbeClasses, batchJobProbeUsings } from './batch-job-probes.js';
+import { batchKeyFixtureRegistration, batchKeyProbeBlock, batchKeyProbeUsings } from './batch-key-probes.js';
 import { claimOrderField, claimsForEntity, rescueProbes, screamingSnake, snakeCase, sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
@@ -649,6 +650,9 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
   // Los lotes asíncronos (DSL 2.30, fase B): BJ-1 a BJ-9 en ESTA clase, con los endpoints y el procesador emitidos.
   const batchJobs = batchJobProbeBlock(model);
   if (batchJobs) blocks.push(batchJobs.methods);
+  // Los lotes síncronos con clave (DSL 2.30, D15): BK-1 a BK-5 en ESTA clase, con el endpoint y KeyedBatches emitidos.
+  const batchKeys = batchKeyProbeBlock(model);
+  if (batchKeys) blocks.push(batchKeys.methods);
 
   // Las raíces a las que apunta una referencia obligatoria: se guarda UNA de cada, y su id vale para todas las sondas.
   const ensures = [];
@@ -693,6 +697,7 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
     ...historyProbeUsings(model, { document: false }),
     ...batchProbeUsings(model),
     ...batchJobProbeUsings(model),
+    ...batchKeyProbeUsings(model),
     'System.Text.Json',
     'System.Text.Json.Nodes',
     'Microsoft.EntityFrameworkCore',
@@ -730,7 +735,7 @@ ${usesMySql(model) ? MYSQL_SUBJECT_DATABASE : POSTGRESQL_SUBJECT_DATABASE}
         // Los barridos de reconciliación con lotes de DOS (con tres candidatos, dos pasadas); AddPersistence no los pisa.
         services.AddSingleton(${probeReconciliationSettings(model)});` : ''}${usesServiceParameters(model) ? `
         services.AddSingleton(${parametersTestInstance(model)});` : ''}
-        services.AddPersistence(new DatabaseSettings(true, target.ConnectionString, TimeSpan.FromSeconds(30), SchemaMode.Create));${batchFixtureRegistration(model)}${batchJobFixtureRegistration(model)}${usesBridge(model) ? `
+        services.AddPersistence(new DatabaseSettings(true, target.ConnectionString, TimeSpan.FromSeconds(30), SchemaMode.Create));${batchFixtureRegistration(model)}${batchJobFixtureRegistration(model)}${batchKeyFixtureRegistration(model)}${usesBridge(model) ? `
         // Los adaptadores de las raíces que emiten eventos los entregan al puente (incremento 9).
         services.AddDomainEvents(MessagingSettings.Defaults);` : ''}${usesDotnetOutbox(model) ? `
         services.AddSingleton<OutboxRelayStore>();` : ''}${usesProcessedEvents(model) ? `

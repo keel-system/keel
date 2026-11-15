@@ -28,7 +28,7 @@ import { readsCompositeResponses } from './http-clients.js';
 import { usesApi } from '@keel-system/keel-core/gen/features';
 import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
 import { usesBatch } from '@keel-system/keel-core/gen/batch';
-import { usesBatchJobs } from './batch-jobs.js';
+import { usesAsyncBatchJobs } from './batch-jobs.js';
 export { usesApi };
 
 export function restNamespace(model) {
@@ -113,7 +113,7 @@ export function generate(model) {
 /** ¿Algún listado con ruta lee un Pageable? Con persistencia, del modelo que sea, todo listado paginado. */
 export function usesPageable(model) {
   // Los resultados de un trabajo de un lote asíncrono (DSL 2.30) también se leen por páginas.
-  if (usesBatchJobs(model)) return true;
+  if (usesAsyncBatchJobs(model)) return true;
   return usesPersistence(model) && (model.services ?? []).some((service) => (service.operations ?? []).some((op) => op.route && op.paginated));
 }
 

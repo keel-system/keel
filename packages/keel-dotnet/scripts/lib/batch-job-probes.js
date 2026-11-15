@@ -19,7 +19,7 @@ import { csMember, csString, namespaceOf } from '../../src/scaffold/render.js';
 import { endpointsClass } from '../../src/scaffold/endpoints.js';
 import { portClass } from '../../src/scaffold/repositories.js';
 import { usesMySql } from '../../src/scaffold/relational-engine.js';
-import { BATCH_JOB_STORE, BATCH_JOB_STORE_PORT, batchInfraNamespace, batchJobClass, jobEndpoint, jobResultsEndpoint } from '../../src/scaffold/batch-jobs.js';
+import { BATCH_JOB_STORE, BATCH_JOB_STORE_PORT, batchInfraNamespace, batchJobClass, jobEndpoint, jobResultsEndpoint, usesBatchJobs, usesKeyedBatches } from '../../src/scaffold/batch-jobs.js';
 import { UNDECLARED_FAILURE_NAME, allBatchOperations } from './batch-probes.js';
 
 const js = (value) => JSON.stringify(value);
@@ -41,6 +41,7 @@ export function batchJobCases(model) {
 // ─── Los sabotajes ───────────────────────────────────────────────────────────────────────────────────────────────
 
 const JOBS = 'Rest/BatchJobs.cs';
+const STEPS = 'Rest/BatchJobSteps.cs';
 const SAME = (spec) => ({ relational: spec, document: spec });
 
 /** Lo que se busca y se sustituye en lo emitido, por sabotaje y por almacén: [sufijo del archivo, texto, sustituto]. */
@@ -48,19 +49,20 @@ export const BATCH_JOB_SABOTAGE_SPECS = {
   // Cada disparo empieza en el principio de su chunk y no en el cursor: tras una caída a mitad de chunk reprocesa lo ya
   // confirmado.
   'bj-no-resume': SAME([JOBS, 'var index = job.NextIndex;', 'var index = job.NextIndex - (job.NextIndex % settings.ChunkSize);']),
-  // El efecto en su transacción, y el cursor con el resultado en otra, después.
+  // El efecto en su transacción, y el cursor con el resultado en otra, después (en el paso que comparte con el lote
+  // síncrono con clave, BatchJobSteps).
   'bj-cursor-outside-tx': SAME([
-    JOBS,
+    STEPS,
     `                await services.GetRequiredService<IUseCaseTransactions>().Run(
                     async () =>
                     {
-                        var result = await process(services, envelope.Message(item), cancellationToken);
+                        var result = await process(services, message(item), cancellationToken);
                         await Keep(services.GetRequiredService<${BATCH_JOB_STORE_PORT}>(), jobId, BatchItem.Succeeded(index, result), cancellationToken);
                         return true;
                     },
                     readOnly: false,
                     cancellationToken);`,
-    `                var result = await services.GetRequiredService<IUseCaseTransactions>().Run(() => process(services, envelope.Message(item), cancellationToken), readOnly: false, cancellationToken);
+    `                var result = await services.GetRequiredService<IUseCaseTransactions>().Run(() => process(services, message(item), cancellationToken), readOnly: false, cancellationToken);
                 await services.GetRequiredService<IUseCaseTransactions>().Run(
                     async () =>
                     {
@@ -90,15 +92,16 @@ export function batchJobSabotageVerdict(failures, id) {
 // ─── El contenedor ───────────────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * Lo que el contenedor de la sonda registra con un lote asíncrono, DESPUÉS de la persistencia: el alta (BatchJobs, que el
- * endpoint pide al contenedor) y el almacén que sabe caer (BJ-4) en el lugar del emitido. No registra el handler del
- * trabajo: lo construye cada caso, y así el sondeador de otras sondas no toca sus temporizadores.
+ * Lo que el contenedor de la sonda registra con un almacén de trabajos, DESPUÉS de la persistencia: con un lote asíncrono, el
+ * alta (BatchJobs, que el endpoint pide al contenedor); y siempre, el almacén que sabe caer (BJ-4, y BK-3 y BK-4 con un lote
+ * síncrono con clave) en el lugar del emitido. No registra el handler del trabajo: lo construye cada caso, y así el sondeador
+ * de otras sondas no toca sus temporizadores.
  */
 export function batchJobFixtureRegistration(model) {
-  if (!asyncOperation(model)) return '';
+  if (!usesBatchJobs(model)) return '';
   return `
-        // Los lotes asíncronos (DSL 2.30, fase B): el alta, y el almacén de los trabajos envuelto en el que cae a voluntad (BJ-4).
-        services.AddScoped<BatchJobs>();
+        // Los lotes con trabajo (DSL 2.30): ${asyncOperation(model) ? 'el alta, y ' : ''}el almacén de los trabajos envuelto en el que cae a voluntad.${asyncOperation(model) ? `
+        services.AddScoped<BatchJobs>();` : ''}
         services.Replace(ServiceDescriptor.Scoped<${BATCH_JOB_STORE_PORT}>(provider => new CrashingBatchJobStore(ActivatorUtilities.CreateInstance<${BATCH_JOB_STORE}>(provider))));`;
 }
 
@@ -125,10 +128,17 @@ export function batchJobProbeUsings(model) {
 
 const usesDocumentModel = (model) => model.persistenceKind === 'document';
 
-/** El almacén que cae al escribir el resultado de un elemento (BJ-4): delega todo lo demás en el emitido. */
+/** El almacén que cae al escribir el resultado de un elemento (BJ-4, BK-3, BK-4): delega todo lo demás en el emitido. */
 export function batchJobProbeClasses(model) {
-  if (!asyncOperation(model)) return null;
-  return `/// <summary>El almacén de una réplica que cae al escribir el resultado del elemento <see cref="CrashAt"/> (BJ-4).</summary>
+  if (!usesBatchJobs(model)) return null;
+  const keyed = usesKeyedBatches(model)
+    ? `
+
+    public Task<bool> TakeOver(Guid id, long staleMs, CancellationToken cancellationToken = default) => inner.TakeOver(id, staleMs, cancellationToken);
+
+    public Task<bool> Discard(Guid id, CancellationToken cancellationToken = default) => inner.Discard(id, cancellationToken);`
+    : '';
+  return `/// <summary>El almacén de una réplica, o de una petición, que cae al escribir el resultado del elemento <see cref="CrashAt"/> (BJ-4, BK-3, BK-4).</summary>
 public sealed class CrashingBatchJobStore(${BATCH_JOB_STORE_PORT} inner) : ${BATCH_JOB_STORE_PORT}
 {
     /// <summary>El índice en el que cae; null: no cae.</summary>
@@ -156,7 +166,7 @@ public sealed class CrashingBatchJobStore(${BATCH_JOB_STORE_PORT} inner) : ${BAT
 
     public Task<long> ResultsCount(Guid jobId, CancellationToken cancellationToken = default) => inner.ResultsCount(jobId, cancellationToken);
 
-    public Task<int> Purge(int retentionDays, CancellationToken cancellationToken = default) => inner.Purge(retentionDays, cancellationToken);
+    public Task<int> Purge(int retentionDays, CancellationToken cancellationToken = default) => inner.Purge(retentionDays, cancellationToken);${keyed}
 }`;
 }
 

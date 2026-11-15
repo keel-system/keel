@@ -130,12 +130,24 @@ test('el alta firma los bytes del cuerpo y el procesador vuelve a leer el sobre 
 });
 
 test('el avance del cursor (la valla) va ANTES que el resultado, en la transacción del elemento', () => {
-  const jobs = fileOf(plan('catalog-batch-async').files, 'Rest/BatchJobs.cs');
-  const keep = jobs.slice(jobs.indexOf('private static async Task Keep('));
+  const { files } = plan('catalog-batch-async');
+  const jobs = fileOf(files, 'Rest/BatchJobs.cs');
+  // El paso de un elemento lo comparten el procesador y el lote síncrono con clave (D15): BatchJobSteps.
+  const steps = fileOf(files, 'Rest/BatchJobSteps.cs');
+  const keep = steps.slice(steps.indexOf('internal static async Task Keep('));
   assert.ok(keep.indexOf('own.Advance(') > 0 && keep.indexOf('own.Advance(') < keep.indexOf('own.InsertResult('));
   // El dueño es el actor de autoría, en el alta y en las rutas.
   assert.match(jobs, /var owner = AuditActor\.Current\(\);/);
   assert.match(jobs, /store\.Owned\(jobId, operation, AuditActor\.Current\(\), cancellationToken\)/);
+});
+
+test('un proyecto solo asíncrono no lleva lo del lote síncrono con clave (D15): ni la toma, ni el descarte, ni su umbral', () => {
+  for (const name of ['catalog-batch-async', 'catalog-batch-async-mongo']) {
+    const { files } = plan(name);
+    assert.doesNotMatch(fileOf(files, 'Batch/IBatchJobStore.cs'), /TakeOver|Discard/, name);
+    assert.doesNotMatch(fileOf(files, 'Batch/BatchSettings.cs'), /SyncStaleMs/, name);
+    assert.ok(!files.some((file) => file.path.endsWith('Rest/KeyedBatches.cs')), name);
+  }
 });
 
 test('lo que el trabajo no puede llevarse de la petición se rechaza en planService, con el criterio de keel-spring', () => {

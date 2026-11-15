@@ -124,7 +124,7 @@ export function planService({ manifest, layers, fixtures = null, workspace, stac
   // El historial (DSL 2.29): sentencias medidas para PostgreSQL y MySQL, y MongoDB.
   const historyErrors = history.historyStackErrors(model);
   if (historyErrors.length > 0) throw new Error(historyErrors.join('\n'));
-  // Los lotes asíncronos (DSL 2.30, fase B): el almacén de los trabajos y lo que el trabajo no puede llevarse de la petición.
+  // Los lotes con trabajo (DSL 2.30, fase B y D15): el almacén de los trabajos y lo que el asíncrono no puede llevarse de la petición.
   const batchJobErrors = batchJobs.batchJobStackErrors(model, (operation) => [
     ...messageComponents(operation, model).filter((component) => component.resolvedIdentity).map((component) => component.name),
     ...(carriesExpectedVersions(model, operation) ? [EXPECTED_VERSIONS] : []),

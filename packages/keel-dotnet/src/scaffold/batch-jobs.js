@@ -22,8 +22,20 @@
 // Lo que no cambia respecto al lote síncrono: el handler procesa UN elemento, cada elemento se lee con el MISMO
 // `ValueReaders.Read<Elemento>` del borde y su fallo se traduce con ApiErrorMiddleware (Batch.cs: `BatchRunner.ReadItem` y
 // `BatchRunner.FailureOf`), así que «falla solo su elemento» y «detiene el lote» significan lo mismo.
+//
+// El lote SÍNCRONO con clave (D15, incremento 10b) usa el mismo almacén, sin temporizador: `KeyedBatches` (Api/Rest) crea su
+// trabajo, procesa cada elemento con los mismos pasos que el procesador (`BatchJobSteps`: cada elemento en su ámbito, con su
+// efecto, la valla y su resultado en UNA transacción) y responde lo guardado (`batchStoredBody`), así que la primera
+// petición, la repetición y la que reanuda responden lo mismo.
 
-import { asyncBatchOperations, batchJobPaths, BATCH_JOB_PARAM, BATCH_ACCEPTED_STATUS } from '@keel-system/keel-core/gen/batch';
+import {
+  asyncBatchOperations,
+  batchJobStoreOperations,
+  keyedSyncBatchOperations,
+  batchJobPaths,
+  BATCH_JOB_PARAM,
+  BATCH_ACCEPTED_STATUS
+} from '@keel-system/keel-core/gen/batch';
 import {
   BATCH_JOB,
   BATCH_ITEM_RESULT,
@@ -31,8 +43,11 @@ import {
   BATCH_JOB_STATUSES,
   BATCH_PARAMETERS,
   BATCH_STORE_ENGINES,
+  BATCH_SYNC_STALE,
+  BATCH_ANONYMOUS_OWNER,
   batchKind,
-  batchStatements
+  batchStatements,
+  batchSyncStatements
 } from '@keel-system/keel-core/gen/batch-store';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { idempotencyOutcomeCode } from '@keel-system/keel-core/gen/declared-errors';
@@ -59,11 +74,28 @@ export const batchInfraNamespace = (model) => namespaceOf(model, 'batchInfra');
 export const asyncOperations = (model) =>
   (model.services ?? []).flatMap((service) => service.operations ?? []).filter((operation) => operation.batch?.execution === 'async');
 
-/** ¿Tiene el servicio algún lote asíncrono? Sin persistencia no hay dónde guardar el trabajo (lo rechaza la frontera). */
-export const usesBatchJobs = (model) => Boolean(model.layersPresent?.persistence) && asyncBatchOperations(model).length > 0;
+/**
+ * ¿Usa el servicio el almacén de trabajos? Con un lote asíncrono o un lote síncrono con clave (D15). Sin persistencia no hay
+ * dónde guardar el trabajo (lo rechaza la frontera).
+ */
+export const usesBatchJobs = (model) => Boolean(model.layersPresent?.persistence) && batchJobStoreOperations(model).length > 0;
+
+/** ¿Tiene el servicio algún lote asíncrono? El alta, el procesador, su temporizador y las dos rutas del trabajo. */
+export const usesAsyncBatchJobs = (model) => usesBatchJobs(model) && asyncBatchOperations(model).length > 0;
+
+/** ¿Tiene el servicio algún lote síncrono con clave (D15)? */
+export const usesKeyedBatches = (model) => usesBatchJobs(model) && keyedSyncBatchOperations(model).length > 0;
 
 /** ¿Es la operación un lote asíncrono que se genera? */
-export const isAsyncBatch = (model, operation) => operation.batch?.execution === 'async' && usesBatchJobs(model);
+export const isAsyncBatch = (model, operation) => operation.batch?.execution === 'async' && usesAsyncBatchJobs(model);
+
+/** ¿Es la operación un lote síncrono con clave que se genera (D15)? */
+export const isKeyedBatch = (model, operation) =>
+  Boolean(operation.batch && operation.batch.execution !== 'async' && operation.batch.idempotency) && usesKeyedBatches(model);
+
+/** Las operaciones síncronas con clave del modelo, enteras. */
+const keyedOperations = (model) =>
+  (model.services ?? []).flatMap((service) => service.operations ?? []).filter((operation) => operation.batch && operation.batch.execution !== 'async' && operation.batch.idempotency);
 
 /** La constante del `kind` del temporizador de los trabajos de una operación, en TimerKinds. */
 export const batchKindConstant = (operationName) => `Batch${pascalCase(operationName)}`;
@@ -91,14 +123,15 @@ export const jobResultsEndpoint = (operation) => `${csMember(operation.name)}Job
  * keel-nest. `stamped(operation)` dice si el mensaje lleva algo que estampa la petición (identidad, versiones, alcance).
  */
 export function batchJobStackErrors(model, stamped) {
-  if (asyncBatchOperations(model).length === 0) return [];
+  if (batchJobStoreOperations(model).length === 0) return [];
   const errors = [];
+  const what = asyncBatchOperations(model).length > 0 ? 'execution: async' : 'idempotency en un lote síncrono';
   if (!model.layersPresent?.persistence) {
-    errors.push('use-cases: batch (execution: async, DSL 2.30): el trabajo vive en la base del servicio, y este diseño no tiene capa persistence.');
+    errors.push(`use-cases: batch (${what}, DSL 2.30): el trabajo vive en la base del servicio, y este diseño no tiene capa persistence.`);
   } else if (!isDocument(model) && !BATCH_STORE_ENGINES.includes(model.stack?.database)) {
     errors.push(
-      `use-cases: batch (execution: async, DSL 2.30): el almacén de los trabajos tiene sentencias medidas para ${BATCH_STORE_ENGINES.join(', ')}, ` +
-        `y no para '${model.stack?.database}'. Elige uno de esos motores o declara execution: sync.`
+      `use-cases: batch (${what}, DSL 2.30): el almacén de los trabajos tiene sentencias medidas para ${BATCH_STORE_ENGINES.join(', ')}, ` +
+        `y no para '${model.stack?.database}'. Elige uno de esos motores, o declara execution: sync sin idempotency.`
     );
   }
   for (const operation of asyncOperations(model)) {
@@ -121,6 +154,7 @@ export function batchJobStackErrors(model, stamped) {
 export function generate(model) {
   if (!usesBatchJobs(model)) return [];
   const document = isDocument(model);
+  const keyed = usesKeyedBatches(model);
   const infra = (name, usings, body) => {
     const { namespace, path } = located(model, 'batchInfra', name);
     return { path, content: csFile({ namespace, usings, body }) };
@@ -130,20 +164,26 @@ export function generate(model) {
     return { path, content: csFile({ namespace, usings, body }) };
   };
   return [
-    infra(BATCH_JOB_STORE_PORT, [], portBody()),
+    infra(BATCH_JOB_STORE_PORT, [], portBody(keyed)),
     document
-      ? infra(BATCH_JOB_STORE, ['MongoDB.Bson', 'MongoDB.Driver', namespaceOf(model, 'persistence')], mongoStoreBody())
+      ? infra(BATCH_JOB_STORE, ['MongoDB.Bson', 'MongoDB.Driver', namespaceOf(model, 'persistence')], mongoStoreBody(keyed))
       : infra(
           BATCH_JOB_STORE,
           ['System.Data.Common', 'System.Globalization', 'System.Text.RegularExpressions', 'Microsoft.EntityFrameworkCore', 'Microsoft.EntityFrameworkCore.Storage', namespaceOf(model, 'persistence')],
           sqlStoreBody(model)
         ),
     ...(document ? [] : [rowsFile(model)]),
-    infra(BATCH_SETTINGS, ['System.Globalization', namespaceOf(model, 'config')], settingsBody()),
-    rest('BatchJobs', jobsUsings(model), jobsBody(model)),
-    ...asyncOperations(model).map((operation) => rest(batchJobClass(operation), handlerUsings(model, operation), handlerBody(model, operation))),
+    infra(BATCH_SETTINGS, ['System.Globalization', namespaceOf(model, 'config')], settingsBody(keyed)),
+    rest('BatchJobSteps', stepsUsings(model), stepsBody(model)),
+    ...(usesAsyncBatchJobs(model)
+      ? [
+          rest('BatchJobs', jobsUsings(model), jobsBody(model)),
+          ...asyncOperations(model).map((operation) => rest(batchJobClass(operation), handlerUsings(model, operation), handlerBody(model, operation)))
+        ]
+      : []),
+    ...(keyed ? [rest('KeyedBatches', keyedUsings(model), keyedBody(model))] : []),
     rest('BatchJobRegistration', ['Microsoft.Extensions.DependencyInjection', namespaceOf(model, 'timer')], registrationBody(model)),
-    ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/batch.yaml`, content: batchYaml(profile) }))
+    ...PROFILES.map((profile) => ({ path: `config/parameters/${profile}/batch.yaml`, content: batchYaml(model, profile) }))
   ];
 }
 
@@ -195,15 +235,19 @@ export function batchJobDocumentIndexEntries(model) {
 }
 
 /**
- * Lo que Program.cs añade con lotes asíncronos, tras el cronómetro: su configuración (la lee la purga, que es
- * Infrastructure) y los handlers de los trabajos, que son de la API.
+ * Lo que Program.cs añade con lotes con trabajo, tras el cronómetro: su configuración (la lee la purga, que es
+ * Infrastructure) y lo que es de la API: los handlers de los trabajos asíncronos y los lotes síncronos con clave.
  */
 export function programBatchJobs(model) {
   if (!usesBatchJobs(model)) return { usings: [], registration: '' };
+  const what = [
+    ...(usesAsyncBatchJobs(model) ? ['un handler del cronómetro por operación asíncrona'] : []),
+    ...(usesKeyedBatches(model) ? ['los lotes síncronos con clave'] : [])
+  ].join(' y ');
   return {
     usings: [batchInfraNamespace(model), namespaceOf(model, 'rest')],
     registration: `
-// Los lotes asíncronos (DSL 2.30): el chunk y la retención (batch.yaml), y un handler del cronómetro por operación.
+// Los lotes con trabajo (DSL 2.30): su mecánica (batch.yaml), y ${what}.
 builder.Services.AddSingleton(BatchSettings.From(configuration));
 builder.Services.AddBatchJobs();`
   };
@@ -212,7 +256,7 @@ builder.Services.AddBatchJobs();`
 /** La purga de `batch_job` como recurrente del cronómetro (la emite timer.js con su nombre de clase y su kind). */
 export function batchPurgeTimerBody(className, kindConstant) {
   return `/// <summary>
-/// La purga de los trabajos terminados de los lotes asíncronos (DSL 2.30, D10): los que acabaron hace más de
+/// La purga de los trabajos terminados de los lotes (DSL 2.30, D10 y D15: los asíncronos y los síncronos con clave): los que acabaron hace más de
 /// <c>${BATCH_PARAMETERS.retentionDays.key}</c> días, con sus resultados. Un trabajo en marcha no se purga nunca. Es un recurrente del
 /// cronómetro en modo clúster (<c>${BATCH_PARAMETERS.purgeCron.key}</c>): cada tick lo ejecuta UNA réplica.
 /// </summary>
@@ -229,17 +273,29 @@ public sealed class ${className}(${BATCH_JOB_STORE_PORT} store, ${BATCH_SETTINGS
 // ─── La configuración ────────────────────────────────────────────────────────────────────────────
 
 /**
- * config/parameters/<perfil>/batch.yaml: la mecánica de los lotes asíncronos (keel-core/gen/batch-store.js, la misma clave
- * y variable en los cuatro generadores). Es, línea a línea, el `batch.yaml` de keel-spring y keel-nest.
+ * config/parameters/<perfil>/batch.yaml: la mecánica de los lotes con trabajo (keel-core/gen/batch-store.js, la misma clave
+ * y variable en los cuatro generadores). Es, línea a línea, el `batch.yaml` de keel-spring y keel-nest: el chunk solo con
+ * lotes asíncronos; el umbral del lote muerto, solo con lotes síncronos con clave (D15).
  */
-export function batchYaml(profile) {
-  const lines = [
-    '# Los lotes asíncronos (DSL 2.30): cuántos elementos procesa cada disparo y cuánto vive un trabajo terminado.',
-    '# El chunk tiene que caber en el arriendo del cronómetro (timer.lease-ms): uno más lento lo tomaría otra réplica.',
-    'batch:'
+export function batchYaml(model, profile) {
+  const asynchronous = asyncBatchOperations(model).length > 0;
+  const keyed = usesKeyedBatches(model);
+  const lines = asynchronous
+    ? [
+        '# Los lotes asíncronos (DSL 2.30): cuántos elementos procesa cada disparo y cuánto vive un trabajo terminado.',
+        '# El chunk tiene que caber en el arriendo del cronómetro (timer.lease-ms): uno más lento lo tomaría otra réplica.'
+      ]
+    : ['# Los lotes con clave (DSL 2.30): cuánto vive un trabajo terminado.'];
+  if (keyed) {
+    lines.push('# Un lote síncrono con clave sin terminar que nadie escribe desde hace más de sync-stale-ms se da por muerto, y su repetición lo sigue desde el cursor.');
+  }
+  lines.push('batch:');
+  const parameters = [
+    ...Object.entries(BATCH_PARAMETERS).filter(([name]) => asynchronous || name !== 'chunkSize').map(([, parameter]) => parameter),
+    ...(keyed ? [BATCH_SYNC_STALE] : [])
   ];
   let parent = null;
-  for (const parameter of Object.values(BATCH_PARAMETERS)) {
+  for (const parameter of parameters) {
     const segments = parameter.key.split('.');
     if (segments.length === 3 && parent !== segments[1]) {
       parent = segments[1];
@@ -253,19 +309,25 @@ export function batchYaml(profile) {
 
 const configKey = (key) => key.replaceAll('.', ':');
 
-function settingsBody() {
+function settingsBody(keyed) {
   const P = BATCH_PARAMETERS;
+  const S = BATCH_SYNC_STALE;
   return `/// <summary>
-/// La mecánica de los lotes asíncronos (DSL 2.30) del perfil activo: la de keel-core (<c>BATCH_PARAMETERS</c>), con las mismas
-/// claves y defaults en los cuatro generadores. Un valor que no es un entero positivo no deja arrancar.
+/// La mecánica de los lotes con trabajo (DSL 2.30) del perfil activo: la de keel-core (<c>BATCH_PARAMETERS</c>${keyed ? ' y <c>BATCH_SYNC_STALE</c>' : ''}), con las
+/// mismas claves y defaults en los cuatro generadores. Un valor que no es un entero positivo no deja arrancar.
 /// </summary>
 /// <param name="ChunkSize">Cuántos elementos procesa cada disparo del temporizador de un trabajo (D9). Por debajo del arriendo del cronómetro.</param>
 /// <param name="RetentionDays">Cuántos días vive un trabajo TERMINADO con sus resultados (D10).</param>
-/// <param name="PurgeCron">El cron (seis campos, en UTC) de su purga.</param>
-public sealed record ${BATCH_SETTINGS}(int ChunkSize, int RetentionDays, string PurgeCron)
+/// <param name="PurgeCron">El cron (seis campos, en UTC) de su purga.</param>${
+    keyed
+      ? `
+/// <param name="SyncStaleMs">Cuántos milisegundos sin escribirse hacen falta para dar por muerto un lote síncrono con clave sin terminar (D15).</param>`
+      : ''
+  }
+public sealed record ${BATCH_SETTINGS}(int ChunkSize, int RetentionDays, string PurgeCron${keyed ? ', int SyncStaleMs' : ''})
 {
     /// <summary>Los defaults de keel-core, para quien no lee la configuración (las pruebas).</summary>
-    public static ${BATCH_SETTINGS} Defaults { get; } = new(${P.chunkSize.default}, ${P.retentionDays.default}, ${csString(P.purgeCron.default)});
+    public static ${BATCH_SETTINGS} Defaults { get; } = new(${P.chunkSize.default}, ${P.retentionDays.default}, ${csString(P.purgeCron.default)}${keyed ? `, ${S.default}` : ''});
 
     public static ${BATCH_SETTINGS} From(ServiceConfiguration configuration)
     {
@@ -273,7 +335,9 @@ public sealed record ${BATCH_SETTINGS}(int ChunkSize, int RetentionDays, string 
         return new ${BATCH_SETTINGS}(
             Positive(configuration, ${csString(configKey(P.chunkSize.key))}, ${P.chunkSize.default}),
             Positive(configuration, ${csString(configKey(P.retentionDays.key))}, ${P.retentionDays.default}),
-            Text(configuration, ${csString(configKey(P.purgeCron.key))}, ${csString(P.purgeCron.default)}));
+            Text(configuration, ${csString(configKey(P.purgeCron.key))}, ${csString(P.purgeCron.default)})${
+              keyed ? `,\n            Positive(configuration, ${csString(configKey(S.key))}, ${S.default})` : ''
+            });
     }
 
     private static string Text(ServiceConfiguration configuration, string key, string fallback) =>
@@ -295,7 +359,19 @@ public sealed record ${BATCH_SETTINGS}(int ChunkSize, int RetentionDays, string 
 
 // ─── El almacén ──────────────────────────────────────────────────────────────────────────────────
 
-function portBody() {
+function portBody(keyed) {
+  const keyedMethods = keyed
+    ? `
+
+    /// <summary>
+    /// Toma un lote síncrono con clave sin terminar que nadie escribe desde hace más de <paramref name="staleMs"/> (D15), con la
+    /// hora de la base. false: sigue en marcha.
+    /// </summary>
+    Task<bool> TakeOver(Guid id, long staleMs, CancellationToken cancellationToken = default);
+
+    /// <summary>Borra el trabajo de un todo o nada con clave que no se confirmó (D15): libera la clave. Nunca uno terminado.</summary>
+    Task<bool> Discard(Guid id, CancellationToken cancellationToken = default);`
+    : '';
   return `/// <summary>Un trabajo, como está en la tabla. <c>NextIndex</c> es el cursor: todo elemento por debajo tiene su resultado.</summary>
 public sealed record BatchJob(
     Guid Id,
@@ -356,16 +432,18 @@ public interface ${BATCH_JOB_STORE_PORT}
     Task<long> ResultsCount(Guid jobId, CancellationToken cancellationToken = default);
 
     /// <summary>La purga (D10): los trabajos terminados hace más de <paramref name="retentionDays"/>, con sus resultados. Nunca uno en marcha.</summary>
-    Task<int> Purge(int retentionDays, CancellationToken cancellationToken = default);
+    Task<int> Purge(int retentionDays, CancellationToken cancellationToken = default);${keyedMethods}
 }`;
 }
 
 const SQL_NAMES = ['insertJob', 'byKey', 'releaseKey', 'job', 'ownedJob', 'insertResult', 'advance', 'finish', 'resultsPage', 'resultsCount', 'purgeResults', 'purgeJobs'];
 
-/** Las sentencias de keel-core para el motor del modelo, con su constante C#. */
+/** Las sentencias de keel-core para el motor del modelo, con su constante C#: las del lote síncrono con clave, solo si lo hay. */
 export function relationalBatchStatements(model) {
-  const S = batchStatements(isMySql(model) ? 'mysql' : 'postgresql');
-  return SQL_NAMES.map((name) => ({ name, constant: `${csMember(name)}Sql`, sql: S[name] }));
+  const engine = isMySql(model) ? 'mysql' : 'postgresql';
+  const S = { ...batchStatements(engine), ...(usesKeyedBatches(model) ? batchSyncStatements(engine) : {}) };
+  const names = [...SQL_NAMES, ...(usesKeyedBatches(model) ? ['takeOver', 'discardJob'] : [])];
+  return names.map((name) => ({ name, constant: `${csMember(name)}Sql`, sql: S[name] }));
 }
 
 function sqlStoreBody(model) {
@@ -466,7 +544,17 @@ ${constants}
                 return await Execute(PurgeJobsSql, new() { ["retentionDays"] = retentionDays }, cancellationToken);
             },
             readOnly: false,
-            cancellationToken);
+            cancellationToken);${
+              usesKeyedBatches(model)
+                ? `
+
+    public async Task<bool> TakeOver(Guid id, long staleMs, CancellationToken cancellationToken = default) =>
+        await Write(TakeOverSql, new() { ["id"] = id, ["staleMs"] = staleMs }, cancellationToken) == 1;
+
+    public async Task<bool> Discard(Guid id, CancellationToken cancellationToken = default) =>
+        await Write(DiscardJobSql, new() { ["id"] = id }, cancellationToken) == 1;`
+                : ''
+            }
 
     private static BatchJob ReadJob(DbDataReader reader) =>
         new(
@@ -638,8 +726,36 @@ ${chains(BATCH_ITEM_RESULT).join('\n')}
   return { path, content: csFile({ namespace, usings: ['Microsoft.EntityFrameworkCore', 'Microsoft.EntityFrameworkCore.Metadata.Builders'], body }) };
 }
 
-function mongoStoreBody() {
+function mongoStoreBody(keyed) {
   const { job, result } = BATCH_JOB_COLLECTIONS;
+  const keyedMethods = keyed
+    ? `
+
+    public async Task<bool> TakeOver(Guid id, long staleMs, CancellationToken cancellationToken = default)
+    {
+        var now = (await DbNow(cancellationToken)).UtcDateTime;
+        var filter = new BsonDocument
+        {
+            { "_id", id.ToString("D") },
+            { "finished_at", BsonNull.Value },
+            { "updated_at", new BsonDocument("$lte", new BsonDateTime(now.AddMilliseconds(-staleMs))) }
+        };
+        var update = new BsonDocument("$set", new BsonDocument("updated_at", new BsonDateTime(now)));
+        var updated = transactions.Session is { } session
+            ? await JobCollection.UpdateOneAsync(session, filter, update, cancellationToken: cancellationToken)
+            : await JobCollection.UpdateOneAsync(filter, update, cancellationToken: cancellationToken);
+        return updated.ModifiedCount == 1;
+    }
+
+    public async Task<bool> Discard(Guid id, CancellationToken cancellationToken = default)
+    {
+        var filter = new BsonDocument { { "_id", id.ToString("D") }, { "finished_at", BsonNull.Value } };
+        var deleted = transactions.Session is { } session
+            ? await JobCollection.DeleteOneAsync(session, filter, cancellationToken: cancellationToken)
+            : await JobCollection.DeleteOneAsync(filter, cancellationToken: cancellationToken);
+        return deleted.DeletedCount == 1;
+    }`
+    : '';
   return `/// <summary>
 /// Los trabajos de los lotes asíncronos sobre MongoDB, con la forma documental de keel-core (<c>BATCH_JOB_COLLECTIONS</c>): los
 /// nombres de campo son los de las columnas, el trabajo lleva su id (texto) en <c>_id</c> y cada resultado la clave aplanada
@@ -839,7 +955,7 @@ public sealed class ${BATCH_JOB_STORE}(DocumentDatabase database, PersistenceTra
             },
             readOnly: false,
             cancellationToken);
-    }
+    }${keyedMethods}
 
     /// <summary>La hora del servidor, sin la sesión de la transacción en curso (como TimerStore.DbNow).</summary>
     private async Task<DateTimeOffset> DbNow(CancellationToken cancellationToken)
@@ -879,9 +995,257 @@ public sealed class ${BATCH_JOB_STORE}(DocumentDatabase database, PersistenceTra
 
 // ─── El alta, las dos rutas y el procesador ──────────────────────────────────────────────────────
 
+function stepsUsings(model) {
+  return [
+    'System.Security.Cryptography',
+    'System.Text.Json',
+    'Microsoft.AspNetCore.Http',
+    'Microsoft.Extensions.DependencyInjection',
+    namespaceOf(model, 'errors'),
+    namespaceOf(model, 'useCaseInfra'),
+    // WireJson: el texto del result de cada elemento, con las reglas del cable.
+    namespaceOf(model, 'appSupport'),
+    batchInfraNamespace(model)
+  ];
+}
+
+/** Las operaciones que guardan su clave en el trabajo: las asíncronas y las síncronas con clave, enteras. */
+const storedOperations = (model) => {
+  const names = new Set(batchJobStoreOperations(model).map(({ operation }) => operation));
+  return (model.services ?? []).flatMap((service) => service.operations ?? []).filter((operation) => names.has(operation.name));
+};
+
+function stepsBody(model) {
+  const canonical = FRAMEWORK_ERRORS.idempotencyReuse;
+  const { completed, aborted } = BATCH_JOB_STATUSES;
+  const succeeded = 'succeeded';
+  const codes = storedOperations(model).map((operation) => `        [${csString(operation.name)}] = ${csString(idempotencyOutcomeCode(model, operation.name, canonical))},`);
+  const jobId = usesAsyncBatchJobs(model)
+    ? `
+
+    /// <summary>El id del trabajo de la ruta: un uuid que no se lee es una petición malformada.</summary>
+    public static Guid JobId(HttpRequest request) =>
+        TextValues.Uuid(TextValues.Route(request, ${csString(BATCH_JOB_PARAM)})) ?? throw new MalformedRequestException();`
+    : '';
+  return `// Lo que comparten el procesador de los lotes asíncronos y los lotes síncronos con clave (DSL 2.30, D9 y D15): los bytes
+// del cuerpo y su firma, la clave reutilizada, el paso de UN elemento y la respuesta rehecha desde lo guardado.
+//
+// No lo edites: lo regenera build.
+
+/// <summary>
+/// La misma clave de idempotencia de un lote con un contenido DISTINTO (D13, D15): no es un reintento, y devolver el trabajo
+/// de la primera petición contestaría a una pregunta que el cliente no hizo.
+/// </summary>
+public sealed class BatchJobKeyReusedException(string operation, string key)
+    : ConflictException($"La clave de idempotencia {operation}/{key} ya se usó con un contenido distinto", code: BatchJobRequests.KeyReusedCode(operation), httpStatus: ${canonical.http}, args: [operation, key]);
+
+/// <summary>Lo que se lee de la petición de un lote con trabajo: los bytes del cuerpo, su firma y la cabecera de la clave.</summary>
+public static class BatchJobRequests
+{
+    private static readonly Dictionary<string, string> KeyReusedCodes = new(StringComparer.Ordinal)
+    {
+${codes.join('\n')}
+    };
+
+    /// <summary>El code de la clave reutilizada de cada operación: el que declara el diseño para ese desenlace, o el canónico.</summary>
+    public static string KeyReusedCode(string operation) => KeyReusedCodes.TryGetValue(operation, out var code) ? code : ${csString(canonical.code)};
+
+    /// <summary>Los BYTES del cuerpo tal como llegaron: su firma es la de la petición (D13) y el trabajo los guarda.</summary>
+    public static async Task<byte[]> Body(HttpRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        using var buffer = new MemoryStream();
+        await request.Body.CopyToAsync(buffer, request.HttpContext.RequestAborted);
+        return buffer.ToArray();
+    }
+
+    /// <summary>La firma de la petición (D13): el sha256 en hexadecimal de los bytes del cuerpo, como batchRequestSignature de keel-core.</summary>
+    public static string Signature(byte[] body) => Convert.ToHexStringLower(SHA256.HashData(body));
+
+    /// <summary>La cabecera ${IDEMPOTENCY_HEADER} de la petición, o null si no llega o va en blanco.</summary>
+    public static string? IdempotencyKey(HttpRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var value = request.Headers[${csString(IDEMPOTENCY_HEADER)}].FirstOrDefault();
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }${jobId}
+}
+
+/// <summary>
+/// El cursor ya no estaba donde lo dejó quien procesa: otra réplica, o la repetición de la petición, se llevó el trabajo.
+/// Revierte el elemento entero.
+/// </summary>
+public sealed class FenceLostException() : Exception("El trabajo lo procesa otro");
+
+/// <summary>Lo que deja un elemento: seguir, parar (el lote se detuvo, D4) o perder el trabajo (la valla).</summary>
+public enum BatchStep
+{
+    Next,
+    Stop,
+    Lost
+}
+
+/// <summary>
+/// UN elemento de un lote con trabajo y la respuesta rehecha desde lo guardado (DSL 2.30, D9 y D15): lo usan el procesador de
+/// los trabajos asíncronos y los lotes síncronos con clave.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Cada elemento va en su ÁMBITO (su contexto, su transacción) y en UNA transacción con tres cosas: su efecto (el despacho por
+/// el mediator, que se une a ella), el avance del cursor y su resultado. El avance es la VALLA: solo avanza si el cursor sigue
+/// donde lo dejó quien procesa, y si no —otra réplica, o la repetición de la petición, se llevó el trabajo— el elemento
+/// revierte entero, efecto incluido. Si quien procesa cae a mitad, lo confirmado queda y quien sigue lo hace desde el cursor:
+/// ningún elemento se aplica dos veces ni se queda sin resultado.
+/// </para>
+/// <para>
+/// Fallan solo su elemento los codes de <c>itemErrors</c> y ${FRAMEWORK_ERRORS.validation.code}; cualquier otro fallo detiene el trabajo
+/// (<c>${aborted}</c>, D4) con su code o ${FRAMEWORK_ERRORS.batchAborted.code}.
+/// </para>
+/// </remarks>
+public sealed class BatchJobSteps(IServiceScopeFactory scopes, ${BATCH_JOB_STORE_PORT} store)
+{
+    /// <summary>
+    /// Un elemento. <paramref name="message"/> construye el mensaje de UN elemento; <paramref name="process"/> lo despacha en
+    /// los servicios de su ámbito y devuelve su result (null si la operación no declara batch.output).
+    /// </summary>
+    public async Task<BatchStep> Process<TItem, TMessage>(
+        Guid jobId,
+        int index,
+        JsonElement element,
+        Func<JsonElement?, TItem?> readItem,
+        Func<TItem, TMessage> message,
+        IReadOnlyCollection<string> itemErrors,
+        Func<IServiceProvider, TMessage, CancellationToken, Task<object?>> process,
+        CancellationToken cancellationToken)
+        where TItem : class
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentNullException.ThrowIfNull(process);
+        TItem item;
+        try
+        {
+            item = BatchRunner.ReadItem(element, readItem) ?? throw BatchRunner.Invalid;
+        }
+        catch (BatchRunner.InvalidItemException invalid)
+        {
+            return await Failed(jobId, BatchItem.Failed(index, BatchRunner.ValidationError, invalid.Message), stops: false, cancellationToken);
+        }
+        BatchItem failure;
+        bool stops;
+        await using (var scope = scopes.CreateAsyncScope())
+        {
+            var services = scope.ServiceProvider;
+            try
+            {
+                await services.GetRequiredService<IUseCaseTransactions>().Run(
+                    async () =>
+                    {
+                        var result = await process(services, message(item), cancellationToken);
+                        await Keep(services.GetRequiredService<${BATCH_JOB_STORE_PORT}>(), jobId, BatchItem.Succeeded(index, result), cancellationToken);
+                        return true;
+                    },
+                    readOnly: false,
+                    cancellationToken);
+                return BatchStep.Next;
+            }
+            catch (FenceLostException)
+            {
+                return BatchStep.Lost;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception error)
+            {
+                (failure, stops) = BatchRunner.FailureOf(index, ApiErrorMiddleware.Translate(services, error), itemErrors);
+            }
+        }
+        return await Failed(jobId, failure, stops, cancellationToken);
+    }
+
+    /// <summary>Un elemento que falla: su resultado y el avance, en su transacción; si detiene el lote, también el final (D4).</summary>
+    private async Task<BatchStep> Failed(Guid jobId, BatchItem item, bool stops, CancellationToken cancellationToken)
+    {
+        await using var scope = scopes.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var own = services.GetRequiredService<${BATCH_JOB_STORE_PORT}>();
+        try
+        {
+            await services.GetRequiredService<IUseCaseTransactions>().Run(
+                async () =>
+                {
+                    await Keep(own, jobId, item, cancellationToken);
+                    if (stops)
+                    {
+                        await own.Finish(jobId, ${csString(aborted)}, cancellationToken);
+                    }
+                    return true;
+                },
+                readOnly: false,
+                cancellationToken);
+        }
+        catch (FenceLostException)
+        {
+            return BatchStep.Lost;
+        }
+        return stops ? BatchStep.Stop : BatchStep.Next;
+    }
+
+    /// <summary>
+    /// La valla y el resultado de un elemento, en la transacción en curso: primero el avance del cursor, que toma la fila del
+    /// trabajo, y después el resultado. Si el cursor ya no estaba en su índice, lanza y la transacción revierte entera.
+    /// </summary>
+    internal static async Task Keep(${BATCH_JOB_STORE_PORT} own, Guid jobId, BatchItem item, CancellationToken cancellationToken)
+    {
+        var ok = item.Status == ${csString(succeeded)};
+        if (!await own.Advance(jobId, item.Index, ok ? 1 : 0, ok ? 0 : 1, cancellationToken))
+        {
+            throw new FenceLostException();
+        }
+        var result = item.Result is null ? null : JsonSerializer.Serialize(item.Result, WireJson.Options);
+        await own.InsertResult(jobId, item.Index, item.Status, item.Error, item.Message, result, cancellationToken);
+    }
+
+    /// <summary>
+    /// La respuesta de un lote con clave rehecha desde lo guardado (D15, batchStoredBody de keel-core): los resultados en orden
+    /// de índice y, si se detuvo, un <c>notAttempted</c> por cada elemento desde el cursor.
+    /// </summary>
+    public async Task<BatchResponse> Stored(Guid jobId, CancellationToken cancellationToken)
+    {
+        var job = await store.Job(jobId, cancellationToken) ?? throw new InvalidOperationException($"No hay ningún trabajo {jobId}");
+        var items = (await store.Results(jobId, job.Total, 0, cancellationToken)).Select(Item).ToList();
+        if (job.Status == ${csString(aborted)})
+        {
+            for (var index = job.NextIndex; index < job.Total; index++)
+            {
+                items.Add(BatchItem.NotAttempted(index));
+            }
+        }
+        return BatchResponse.Of(items);
+    }
+
+    /// <summary>Un resultado guardado, como viaja en el cable.</summary>
+    public static BatchItem Item(BatchJobResult row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        return row.Status == ${csString(succeeded)}
+            ? BatchItem.Succeeded(row.Index, row.Result is null ? null : JsonDocument.Parse(row.Result).RootElement.Clone())
+            : BatchItem.Failed(row.Index, row.ErrorCode ?? "", row.Message);
+    }
+}
+
+/// <summary>El estado de un trabajo que se da por cerrado (lo usan quienes lo procesan).</summary>
+internal static class BatchJobStatuses
+{
+    public const string Completed = ${csString(completed)};
+
+    public const string Aborted = ${csString(aborted)};
+}`;
+}
+
 function jobsUsings(model) {
   const usings = [
-    'System.Security.Cryptography',
     'System.Text',
     'System.Text.Json',
     'System.Text.Json.Serialization',
@@ -892,8 +1256,6 @@ function jobsUsings(model) {
     namespaceOf(model, 'repositories'),
     namespaceOf(model, 'useCaseInfra'),
     namespaceOf(model, 'timer'),
-    // WireJson: el texto del result de cada elemento, con las reglas del cable.
-    namespaceOf(model, 'appSupport'),
     batchInfraNamespace(model),
     ...typeUsings(model, ['PagedResponse'])
   ];
@@ -903,11 +1265,8 @@ function jobsUsings(model) {
 
 function jobsBody(model) {
   const notFound = FRAMEWORK_ERRORS.batchJobNotFound;
-  const canonical = FRAMEWORK_ERRORS.idempotencyReuse;
   const { completed, aborted } = BATCH_JOB_STATUSES;
-  const succeeded = 'succeeded';
   const security = Boolean(model.layersPresent?.security);
-  const codes = asyncOperations(model).map((operation) => `        [${csString(operation.name)}] = ${csString(idempotencyOutcomeCode(model, operation.name, canonical))},`);
   return `// Los lotes asíncronos (DSL 2.30, fase B; wire-contract.md § Lotes asíncronos): el trabajo en el cable, el alta, las dos
 // rutas que lo leen y el procesador que lo recorre por partes sobre el cronómetro.
 //
@@ -939,49 +1298,6 @@ public sealed record BatchJobView(
 /// </summary>
 public sealed class BatchJobNotFoundException(Guid jobId)
     : NotFoundException($"No hay ningún trabajo {jobId}", code: ${csString(notFound.code)}, httpStatus: ${notFound.http}, args: [jobId]);
-
-/// <summary>
-/// La misma clave de idempotencia de un lote asíncrono con un contenido DISTINTO (D13): no es un reintento, y devolver el
-/// trabajo de la primera petición contestaría a una pregunta que el cliente no hizo.
-/// </summary>
-public sealed class BatchJobKeyReusedException(string operation, string key)
-    : ConflictException($"La clave de idempotencia {operation}/{key} ya se usó con un contenido distinto", code: BatchJobRequests.KeyReusedCode(operation), httpStatus: ${canonical.http}, args: [operation, key]);
-
-/// <summary>Lo que el alta lee de la petición: los bytes del cuerpo, su firma y la cabecera de la clave.</summary>
-public static class BatchJobRequests
-{
-    private static readonly Dictionary<string, string> KeyReusedCodes = new(StringComparer.Ordinal)
-    {
-${codes.join('\n')}
-    };
-
-    /// <summary>El code de la clave reutilizada de cada operación: el que declara el diseño para ese desenlace, o el canónico.</summary>
-    public static string KeyReusedCode(string operation) => KeyReusedCodes.TryGetValue(operation, out var code) ? code : ${csString(canonical.code)};
-
-    /// <summary>Los BYTES del cuerpo tal como llegaron: su firma es la de la petición (D13) y el trabajo los guarda.</summary>
-    public static async Task<byte[]> Body(HttpRequest request)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        using var buffer = new MemoryStream();
-        await request.Body.CopyToAsync(buffer, request.HttpContext.RequestAborted);
-        return buffer.ToArray();
-    }
-
-    /// <summary>La firma de la petición (D13): el sha256 en hexadecimal de los bytes del cuerpo, como batchRequestSignature de keel-core.</summary>
-    public static string Signature(byte[] body) => Convert.ToHexStringLower(SHA256.HashData(body));
-
-    /// <summary>La cabecera ${IDEMPOTENCY_HEADER} de la petición, o null si no llega o va en blanco.</summary>
-    public static string? IdempotencyKey(HttpRequest request)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        var value = request.Headers[${csString(IDEMPOTENCY_HEADER)}].FirstOrDefault();
-        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-    }
-
-    /// <summary>El id del trabajo de la ruta: un uuid que no se lee es una petición malformada.</summary>
-    public static Guid JobId(HttpRequest request) =>
-        TextValues.Uuid(TextValues.Route(request, ${csString(BATCH_JOB_PARAM)})) ?? throw new MalformedRequestException();
-}
 
 /// <summary>
 /// Los lotes asíncronos (DSL 2.30, fase B) vistos desde la API: el alta del trabajo y las dos rutas que lo leen.
@@ -1079,11 +1395,7 @@ public sealed class BatchJobs(${BATCH_JOB_STORE_PORT} store, ITimerStore timers,
         ArgumentNullException.ThrowIfNull(pageable);
         var job = await Owned(operation, jobId, cancellationToken);
         var rows = await store.Results(job.Id, pageable.Size, (long)pageable.Page * pageable.Size, cancellationToken);
-        var items = rows
-            .Select(row => row.Status == ${csString(succeeded)}
-                ? BatchItem.Succeeded(row.Index, row.Result is null ? null : JsonDocument.Parse(row.Result).RootElement.Clone())
-                : BatchItem.Failed(row.Index, row.ErrorCode ?? "", row.Message))
-            .ToList();
+        var items = rows.Select(BatchJobSteps.Item).ToList();
         var page = Page<BatchItem>.Of(items, pageable, await store.ResultsCount(job.Id, cancellationToken));
         return new PagedResponse<BatchItem> { Items = page.Items, Page = page.Number, Size = page.Size, TotalElements = page.TotalElements, TotalPages = page.TotalPages };
     }
@@ -1092,30 +1404,21 @@ public sealed class BatchJobs(${BATCH_JOB_STORE_PORT} store, ITimerStore timers,
         await store.Owned(jobId, operation, AuditActor.Current(), cancellationToken) ?? throw new BatchJobNotFoundException(jobId);
 }
 
-/// <summary>El cursor ya no estaba donde lo dejó este disparo: otra réplica se llevó el trabajo. Revierte el elemento entero.</summary>
-public sealed class FenceLostException() : Exception("El trabajo lo procesa otra réplica");
-
 /// <summary>
 /// Un disparo del temporizador de un trabajo (DSL 2.30, D9): procesa un CHUNK desde el cursor y dice si queda trabajo
 /// (rearmar para ya) o si terminó (borrar el temporizador). Es el <i>commit interval</i> y el <i>restart</i> de Spring Batch
 /// sobre el cronómetro, sin la librería.
 /// </summary>
 /// <remarks>
-/// <para>
-/// Cada elemento va en su ÁMBITO (su contexto, su transacción) y en UNA transacción con tres cosas: su efecto (el despacho por
-/// el mediator, que se une a ella), el avance del cursor y su resultado. El avance es la VALLA: solo avanza si el cursor sigue
-/// donde lo dejó este disparo, y si no —otra réplica le quitó el trabajo al vencer su arriendo— el elemento revierte entero,
-/// efecto incluido. Si la réplica cae a mitad de chunk, lo confirmado queda y el siguiente disparo sigue desde el cursor:
-/// ningún elemento se aplica dos veces ni se queda sin resultado.
-/// </para>
-/// <para>
-/// Fallan solo su elemento los codes de <c>itemErrors</c> y ${FRAMEWORK_ERRORS.validation.code}; cualquier otro fallo detiene el trabajo
-/// (<c>${aborted}</c>, D4) con su code o ${FRAMEWORK_ERRORS.batchAborted.code}. Corre sin token: el actor de autoría de cada elemento es el
-/// dueño del trabajo.
-/// </para>
+/// Cada elemento lo procesa <see cref="BatchJobSteps"/>: en su ámbito, con su efecto, el avance del cursor (la valla) y su
+/// resultado en UNA transacción. Si la réplica cae a mitad de chunk, el siguiente disparo sigue desde el cursor. Corre sin
+/// token: el actor de autoría de cada elemento es el dueño del trabajo.
 /// </remarks>
 public sealed class BatchJobRunner(IServiceScopeFactory scopes, ${BATCH_JOB_STORE_PORT} store, ITimerStore timers, ${BATCH_SETTINGS} settings)
 {
+    /// <summary>Los pasos de cada elemento, sobre el almacén y los ámbitos de este disparo.</summary>
+    private BatchJobSteps Steps => new(scopes, store);
+
     /// <summary>
     /// Un disparo. <paramref name="readEnvelope"/> vuelve a leer el sobre guardado con el lector de la operación;
     /// <paramref name="process"/> despacha el mensaje de UN elemento en los servicios de su ámbito y devuelve su result (null si
@@ -1138,12 +1441,14 @@ public sealed class BatchJobRunner(IServiceScopeFactory scopes, ${BATCH_JOB_STOR
             return TimerOutcome.Finished();
         }
         var envelope = readEnvelope(Encoding.UTF8.GetBytes(job.Input));
+        var steps = Steps;
         using var owner = AsOwner(job.Owner);
         var index = job.NextIndex;
         var end = Math.Min(job.Total, index + settings.ChunkSize);
         for (; index < end; index++)
         {
-            if (!await ProcessItem(job.Id, index, envelope, readItem, itemErrors, process, cancellationToken))
+            // Parar (el lote se detuvo) o perder la valla (el trabajo es de otra réplica) acaban el disparo.
+            if (await steps.Process(job.Id, index, envelope.Items[index], readItem, envelope.Message, itemErrors, process, cancellationToken) != BatchStep.Next)
             {
                 return TimerOutcome.Finished();
             }
@@ -1154,103 +1459,6 @@ public sealed class BatchJobRunner(IServiceScopeFactory scopes, ${BATCH_JOB_STOR
             return TimerOutcome.Finished();
         }
         return TimerOutcome.RescheduleAt(await timers.DbNow(cancellationToken));
-    }
-
-    /// <summary>Un elemento: true para seguir, false para parar el disparo (detiene el lote, o el trabajo es de otra réplica).</summary>
-    private async Task<bool> ProcessItem<TItem, TMessage>(
-        Guid jobId,
-        int index,
-        BatchEnvelope<TItem, TMessage> envelope,
-        Func<JsonElement?, TItem?> readItem,
-        IReadOnlyCollection<string> itemErrors,
-        Func<IServiceProvider, TMessage, CancellationToken, Task<object?>> process,
-        CancellationToken cancellationToken)
-        where TItem : class
-    {
-        TItem item;
-        try
-        {
-            item = BatchRunner.ReadItem(envelope.Items[index], readItem) ?? throw BatchRunner.Invalid;
-        }
-        catch (BatchRunner.InvalidItemException invalid)
-        {
-            return await Failed(jobId, BatchItem.Failed(index, BatchRunner.ValidationError, invalid.Message), stops: false, cancellationToken);
-        }
-        BatchItem failure;
-        bool stops;
-        await using (var scope = scopes.CreateAsyncScope())
-        {
-            var services = scope.ServiceProvider;
-            try
-            {
-                await services.GetRequiredService<IUseCaseTransactions>().Run(
-                    async () =>
-                    {
-                        var result = await process(services, envelope.Message(item), cancellationToken);
-                        await Keep(services.GetRequiredService<${BATCH_JOB_STORE_PORT}>(), jobId, BatchItem.Succeeded(index, result), cancellationToken);
-                        return true;
-                    },
-                    readOnly: false,
-                    cancellationToken);
-                return true;
-            }
-            catch (FenceLostException)
-            {
-                return false;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception error)
-            {
-                (failure, stops) = BatchRunner.FailureOf(index, ApiErrorMiddleware.Translate(services, error), itemErrors);
-            }
-        }
-        return await Failed(jobId, failure, stops, cancellationToken);
-    }
-
-    /// <summary>Un elemento que falla: su resultado y el avance, en su transacción; si detiene el lote, también el final (D4).</summary>
-    private async Task<bool> Failed(Guid jobId, BatchItem item, bool stops, CancellationToken cancellationToken)
-    {
-        await using var scope = scopes.CreateAsyncScope();
-        var services = scope.ServiceProvider;
-        var own = services.GetRequiredService<${BATCH_JOB_STORE_PORT}>();
-        try
-        {
-            await services.GetRequiredService<IUseCaseTransactions>().Run(
-                async () =>
-                {
-                    await Keep(own, jobId, item, cancellationToken);
-                    if (stops)
-                    {
-                        await own.Finish(jobId, ${csString(aborted)}, cancellationToken);
-                    }
-                    return true;
-                },
-                readOnly: false,
-                cancellationToken);
-        }
-        catch (FenceLostException)
-        {
-            return false;
-        }
-        return !stops;
-    }
-
-    /// <summary>
-    /// La valla y el resultado de un elemento, en la transacción en curso: primero el avance del cursor, que toma la fila del
-    /// trabajo, y después el resultado. Si el cursor ya no estaba en su índice, lanza y la transacción revierte entera.
-    /// </summary>
-    private static async Task Keep(${BATCH_JOB_STORE_PORT} own, Guid jobId, BatchItem item, CancellationToken cancellationToken)
-    {
-        var ok = item.Status == ${csString(succeeded)};
-        if (!await own.Advance(jobId, item.Index, ok ? 1 : 0, ok ? 0 : 1, cancellationToken))
-        {
-            throw new FenceLostException();
-        }
-        var result = item.Result is null ? null : JsonSerializer.Serialize(item.Result, WireJson.Options);
-        await own.InsertResult(jobId, item.Index, item.Status, item.Error, item.Message, result, cancellationToken);
     }
 
     /// <summary>El disparo corre como el dueño del trabajo: el actor de autoría de cada elemento (el trabajo no tiene token).</summary>
@@ -1269,6 +1477,277 @@ ${
 }
 }`;
 }
+
+// ─── El lote síncrono con clave (D15) ────────────────────────────────────────────────────────────
+
+function keyedUsings(model) {
+  const usings = [
+    'System.Text',
+    'System.Text.Json',
+    'Microsoft.Extensions.DependencyInjection',
+    namespaceOf(model, 'errors'),
+    namespaceOf(model, 'useCaseInfra'),
+    namespaceOf(model, 'appSupport'),
+    batchInfraNamespace(model)
+  ];
+  if (model.layersPresent?.security) usings.push(namespaceOf(model, 'persistence'));
+  return usings;
+}
+
+function keyedBody(model) {
+  const secured = Boolean(model.layersPresent?.security);
+  const canonical = FRAMEWORK_ERRORS.idempotencyRace;
+  const operations = keyedOperations(model);
+  const codes = operations.map((operation) => `        [${csString(operation.name)}] = ${csString(idempotencyOutcomeCode(model, operation.name, canonical))},`);
+  const perItem = operations.some((operation) => operation.batch.atomicity === 'per-item');
+  const atomic = operations.some((operation) => operation.batch.atomicity === 'all-or-nothing');
+  const translate = 'error => ApiErrorMiddleware.Translate(services, error)';
+  const perItemMethod = `
+
+    /// <summary>
+    /// Un lote <c>per-item</c> con clave: como <c>BatchRunner.PerItem</c>, con cada elemento confirmado junto a su
+    /// resultado y el avance del cursor, y la respuesta rehecha de lo guardado. Sin clave, el lote de siempre.
+    /// </summary>
+    public async Task<BatchResponse> PerItem<TItem, TMessage>(
+        string operation,
+        byte[] body,
+        string keySource,
+        string? clientKey,
+        int? ttlSeconds,
+        BatchEnvelope<TItem, TMessage> envelope,
+        Func<JsonElement?, TItem?> readItem,
+        IReadOnlyCollection<string> itemErrors,
+        Func<IServiceProvider, TMessage, CancellationToken, Task<object?>> process,
+        CancellationToken cancellationToken)
+        where TItem : class
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        ArgumentNullException.ThrowIfNull(envelope);
+        ArgumentNullException.ThrowIfNull(process);
+        var signature = BatchJobRequests.Signature(body);
+        var key = KeyOf(keySource, clientKey, signature);
+        if (key is null)
+        {
+            // Sin la cabecera de la clave: el lote de siempre, sin trabajo.
+            return await BatchRunner.PerItem(envelope.Items, readItem, itemErrors, item => process(services, envelope.Message(item), cancellationToken), ${translate}, cancellationToken);
+        }
+        var started = await Start(operation, key, signature, ttlSeconds, body, envelope.Items.Count, cancellationToken);
+        var steps = Steps;
+        if (started.Replay)
+        {
+            // La repetición de un lote terminado: lo guardado, sin procesar nada.
+            return await steps.Stored(started.Id, cancellationToken);
+        }
+        for (var index = started.From; index < envelope.Items.Count; index++)
+        {
+            var step = await steps.Process(started.Id, index, envelope.Items[index], readItem, envelope.Message, itemErrors, process, cancellationToken);
+            if (step == BatchStep.Lost)
+            {
+                // Otra petición con la misma clave tomó el trabajo (D15): lo termina ella.
+                throw new BatchKeyInProgressException(operation, key);
+            }
+            if (step == BatchStep.Stop)
+            {
+                return await steps.Stored(started.Id, cancellationToken);
+            }
+        }
+        await transactions.Run(() => store.Finish(started.Id, BatchJobStatuses.Completed, cancellationToken), readOnly: false, cancellationToken);
+        return await steps.Stored(started.Id, cancellationToken);
+    }`;
+  const atomicMethod = `
+
+    /// <summary>
+    /// Un lote <c>all-or-nothing</c> con clave: como <c>BatchRunner.AllOrNothing</c>, con los resultados, el cursor y el
+    /// final del trabajo en la transacción del lote. Si falla no queda nada confirmado, y su trabajo se descarta en otra: la
+    /// repetición lo vuelve a procesar en vez de devolver un lote que nunca se confirmó.
+    /// </summary>
+    public async Task<AtomicOutcome> AllOrNothing<TItem, TMessage>(
+        string operation,
+        string over,
+        byte[] body,
+        string keySource,
+        string? clientKey,
+        int? ttlSeconds,
+        BatchEnvelope<TItem, TMessage> envelope,
+        Func<JsonElement?, TItem?> readItem,
+        Func<TItem, Task<object?>> process,
+        CancellationToken cancellationToken)
+        where TItem : class
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        ArgumentNullException.ThrowIfNull(envelope);
+        var signature = BatchJobRequests.Signature(body);
+        var key = KeyOf(keySource, clientKey, signature);
+        if (key is null)
+        {
+            // Sin la cabecera de la clave: el lote de siempre, sin trabajo.
+            return await BatchRunner.AllOrNothing(over, envelope.Items, readItem, transactions, process, ${translate}, sink: null, cancellationToken);
+        }
+        var started = await Start(operation, key, signature, ttlSeconds, body, envelope.Items.Count, cancellationToken);
+        if (started.Replay)
+        {
+            // La repetición de un todo o nada confirmado: la respuesta guardada, sin procesar nada.
+            return new AtomicOutcome(await Steps.Stored(started.Id, cancellationToken), null);
+        }
+        var id = started.Id;
+        AtomicOutcome outcome;
+        try
+        {
+            outcome = await BatchRunner.AllOrNothing(over, envelope.Items, readItem, transactions, process, ${translate}, new JobSink(store, id), cancellationToken);
+        }
+        catch (FenceLostException)
+        {
+            // Otra petición con la misma clave tomó el trabajo (D15): lo termina ella.
+            throw new BatchKeyInProgressException(operation, key);
+        }
+        catch
+        {
+            // Un fallo al confirmar no es de ningún elemento, y el lote tampoco quedó confirmado: su trabajo se descarta igual.
+            await Discard(id);
+            throw;
+        }
+        if (outcome.Error is not null)
+        {
+            await Discard(id);
+            return outcome;
+        }
+        return new AtomicOutcome(await Steps.Stored(id, cancellationToken), null);
+    }
+
+    /// <summary>El trabajo de un todo o nada que no se confirmó, fuera, en su transacción: libera la clave. Sin cancelación: la petición puede estar cancelada.</summary>
+    private async Task Discard(Guid id)
+    {
+        await transactions.Run(() => store.Discard(id, CancellationToken.None), readOnly: false, CancellationToken.None);
+    }
+
+    /// <summary>Lo que guarda el todo o nada con clave DENTRO de la transacción del lote: el resultado y el cursor de cada elemento, y el final.</summary>
+    private sealed class JobSink(${BATCH_JOB_STORE_PORT} store, Guid id) : IAtomicSink
+    {
+        public Task Kept(BatchItem item, CancellationToken cancellationToken) => BatchJobSteps.Keep(store, id, item, cancellationToken);
+
+        public async Task Completed(CancellationToken cancellationToken) => await store.Finish(id, BatchJobStatuses.Completed, cancellationToken);
+    }`;
+  return `// Los lotes SÍNCRONOS con clave de idempotencia (DSL 2.30, D15; wire-contract.md § Lotes).
+//
+// No lo edites: lo regenera build.
+
+/// <summary>
+/// La repetición de un lote síncrono con clave mientras el primero sigue en marcha (DSL 2.30, D15): todavía no hay respuesta
+/// que devolver, y procesarlo a la vez lo repartiría entre dos peticiones. Es la semántica de una operación sola con clave.
+/// El code es el que declara cada operación para este desenlace, o el canónico (docs/framework-errors.md).
+/// </summary>
+public sealed class BatchKeyInProgressException(string operation, string key)
+    : ConflictException($"Otra petición con la clave de idempotencia {operation}/{key} está procesando el lote", code: CodeOf(operation), httpStatus: ${canonical.http}, args: [operation, key])
+{
+    private static readonly Dictionary<string, string> Codes = new(StringComparer.Ordinal)
+    {
+${codes.join('\n')}
+    };
+
+    /// <summary>El code de la clave en curso de cada operación: el que declara el diseño para ese desenlace, o el canónico.</summary>
+    public static string CodeOf(string operation) => Codes.TryGetValue(operation, out var code) ? code : ${csString(canonical.code)};
+}
+
+/// <summary>
+/// Los lotes SÍNCRONOS con clave de idempotencia (DSL 2.30, D15): la clave la guarda el TRABAJO (<c>${BATCH_JOB.table}</c>), como en
+/// un lote asíncrono, sin temporizador. La petición crea su trabajo en una transacción propia y procesa cada elemento con
+/// <see cref="BatchJobSteps"/>; la respuesta se rehace siempre de lo guardado, así que es la misma para la primera petición,
+/// la repetición y la que reanuda.
+/// </summary>
+/// <remarks>
+/// La repetición: con la misma firma y el trabajo terminado, la respuesta guardada sin procesar nada; con otra firma, el error
+/// de la clave reutilizada; sin terminar y escrito hace menos de <c>${BATCH_SYNC_STALE.key}</c>, el error de la clave en curso
+/// (409); sin terminar y más viejo, quien lo procesaba murió: lo toma y sigue desde el cursor.
+/// </remarks>
+public sealed class KeyedBatches(
+    IServiceProvider services,
+    IServiceScopeFactory scopes,
+    ${BATCH_JOB_STORE_PORT} store,
+    IUseCaseTransactions transactions,
+    ${BATCH_SETTINGS} settings)
+{${
+    secured
+      ? ''
+      : `
+    /// <summary>El dueño de un lote sin capa security: no hay llamante, y la clave la acota solo la operación.</summary>
+    private const string Owner = ${csString(BATCH_ANONYMOUS_OWNER)};
+`
+  }
+    /// <summary>Los pasos de cada elemento, sobre el almacén y los ámbitos de la petición.</summary>
+    private BatchJobSteps Steps => new(scopes, store);${perItem ? perItemMethod : ''}${atomic ? atomicMethod : ''}
+
+    /// <summary>La clave del lote: la cabecera, o la firma del cuerpo si la clave es el contenido. null: sin clave.</summary>
+    private static string? KeyOf(string keySource, string? clientKey, string signature) => keySource == "payload-hash" ? signature : clientKey;
+
+    /// <summary>El trabajo de la petición: el de la clave, si lo hay, o uno nuevo, en una transacción propia.</summary>
+    private async Task<Started> Start(string operation, string key, string signature, int? ttlSeconds, byte[] body, int total, CancellationToken cancellationToken)
+    {
+        var owner = ${secured ? 'AuditActor.Current()' : 'Owner'};
+        long? ttlMs = ttlSeconds is null ? null : ttlSeconds.Value * 1000L;
+        var input = Encoding.UTF8.GetString(body);
+        try
+        {
+            return await transactions.Run(
+                async () =>
+                {
+                    await store.ReleaseKey(operation, owner, key, cancellationToken);
+                    if (await Repeat(operation, owner, key, signature, cancellationToken) is { } found)
+                    {
+                        return found;
+                    }
+                    var id = Guid.CreateVersion7();
+                    await store.Insert(id, operation, owner, key, signature, ttlMs, input, total, cancellationToken);
+                    return new Started(id, 0, false);
+                },
+                readOnly: false,
+                cancellationToken);
+        }
+        catch (Exception error) when (error is not BatchJobKeyReusedException && error is not BatchKeyInProgressException && error is not OperationCanceledException)
+        {
+            // Dos peticiones con la misma clave a la vez: la que pierde choca con la unicidad del motor y encuentra el trabajo
+            // de la ganadora, en marcha.
+            var found = await transactions.Run(() => Repeat(operation, owner, key, signature, cancellationToken), readOnly: false, cancellationToken);
+            if (found is null)
+            {
+                throw;
+            }
+            return found;
+        }
+    }
+
+    /// <summary>El trabajo vivo de la clave (D15, batchSyncRepeat de keel-core).</summary>
+    private async Task<Started?> Repeat(string operation, string owner, string key, string signature, CancellationToken cancellationToken)
+    {
+        var hit = await store.ByKey(operation, owner, key, cancellationToken);
+        if (hit is null)
+        {
+            return null;
+        }
+        if (hit.Signature != signature)
+        {
+            throw new BatchJobKeyReusedException(operation, key);
+        }
+        var job = await store.Job(hit.Id, cancellationToken);
+        if (job is null)
+        {
+            return null;
+        }
+        if (job.FinishedAt is not null)
+        {
+            return new Started(job.Id, job.Total, Replay: true);
+        }
+        if (!await store.TakeOver(job.Id, settings.SyncStaleMs, cancellationToken))
+        {
+            throw new BatchKeyInProgressException(operation, key);
+        }
+        return new Started(job.Id, job.NextIndex, Replay: false);
+    }
+
+    /// <summary>El trabajo de la petición: su id, desde qué elemento sigue y si ya terminó (la repetición responde lo guardado).</summary>
+    private sealed record Started(Guid Id, int From, bool Replay);
+}`;
+}
+
 
 // ─── El temporizador de cada operación ───────────────────────────────────────────────────────────
 
@@ -1327,19 +1806,26 @@ ${process}
 }
 
 function registrationBody(model) {
-  const handlers = asyncOperations(model).map((operation) => `        services.AddScoped<ITimerHandler, ${batchJobClass(operation)}>();`);
+  const lines = [];
+  if (usesAsyncBatchJobs(model)) {
+    lines.push(
+      '        services.AddScoped<BatchJobs>();',
+      '        services.AddScoped<BatchJobRunner>();',
+      ...asyncOperations(model).map((operation) => `        services.AddScoped<ITimerHandler, ${batchJobClass(operation)}>();`)
+    );
+  }
+  if (usesKeyedBatches(model)) lines.push('        services.AddScoped<KeyedBatches>();');
   return `/// <summary>
-/// Los lotes asíncronos (DSL 2.30) en el contenedor: el alta y las rutas del trabajo, el procesador y un handler del cronómetro
-/// por operación. Los handlers son de la API (leen el sobre con el lector del endpoint y traducen el fallo con el middleware de
-/// errores), así que no los registra AddTimer sino esto, desde Program.cs. BatchSettings lo registra Program.cs con el perfil.
+/// Los lotes con trabajo (DSL 2.30) en el contenedor: el alta y las rutas del trabajo, el procesador y un handler del cronómetro
+/// por operación asíncrona, y los lotes síncronos con clave. Son de la API (leen el sobre con el lector del endpoint y traducen
+/// el fallo con el middleware de errores), así que no los registra AddTimer sino esto, desde Program.cs. BatchSettings lo
+/// registra Program.cs con el perfil.
 /// </summary>
 public static class BatchJobRegistration
 {
     public static IServiceCollection AddBatchJobs(this IServiceCollection services)
     {
-        services.AddScoped<BatchJobs>();
-        services.AddScoped<BatchJobRunner>();
-${handlers.join('\n')}
+${lines.join('\n')}
         return services;
     }
 }`;

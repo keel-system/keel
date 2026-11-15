@@ -15,7 +15,7 @@ import { READ_SCOPE_DESIGNS } from '../../../keel-core/test/helpers/read-scope-d
 import { IDENTITY_DESIGNS } from '../../../keel-core/test/helpers/identity-designs.js';
 import { DATA_LIFECYCLE_DESIGNS } from '../../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { HISTORY_DESIGNS } from '../../../keel-core/test/helpers/history-designs.js';
-import { BATCH_DESIGNS, BATCH_JOB_DESIGNS } from '../../../keel-core/test/helpers/batch-designs.js';
+import { BATCH_DESIGNS, BATCH_JOB_DESIGNS, BATCH_KEY_DESIGNS } from '../../../keel-core/test/helpers/batch-designs.js';
 
 const here = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.join(here, '..', '..', '..');
@@ -215,8 +215,9 @@ export const UNCOVERED_BRANCHES = [
   })),
   // Los lotes (DSL 2.30, PLAN-DSL-230-LOTES.md): los diseños de keel-core/test/helpers/batch-designs.js, los MISMOS que
   // miden keel-spring y keel-nest (por elemento relacional y documental, y todo o nada). Ninguna fixture los declara hasta
-  // el incremento 11. Y los asíncronos (fase B, BATCH_JOB_DESIGNS), desde el incremento 8.
-  ...[...BATCH_DESIGNS, ...BATCH_JOB_DESIGNS].map((design) => ({
+  // el incremento 11. Y los asíncronos (fase B, BATCH_JOB_DESIGNS), desde el incremento 8, y los síncronos con clave
+  // (D15, BATCH_KEY_DESIGNS), desde el 10b.
+  ...[...BATCH_DESIGNS, ...BATCH_JOB_DESIGNS, ...BATCH_KEY_DESIGNS].map((design) => ({
     name: design.name,
     from: design.from,
     mutate(manifest, layers, name) {

@@ -113,10 +113,11 @@ export function usesAuthorship(model) {
 
 /**
  * ¿Se emite el actor? Con autoría y también con historial (DSL 2.29, D5): la entrada lleva su autor aunque las filas no. Y
- * con lotes asíncronos (DSL 2.30, D11): el dueño de un trabajo es este actor.
+ * con lotes con trabajo y capa security (DSL 2.30, D11 y D15): el dueño de un trabajo es este actor. Un lote síncrono con
+ * clave sin security tiene un dueño fijo (BATCH_ANONYMOUS_OWNER), y un asíncrono siempre tiene security.
  */
 export function emitsAuditActor(model) {
-  return usesAuthorship(model) || usesHistory(model) || usesBatchJobs(model);
+  return usesAuthorship(model) || usesHistory(model) || (usesBatchJobs(model) && Boolean(model.layersPresent?.security));
 }
 
 /**

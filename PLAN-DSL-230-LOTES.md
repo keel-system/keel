@@ -1,6 +1,6 @@
 # DSL 2.30: lotes con resultado por elemento (R5)
 
-**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 10 cerrados el 2026-11-14 (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores, con la fase B neutral en keel-core, y el contrato y el método); el 10b (D15, la idempotencia del lote síncrono) tiene hechas la parte neutral y keel-spring (2026-11-15); le siguen keel-nest, keel-dotnet y keel-go. Al cerrar pasa a `completed_plans/`.
+**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 10 cerrados el 2026-11-14 (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores, con la fase B neutral en keel-core, y el contrato y el método); el 10b (D15, la idempotencia del lote síncrono) tiene hechas la parte neutral, keel-spring, keel-nest y keel-dotnet (2026-11-15); le sigue keel-go. Al cerrar pasa a `completed_plans/`.
 
 ## Contexto
 
@@ -553,17 +553,55 @@ Incremento 10b en keel-nest (D15):
   MongoDB; `bk-replay-reprocess` en BK-1, `bk-steal-running` en BK-3, `bk-no-resume` en BK-4 (también en MySQL) y
   `bk-keep-failed` en BK-5, exactamente.
 
+Incremento 10b en keel-dotnet (D15):
+
+- **`KeyedBatches.cs`** (Api/Rest) es el gemelo de los de keel-spring y keel-nest: crea o encuentra el trabajo en una
+  transacción propia (`ReleaseKey`, `ByKey`, `Job`, `TakeOver`), procesa desde el cursor y responde siempre lo guardado.
+  La carrera del alta la arbitra la unicidad del motor; la que pierde encuentra el trabajo en marcha (409 en curso), y una
+  valla perdida a mitad de lote también es el 409 en curso. Sin la cabecera de la clave, el lote de siempre.
+- **`BatchJobs.cs` se partió**: `BatchJobSteps.cs` reúne lo que comparten el procesador asíncrono y el lote con clave (los
+  bytes del cuerpo, su firma y la cabecera, la clave reutilizada, la valla y el paso de UN elemento con tres desenlaces,
+  `BatchStep.Next|Stop|Lost`, y `Stored`, la respuesta de `batchStoredBody`). Cada elemento va en su ÁMBITO, como en el
+  procesador: con el contexto de la petición, la fila que rechaza la unicidad seguiría en el change tracker y la volvería a
+  insertar el elemento siguiente (lo medido con `ba-one-tx` en el inc. 3). `bj-cursor-outside-tx` apunta ahora a
+  `BatchJobSteps.cs`.
+- **El cuerpo llega en bytes** (`BatchJobRequests.Body`) y el lector del sobre los parsea como el del asíncrono: el 400 del
+  sobre de un lote con clave lleva `invalidParams`, como en keel-spring y keel-nest.
+- **El todo o nada con clave** pasa un `IAtomicSink` (`Kept`, `Completed`) a `BatchRunner.AllOrNothing`, que lo llama
+  dentro de la transacción del lote, y `KeyedBatches` descarta el trabajo si falla o si no se confirma. El parámetro va
+  explícito ANTES del `CancellationToken` (CA1068), y el endpoint sin clave pasa `sink: null`.
+- **Lo que se emite solo con clave**: `TakeOver`/`Discard` en el puerto y en los dos almacenes con las sentencias de
+  `batchSyncStatements` tal cual, `SyncStaleMs` en `BatchSettings` y `batch.sync-stale-ms` en `batch.yaml` (línea a línea
+  el de keel-spring y keel-nest, sin `chunk-size` si no hay asíncronos). `usesBatchJobs` significa «almacén de trabajos»;
+  el alta, el procesador, su temporizador y la lectura por páginas de los resultados son de `usesAsyncBatchJobs`. El dueño
+  sin capa security es `BATCH_ANONYMOUS_OWNER`; con ella, `AuditActor` (que solo se emite con security).
+- **Trampa de C#**: `BatchJobRunner` y `KeyedBatches` construyen `BatchJobSteps` en una propiedad y no en un inicializador
+  de campo; un parámetro del constructor primario usado en los dos sitios es CS9124, y el proyecto compila con
+  `TreatWarningsAsErrors`. Por lo mismo, `bk-steal-running` multiplica el umbral por cero en vez de quitarlo (un parámetro
+  sin leer sería CS9113).
+- Red: `test/batch-keys.test.js` (10 casos, contra keel-spring y keel-nest: frontera, casos BK, nota, `batch.yaml`,
+  contrato byte a byte, sentencias tal cual, lo que no se emite sin asíncronos, endpoint, dueño anónimo, frontera de stack y
+  sabotajes aplicables) y un caso más en `batch-jobs.test.js` (un proyecto solo asíncrono no lleva nada de la clave). Los
+  sujetos de `BATCH_KEY_DESIGNS` en `UNCOVERED_BRANCHES` (`cs-syntax`, `uncovered-branches`, `cs-check`), en `db-check`
+  (`catalog-batch-keyed`, `catalog-batch-atomic-keyed`) y en `doc-check` (`catalog-batch-keyed-mongo`) con
+  `scripts/lib/batch-key-probes.js`: un `[Fact]` por caso (`BatchKey_BK4_…`) en la clase de sondas, contando trabajos y
+  resultados como diferencia, y la muerte a mitad de lote es el `CrashingBatchJobStore` de las sondas BJ con `CrashAt = 1`.
+  Medido: BK-1 a BK-5 y BA-* en verde en PostgreSQL (49 sondas) y MySQL (51), y `bk-replay-reprocess` en BK-1,
+  `bk-steal-running` en BK-3, `bk-no-resume` en BK-4 y `bk-keep-failed` en BK-5, exactamente, en los dos motores. MongoDB
+  (`doc-check --only=catalog-batch-keyed-mongo`, 28 sondas) en verde; sus tres sabotajes quedaron lanzados sin leer el
+  resultado: repetirlos (`doc-check --sabotage=bk-replay-reprocess|bk-steal-running|bk-no-resume`) antes de keel-go.
+
 ## Para retomar
 
-Inc. 10b en keel-dotnet y keel-go, uno tras otro desde main (keel-spring y keel-nest hechos). En cada uno: el lote
+Inc. 10b en keel-go, desde main (keel-spring, keel-nest y keel-dotnet hechos). En él: el lote
 síncrono con clave (D15) sobre el almacén de trabajos que ya emite para el asíncrono (`usesBatchJobs` pasa a
 `batchJobStoreOperations`), sin temporizador; la repetición con `batchSyncRepeat` resuelta por `byKey`, `job` y `takeOver` (las de `batchSyncStatements`, con `BATCH_SYNC_STALE` en su configuración);
 el 207 rehecho con `batchStoredBody`; el todo o nada con `discardJob`; `syncIdempotency: true` en su frontera; los sujetos de
 `BATCH_KEY_DESIGNS` en su red (`batch-check` en keel-spring, `db-check`/`doc-check` en los otros) con BK-1 a BK-5 y los
 cuatro `bk-*` cayendo exactamente en sus casos; y su paridad contra los anteriores. La muerte a mitad de lote de la sonda
-no es un error del handler en ninguno de los dos (C# y Go capturan como TypeScript): un almacén que lanza al escribir el
-resultado del segundo elemento, como en keel-nest. El contrato de `BATCH_KEY_DESIGNS` entra en `keel-nest/test/openapi.test.js`
-cuando los cuatro lo generen (hoy lo compara `batch-keys.test.js` solo con keel-spring). Cuando los cuatro lo generen, los
+no es un error del handler (Go captura como TypeScript y C#): un almacén que lanza al escribir el resultado del segundo
+elemento, como en keel-nest y keel-dotnet. El contrato de `BATCH_KEY_DESIGNS` entra en `keel-nest/test/openapi.test.js`
+cuando los cuatro lo generen (hoy lo comparan los `batch-keys.test.js` de keel-nest y keel-dotnet con los anteriores). Cuando los cuatro lo generen, los
 sujetos pasan a `BATCH_DESIGNS`, la huella golden de keel-nest se regenera (`wire-contract.md` cambió) y sigue el inc. 11
 (diseño de contraste y corridas). Las filas de `capability-coverage` de los lotes se borran en el inc. 11.
 

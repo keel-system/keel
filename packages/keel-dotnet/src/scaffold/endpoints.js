@@ -30,7 +30,7 @@ import { callerResolution, securityNamespace } from './security.js';
 import { EXPECTED_VERSIONS, carriesExpectedVersions, readerLine, returnsVersioned } from './conditional-writes.js';
 import { READ_SCOPE_PROPERTY, readScopeStamp } from './read-scope.js';
 import { BATCH_ITEM_COMPONENT } from './batch.js';
-import { batchJobEndpoints, batchJobRouteRows, isAsyncBatch } from './batch-jobs.js';
+import { batchJobEndpoints, batchJobRouteRows, isAsyncBatch, isKeyedBatch } from './batch-jobs.js';
 import { batchSuccessStatus } from '@keel-system/keel-core/gen/batch';
 
 // Los tipos base que en C# son tipos de VALOR: un ausente se escribe `T?` (Nullable<T>), no una referencia nula.
@@ -237,7 +237,7 @@ function renderEndpoint(model, operation, usings) {
     return batchJobEndpoints(model, operation, { doc, usings });
   }
   // Un lote (DSL 2.30) responde BatchResponse (o el error del culpable), no el DTO de la operación.
-  if (operation.batch) return renderBatchEndpoint(model, operation, read, usings);
+  if (operation.batch) return renderBatchEndpoint(model, operation, { read, resolving, callerArg }, usings);
   let statements;
   // La query de historial (DSL 2.29) responde la página de entradas, como cualquier otra respuesta.
   if (operation.responseDto || operation.historyOf) {
@@ -269,7 +269,7 @@ ${statements}
  * de cada uno; el bucle (Batch.cs) los lee, valida y despacha uno a uno. Un lote por elemento responde siempre 207; uno
  * todo o nada, su successStatus o el error del culpable, con el status que lleva.
  */
-function renderBatchEndpoint(model, operation, read, usings) {
+function renderBatchEndpoint(model, operation, { read, resolving, callerArg }, usings) {
   const batch = operation.batch;
   const item = BATCH_ITEM_COMPONENT;
   const dispatch = `Mediator(http).Dispatch(envelope.Message(${item}), http.RequestAborted)`;
@@ -282,7 +282,9 @@ function renderBatchEndpoint(model, operation, read, usings) {
             }`;
   const reader = `ValueReaders.Read${batch.itemType}`;
   const translate = 'error => ApiErrorMiddleware.Translate(http, error)';
-  const head = `${xmlDoc([`${operation.route.method} ${operation.route.path} (${operation.name}).`, operation.description], '    ')}    public static async Task ${csMember(operation.name)}(HttpContext http)
+  const doc = xmlDoc([`${operation.route.method} ${operation.route.path} (${operation.name}).`, operation.description], '    ');
+  if (isKeyedBatch(model, operation)) return renderKeyedBatchEndpoint(model, operation, { doc, resolving, callerArg, process, reader }, usings);
+  const head = `${doc}    public static async Task ${csMember(operation.name)}(HttpContext http)
     {
         var envelope = ${read};`;
   if (batch.atomicity === 'per-item') {
@@ -307,6 +309,66 @@ function renderBatchEndpoint(model, operation, read, usings) {
             http.RequestServices.GetRequiredService<IUseCaseTransactions>(),
             ${process},
             ${translate},
+            sink: null,
+            http.RequestAborted);
+        if (outcome.Error is { } error)
+        {
+            await HttpReply.Json(http, error.Status, error);
+            return;
+        }
+        await HttpReply.Json(http, ${operation.route.status}, outcome.Body);
+    }`;
+}
+
+/**
+ * El endpoint de un lote síncrono con clave (DSL 2.30, D15): los BYTES del cuerpo (su firma es la de la petición), el sobre
+ * leído de ellos como el borde, y KeyedBatches, que guarda la clave y la respuesta en el trabajo. Sin la cabecera de la
+ * clave, KeyedBatches corre el lote de siempre.
+ */
+function renderKeyedBatchEndpoint(model, operation, { doc, resolving, callerArg, process, reader }, usings) {
+  const batch = operation.batch;
+  const idempotency = batch.idempotency;
+  usings.push('Microsoft.Extensions.DependencyInjection');
+  const op = csString(operation.name);
+  const key = `${csString(idempotency.keySource)}, ${idempotency.keySource === 'client-key' ? 'BatchJobRequests.IdempotencyKey(http.Request)' : 'null'}, ${idempotency.ttlSeconds ?? 'null'}`;
+  const head = `${doc}    public static async Task ${csMember(operation.name)}(HttpContext http)
+    {
+        // Lote con clave (DSL 2.30, D15): la repetición responde lo guardado en su trabajo.
+        var body = await BatchJobRequests.Body(http.Request);
+        var envelope = ${resolving ? 'await ' : ''}Read${csMember(operation.name)}(http.Request, body${callerArg});
+        var batches = http.RequestServices.GetRequiredService<KeyedBatches>();`;
+  if (batch.atomicity === 'per-item') {
+    const dispatch = 'services.GetRequiredService<IUseCaseMediator>().Dispatch(message, cancellationToken)';
+    const perItemProcess = batch.resultFields.length > 0
+      ? `static async (services, message, cancellationToken) => await ${dispatch}`
+      : `static async (services, message, cancellationToken) =>
+            {
+                await ${dispatch};
+                return null;
+            }`;
+    return `${head}
+        var response = await batches.PerItem<${batch.itemType}, ${operation.messageClass}>(
+            ${op},
+            body,
+            ${key},
+            envelope,
+            ${reader},
+            [${batch.itemErrors.map(csString).join(', ')}],
+            ${perItemProcess},
+            http.RequestAborted);
+        await HttpReply.Json(http, BatchRunner.MultiStatus, response);
+    }`;
+  }
+  return `${head}
+        // Todo o nada: la transacción del lote la abre KeyedBatches (o el bucle, sin clave), y los despachos se unen a ella.
+        var outcome = await batches.AllOrNothing<${batch.itemType}, ${operation.messageClass}>(
+            ${op},
+            ${csString(batch.over)},
+            body,
+            ${key},
+            envelope,
+            ${reader},
+            ${process},
             http.RequestAborted);
         if (outcome.Error is { } error)
         {
@@ -452,15 +514,18 @@ function renderReader(model, operation, usings) {
   if (conditional) lines.unshift(conditional);
   // Un lote asíncrono (DSL 2.30) lee el sobre de los BYTES que guarda el trabajo, y una cota de la lista incumplida es el 400 del
   // sobre con el mensaje de las restricciones declaradas (invalidParams, el de keel-spring, que lo valida fuera del cuerpo).
+  // Un lote síncrono con clave (D15) también: firma los bytes, y su sobre se lee de ellos con el 400 del asíncrono.
   const asyncBatch = isAsyncBatch(model, operation);
+  const keyedBatch = isKeyedBatch(model, operation);
+  const fromBytes = asyncBatch || keyedBatch;
   if (asBody) {
     lines.push(
-      asyncBatch
+      fromBytes
         ? '        var requestFields = JsonBodyReader.ParseObject(body.Span, required: true);'
         : `        var requestFields = await HttpJsonBody.ReadObject(httpRequest, required: ${bodyRequired});`
     );
     lines.push(...bodyLines);
-    if (bodyChecks.length > 0) lines.push(`        var bodyChecks = new InputViolations(ViolationSource.${asyncBatch ? 'Params' : 'Body'});`, ...bodyChecks, '        bodyChecks.ThrowIfAny();');
+    if (bodyChecks.length > 0) lines.push(`        var bodyChecks = new InputViolations(ViolationSource.${fromBytes ? 'Params' : 'Body'});`, ...bodyChecks, '        bodyChecks.ThrowIfAny();');
   } else {
     lines.push(...queryRequired);
   }
@@ -493,6 +558,20 @@ function renderReader(model, operation, usings) {
     /// </summary>
     public static ${envelope} Read${csMember(operation.name)}(ReadOnlyMemory<byte> body)
     {
+${lines.join('\n')}${lines.length > 0 ? '\n' : ''}        return new ${envelope}(
+            ${localOf(over)} ?? [],
+            ${BATCH_ITEM_COMPONENT} => ${message});
+    }`;
+    }
+    if (keyedBatch) {
+      const returns = resolving ? `async Task<${envelope}>` : envelope;
+      return `    /// <summary>
+    /// Lee el sobre del lote con clave ${operation.route.method} ${operation.route.path} (${operation.name}) de los bytes del cuerpo (su firma es la de la
+    /// petición): los elementos, sin leer, y el mensaje de cada uno.
+    /// </summary>
+    private static ${returns} Read${csMember(operation.name)}(HttpRequest httpRequest, ReadOnlyMemory<byte> body${resolved})
+    {
+        ArgumentNullException.ThrowIfNull(httpRequest);
 ${lines.join('\n')}${lines.length > 0 ? '\n' : ''}        return new ${envelope}(
             ${localOf(over)} ?? [],
             ${BATCH_ITEM_COMPONENT} => ${message});

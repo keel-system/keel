@@ -51,7 +51,11 @@ function batchBody(model) {
     /// del elemento culpable en <c>details</c> (<c>items[7]</c>); sin fallos, el mismo cuerpo que un lote por elemento,
     /// con el <c>successStatus</c> del endpoint.
     /// </summary>
-    /// <remarks>Un fallo AL CONFIRMAR no es de ningún elemento: sale sin índice, por el middleware, como el de cualquier operación.</remarks>
+    /// <remarks>
+    /// Un fallo AL CONFIRMAR no es de ningún elemento: sale sin índice, por el middleware, como el de cualquier operación. Con
+    /// <paramref name="sink"/> (un lote con clave, DSL 2.30, D15), cada resultado y el final del trabajo se guardan dentro de
+    /// la misma transacción: un fallo del sink la revierte entera y sale tal cual.
+    /// </remarks>
     public static async Task<AtomicOutcome> AllOrNothing<T>(
         string over,
         IReadOnlyList<JsonElement> items,
@@ -59,6 +63,7 @@ function batchBody(model) {
         IUseCaseTransactions transactions,
         Func<T, Task<object?>> process,
         Func<Exception, ErrorResponse> translate,
+        IAtomicSink? sink,
         CancellationToken cancellationToken)
         where T : class
     {
@@ -83,9 +88,10 @@ function batchBody(model) {
                         {
                             throw new ItemFailure(index, ErrorResponse.Of(${FW.invalidBody.status}, ${csString(FW.invalidBody.error)}, ValidationError, invalid.Message));
                         }
+                        BatchItem kept;
                         try
                         {
-                            done.Add(BatchItem.Succeeded(index, await process(item)));
+                            kept = BatchItem.Succeeded(index, await process(item));
                         }
                         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                         {
@@ -97,6 +103,15 @@ function batchBody(model) {
                             // traducción de la persistencia mira la cadena de causas y perdería el índice).
                             throw new ItemFailure(index, translate(error));
                         }
+                        done.Add(kept);
+                        if (sink is not null)
+                        {
+                            await sink.Kept(kept, cancellationToken);
+                        }
+                    }
+                    if (sink is not null)
+                    {
+                        await sink.Completed(cancellationToken);
                     }
                     return done;
                 },
@@ -123,7 +138,18 @@ function batchBody(model) {
     ? `
 
 /// <summary>El desenlace de un lote todo o nada: el cuerpo con su successStatus, o el error del elemento culpable.</summary>
-public sealed record AtomicOutcome(BatchResponse? Body, ErrorResponse? Error);`
+public sealed record AtomicOutcome(BatchResponse? Body, ErrorResponse? Error);
+
+/// <summary>
+/// Lo que guarda un lote todo o nada con clave (DSL 2.30, D15) DENTRO de su transacción: el resultado de cada elemento y el
+/// final del trabajo. Si el lote falla, la transacción se lo lleva todo.
+/// </summary>
+public interface IAtomicSink
+{
+    Task Kept(BatchItem item, CancellationToken cancellationToken);
+
+    Task Completed(CancellationToken cancellationToken);
+}`
     : '';
   return `// El bucle de los lotes con resultado por elemento (DSL 2.30, wire-contract.md § Lotes). El handler de la operación
 // procesa UN elemento; esto lo llama una vez por elemento, en orden de índice y sin paralelismo, y compone la respuesta.

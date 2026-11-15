@@ -10,7 +10,7 @@
 
 import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
 import { csFile, csMember, csString, declType, fieldUsings, located, namespaceOf, xmlDoc } from './render.js';
-import { usesBatchJobs } from './batch-jobs.js';
+import { usesAsyncBatchJobs } from './batch-jobs.js';
 
 export function generate(model) {
   const files = [];
@@ -32,7 +32,7 @@ export function generate(model) {
   }
   if (model.hasFileUploads) files.push(file(model, 'FileUpload', fileUploadBody()));
   // Los resultados de un trabajo de un lote asíncrono (DSL 2.30) viajan con el mismo sobre de página.
-  if (paginated || usesBatchJobs(model)) files.push(file(model, 'PagedResponse', pagedResponseBody(), ['System.Text.Json.Serialization']));
+  if (paginated || usesAsyncBatchJobs(model)) files.push(file(model, 'PagedResponse', pagedResponseBody(), ['System.Text.Json.Serialization']));
   return files;
 }
 

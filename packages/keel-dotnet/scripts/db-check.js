@@ -77,6 +77,10 @@
 // Y los de los lotes asíncronos (DSL 2.30, fase B), sobre catalog-batch-async (sin --only, ese): verde = cada uno cae en
 // EXACTAMENTE sus casos BJ (scripts/lib/batch-job-probes.js):
 //   bj-no-resume  bj-cursor-outside-tx  bj-foreign-reader
+// Y los de los lotes síncronos con clave (DSL 2.30, D15), sobre catalog-batch-keyed (bk-keep-failed, sobre
+// catalog-batch-atomic-keyed; sin --only, ese): verde = cada uno cae en EXACTAMENTE sus casos BK
+// (scripts/lib/batch-key-probes.js):
+//   bk-replay-reprocess  bk-steal-running  bk-no-resume  bk-keep-failed
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -99,6 +103,7 @@ import { LIFECYCLE_SABOTAGE_SPECS, LIFECYCLE_SUBJECTS, isLifecycleSabotage, life
 import { HISTORY_SABOTAGE_SPECS, HISTORY_SUBJECTS, isHistorySabotage, historySabotageVerdict } from './lib/history-probes.js';
 import { BATCH_SABOTAGE_SPECS, BATCH_SUBJECTS, batchProbePatch, batchSabotageVerdict, isBatchSabotage } from './lib/batch-probes.js';
 import { BATCH_JOB_SABOTAGE_SPECS, BATCH_JOB_SUBJECTS, batchJobSabotageVerdict, isBatchJobSabotage } from './lib/batch-job-probes.js';
+import { BATCH_KEY_SABOTAGE_SPECS, BATCH_KEY_SUBJECTS, batchKeySabotageVerdict, isBatchKeySabotage } from './lib/batch-key-probes.js';
 import { resolveRuntime, startDatabase, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const args = process.argv.slice(2);
@@ -208,7 +213,10 @@ const SABOTAGES = {
   // Los lotes (DSL 2.30): sobre catalog-batch y catalog-batch-atomic, cada uno cae en exactamente sus casos BA.
   ...Object.fromEntries(Object.entries(BATCH_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational])),
   // Los lotes asíncronos (DSL 2.30, fase B): sobre catalog-batch-async, cada uno cae en exactamente sus casos BJ.
-  ...Object.fromEntries(Object.entries(BATCH_JOB_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
+  ...Object.fromEntries(Object.entries(BATCH_JOB_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational])),
+  // Los lotes síncronos con clave (DSL 2.30, D15): sobre catalog-batch-keyed o catalog-batch-atomic-keyed, cada uno cae en
+  // exactamente sus casos BK.
+  ...Object.fromEntries(Object.entries(BATCH_KEY_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
 };
 
 /** El sabotaje para un motor: [sufijo, texto, sustituto], o null si no aplica a ese motor. */
@@ -267,7 +275,9 @@ const DERIVED = {
   // Los lotes (DSL 2.30): BA-1 a BA-7 (scripts/lib/batch-probes.js).
   ...Object.assign({}, ...BATCH_SUBJECTS.relational.map((name) => uncoveredBranch(name))),
   // Los lotes asíncronos (DSL 2.30, fase B): BJ-1 a BJ-9 (scripts/lib/batch-job-probes.js).
-  ...Object.assign({}, ...BATCH_JOB_SUBJECTS.relational.map((name) => uncoveredBranch(name)))
+  ...Object.assign({}, ...BATCH_JOB_SUBJECTS.relational.map((name) => uncoveredBranch(name))),
+  // Los lotes síncronos con clave (DSL 2.30, D15): BK-1 a BK-5 (scripts/lib/batch-key-probes.js).
+  ...Object.assign({}, ...BATCH_KEY_SUBJECTS.relational.map((name) => uncoveredBranch(name)))
 };
 
 function uncoveredBranch(name) {
@@ -281,6 +291,8 @@ const SUBJECTS = only
     ? BATCH_SUBJECTS.relational
   : isBatchJobSabotage(sabotage)
     ? BATCH_JOB_SUBJECTS.relational
+  : isBatchKeySabotage(sabotage)
+    ? [sabotage === 'bk-keep-failed' ? 'catalog-batch-atomic-keyed' : 'catalog-batch-keyed']
   : isHistorySabotage(sabotage)
     ? HISTORY_SUBJECTS.relational
     : isLifecycleSabotage(sabotage)
@@ -393,6 +405,11 @@ async function checkEngine(engine) {
       // Con el espacio delante: `Catalog.DbProbes.` es subcadena de `ProductCatalog.DbProbes.`.
       const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
       const ran = tested.output.includes(`${subject.probes.name}.dll`);
+      if (isBatchKeySabotage(sabotage)) {
+        const verdict = batchKeySabotageVerdict(mine, sabotage, subject.model);
+        step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+        continue;
+      }
       if (isBatchJobSabotage(sabotage)) {
         const verdict = batchJobSabotageVerdict(mine, sabotage);
         step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);

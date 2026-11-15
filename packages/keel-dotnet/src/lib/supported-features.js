@@ -71,10 +71,10 @@ export function checkSupportedFeatures(manifest, layers) {
   // (PermitAll y CallerIdentity.ResolveOptional()), salvo sobre una identidad que no es un token: la frontera neutral.
   errors.push(...optionalAuthFrontierErrors(layers, 'keel-dotnet'));
   // Los lotes con resultado por elemento (DSL 2.30: use-cases.<op>.batch): sync (scaffold/batch.js) y async
-  // (scaffold/batch-jobs.js) se generan enteros; lo que depende del stack lo rechaza planService (batchJobStackErrors), y
-  // la idempotencia del lote síncrono entero no la genera nadie todavía.
+  // (scaffold/batch-jobs.js) se generan enteros, también la idempotencia del lote síncrono (D15, KeyedBatches); lo que
+  // depende del stack lo rechaza planService (batchJobStackErrors).
   errors.push(...batchPendingErrors(layers, 'keel-dotnet', { syncIncrement: null, asyncIncrement: null }));
-  errors.push(...batchFrontierErrors(layers, 'keel-dotnet'));
+  errors.push(...batchFrontierErrors(layers, 'keel-dotnet', { syncIdempotency: true }));
   // El historial de cambios consultable (DSL 2.29: audit.history y output: { history }) se genera entero
   // (scaffold/history.js); lo que depende del motor elegido lo rechaza planService (historyStackErrors).
   // El ciclo de vida del dato (DSL 2.28: personal, deletion: logical, restorableFor, retention) se genera entero
