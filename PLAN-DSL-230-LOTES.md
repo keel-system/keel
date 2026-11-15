@@ -1,6 +1,6 @@
 # DSL 2.30: lotes con resultado por elemento (R5)
 
-**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 10 cerrados el 2026-11-14 (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores, con la fase B neutral en keel-core, y el contrato y el método); el siguiente es el 10b (idempotencia del lote síncrono, D13). Al cerrar pasa a `completed_plans/`.
+**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 10 cerrados el 2026-11-14 (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores, con la fase B neutral en keel-core, y el contrato y el método); el 10b va por la parte neutral (D15, la idempotencia del lote síncrono); le siguen los cuatro generadores. Al cerrar pasa a `completed_plans/`.
 
 ## Contexto
 
@@ -58,7 +58,7 @@ La forma en el cable la fija `wire-contract.md` § Lotes (es del método, no de 
              { "index": 7, "status": "failed", "result": null, "error": "SKU_ALREADY_EXISTS", "message": "…" } ] }
 ```
 
-## Decisiones (D1-D12)
+## Decisiones (D1-D15)
 
 | # | Decisión | Por qué |
 |---|---|---|
@@ -75,6 +75,7 @@ La forma en el cable la fija `wire-contract.md` § Lotes (es del método, no de 
 | D11 | Acceso: las rutas del trabajo exigen la misma regla de `security` que la operación, y solo las lee **quien lo creó** (el `sub` del llamante, como `authorship`). Otro llamante recibe 404 | Una URL de resultados no debe ser una fuga entre inquilinos. Es lo que hace 2.27 con `readMiss: not-found` |
 | D12 | Eventos: cada elemento confirmado publica lo que publicaría la operación sola. El lote **no** publica un evento propio en esta versión | Un «lote completado» sería sintaxis nueva sin un consumidor que lo pida |
 | D13 | **Idempotencia del lote (decidida el 2026-11-14).** En `async`, la clave (`client-key` o `payload-hash`) es una columna de `batch_job`, única por (operación, dueño, clave): la repetición responde el MISMO 202 con el mismo `Location` y el trabajo en el estado en que esté (no un 409 mientras corre); la misma clave con otro contenido es `IDEMPOTENCY_KEY_REUSED`, como en una operación sola, y `ttlSeconds` acota cuánto vale la clave (pasada la ventana, la libera el siguiente alta). `payload-field` y `partitionBy` siguen rechazados en un lote. En `sync`, la repetición devuelve el 207 entero guardado en el registro de idempotencia: entra tras la fase B en los cuatro, medida con BA-8 | Es el reintento que más daño hace en un lote (un corte de red tras 500 altas). En `async` el trabajo ya es la respuesta: guardar la clave en él es casi gratis, y la tabla se diseña con ella desde el principio |
+| D15 | **Idempotencia del lote `sync` (decidida el 2026-11-15).** La guarda el TRABAJO, como en `async`: un lote síncrono con clave crea su fila en `batch_job` (en una transacción propia, sin temporizador) y cada elemento escribe su efecto, el avance del cursor (la valla) y su resultado en SU transacción; al terminar, `finish`. La respuesta se rehace siempre de lo guardado (`batchStoredBody`), así que es la misma para la primera petición, la repetición y la que reanuda. La repetición: misma firma y terminado, la respuesta guardada; otra firma, `IDEMPOTENCY_KEY_REUSED`; sin terminar y escrito hace menos de `batch.sync-stale-ms` (60 s), **409 `IDEMPOTENCY_KEY_IN_PROGRESS`**; sin terminar y más viejo, lo toma (`takeOver`, con la hora del motor) y sigue desde el cursor. El todo o nada con clave procesa en la transacción del lote y, si falla, borra su trabajo en otra (`discardJob`): la repetición lo vuelve a procesar. Sin capa `security`, el dueño es `BATCH_ANONYMOUS_OWNER` y la clave la acota la operación | Reutiliza las tablas, las sentencias, la valla, la ventana, la clave reutilizada y la purga ya medidas en los cuatro, en vez de cambiar la forma de `idempotency_record` (ya desplegada). Y gana algo que el registro no daba: un reintento tras un corte a mitad de lote reanuda en vez de reprocesar. El 409 en curso es la semántica de una operación sola con clave |
 | D14 | `async` solo con `atomicity: per-item` (`CHK-USECASES-BATCH-ASYNC-ATOMIC`) | Un trabajo por chunks no cabe en una transacción: el todo o nada de un lote de minutos sería una transacción de minutos, que el tope de transacción mata. Spring Batch tampoco lo hace. Un lote todo o nada grande se parte en lotes `sync` |
 
 **Fuera de la 2.30:** subir un CSV o un archivo (R13, el lote viaja como JSON), paralelismo dentro de un lote,
@@ -468,15 +469,38 @@ Incremento 10 (contrato y método):
 - **D13 en `sync` (BA-8) tenía que entrar «tras la fase B» y no tenía incremento**: pasa a ser el 10b, antes de las corridas,
   para que estas midan la 2.30 sin un hueco conocido.
 
+Incremento 10b, parte neutral (keel-core, D15):
+
+- **El modelo**: un lote con `idempotency` no la lleva en la operación en NINGÚN modo (`operation.idempotency` null), sino en
+  `batch.idempotency`; así ningún generador monta `idempotency_record` para un lote síncrono.
+  `keyedSyncBatchOperations` y `batchJobStoreOperations` (los asíncronos y los síncronos con clave) dicen quién usa
+  `batch_job`, y su purga entra en el cronómetro también sin lotes asíncronos (`generatorPurges`).
+- **Las referencias**: `batchSyncRepeat` (create, reused, replay, in-progress, resume) y `batchStoredBody` (el 207 rehecho de
+  lo guardado, el mismo que `batchResponse` también tras un corte y una reanudación). La nota del handler gana «Lote con
+  clave». La cláusula del contrato lo cuenta sin nombrar el `code` del 409, que el diseño puede sustituir; el 409 en curso y
+  el de la clave reutilizada ya salían en el contrato.
+- **Las sentencias**: `batchSyncStatements(engine)`, aparte de las del asíncrono para que un proyecto sin lotes síncronos con
+  clave no las lleve: `takeOver` (toma un lote sin terminar que nadie escribe desde hace más de `:staleMs`, con la hora del
+  motor) y `discardJob` (el todo o nada que falla). El umbral es `BATCH_SYNC_STALE` (`batch.sync-stale-ms`, 60 s), también
+  fuera de `BATCH_PARAMETERS` por lo mismo. Medidas en
+  `timer-sql-check` (`lote-toma`, `lote-descarte`; 54 pasos) con los sabotajes `batch-takeover-live` y
+  `batch-discard-finished`.
+- **La frontera**: `batchFrontierErrors(layers, generador, { syncIdempotency })` sigue rechazando la clave del lote síncrono
+  (mensaje con D15) hasta que cada generador pasa `true`.
+- **Casos y sujetos**: BA-8 remite a `BATCH_KEY_CASES` (BK-1 a BK-5) y `BATCH_KEY_SABOTAGES` (`bk-replay-reprocess`,
+  `bk-steal-running`, `bk-no-resume`, `bk-keep-failed`); sujetos en `BATCH_KEY_DESIGNS` (`catalog-batch-keyed`, `-mongo` y
+  `catalog-batch-atomic-keyed`, sin capa security: dueño `BATCH_ANONYMOUS_OWNER`).
+
 ## Para retomar
 
-Inc. 10b, idempotencia del lote síncrono (D13): con `idempotency` (`client-key` o `payload-hash`) en un lote `sync`, la
-repetición devuelve el 207 entero guardado sin volver a procesarlo, la misma clave con otro cuerpo es
-`IDEMPOTENCY_KEY_REUSED`, y `batchFrontierErrors` deja de rechazarla. Primero lo neutral en keel-core (dónde se guarda la
-respuesta: el registro de idempotencia que ya existe o una columna nueva; BA-8 y su sabotaje), después los cuatro
-generadores en orden, cada uno con BA-8 en su red. Después, el inc. 11 (diseño de contraste y corridas). La huella golden
-de keel-nest sigue atrasada desde antes de la 2.30 (`npm run golden --workspace packages/keel-nest -- --check`): va en su
-propio commit. Las filas de `capability-coverage` de los lotes se borran en el inc. 11.
+Inc. 10b en los generadores, uno tras otro desde main (keel-spring, keel-nest, keel-dotnet, keel-go). En cada uno: el lote
+síncrono con clave (D15) sobre el almacén de trabajos que ya emite para el asíncrono (`usesBatchJobs` pasa a
+`batchJobStoreOperations`), sin temporizador; la repetición con `batchSyncRepeat` resuelta por `byKey`, `job` y `takeOver` (las de `batchSyncStatements`, con `BATCH_SYNC_STALE` en su configuración);
+el 207 rehecho con `batchStoredBody`; el todo o nada con `discardJob`; `syncIdempotency: true` en su frontera; los sujetos de
+`BATCH_KEY_DESIGNS` en su red (`batch-check` en keel-spring, `db-check`/`doc-check` en los otros) con BK-1 a BK-5 y los
+cuatro `bk-*` cayendo exactamente en sus casos; y su paridad contra los anteriores. Cuando los cuatro lo generen, los
+sujetos pasan a `BATCH_DESIGNS`, la huella golden de keel-nest se regenera (`wire-contract.md` cambió) y sigue el inc. 11
+(diseño de contraste y corridas). Las filas de `capability-coverage` de los lotes se borran en el inc. 11.
 
 ## Verificación
 

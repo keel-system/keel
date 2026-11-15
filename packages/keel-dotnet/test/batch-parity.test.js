@@ -59,7 +59,7 @@ test('la frontera: async ya no se rechaza (inc. 8) y la idempotencia del lote sÃ
   const idempotent = load('catalog-batch', (layers) => {
     layers['use-cases'].operations.importProducts.idempotency = { keySource: 'client-key', ttlSeconds: 3600 };
   });
-  assert.match(checkSupportedFeatures(idempotent.manifest, idempotent.layers).errors.join('\n'), /importProducts\.batch con idempotency \(DSL 2\.30, D5\): keel-dotnet/);
+  assert.match(checkSupportedFeatures(idempotent.manifest, idempotent.layers).errors.join('\n'), /importProducts\.batch con idempotency \(DSL 2\.30, D15\): keel-dotnet/);
 });
 
 test('el handler procesa UN elemento: el mensaje lleva el elemento y devuelve el ItemResult, con la MISMA nota que keel-spring y keel-nest', () => {

@@ -12,7 +12,7 @@ import { buildModel } from '../src/lib/gen/model.js';
 import { STACK_DEFAULTS } from '../src/lib/gen/infra-catalog.js';
 import { FRAMEWORK_ERRORS } from '../src/lib/framework-errors.js';
 import { WIRE_BATCH_CASES, WIRE_BATCH_JOB_CASES, WIRE_RULES, WIRE_SHAPES } from '../src/lib/gen/wire.js';
-import { BATCH_ITEM_RESULT, BATCH_JOB, BATCH_JOB_STATUSES } from '../src/lib/gen/batch-store.js';
+import { BATCH_ITEM_RESULT, BATCH_JOB, BATCH_JOB_STATUSES, BATCH_SYNC_STALE, batchSyncStatements } from '../src/lib/gen/batch-store.js';
 import { GENERATOR_TABLES, schemaStepSql } from '../src/lib/gen/schema-steps.js';
 import { batchTimers, generatorPurges, usesTimer } from '../src/lib/gen/timer-plan.js';
 import { openapiDocument } from '../src/lib/gen/openapi.js';
@@ -22,6 +22,12 @@ import {
   BATCH_ITEM_STATUSES,
   BATCH_JOB_CASES,
   BATCH_JOB_SABOTAGES,
+  BATCH_KEY_CASES,
+  BATCH_KEY_SABOTAGES,
+  batchJobStoreOperations,
+  batchStoredBody,
+  batchSyncRepeat,
+  keyedSyncBatchOperations,
   BATCH_SABOTAGES,
   batchContractClause,
   batchItem,
@@ -42,7 +48,7 @@ import {
 } from '../src/lib/gen/batch.js';
 import { registryOperations } from '../src/lib/gen/request-idempotency.js';
 import { idempotencyOutcomeCodes } from '../src/lib/gen/declared-errors.js';
-import { BATCH_DESIGNS, BATCH_JOB_DESIGNS } from './helpers/batch-designs.js';
+import { BATCH_DESIGNS, BATCH_JOB_DESIGNS, BATCH_KEY_DESIGNS } from './helpers/batch-designs.js';
 import { PROBE } from './helpers/probe-projection.js';
 
 const FIXTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'fixtures', 'designs');
@@ -177,13 +183,17 @@ test('la frontera de los generadores: el mismo mensaje en los cuatro, por modo',
   assert.deepEqual(batchPendingErrors(designOf('product-catalog').layers, 'keel-go', { syncIncrement: 4, asyncIncrement: 9 }), []);
 });
 
-test('la idempotencia del lote entero (D5) se rechaza en los cuatro con el mismo mensaje, y solo en el lote que la declara', () => {
+test('la idempotencia del lote síncrono (D15) se rechaza con el mismo mensaje hasta que el generador la genera, y solo en el lote que la declara', () => {
   const { layers } = derived('catalog-batch');
   assert.deepEqual(batchFrontierErrors(layers, 'keel-spring'), []);
   layers['use-cases'].operations.importProducts.idempotency = { keySource: 'client-key', ttlSeconds: 3600 };
   const [message] = batchFrontierErrors(layers, 'keel-go');
-  assert.match(message, /^use-cases: importProducts\.batch con idempotency \(DSL 2\.30, D5\): keel-go todavía no genera/);
+  assert.match(message, /^use-cases: importProducts\.batch con idempotency \(DSL 2\.30, D15\): keel-go todavía no genera/);
   assert.equal(batchFrontierErrors(layers, 'keel-go').length, 1, 'createProduct declara idempotency y no es un lote');
+  assert.deepEqual(batchFrontierErrors(layers, 'keel-go', { syncIdempotency: true }), []);
+  // payload-field sigue fuera aunque el generador genere la clave del lote síncrono.
+  layers['use-cases'].operations.importProducts.idempotency = { keySource: 'payload-field', keyField: 'items' };
+  assert.match(batchFrontierErrors(layers, 'keel-go', { syncIdempotency: true }).join('\n'), /payload-field y partitionBy/);
 });
 
 test('la cláusula del contrato: qué falla solo su elemento y qué detiene el lote, o que no queda nada confirmado', () => {
@@ -352,4 +362,112 @@ test('los casos de la fase B y sus sabotajes: ids únicos, y cada sabotaje cae e
     assert.match(sabotage, /^bj-/);
     for (const id of cases) assert.ok(ids.includes(id), `${sabotage}: ${id}`);
   }
+});
+
+// ─── La idempotencia del lote síncrono (D15, inc. 10b) ───────────────────────
+
+const derivedKeyed = (name, then = null) => {
+  const design = BATCH_KEY_DESIGNS.find((entry) => entry.name === name);
+  return designOf(design.from, (layers) => {
+    design.mutate(layers);
+    then?.(layers);
+  });
+};
+
+test('los sujetos con clave validan sin errores ni hallazgos de los lotes', () => {
+  for (const design of BATCH_KEY_DESIGNS) {
+    const { manifest, layers } = derivedKeyed(design.name);
+    const result = checkCrossRefs({ layers, manifest });
+    assert.deepEqual(result.errors, [], design.name);
+    assert.deepEqual(idsOf(result).filter((id) => BATCH_IDS.test(id)), [], design.name);
+  }
+});
+
+test('D15: la clave del lote síncrono la lleva su lote y la guarda el trabajo, con su purga y sin temporizador', () => {
+  const { model } = derivedKeyed('catalog-batch-keyed');
+  const operation = operationOf(model, 'importProducts');
+  assert.equal(operation.idempotency, null);
+  assert.deepEqual(operation.batch.idempotency, { keySource: 'client-key', ttlSeconds: 86400 });
+  assert.equal(registryOperations(model).some((candidate) => candidate.name === 'importProducts'), false);
+  assert.deepEqual(keyedSyncBatchOperations(model).map(({ operation: name }) => name), ['importProducts']);
+  assert.deepEqual(batchJobStoreOperations(model).map(({ operation: name }) => name), ['importProducts']);
+  assert.deepEqual(batchTimers(model), [], 'un lote síncrono no se procesa por el cronómetro');
+  assert.ok(generatorPurges(model).some((purge) => purge.table === BATCH_JOB.table), 'pero sus trabajos se purgan');
+  // La purga va por el cronómetro del motor que el generador elige (el modelo de estas pruebas no lleva stack).
+  assert.equal(usesTimer({ ...model, stack: { database: 'postgresql' } }), true);
+  // Sin clave, un lote síncrono no usa el almacén.
+  assert.deepEqual(batchJobStoreOperations(derived('catalog-batch').model), []);
+});
+
+test('D15, la repetición: create, reused, replay, in-progress y resume, con la hora del motor', () => {
+  const now = 1_000_000;
+  const staleMs = BATCH_SYNC_STALE.default;
+  const row = (over) => ({ signature: 'f1', keyExpiresAt: null, finishedAt: null, updatedAt: now - 1000, ...over });
+  assert.equal(batchSyncRepeat(null, 'f1', now, staleMs), 'create');
+  assert.equal(batchSyncRepeat(row({ keyExpiresAt: now - 1 }), 'f1', now, staleMs), 'create');
+  assert.equal(batchSyncRepeat(row(), 'f2', now, staleMs), 'reused');
+  assert.equal(batchSyncRepeat(row({ finishedAt: now - 5 }), 'f1', now, staleMs), 'replay');
+  assert.equal(batchSyncRepeat(row(), 'f1', now, staleMs), 'in-progress');
+  assert.equal(batchSyncRepeat(row({ updatedAt: now - staleMs }), 'f1', now, staleMs), 'resume');
+});
+
+test('D15, el 207 rehecho desde lo guardado es el mismo que da batchResponse, también si se detuvo o se reanudó', () => {
+  const plan = operationOf(derived('catalog-batch').model, 'importProducts').batch;
+  const outcomes = [
+    { ok: true, result: { productId: 'p-0' } },
+    { ok: false, code: 'SKU_ALREADY_EXISTS', message: 'repetido' },
+    { ok: true, result: { productId: 'p-2' } },
+    { ok: false, code: null },
+    { ok: true, result: { productId: 'p-4' } }
+  ];
+  const expected = batchResponse(plan, outcomes).body;
+  // El lote como lo procesa el síncrono con clave: un chunk del tamaño del lote, cortado a mitad y reanudado desde el cursor.
+  let job = newBatchJob(outcomes.length);
+  job = runBatchChunk(job, { plan, outcomeOf: (index) => outcomes[index], chunkSize: outcomes.length, crashAfter: 2 }).state;
+  job = runBatchChunk(job, { plan, outcomeOf: (index) => outcomes[index], chunkSize: outcomes.length }).state;
+  assert.equal(job.status, 'aborted');
+  assert.deepEqual(batchStoredBody(job, [...job.results].reverse()), expected);
+  // Sin fallos que detengan: completed y sin notAttempted.
+  const clean = outcomes.slice(0, 3);
+  const done = runBatchChunk(newBatchJob(3), { plan, outcomeOf: (index) => clean[index], chunkSize: 3 }).state;
+  assert.deepEqual(batchStoredBody(done, done.results), batchResponse(plan, clean).body);
+});
+
+test('D15, el contrato: la cláusula lo cuenta, y el lote con clave responde el 409 en curso y el de la clave reutilizada', () => {
+  for (const name of ['catalog-batch-keyed', 'catalog-batch-atomic-keyed']) {
+    const { model } = derivedKeyed(name);
+    const operation = operationOf(model, 'importProducts');
+    assert.match(batchContractClause(operation.batch), /Con idempotency, repetir la clave/, name);
+    assert.match(batchContractClause(operation.batch), /Mientras el primero sigue en marcha, responde 409/, name);
+    const document = openapiDocument(model);
+    const op = Object.values(document.paths).flatMap((methods) => Object.values(methods)).find((candidate) => candidate.operationId === 'importProducts');
+    const errors = Object.entries(op.responses).filter(([status]) => Number(status) >= 400).map(([, response]) => response.description).join('\n');
+    assert.match(errors, /IDEMPOTENCY_KEY_IN_PROGRESS/, name);
+    assert.match(errors, /IDEMPOTENCY_KEY_REUSED/, name);
+  }
+  assert.doesNotMatch(batchContractClause(operationOf(derived('catalog-batch').model, 'importProducts').batch), /idempotency/);
+});
+
+test('D15, las sentencias: la toma de un lote muerto y el descarte del todo o nada, en los dos motores', () => {
+  for (const engine of ['postgresql', 'mysql']) {
+    const statements = batchSyncStatements(engine);
+    assert.match(statements.takeOver, /finished_at IS NULL AND updated_at <= /, engine);
+    assert.equal(statements.discardJob, 'DELETE FROM batch_job WHERE id = :id AND finished_at IS NULL', engine);
+  }
+});
+
+test('los casos de la clave y sus sabotajes: ids únicos, y cada sabotaje cae en casos que existen', () => {
+  const ids = BATCH_KEY_CASES.map((entry) => entry.id);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const [sabotage, cases] of Object.entries(BATCH_KEY_SABOTAGES)) {
+    assert.match(sabotage, /^bk-/);
+    for (const id of cases) assert.ok(ids.includes(id), `${sabotage}: ${id}`);
+  }
+});
+
+test('D15, la nota: el handler sabe que la repetición no le llega', () => {
+  const keyed = operationOf(derivedKeyed('catalog-batch-keyed').model, 'importProducts').batch;
+  assert.ok(batchNote(keyed).some((line) => /^Lote con clave: la repetición la resuelve el generador/.test(line)));
+  const plain = operationOf(derived('catalog-batch').model, 'importProducts').batch;
+  assert.ok(!batchNote(plain).some((line) => /^Lote con clave/.test(line)));
 });

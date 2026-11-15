@@ -56,7 +56,7 @@ test('la frontera: la idempotencia del lote síncrono entero no la genera nadie 
   const idempotent = load('catalog-batch', (layers) => {
     layers['use-cases'].operations.importProducts.idempotency = { keySource: 'client-key', ttlSeconds: 3600 };
   });
-  assert.match(checkSupportedFeatures(idempotent.manifest, idempotent.layers).errors.join('\n'), /importProducts\.batch con idempotency \(DSL 2\.30, D5\): keel-spring/);
+  assert.match(checkSupportedFeatures(idempotent.manifest, idempotent.layers).errors.join('\n'), /importProducts\.batch con idempotency \(DSL 2\.30, D15\): keel-spring/);
 });
 
 test('el handler procesa UN elemento: su mensaje lleva el elemento y devuelve el ItemResult, con la nota neutral', () => {

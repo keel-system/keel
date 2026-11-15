@@ -141,6 +141,11 @@ de la respuesta: la operación lleva `output: void`, y cada elemento con éxito 
   confirmado y lo siguiente sale `notAttempted`, que es lo que el cliente tiene que reenviar.
 - Son un `400` del lote entero, sin procesar ningún elemento, solo el sobre: el campo que se recorre ausente o con más
   elementos que su `maxItems`.
+- Con `idempotency`, repetir la clave devuelve la **misma respuesta** sin volver a procesar el lote, rehecha de lo que se
+  guardó elemento a elemento. Si el primero se cortó a mitad, la repetición sigue desde el último elemento confirmado y
+  su `207` los cuenta todos. Mientras el primero sigue en marcha, la repetición recibe el `409` de la clave en curso
+  (`IDEMPOTENCY_KEY_IN_PROGRESS` o el que declare el diseño), y la misma clave con otro cuerpo, el de la clave
+  reutilizada. Un lote `all-or-nothing` que falló no se guarda: repetirlo lo vuelve a procesar.
 
 ### Lotes asíncronos
 

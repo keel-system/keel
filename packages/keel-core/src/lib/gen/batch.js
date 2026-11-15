@@ -5,7 +5,7 @@
 // del input se recorre, qué fallo es solo de su elemento y cuál detiene el lote, y la respuesta que sale de una serie de
 // desenlaces. El bucle lo emite cada generador; el handler de la operación procesa UN elemento, como con el historial.
 // Primero desde las capas (lo que leen las reglas de `crossrefs.js`) y después desde el modelo.
-// Origen y decisiones (D1-D12): PLAN-DSL-230-LOTES.md. La semántica es la de Spring Batch —skip, commit interval y
+// Origen y decisiones (D1-D15): PLAN-DSL-230-LOTES.md. La semántica es la de Spring Batch —skip, commit interval y
 // reanudación—, sin la librería.
 
 import { createHash } from 'node:crypto';
@@ -233,6 +233,35 @@ export function batchJobRepeat(existing, signature, now) {
   return existing.signature === signature ? 'same' : 'reused';
 }
 
+/**
+ * Qué hace un lote SÍNCRONO con clave ante ella (D15): `create` si no hay trabajo vivo con ella (ninguno, o su ventana
+ * pasó); `reused` si lo hay con otra firma (IDEMPOTENCY_KEY_REUSED); `replay` si terminó (la respuesta guardada, sin
+ * procesar nada); `in-progress` si sigue en marcha —su última escritura es más reciente que `staleMs`: 409
+ * IDEMPOTENCY_KEY_IN_PROGRESS—; y `resume` si quien lo procesaba murió a mitad: lo toma y sigue desde el cursor, y la
+ * valla protege si en realidad seguía vivo. `existing` es `{ signature, keyExpiresAt, finishedAt, updatedAt }` o null y
+ * `now` la hora del motor; en SQL, la frontera entre `in-progress` y `resume` la traza `takeOver` con la hora del motor.
+ */
+export function batchSyncRepeat(existing, signature, now, staleMs) {
+  const repeat = batchJobRepeat(existing, signature, now);
+  if (repeat !== 'same') return repeat;
+  if (existing.finishedAt !== null && existing.finishedAt !== undefined) return 'replay';
+  return existing.updatedAt <= now - staleMs ? 'resume' : 'in-progress';
+}
+
+/**
+ * El cuerpo de un lote síncrono con clave, rehecho desde lo guardado (D15): los resultados escritos, en orden de índice, y,
+ * si el trabajo se detuvo (aborted), un `notAttempted` por cada elemento desde el cursor. Es el MISMO cuerpo que
+ * `batchResponse` da para esos desenlaces, y lo responden igual la primera petición, la que reanuda y la repetición. `row`
+ * es `{ status, total, nextIndex }`; cada resultado, `{ index, status, result, error, message }`.
+ */
+export function batchStoredBody(row, results) {
+  const items = [...results]
+    .sort((a, b) => a.index - b.index)
+    .map((stored) => batchItem(stored.index, stored.status, { result: stored.result ?? null, error: stored.error ?? null, message: stored.message ?? null }));
+  if (row.status === 'aborted') for (let index = row.nextIndex; index < row.total; index += 1) items.push(batchItem(index, 'notAttempted'));
+  return batchBody(items);
+}
+
 /** Un trabajo recién creado, como lo deja el alta. */
 export function newBatchJob(total) {
   return { status: 'queued', total, nextIndex: 0, succeeded: 0, failed: 0, results: [] };
@@ -301,7 +330,11 @@ export function batchContractClause(batch) {
   if (batch.atomicity === 'all-or-nothing') {
     return (
       `Lote todo o nada (DSL 2.30): un resultado por elemento de '${batch.over}', en orden de índice. Con un fallo no queda ` +
-      `nada confirmado y la respuesta es el error de ese elemento, con su ruta en details (${batchItemPath(batch.over, 0)}).`
+      `nada confirmado y la respuesta es el error de ese elemento, con su ruta en details (${batchItemPath(batch.over, 0)}).` +
+      (batch.idempotency
+        ? ` Con idempotency, repetir la clave de un lote confirmado devuelve la misma respuesta sin volver a procesarlo; uno ` +
+          `que falló no se guarda, y repetirlo lo vuelve a procesar. ${syncInProgressClause()}`
+        : '')
     );
   }
   const skipped = [...batch.itemErrors, FRAMEWORK_ERRORS.validation.code].join(', ');
@@ -309,32 +342,44 @@ export function batchContractClause(batch) {
     `Lote por elemento (DSL 2.30): siempre ${BATCH_MULTI_STATUS}, con un resultado por elemento de '${batch.over}' en orden de ` +
     `índice, cada uno confirmado en su propia transacción. Fallan solo su elemento ${skipped}. Cualquier otro fallo ` +
     `detiene el lote: ese elemento sale failed con su code (${FRAMEWORK_ERRORS.batchAborted.code} si no tiene), lo ` +
-    'anterior queda confirmado y lo siguiente sale notAttempted.'
+    'anterior queda confirmado y lo siguiente sale notAttempted.' +
+    (batch.idempotency
+      ? ' Con idempotency, repetir la clave devuelve el mismo 207 sin volver a procesar el lote; si el primero se cortó a ' +
+        `mitad, la repetición sigue desde el último elemento confirmado. ${syncInProgressClause()}`
+      : '')
   );
 }
 
 /**
+ * Lo que responde la repetición de un lote síncrono con clave que sigue en marcha (D15). Sin `code`: el diseño puede
+ * sustituir el canónico, y el contrato ya lista el de la operación entre sus respuestas.
+ */
+function syncInProgressClause() {
+  return `Mientras el primero sigue en marcha, responde ${FRAMEWORK_ERRORS.idempotencyRace.http}, el error de la clave en curso.`;
+}
+
+/**
  * Lo que ningún generador sabe generar todavía de un lote, con el mismo mensaje en los cuatro:
- *   · en `sync`, la idempotencia del lote entero (D5, BA-8): la repetición devuelve el mismo 207, guardado en el registro
- *     de idempotencia; entra tras la fase B (D13). El handler procesa un elemento, así que la de la operación sola
- *     deduplicaría cada elemento y no el lote;
+ *   · en `sync`, la idempotencia del lote entero (D15) mientras el generador no la genera (`syncIdempotency` false): la
+ *     repetición devuelve la respuesta guardada en el trabajo (`batch_job`), y la de la operación sola deduplicaría cada
+ *     elemento y no el lote;
  *   · en cualquier modo, la clave de un lote que es un campo (`payload-field`) o que se acota por campos (`partitionBy`):
  *     un lote se acota por su dueño (D13), y el campo de la clave no está en ningún elemento;
  *   · en `async`, una operación cuyo mensaje lleva la identidad del llamante (`callerIdentity`): el trabajo se procesa
  *     fuera de la petición, sin token, y la identidad no viaja en el sobre guardado.
  */
-export function batchFrontierErrors(layers, generator) {
+export function batchFrontierErrors(layers, generator, { syncIdempotency = false } = {}) {
   const errors = [];
   const identityField = layers.security?.authentication?.callerIdentity?.field ?? null;
   for (const { operation, op, batch } of batchOperations(layers)) {
     const execution = batchExecutionOf(batch);
     const idempotency = op.idempotency;
-    if (idempotency && execution === 'sync') {
+    if (idempotency && execution === 'sync' && !syncIdempotency) {
       errors.push(
-        `use-cases: ${operation}.batch con idempotency (DSL 2.30, D5): ${generator} todavía no genera la idempotencia del ` +
-          'lote síncrono entero —la repetición tiene que devolver el mismo 207 sin volver a procesarlo; llega tras la fase B ' +
-          '(D13)—. Quita idempotency del lote (la clave natural de cada elemento ya lo guarda de duplicarse), declara ' +
-          'execution: async o espera a que se genere.'
+        `use-cases: ${operation}.batch con idempotency (DSL 2.30, D15): ${generator} todavía no genera la idempotencia del ` +
+          'lote síncrono entero —la repetición tiene que devolver la misma respuesta sin volver a procesarlo; llega en el ' +
+          'incremento 10b de PLAN-DSL-230-LOTES.md—. Quita idempotency del lote (la clave natural de cada elemento ya lo ' +
+          'guarda de duplicarse), declara execution: async o espera a que se genere.'
       );
     } else if (idempotency && (idempotency.keySource === 'payload-field' || idempotency.partitionBy)) {
       errors.push(
@@ -392,6 +437,16 @@ export function asyncBatchOperations(model) {
   return batchModelOperations(model).filter(({ batch }) => batch.execution === 'async');
 }
 
+/** Los lotes SÍNCRONOS con clave (D15): su clave y su respuesta las guarda el trabajo (`batch_job`), sin temporizador. */
+export function keyedSyncBatchOperations(model) {
+  return batchModelOperations(model).filter(({ batch }) => batch.execution !== 'async' && batch.idempotency);
+}
+
+/** Los lotes que usan el almacén de trabajos (`batch_job`, su purga): los asíncronos y los síncronos con clave. */
+export function batchJobStoreOperations(model) {
+  return batchModelOperations(model).filter(({ batch }) => batch.execution === 'async' || batch.idempotency);
+}
+
 /** ¿Tiene el servicio algún lote? */
 export function usesBatch(model) {
   return batchModelOperations(model).length > 0;
@@ -409,6 +464,9 @@ export function batchNote(batch) {
     lines.push(
       'Lote asíncrono: se procesa por partes fuera de la petición, sin token. El actor de autoría de cada elemento es el dueño del trabajo, y lo que el handler lea de la petición tiene que venir en el mensaje.'
     );
+  }
+  if (batch.idempotency && batch.execution !== 'async') {
+    lines.push('Lote con clave: la repetición la resuelve el generador con la respuesta guardada, sin llamar a este handler.');
   }
   if (batch.atomicity === 'per-item') {
     lines.push('Una transacción por elemento, en orden de índice: lo que falla aquí no deshace los elementos anteriores.');
@@ -439,9 +497,30 @@ export const BATCH_CASES = Object.freeze([
   { id: 'BA-5', level: 'adapter', asserts: 'per-item: dos elementos con la misma clave natural en el mismo lote fallan siempre en el segundo' },
   { id: 'BA-6', level: 'adapter', asserts: 'all-or-nothing: un fallo revierte el lote entero y responde su error con el índice del culpable en details' },
   { id: 'BA-7', level: 'adapter', asserts: 'el sobre: exceder maxItems o el campo over ausente es un 400 del lote, sin procesar ningún elemento' },
-  { id: 'BA-8', level: 'adapter', asserts: 'idempotency de la operación: la repetición del lote devuelve el mismo 207 sin volver a procesarlo' },
+  { id: 'BA-8', level: 'adapter', asserts: 'idempotency de la operación (D15): la miden BK-1 a BK-5 sobre los sujetos con clave' },
   { id: 'BA-9', level: 'adapter', asserts: 'cada elemento confirmado publica lo que publicaría la operación sola, en su transacción' }
 ]);
+
+/** Los casos de un lote SÍNCRONO con clave (D15) que los cuatro generadores ejecutan con el mismo id. */
+export const BATCH_KEY_CASES = Object.freeze([
+  { id: 'BK-1', level: 'adapter', asserts: 'per-item: repetir la clave de un lote terminado devuelve el MISMO 207 sin procesar nada (ni efectos, ni resultados nuevos)' },
+  { id: 'BK-2', level: 'adapter', asserts: 'la misma clave con otro cuerpo es IDEMPOTENCY_KEY_REUSED sin procesar nada; pasada su ventana, un lote nuevo' },
+  { id: 'BK-3', level: 'adapter', asserts: 'la repetición mientras el primero sigue en marcha es 409 IDEMPOTENCY_KEY_IN_PROGRESS sin procesar nada' },
+  { id: 'BK-4', level: 'adapter', asserts: 'reanudación: si el primero murió a mitad, la repetición sigue desde el cursor sin repetir ningún elemento, y su 207 los cuenta todos' },
+  { id: 'BK-5', level: 'adapter', asserts: 'all-or-nothing: el lote confirmado se repite con la misma respuesta; uno que falló no deja trabajo, y repetirlo lo vuelve a procesar' }
+]);
+
+/** Los sabotajes de la clave de un lote síncrono y los casos en los que tiene que caer cada uno: exactamente esos. */
+export const BATCH_KEY_SABOTAGES = Object.freeze({
+  // La repetición de un lote terminado lo vuelve a procesar en vez de devolver lo guardado.
+  'bk-replay-reprocess': ['BK-1'],
+  // Un lote en marcha se toma igual que uno muerto: dos peticiones procesan el mismo lote a la vez.
+  'bk-steal-running': ['BK-3'],
+  // La reanudación empieza en el principio y no en el cursor.
+  'bk-no-resume': ['BK-4'],
+  // El todo o nada que falla deja su trabajo: la repetición devuelve un lote que nunca se confirmó.
+  'bk-keep-failed': ['BK-5']
+});
 
 /** Los casos de un lote ASÍNCRONO (fase B) que los cuatro generadores ejecutan con el mismo id. */
 export const BATCH_JOB_CASES = Object.freeze([

@@ -72,3 +72,20 @@ export const BATCH_JOB_DESIGNS = [
   { name: 'catalog-batch-async', from: 'product-catalog', mutate: (layers) => catalogBatchAsync(layers, 'relational') },
   { name: 'catalog-batch-async-mongo', from: 'product-catalog', mutate: (layers) => catalogBatchAsync(layers, 'document') }
 ];
+
+/**
+ * product-catalog con `importProducts` SÍNCRONO y con clave (D15, inc. 10b): la repetición devuelve la respuesta guardada
+ * en el trabajo. Sin capa security, como product-catalog: la clave se acota solo por la operación (BATCH_ANONYMOUS_OWNER).
+ */
+function catalogBatchKeyed(layers, model, atomicity) {
+  catalogBatch(layers, model, atomicity);
+  layers['use-cases'].operations.importProducts.idempotency = { keySource: 'client-key', ttlSeconds: 86400 };
+}
+
+/** Los sujetos del lote síncrono con clave: no entran en BATCH_DESIGNS hasta que los cuatro generadores los generen. */
+export const BATCH_KEY_DESIGNS = [
+  { name: 'catalog-batch-keyed', from: 'product-catalog', mutate: (layers) => catalogBatchKeyed(layers, 'relational', 'per-item') },
+  { name: 'catalog-batch-keyed-mongo', from: 'product-catalog', mutate: (layers) => catalogBatchKeyed(layers, 'document', 'per-item') },
+  // El todo o nada con clave (BK-5): uno que falla no deja trabajo.
+  { name: 'catalog-batch-atomic-keyed', from: 'product-catalog', mutate: (layers) => catalogBatchKeyed(layers, 'relational', 'all-or-nothing') }
+];

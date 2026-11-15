@@ -223,10 +223,11 @@ importProducts:
 - **`execution`**: `sync` (por defecto) responde cuando termina. `async` responde `202` con la ubicación de un trabajo
   que procesa el lote por partes, para importaciones de minutos (§ Lotes asíncronos). Los cuatro generadores traen los
   dos modos.
-- `idempotency` de la operación se aplica al **lote entero**: la repetición devuelve el mismo resultado. Por elemento,
-  la guarda es la `naturalKey` de lo que escribe. En un lote `async` la clave la guarda el trabajo (§ Lotes
-  asíncronos); en uno `sync` los generadores todavía la rechazan (tendrían que guardar el 207 entero), así que un lote
-  síncrono se repite sin daño solo por la clave natural de cada elemento. Cada elemento confirmado publica lo que
+- `idempotency` de la operación se aplica al **lote entero** (`client-key` o `payload-hash`): repetir la clave devuelve
+  la misma respuesta sin volver a procesar nada. La guarda el generador elemento a elemento, así que un lote que se
+  cortó a mitad se **reanuda** desde el último elemento confirmado al repetirlo; mientras el primero sigue en marcha,
+  la repetición recibe el `409` de la clave en curso. Un `all-or-nothing` que falló no se guarda, y repetirlo lo vuelve
+  a procesar. Por elemento, la guarda es la `naturalKey` de lo que escribe. Cada elemento confirmado publica lo que
   publicaría la operación sola (`emits`); el lote no publica un evento propio.
 
 El handler de la operación procesa **un** elemento; el bucle, la transacción de cada uno, su validación y la

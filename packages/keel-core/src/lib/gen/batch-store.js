@@ -109,6 +109,12 @@ export const BATCH_JOB_COLLECTIONS = Object.freeze({
   })
 });
 
+/**
+ * El dueño de un lote síncrono con clave sin capa `security` (D15): no hay actor que acote la clave, así que la acota solo
+ * la operación, como `idempotency_record`. Un lote asíncrono exige `security` (CHK-USECASES-BATCH-NO-AUTH) y nunca lo usa.
+ */
+export const BATCH_ANONYMOUS_OWNER = 'anonymous';
+
 /** El `_id` de un resultado en el modelo documental: el trabajo y el índice, aplanados. */
 export function batchResultDocumentId(jobId, index) {
   return `${jobId}|${index}`;
@@ -133,6 +139,14 @@ export const BATCH_PARAMETERS = Object.freeze({
   purgeCron: Object.freeze({ key: 'batch.purge.cron', env: 'BATCH_PURGE_CRON', default: '0 15 5 * * *', cron: true })
 });
 
+/**
+ * D15: cuánto tiempo sin escribir da por muerto un lote SÍNCRONO con clave sin terminar, y su repetición lo toma y sigue
+ * desde el cursor en vez de responder 409 en curso. Por encima de lo que tarda un elemento (cada uno avanza el cursor y
+ * con él updated_at): uno más largo lo tomaría en vida, y entonces decide la valla del cursor. Aparte de BATCH_PARAMETERS:
+ * solo lo escribe un proyecto con lotes síncronos con clave.
+ */
+export const BATCH_SYNC_STALE = Object.freeze({ key: 'batch.sync-stale-ms', env: 'BATCH_SYNC_STALE_MS', default: 60000 });
+
 // ─── Las sentencias (relacional) ─────────────────────────────────────────────
 //
 // Con marcadores nombrados (`:id`), como las del cronómetro: `bindNamed` (timer-store.js) los pasa al estilo de cada
@@ -146,18 +160,39 @@ const DIALECTS = Object.freeze({
     now: 'current_timestamp',
     // Con :ttlMs NULL el resultado es NULL (sin ventana); el CAST le da tipo al parámetro.
     plusMs: (param) => `current_timestamp + (CAST(:${param} AS bigint) * interval '1 millisecond')`,
-    minusDays: (param) => `current_timestamp - (CAST(:${param} AS integer) * interval '1 day')`
+    minusDays: (param) => `current_timestamp - (CAST(:${param} AS integer) * interval '1 day')`,
+    minusMs: (param) => `current_timestamp - (CAST(:${param} AS bigint) * interval '1 millisecond')`
   },
   mysql: {
     // UTC_TIMESTAMP, como el cronómetro: `datetime` no guarda zona y los cuatro servidores escriben en UTC.
     now: 'utc_timestamp(6)',
     plusMs: (param) => `DATE_ADD(utc_timestamp(6), INTERVAL CAST(:${param} AS SIGNED) * 1000 MICROSECOND)`,
-    minusDays: (param) => `DATE_SUB(utc_timestamp(6), INTERVAL CAST(:${param} AS SIGNED) DAY)`
+    minusDays: (param) => `DATE_SUB(utc_timestamp(6), INTERVAL CAST(:${param} AS SIGNED) DAY)`,
+    minusMs: (param) => `DATE_SUB(utc_timestamp(6), INTERVAL CAST(:${param} AS SIGNED) * 1000 MICROSECOND)`
   }
 });
 
 /** Los motores para los que hay sentencias de los lotes asíncronos: los del cronómetro. */
 export const BATCH_STORE_ENGINES = Object.freeze(Object.keys(DIALECTS));
+
+/**
+ * Las sentencias que añade un lote SÍNCRONO con clave (D15) a las de `batchStatements`, para un motor relacional. Aparte:
+ * solo las emite un proyecto con lotes síncronos con clave.
+ */
+export function batchSyncStatements(engine) {
+  const d = DIALECTS[engine];
+  if (!d) throw new Error(`los lotes no tienen sentencias para '${engine}' (las hay para ${BATCH_STORE_ENGINES.join(', ')})`);
+  const j = BATCH_JOB.table;
+  return Object.freeze({
+    // La repetición de un lote que no terminó: lo toma solo si nadie lo escribe desde hace más de :staleMs (con la hora del
+    // motor). Una fila: estaba muerto, y quien lo toma sigue desde el cursor; ninguna: sigue en marcha (409 en curso). Si en
+    // realidad seguía vivo, los dos avanzan con la valla del cursor y cada elemento lo gana uno.
+    takeOver: `UPDATE ${j} SET updated_at = ${d.now} WHERE id = :id AND finished_at IS NULL AND updated_at <= ${d.minusMs('staleMs')}`,
+    // El todo o nada con clave que falla: su transacción revierte los resultados, y el trabajo se borra en otra para liberar
+    // la clave (la repetición lo vuelve a procesar, no devuelve un lote que nunca se confirmó).
+    discardJob: `DELETE FROM ${j} WHERE id = :id AND finished_at IS NULL`
+  });
+}
 
 /** Las sentencias de los lotes asíncronos para un motor relacional. */
 export function batchStatements(engine) {

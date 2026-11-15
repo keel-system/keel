@@ -17,7 +17,7 @@
 // Y las de los LOTES ASÍNCRONOS (DSL 2.30, fase B, gen/batch-store.js): el alta con su clave y su ventana (D13), la valla
 // del cursor (D9), la página de resultados, el final de una sola vez y la purga de lo terminado (D10).
 //
-// Uso: node scripts/timer-sql-check.js [--database=postgresql|mysql] [--sabotage=no-skip-locked|no-fence|park-order|lag-all-kinds|age-deletion-live|age-deletion-sign|history-order|history-filter|batch-fence|batch-key-expiry|batch-purge-live|batch-finish-twice]
+// Uso: node scripts/timer-sql-check.js [--database=postgresql|mysql] [--sabotage=no-skip-locked|no-fence|park-order|lag-all-kinds|age-deletion-live|age-deletion-sign|history-order|history-filter|batch-fence|batch-key-expiry|batch-purge-live|batch-finish-twice|batch-takeover-live|batch-discard-finished]
 //   (podman o docker; ~1 min). Con sabotaje, verde = el sabotaje cae en exactamente sus casos.
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -28,7 +28,7 @@ import { timerStatements, expandList, NIL_ENTITY_ID, TIMER_ENGINES } from '../sr
 import { GENERATOR_TABLES, schemaStepSql } from '../src/lib/gen/schema-steps.js';
 import { ageDeletionStatement } from '../src/lib/gen/data-lifecycle.js';
 import { historyCountSql, historyFieldRows, historyPageSql, historyStatements } from '../src/lib/gen/history-store.js';
-import { batchStatements } from '../src/lib/gen/batch-store.js';
+import { batchStatements, batchSyncStatements } from '../src/lib/gen/batch-store.js';
 
 const only = process.argv.find((arg) => arg.startsWith('--database='))?.slice('--database='.length);
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.slice('--sabotage='.length) ?? null;
@@ -63,6 +63,10 @@ const SABOTAGES = {
   },
   // El final sin «solo una vez»: un disparo repetido cambia el desenlace de un trabajo ya terminado.
   'batch-finish-twice': { breaks: ['lote-final'], apply: (s) => s, batch: (b) => ({ ...b, finish: b.finish.replace(' AND finished_at IS NULL', '') }) },
+  // La toma de un lote síncrono con clave sin mirar si sigue vivo (D15): la repetición procesa a la vez que el primero.
+  'batch-takeover-live': { breaks: ['lote-toma'], apply: (s) => s, batch: (b) => ({ ...b, takeOver: b.takeOver.replace(/ AND updated_at <= .*$/, '') }) },
+  // El descarte del todo o nada sin «solo si no terminó»: borra un lote confirmado y su repetición lo vuelve a aplicar.
+  'batch-discard-finished': { breaks: ['lote-descarte'], apply: (s) => s, batch: (b) => ({ ...b, discardJob: b.discardJob.replace(' AND finished_at IS NULL', '') }) },
   'park-order': {
     breaks: ['aparcado'],
     // PostgreSQL evalúa todas las asignaciones con los valores de antes: ahí el orden no importa, y no debe caer nada.
@@ -402,7 +406,8 @@ async function check(engine) {
     // Los lotes asíncronos (DSL 2.30, gen/batch-store.js): las dos tablas las creó el paso de esquema de arriba. En su bloque:
     // sus nombres son los de los pasos anteriores.
     {
-    const B = sabotage && SABOTAGES[sabotage].batch ? SABOTAGES[sabotage].batch(batchStatements(engine)) : batchStatements(engine);
+    const allBatch = { ...batchStatements(engine), ...batchSyncStatements(engine) };
+    const B = sabotage && SABOTAGES[sabotage].batch ? SABOTAGES[sabotage].batch(allBatch) : allBatch;
     const owned = { operation: 'importProducts', owner: 'sub-1' };
     const job = (n) => `01900000-0000-7000-8000-0000000000b${n}`;
     const alta = (id, key, signature, ttlMs = null) => run(B.insertJob, { id, ...owned, key, signature, ttlMs, input: '{"items":[]}', total: 5 });
@@ -462,6 +467,27 @@ async function check(engine) {
     run(B.finish, { id: job(1), status: 'completed' });
     run(B.finish, { id: job(1), status: 'aborted' });
     step(engine, 'lote-final', jobRow(job(1))[0] === 'completed' && ['t', '1'].includes(jobRow(job(1))[4]), jobRow(job(1)).join(' '));
+    // D15, la toma de un lote síncrono con clave: uno sin escribir desde hace más del umbral se toma (su updated_at vuelve a
+    // ahora); uno escrito hace menos, no; uno terminado, nunca, por viejo que sea.
+    const agoMs = (ms) => literal(engine, new Date(dbNow().getTime() - ms));
+    const setUpdated = (id, ms) => sql(engine, name, `UPDATE batch_job SET updated_at = ${agoMs(ms)} WHERE id = ${literal(engine, id)};`);
+    const freshSince = (id, ms) => Number(sql(engine, name, `SELECT count(*) FROM batch_job WHERE id = ${literal(engine, id)} AND updated_at > ${agoMs(ms)};`)[0][0]);
+    setUpdated(job(4), 600_000);
+    run(B.takeOver, { id: job(4), staleMs: 60_000 });
+    const dead = freshSince(job(4), 30_000);
+    setUpdated(job(4), 30_000);
+    run(B.takeOver, { id: job(4), staleMs: 60_000 });
+    const alive = freshSince(job(4), 20_000);
+    setUpdated(job(1), 600_000);
+    run(B.takeOver, { id: job(1), staleMs: 60_000 });
+    const finished = freshSince(job(1), 30_000);
+    step(engine, 'lote-toma', dead === 1 && alive === 0 && finished === 0, `muerto tomado ${dead}, vivo tomado ${alive}, terminado tomado ${finished}`);
+    // D15, el descarte del todo o nada que falla: se lleva el trabajo sin terminar, nunca uno confirmado.
+    alta(job(5), 'clave-3', 'firma-5');
+    run(B.discardJob, { id: job(5) });
+    run(B.discardJob, { id: job(1) });
+    const left = sql(engine, name, `SELECT ${hex('id')} FROM batch_job WHERE id IN (${literal(engine, job(5))}, ${literal(engine, job(1))});`).map(([id]) => id.slice(-2)).join(',');
+    step(engine, 'lote-descarte', left === 'b1', `quedan ${left || '∅'}`);
     // La purga (D10): lo terminado hace más de la retención, con sus resultados; nunca uno en marcha, por viejo que sea.
     const daysAgo = (days) => literal(engine, new Date(dbNow().getTime() - days * 86_400_000));
     sql(engine, name, `UPDATE batch_job SET created_at = ${daysAgo(12)}, finished_at = ${daysAgo(10)} WHERE id = ${literal(engine, job(1))};`);
