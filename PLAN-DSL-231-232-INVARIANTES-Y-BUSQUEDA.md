@@ -8,16 +8,21 @@
 |---|---|---|
 | A0 | Medir antes de nada | hecho (2026-11-16, § Medidas de A0) |
 | A1 | keel-core: schema, reglas, `INVARIANT_VIOLATED`, docs, enum a 2.31 y la frontera de los cuatro | hecho (2026-11-16) |
-| A2-A9 | Fase A: DSL 2.31 (R7) | pendiente |
+| A2 | Lo neutral: `entity-checks.js` (plan, referencia, contrato, casos `IC-*`), `computed.js` (D5, casos `CP-*`), el modelo y el OpenAPI | hecho (2026-11-16) |
+| A3-A9 | Fase A: DSL 2.31 (R7) | pendiente |
 | B0-B9 | Fase B: DSL 2.32 (R8) | pendiente |
 
-**Para retomar.** A1 hecho: el DSL es 2.31; `checks` y el `computed` estructurado validan, con cinco `CHK-*` falsados
-en el corpus (extensión `checks`) y las formas reales de M5 en verde (`keel-core/test/entity-checks.test.js`); dos `REV-*`
-nuevas con veredicto en las siete fixtures listas; `INVARIANT_VIOLATED` en el catálogo; los cuatro generadores rechazan
-`checks` y `computed` estructurado con `entityChecksPendingErrors` (`keel-core/src/lib/gen/entity-checks.js`) hasta A3-A6.
-Siguiente: A2 desde `main`. Empezar por medir M8 en los cuatro (dónde está el `save` generado de cada raíz y si puede
-llamar a `ensureInvariants()`), fijar la propuesta como D21 y escribir `evaluateChecks`/`evaluateComputed` con los casos
-`IC-*`/`CP-*`.
+**Para retomar.** A2 hecho: M8 medido (D21) y lo neutral escrito. `invariantPlan(layers, raíz)` es lo que hace
+`ensureInvariants()` como datos (derivados, cotas y checks del agregado, hijas primero); `evaluateInvariants` y
+`evaluateComputed` son las referencias ejecutables; el modelo lleva `entity.checks`, `entity.bounds`,
+`entity.invariantPlan`/`guardsInvariants` (la raíz) y `field.computedSpec`; el OpenAPI anuncia el 422 en los commands que
+escriben un agregado guardado y `readOnly` en el derivado. El sujeto es `catalog-invariants`/`-mongo`
+(`keel-core/test/helpers/entity-check-designs.js`) con `INVARIANT_VECTORS`: cada sabotaje con `reference: true` cae en
+exactamente sus casos contra la referencia (`test/entity-checks.test.js`). Siguiente: A3, keel-spring. Emitir
+`ensureInvariants()` en la entidad (`entities.js`), su llamada al principio del `save` de los dos adaptadores (antes del
+armado y del historial), el getter del derivado y su columna, la traducción de `INVARIANT_VIOLATED`, las notas
+(`invariantsHandlerNote`, `computedHandlerNote`), quitar `entityChecksPendingErrors` de su frontera y escribir
+`npm run invariant-check` sobre los vectores, con `ic-no-call` e `ic-after-write` como sabotajes del generador.
 
 ## Medidas de A0 (2026-11-16)
 
@@ -131,7 +136,12 @@ entities:
 | D8 | Quedan fuera: lo que cruza agregados (el `count` de `Favorite` de conduit, el `totalKwh` de metering), los derivados que dependen del llamante (`favorited`, `following`) y la aritmética más allá de `sum`/`times`/`count` | La referencia prohíbe las invariantes entre agregados. Lo del llamante necesita la lectura de otra raíz por identidad, que es otro primitivo |
 | D19 | Un operador de orden (`lt`, `lte`, `gt`, `gte`) con un operando ausente **se cumple**. Si el diseño quiere el campo presente, lo dice con `requires` | Es la semántica de un `CHECK` de SQL con NULL, y no obliga a duplicar el `when` en cada comparación (M7) |
 | D20 | Un `json` cuenta como ausente solo si es nulo; `{}` y `[]` son presentes | El json es opaco (lo define un tercero): el servidor no puede saber que `{}` significa «nada» (M7) |
-| D9 | El gate derivado `check-domain-guards.sh` gana filas: una por `(entidad, check)` y una por campo acotado escrito por el servidor | Las guardas existen porque el diseño las declara, no porque un escenario las pida |
+| ~~D9~~ | ~~El gate derivado `check-domain-guards.sh` gana filas~~ **Descartada en A2 por D21**: la guarda y su llamada las escribe build, así que no hay nada del agente que un gate tenga que vigilar | — |
+| D21 | `build` emite en la raíz `ensureInvariants()`, que recalcula los derivados y comprueba las cotas y los checks del agregado entero, y el `save` generado (relacional y documental) la llama antes de escribir nada: antes del armado de plazos, del historial y de drenar eventos. El derivado es un getter que calcula desde las hijas, y el `save` persiste su valor | M8: en los cuatro, cada raíz tiene un único `save` por adaptador y toda escritura pasa por él; los mutadores son del agente. Un `save` rechazado deja la transacción sin escribir (IC-10) |
+| D22 | `eq`/`ne` con un operando ausente también se cumplen, como los de orden (D19) | La misma regla para toda comparación: la de un CHECK de SQL con NULL |
+| D23 | El orden de la guarda es contrato, porque decide el `code` cuando se rompen dos: las hijas antes que su padre, y en cada entidad los derivados, las cotas en el orden de sus campos y los checks en el del diseño | Sin orden fijo, dos servidores responderían codes distintos al mismo estado |
+| D24 | En un `sum`, una hija con el sumando o el factor ausente aporta cero (como `SUM` en SQL). Un `decimal` sin `scale` declarada redondea a entero. La longitud de un texto se cuenta en puntos de código | Las tres son preguntas que D5 y D6 no contestaban y la referencia tenía que decidir |
+| D25 | Las cotas que se hacen cumplir son las de `validationRules` sin la presencia (`size`, `pattern`, `min`, `max`, también por elemento de una lista), con el `pattern` heredado del value type incluido. Fuera el id, lo generado y los value objects compuestos, cuyo constructor ya guarda las suyas | Una cota de la entidad es siempre verdad (U6). La clase `<Tipo>Format` y su gate siguen: dicen DÓNDE se normaliza y valida la entrada que no pasa por el borde |
 
 ### Reglas mecánicas (keel-core)
 
@@ -169,11 +179,11 @@ Cada una con su id, su entrada en `checks.js` con `nature` y su mutación en `te
 - `computed.js`, nuevo: `computedSpec(field)`, `evaluateComputed(aggregate)` como referencia ejecutable con D5, y los
   casos `CP-*`.
 - `gen/model.js` (`buildModel`): `entity.checks` y `field.computedSpec`. La proyección de cada lenguaje no cambia.
-- `domain-guards.js`: `guardedFields` gana las filas de D9, y `domainGuardsScript` las mismas filas en los tres que
-  lo comparten. keel-spring tiene el suyo.
+- ~~`domain-guards.js`: `guardedFields` gana las filas de D9~~ (descartado en A2 por D21).
 - `gen/openapi.js`: el 422 de `INVARIANT_VIOLATED` en las escrituras de entidades con checks o cotas. `readOnly` en el
   derivado.
-- `relational.js` y `persistedMembers`: la columna del derivado. El documental lo guarda como campo.
+- `relational.js` y `persistedMembers`: sin cambios. Medido en A2: un `computed` ya era un campo persistido (la prosa lo
+  guardaba igual); lo nuevo es quién lo escribe.
 - `wire.js`: sin cambios. El derivado viaja como cualquier campo de su tipo.
 
 ### Generadores

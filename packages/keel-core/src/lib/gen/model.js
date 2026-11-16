@@ -36,6 +36,8 @@ import { readScopesOfLayers, readScopeOfOperation, isOptionalAuth } from './read
 import { guardedByNaturalKey } from './natural-key-guard.js';
 import { domainGuardKind } from './domain-guard.js';
 import { historyShape } from './history.js';
+import { resolvedChecks, boundGuards, invariantPlan, guardsAggregate } from './entity-checks.js';
+import { computedSpec } from './computed.js';
 
 const CRUD_PREFIXES = ['create', 'get', 'list', 'update', 'delete'];
 
@@ -761,6 +763,8 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
         collation: persisted && uniqueNames.has(fieldName) && (field?.compare ?? 'exact') === 'exact' ? collation : null
       })
     );
+    // El derivado estructurado (DSL 2.31), resuelto: lo calcula la entidad y lo persiste el save (gen/computed.js).
+    for (const field of fields) field.computedSpec = computedSpec(domain, name, field.name);
     const fieldNames = new Set(fields.map((field) => field.name));
 
     const relations = [];
@@ -844,6 +848,11 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
       relations,
       lifecycle,
       invariants: def.invariants ?? [],
+      // Las invariantes que se hacen cumplir (DSL 2.31): sus checks y sus cotas, con los nombres del diseño. La raíz lleva
+      // además el plan de su agregado entero, que es lo que hace `ensureInvariants()` y llama el save (gen/entity-checks.js).
+      checks: resolvedChecks({ domain }, name),
+      bounds: boundGuards(domain, name),
+      invariantPlan: internalOf.has(name) ? null : invariantPlan({ domain }, name),
       isAggregateRoot: !internalOf.has(name),
       internalOf: internalOf.get(name)?.aggregate ?? null,
       rootEntity: internalOf.get(name)?.root ?? name,
@@ -873,6 +882,8 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
       // El historial de cambios consultable (DSL 2.29): solo de una raíz persistida, y alcanza a su agregado entero.
       history: persisted && !internalOf.has(name) && (persistence?.audit?.history ?? []).includes(name)
     });
+    const entry = entities[entities.length - 1];
+    entry.guardsInvariants = entry.invariantPlan ? guardsAggregate(entry.invariantPlan) : false;
   }
 
   addImplicitAggregateRelations(entities, aggregates, warnings);

@@ -9,6 +9,9 @@
 
 import { FRAMEWORK_ERRORS } from '../framework-errors.js';
 import { operationTargetEntity } from './model.js';
+import { resolveType } from './types.js';
+import { validationRules, elementValidationRules } from './constraints.js';
+import { computedFieldsOf, evaluateComputed, compareDecimals } from './computed.js';
 
 /** El `code` canónico de una invariante rota (U1): el de un check sin `error`, y el de una cota rota por el servidor. */
 export const INVARIANT_VIOLATED = FRAMEWORK_ERRORS.invariantViolated.code;
@@ -158,3 +161,296 @@ export function entityChecksPendingErrors(layers, generator, increment) {
   }
   return errors;
 }
+
+// ─── El plan de la guarda: qué comprueba la entidad al guardar ───────────────
+//
+// D2 dice «al final de cada mutación», y M8 midió que los mutadores son del agente: el único punto de build por el que
+// pasa toda escritura es el `save` del adaptador. Así que build emite en la entidad `ensureInvariants()` —los derivados,
+// las cotas y los checks del agregado entero (D3)— y el `save` generado la llama antes de escribir nada (D21). La guarda
+// y su llamada son de build, y ningún gate tiene que vigilar que el agente las escriba (la fila de D9 sobra).
+
+const BOUND_RULES = new Set(['size', 'pattern', 'min', 'max']);
+
+/**
+ * Las cotas de una entidad que se hacen cumplir en ella (U1, U6: una cota de la entidad es siempre verdad), como reglas de
+ * `validationRules` sin la presencia: `[{ field, element, rules }]`. `element: true` son las de cada elemento de una
+ * lista. Fuera el id, lo generado y los value objects compuestos (su constructor ya guarda sus propias cotas). La escala
+ * de un decimal no es una cota: normaliza, no rechaza.
+ */
+export function boundGuards(domain, entityName) {
+  const entity = domain?.entities?.[entityName];
+  const guards = [];
+  for (const [fieldName, field] of Object.entries(entity?.fields ?? {})) {
+    if (!field || field.id || field.generated || field.type === 'enum') continue;
+    const resolved = resolveType(field.type, domain.types ?? {});
+    if (resolved.kind === 'composite' || resolved.kind === 'enum') continue;
+    const rules = validationRules({ ...field, required: false }, resolved).filter((rule) => BOUND_RULES.has(rule.rule));
+    if (rules.length > 0) guards.push(Object.freeze({ field: fieldName, element: false, rules }));
+    const element = elementValidationRules(field, resolved).filter((rule) => BOUND_RULES.has(rule.rule));
+    if (element.length > 0) guards.push(Object.freeze({ field: fieldName, element: true, rules: element }));
+  }
+  return guards;
+}
+
+/**
+ * Los checks de una entidad, resueltos para quien los emite: cada uno con su forma, sus rutas (`{ path, head, sub,
+ * target: 'field'|'relation', category }`), su condición, su comparación y su `code`. Los nombres son los del diseño; cada
+ * generador los proyecta a sus accesores.
+ */
+export function resolvedChecks(layers, entityName) {
+  const entity = layers.domain?.entities?.[entityName];
+  return (entity?.checks ?? []).map((check, index) => {
+    const kind = checkKind(check);
+    const paths = checkPaths(check).map((path) => {
+      const target = resolveCheckPath(layers, entityName, path);
+      const [head, sub = null] = path.split('.');
+      return Object.freeze({
+        path,
+        head,
+        sub,
+        target: target?.kind ?? null,
+        category: target?.kind === 'field' ? target.type.category : 'relation'
+      });
+    });
+    return Object.freeze({
+      index,
+      kind,
+      paths,
+      condition: checkCondition(check),
+      op: kind === 'compare' ? check.op : null,
+      than: check.than ?? null,
+      value: check.value ?? null,
+      hasValue: check.value !== undefined,
+      error: checkErrorCode(check),
+      customError: check.error !== undefined
+    });
+  });
+}
+
+/**
+ * El plan de la guarda de un agregado desde `entityName`: `{ entity, computed, bounds, checks, children }`, con
+ * `children` = las relaciones internas del agregado (`{ relation, toMany, plan }`). Es lo que `ensureInvariants()` hace,
+ * como datos.
+ */
+export function invariantPlan(layers, entityName, seen = new Set()) {
+  const domain = layers.domain ?? {};
+  const entity = domain.entities?.[entityName];
+  seen.add(entityName);
+  const children = Object.entries(entity?.relations ?? {})
+    .filter(([, relation]) => sameAggregate(domain, entityName, relation.entity) && !seen.has(relation.entity))
+    .map(([relation, def]) => ({
+      relation,
+      toMany: def.cardinality === 'one-to-many' || def.cardinality === 'many-to-many',
+      plan: invariantPlan(layers, def.entity, seen)
+    }));
+  return Object.freeze({
+    entity: entityName,
+    computed: computedFieldsOf(domain, entityName),
+    bounds: boundGuards(domain, entityName),
+    checks: resolvedChecks(layers, entityName),
+    children
+  });
+}
+
+/** ¿Hay algo que guardar en el agregado del plan? Decide si build emite `ensureInvariants()`. */
+export function guardsAggregate(plan) {
+  return plan.computed.length + plan.bounds.length + plan.checks.length > 0 || plan.children.some((child) => guardsAggregate(child.plan));
+}
+
+// ─── La referencia ejecutable ────────────────────────────────────────────────
+
+/**
+ * ¿Está ausente un valor? (D6, D20): nulo, la cadena vacía y la lista vacía; un `json` solo si es nulo. Es la misma
+ * definición de vacío que `required` en el borde.
+ */
+export function isAbsentValue(value, category, { sabotage = null } = {}) {
+  if (value === null || value === undefined) return true;
+  if (category === 'json' || sabotage === 'ic-absent-null-only') return false;
+  if (typeof value === 'string') return value.length === 0;
+  if (Array.isArray(value)) return value.length === 0;
+  return false;
+}
+
+const valueAt = (state, { head, sub }) => (sub === null ? state?.[head] : state?.[head]?.[sub]);
+
+function compareValues(left, right, category) {
+  if (category === 'numeric') return compareDecimals(String(left), String(right));
+  if (category === 'instant') {
+    const x = Date.parse(left);
+    const y = Date.parse(right);
+    return x < y ? -1 : x > y ? 1 : 0;
+  }
+  return left === right ? 0 : 1;
+}
+
+/**
+ * ¿Se cumple una comparación? Con un operando ausente se cumple (D19, y D22 para `eq`/`ne`: la semántica de un CHECK de
+ * SQL con NULL).
+ */
+function compareHolds(check, state, sabotage) {
+  const [field, than] = check.paths;
+  const left = valueAt(state, field);
+  const right = than ? valueAt(state, than) : check.value;
+  if (left === null || left === undefined || right === null || right === undefined) return sabotage !== 'ic-null-fails';
+  const order = compareValues(left, right, field.category);
+  const op = sabotage === 'ic-boundary' ? ({ lte: 'lt', gte: 'gt' }[check.op] ?? check.op) : check.op;
+  switch (op) {
+    case 'eq': return order === 0;
+    case 'ne': return order !== 0;
+    case 'lt': return order < 0;
+    case 'lte': return order <= 0;
+    case 'gt': return order > 0;
+    default: return order >= 0;
+  }
+}
+
+function checkApplies(check, state) {
+  if (!check.condition) return true;
+  const inside = check.condition.values.includes(state?.[check.condition.field]);
+  return check.condition.negated ? !inside : inside;
+}
+
+function checkHolds(check, state, sabotage) {
+  if (!checkApplies(check, state)) return true;
+  const absent = (path) => isAbsentValue(valueAt(state, path), path.category, { sabotage });
+  switch (check.kind) {
+    case 'requires': return !absent(check.paths[0]);
+    case 'forbids': return absent(check.paths[0]);
+    case 'exactlyOne': return check.paths.filter((path) => !absent(path)).length === 1;
+    default: return compareHolds(check, state, sabotage);
+  }
+}
+
+/** ¿Cumple `value` las reglas de cota? Un valor ausente no se acota: su presencia es de `required`. */
+function boundHolds(rules, value) {
+  if (value === null || value === undefined) return true;
+  return rules.every((rule) => {
+    switch (rule.rule) {
+      case 'size': {
+        // La longitud de un texto en puntos de código, no en unidades de UTF-16 ni en bytes.
+        const length = Array.isArray(value) ? value.length : [...String(value)].length;
+        return (rule.min === null || length >= rule.min) && (rule.max === null || length <= rule.max);
+      }
+      case 'pattern': return new RegExp(`^(?:${rule.regexp})$`, 'u').test(String(value));
+      case 'min': return compareDecimals(String(value), String(rule.value)) >= 0;
+      default: return compareDecimals(String(value), String(rule.value)) <= 0;
+    }
+  });
+}
+
+/**
+ * La guarda de un agregado sobre `state` (con los nombres del diseño; una relación interna es su objeto o su lista de
+ * objetos): `{ violation, state }`. `state` vuelve con los derivados recalculados, y `violation` es la primera
+ * invariante rota —`{ code, entity, source }`— o null. El orden es contrato (decide el `code` cuando se rompen dos): las
+ * hijas antes que su padre, y en cada entidad los derivados, las cotas en el orden de sus campos y los checks en el del
+ * diseño. `sabotage` deja falsar la referencia (INVARIANT_SABOTAGES con `reference: true`).
+ */
+export function evaluateInvariants(plan, state, { sabotage = null } = {}) {
+  const next = { ...state };
+  if (sabotage !== 'ic-children') {
+    for (const child of plan.children) {
+      const value = next[child.relation];
+      if (value === null || value === undefined) continue;
+      const members = child.toMany ? value : [value];
+      const evaluated = [];
+      for (const member of members) {
+        const result = evaluateInvariants(child.plan, member, { sabotage });
+        if (result.violation) return { violation: result.violation, state: next };
+        evaluated.push(result.state);
+      }
+      next[child.relation] = child.toMany ? evaluated : evaluated[0];
+    }
+  }
+  for (const { fieldName, spec } of plan.computed) {
+    const result = evaluateComputed(spec, next[spec.relation] ?? [], { sabotage });
+    if (result.error) return { violation: { code: result.error, entity: plan.entity, source: `computed:${fieldName}` }, state: next };
+    next[fieldName] = result.value;
+  }
+  if (sabotage !== 'ic-no-bounds') {
+    for (const guard of plan.bounds) {
+      const value = next[guard.field];
+      const holds = guard.element ? (value ?? []).every((element) => boundHolds(guard.rules, element)) : boundHolds(guard.rules, value);
+      if (!holds) return { violation: { code: INVARIANT_VIOLATED, entity: plan.entity, source: `bound:${guard.field}` }, state: next };
+    }
+  }
+  for (const check of plan.checks) {
+    if (checkHolds(check, next, sabotage)) continue;
+    const code = sabotage === 'ic-default-code' ? INVARIANT_VIOLATED : check.error;
+    return { violation: { code, entity: plan.entity, source: `check:${check.index}` }, state: next };
+  }
+  return { violation: null, state: next };
+}
+
+// ─── Lo que cuenta el contrato ───────────────────────────────────────────────
+
+/**
+ * Las raíces guardadas que escribe una operación del modelo: la de su entidad objetivo y las de las entidades cuyas
+ * transiciones declara. Vacío en una query o si ninguna lleva guarda. Es la pregunta del contrato (el 422 de la
+ * operación) y la de la nota de su handler.
+ */
+export function guardedRootsWrittenBy(model, operation) {
+  if ((operation.kind ?? 'command') !== 'command') return [];
+  const byName = new Map((model.entities ?? []).map((entity) => [entity.name, entity]));
+  const touched = [operation.targetEntity, ...(operation.transitions ?? []).map((transition) => transition?.entity)].filter(Boolean);
+  const roots = new Set(touched.map((name) => byName.get(name)?.aggregateRoot).filter(Boolean));
+  return [...roots].map((name) => byName.get(name)).filter((root) => root?.guardsInvariants);
+}
+
+/** La frase del contrato para el 422 de la guarda. */
+export const INVARIANT_CONTRACT_CLAUSE =
+  'una invariante de la entidad (un check o la cota de un campo) se rompería con un valor que calculó el servidor; no se escribe nada.';
+
+// ─── Lo que lee el agente ────────────────────────────────────────────────────
+
+/**
+ * La nota del handler de una operación que escribe una entidad guardada, o null. La misma en los cuatro: el agente no
+ * duplica la guarda, y lo que le queda es decidir el estado, no comprobarlo.
+ */
+export function invariantsHandlerNote(layers, entityName) {
+  const plan = invariantPlan(layers, aggregateRootOf(layers.domain ?? {}, entityName));
+  if (!guardsAggregate(plan)) return null;
+  const custom = [...new Set(collectPlans(plan).flatMap((node) => node.checks.filter((check) => check.customError).map((check) => check.error)))];
+  return (
+    `El agregado de ${plan.entity} se guarda con ensureInvariants(): el save generado comprueba las cotas de sus campos y ` +
+    'sus checks antes de escribir nada, y recalcula sus derivados. No repitas esas comprobaciones en el handler ni las ' +
+    `rodees: una invariante rota por un valor que calculó el servidor es ${INVARIANT_VIOLATED} (422)` +
+    `${custom.length > 0 ? `, o el error que el check declara (${custom.join(', ')})` : ''}, y la transacción no deja nada escrito.`
+  );
+}
+
+function collectPlans(plan) {
+  return [plan, ...plan.children.flatMap((child) => collectPlans(child.plan))];
+}
+
+// ─── Lo que se mide ──────────────────────────────────────────────────────────
+
+/** Los casos de la guarda. Los vectores concretos, sobre el sujeto de entity-check-designs.js, los comparten las redes. */
+export const INVARIANT_CASES = Object.freeze([
+  { id: 'IC-1', what: 'requires + when: en el estado nombrado, el campo ausente es INVARIANT_VIOLATED; fuera de él, no' },
+  { id: 'IC-2', what: 'forbids + unless: el campo presente fuera de los estados nombrados es INVARIANT_VIOLATED' },
+  { id: 'IC-3', what: 'campo contra campo: lte se cumple en la igualdad y se rompe por encima' },
+  { id: 'IC-4', what: 'campo contra literal con when: se rompe en el estado y no fuera de él' },
+  { id: 'IC-5', what: 'una comparación con un operando ausente se cumple (D19)' },
+  { id: 'IC-6', what: 'exactlyOne: ninguno y dos se rompen; uno se cumple' },
+  { id: 'IC-7', what: 'ausente es nulo, la cadena vacía y la lista vacía; un json {} está presente (D6, D20)' },
+  { id: 'IC-8', what: 'una cota de la entidad rota por un valor del servidor es INVARIANT_VIOLATED (422)' },
+  { id: 'IC-9', what: 'el check de una hija se comprueba al guardar el agregado (D3)' },
+  { id: 'IC-10', what: 'un save rechazado no escribe nada: la fila sigue como estaba' },
+  { id: 'IC-11', what: 'un check con error responde con su code, y su http es el que declara la operación' }
+]);
+
+/** Los sabotajes de la guarda. `reference: true` los sabe aplicar evaluateInvariants, y el test de keel-core los falsa. */
+export const INVARIANT_SABOTAGES = Object.freeze({
+  'ic-boundary': { breaks: ['IC-3'], reference: true, what: 'lte se evalúa como lt' },
+  'ic-null-fails': { breaks: ['IC-5'], reference: true, what: 'una comparación con un operando ausente se rompe' },
+  'ic-absent-null-only': { breaks: ['IC-7'], reference: true, what: 'solo el nulo cuenta como ausente' },
+  'ic-no-bounds': { breaks: ['IC-8'], reference: true, what: 'la entidad no hace cumplir sus cotas' },
+  'ic-children': { breaks: ['IC-9'], reference: true, what: 'la guarda no baja a las hijas' },
+  'ic-default-code': { breaks: ['IC-11'], reference: true, what: 'ignora el error del check' },
+  'ic-no-call': {
+    breaks: ['IC-1', 'IC-2', 'IC-3', 'IC-4', 'IC-6', 'IC-7', 'IC-8', 'IC-9', 'IC-10', 'IC-11'],
+    reference: false,
+    what: 'el save no llama a ensureInvariants()'
+  },
+  'ic-after-write': { breaks: ['IC-10'], reference: false, what: 'la guarda corre después de escribir' }
+});

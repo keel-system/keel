@@ -28,6 +28,7 @@ import {
 } from './conditional-writes.js';
 import { lifecycleContractClause } from './data-lifecycle.js';
 import { HISTORY_CHANGES, HISTORY_CHANGE_FIELDS, HISTORY_ENTRY_FIELDS, historyContractClause, historyPersonalPaths } from './history.js';
+import { guardedRootsWrittenBy, isStructuredComputed, INVARIANT_CONTRACT_CLAUSE } from './entity-checks.js';
 import { BATCH_ITEM_STATUSES, BATCH_JOB_PARAM, batchContractClause, batchJobPaths, batchSuccessStatus } from './batch.js';
 import { BATCH_JOB_STATUSES } from './batch-store.js';
 
@@ -247,6 +248,10 @@ function responses(context, operation, inputs) {
     if (conditionalWritePolicy(model) === 'required') add(required.status, required.code, 'la petición no trae If-Match.');
     add(failed.status, failed.code, 'If-Match no es la versión vigente: otro escribió después de tu lectura.');
   }
+  // La guarda del agregado (DSL 2.31, U1): un valor del servidor que rompería una invariante es un 422 de framework.
+  if (!perItem && guardedRootsWrittenBy(model, operation).length > 0) {
+    add(FRAMEWORK_ERRORS.invariantViolated.http, effectiveErrorCode(model, FRAMEWORK_ERRORS.invariantViolated), INVARIANT_CONTRACT_CLAUSE);
+  }
   // En un lote por elemento ningún error del diseño es la respuesta: viaja en el resultado de su elemento (D1, D4).
   for (const code of perItem ? [] : operation.errors ?? []) {
     const error = (model.errors ?? []).find((candidate) => candidate.code === code);
@@ -338,7 +343,9 @@ function dtoSchema(context, fields) {
   for (const field of fields) {
     const name = field.wireName ?? field.name;
     const nullable = mayBeNull(field);
-    const schema = fieldSchema(context, field, { input: false });
+    const plain = fieldSchema(context, field, { input: false });
+    // El derivado estructurado (DSL 2.31, D4) lo calcula la entidad y nunca viene del cliente.
+    const schema = isStructuredComputed(field.computed) ? { ...plain, readOnly: true } : plain;
     properties[name] = personalMark(nullable && !omitNulls ? orNull(schema) : schema, field);
     if (!omitNulls || !nullable) required.push(name);
   }
