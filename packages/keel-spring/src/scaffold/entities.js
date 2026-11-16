@@ -11,6 +11,7 @@ import { idHelperImports } from './ids.js';
 import { refIdJava } from './persistence-members.js';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import { lateGuardBlock, transitionNeedsClock } from './timer.js';
+import { invariantMembers } from './entity-checks.js';
 
 // Subpaquete de una entidad de dominio según su rol en el agregado.
 export function domainSubPackage(entity) {
@@ -75,7 +76,8 @@ function renderEntity(model, entity) {
       const typeImport = domainTypeImport(model, field);
       if (typeImport) imports.add(typeImport);
       if (field.description) lines.push(`    // ${field.description}`);
-      if (field.computed) lines.push(`    // TODO computed: ${field.computed}`);
+      // Un derivado en prosa lo escribe el agente; el estructurado (DSL 2.31) lo calcula el getter que emite build.
+      if (field.computed && !field.computedSpec) lines.push(`    // TODO computed: ${field.computed}`);
       if (field.list) {
         // Colección de valores sin identidad (list): lista mutable internamente,
         // expuesta como vista inmutable; la altera solo la raíz por métodos de negocio.
@@ -183,7 +185,10 @@ ${assignParts.join('\n')}
     imports.add(`${subPackage(model, 'domain.errors')}.InvalidStateTransitionException`);
     bodyParts.push(renderLifecycle(model, entity, imports));
   }
-  const accessors = renderAccessors(members);
+  // La guarda del agregado (DSL 2.31): ensureInvariants(), sus derivados y sus ayudas (scaffold/entity-checks.js).
+  const guard = invariantMembers(model, entity, imports);
+  if (guard.members.length > 0) bodyParts.push(guard.members.join('\n\n'));
+  const accessors = renderAccessors(members, guard.getters);
   // Getter de la versión (solo raíz): lo usa el toJpa del adaptador para
   // devolver la versión a la XxxJpa antes de persistir.
   const versionAccessor =
@@ -298,9 +303,13 @@ ${guard}`;
 // Solo getters: el dominio no expone setters (conventions/domain-modeling.md).
 // Las colecciones salen como vista inmutable; el alta/baja de hijas la gobiernan
 // métodos de negocio de la raíz que escribe el agente.
-function renderAccessors(members) {
+function renderAccessors(members, overrides = new Map()) {
   const accessors = [];
   for (const { kind, name, javaType, field } of members) {
+    if (overrides.has(name)) {
+      accessors.push(overrides.get(name));
+      continue;
+    }
     const isCollection = kind === 'relationMany' || field?.list;
     const value = isCollection ? `List.copyOf(${name})` : name;
     accessors.push(`    public ${javaType} get${capitalize(name)}() {\n        return ${value};\n    }`);

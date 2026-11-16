@@ -11,7 +11,7 @@ import { FRAMEWORK_ERRORS } from '../framework-errors.js';
 import { operationTargetEntity } from './model.js';
 import { resolveType } from './types.js';
 import { validationRules, elementValidationRules } from './constraints.js';
-import { computedFieldsOf, evaluateComputed, compareDecimals } from './computed.js';
+import { computedFieldsOf, evaluateComputed, compareDecimals, computedNoteOf } from './computed.js';
 
 /** El `code` canónico de una invariante rota (U1): el de un check sin `error`, y el de una cota rota por el servidor. */
 export const INVARIANT_VIOLATED = FRAMEWORK_ERRORS.invariantViolated.code;
@@ -400,6 +400,29 @@ export function guardedRootsWrittenBy(model, operation) {
 export const INVARIANT_CONTRACT_CLAUSE =
   'una invariante de la entidad (un check o la cota de un campo) se rompería con un valor que calculó el servidor; no se escribe nada.';
 
+const OP_SYMBOLS = Object.freeze({ eq: '=', ne: '≠', lt: '<', lte: '≤', gt: '>', gte: '≥' });
+
+/**
+ * El `message` de una invariante rota, el mismo en los cuatro: `source` es `{ kind: 'check', check }` (un check de
+ * `resolvedChecks`), `{ kind: 'bound', field }` o `{ kind: 'computed', field }`. Nombra la regla del diseño, nunca el
+ * valor: el valor lo calculó el servidor y puede ser de otro campo `sensitive`.
+ */
+export function invariantMessage(entityName, source) {
+  if (source.kind === 'bound') return `${entityName}: ${source.field} queda fuera de sus cotas.`;
+  if (source.kind === 'computed') return `${entityName}: ${source.field} no cabe en su tipo.`;
+  const { check } = source;
+  const condition = check.condition
+    ? ` ${check.condition.negated ? 'salvo cuando' : 'cuando'} ${check.condition.field} es ${check.condition.values.join(' o ')}`
+    : '';
+  const [first] = check.paths;
+  switch (check.kind) {
+    case 'requires': return `${entityName}: ${first.path} es obligatorio${condition}.`;
+    case 'forbids': return `${entityName}: ${first.path} tiene que estar vacío${condition}.`;
+    case 'exactlyOne': return `${entityName}: exactamente uno de ${check.paths.map((path) => path.path).join(', ')}${condition}.`;
+    default: return `${entityName}: ${first.path} ${OP_SYMBOLS[check.op]} ${check.than ?? check.value}${condition}.`;
+  }
+}
+
 // ─── Lo que lee el agente ────────────────────────────────────────────────────
 
 /**
@@ -407,8 +430,12 @@ export const INVARIANT_CONTRACT_CLAUSE =
  * duplica la guarda, y lo que le queda es decidir el estado, no comprobarlo.
  */
 export function invariantsHandlerNote(layers, entityName) {
-  const plan = invariantPlan(layers, aggregateRootOf(layers.domain ?? {}, entityName));
-  if (!guardsAggregate(plan)) return null;
+  return invariantsNoteOfPlan(invariantPlan(layers, aggregateRootOf(layers.domain ?? {}, entityName)));
+}
+
+/** La misma nota desde el plan ya resuelto (el del modelo: `entity.invariantPlan` de la raíz). */
+export function invariantsNoteOfPlan(plan) {
+  if (!plan || !guardsAggregate(plan)) return null;
   const custom = [...new Set(collectPlans(plan).flatMap((node) => node.checks.filter((check) => check.customError).map((check) => check.error)))];
   return (
     `El agregado de ${plan.entity} se guarda con ensureInvariants(): el save generado comprueba las cotas de sus campos y ` +
@@ -418,7 +445,18 @@ export function invariantsHandlerNote(layers, entityName) {
   );
 }
 
-function collectPlans(plan) {
+/**
+ * Las notas de la guarda para el handler de una operación del modelo: la de cada raíz guardada que escribe y la de sus
+ * derivados. Las mismas en los cuatro generadores.
+ */
+export function invariantHandlerNotes(model, operation) {
+  return guardedRootsWrittenBy(model, operation).flatMap((root) => {
+    const derived = (root.fields ?? []).filter((field) => field.computedSpec).map((field) => ({ fieldName: field.name, spec: field.computedSpec }));
+    return [invariantsNoteOfPlan(root.invariantPlan), computedNoteOf(root.name, derived)].filter(Boolean);
+  });
+}
+
+export function collectPlans(plan) {
   return [plan, ...plan.children.flatMap((child) => collectPlans(child.plan))];
 }
 
@@ -448,9 +486,15 @@ export const INVARIANT_SABOTAGES = Object.freeze({
   'ic-children': { breaks: ['IC-9'], reference: true, what: 'la guarda no baja a las hijas' },
   'ic-default-code': { breaks: ['IC-11'], reference: true, what: 'ignora el error del check' },
   'ic-no-call': {
-    breaks: ['IC-1', 'IC-2', 'IC-3', 'IC-4', 'IC-6', 'IC-7', 'IC-8', 'IC-9', 'IC-10', 'IC-11'],
+    // Los casos con algún vector que se rompe: IC-5 e IC-7 solo tienen vectores que se cumplen, y sin la llamada siguen
+    // cumpliéndose (medido en invariant-check de keel-spring). Y sin ella no se comprueba que el derivado quepa: la suma
+    // llega a la base tal cual (CP-4).
+    breaks: ['IC-1', 'IC-2', 'IC-3', 'IC-4', 'IC-6', 'IC-8', 'IC-9', 'IC-10', 'IC-11', 'CP-4'],
     reference: false,
     what: 'el save no llama a ensureInvariants()'
   },
-  'ic-after-write': { breaks: ['IC-10'], reference: false, what: 'la guarda corre después de escribir' }
+  // El desbordamiento llega a la base antes que la guarda (CP-4), y la fila rechazada queda escrita (IC-10). Un generador
+  // cuyo save es transaccional revierte esa fila, y uno cuyo almacén admite el número no ve el desbordamiento: cada red
+  // dice cuál de los dos enmascara (masks en su script), con el motivo medido.
+  'ic-after-write': { breaks: ['IC-10', 'CP-4'], reference: false, what: 'la guarda corre después de escribir' }
 });

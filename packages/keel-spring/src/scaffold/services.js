@@ -33,6 +33,7 @@ import { domainTypeImport } from './entities.js';
 import { refTargetsOf } from './ref-resolvers.js';
 import { usesCorrelation, correlationImport } from './correlation.js';
 import { deadlineHandlerNote, lateTransitionNote } from '@keel-system/keel-core/gen/deadlines';
+import { invariantHandlerNotes } from '@keel-system/keel-core/gen/entity-checks';
 import { deadlinesClass, scheduleTimerClass } from './timer.js';
 import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { claimMechanism } from './claim.js';
@@ -610,6 +611,8 @@ function renderHandler(model, service, operation) {
   if (expiring) notes.push(expiring);
   const late = lateTransitionNote(model, operation);
   if (late) notes.push(`${late} En Java: clock.instant() y ${decap(deadlinesClass(model))}.`);
+  // La guarda del agregado y sus derivados (DSL 2.31): neutrales, las mismas en los cuatro.
+  for (const note of invariantHandlerNotes(model, operation)) notes.push(note);
   // La escritura condicional (api.concurrency): cargar con loadExpecting y devolver la versión persistida.
   const conditional = conditionalHandlerNote(
     model,

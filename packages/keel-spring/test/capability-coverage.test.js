@@ -49,10 +49,11 @@ const MOTIVOS = {
  * Cerrar un hueco significa BORRAR su fila: el test comprueba también que no queden filas
  * muertas, para que la tabla no se convierta en la lista de lo que hubo alguna vez.
  */
-// Los checks de la entidad (DSL 2.31) los rechaza la frontera de keel-spring (entityChecksPendingErrors) hasta el incremento
-// A3 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md, y ninguna fixture los declara hasta el A8; entonces estas filas se borran.
+// Los checks de la entidad (DSL 2.31) los genera keel-spring desde el incremento A3 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md
+// (test/entity-checks.test.js y la red invariant-check, sobre el sujeto catalog-invariants), y ninguna fixture los declara
+// hasta el A8; entonces estas filas se borran.
 const CHECKS_PENDIENTES =
-  'los checks de la entidad (DSL 2.31) los rechaza la frontera de keel-spring hasta el incremento A3 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md, y ninguna fixture los declara hasta el A8; entonces esta fila se borra.';
+  'los checks de la entidad (DSL 2.31) se miden sobre el sujeto sintético catalog-invariants (invariant-check) y ninguna fixture los declara hasta el incremento A8 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md; entonces esta fila se borra.';
 
 const EXCEPCIONES = new Map([
   ['domain.entities.*.checks', { motivo: MOTIVOS.hueco, porque: CHECKS_PENDIENTES }],

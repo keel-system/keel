@@ -146,7 +146,11 @@ function integerResult(base, total) {
 
 /** La nota del handler de una operación que escribe una entidad con derivados, o null. La misma en los cuatro. */
 export function computedHandlerNote(domain, entityName) {
-  const fields = computedFieldsOf(domain, entityName);
+  return computedNoteOf(entityName, computedFieldsOf(domain, entityName));
+}
+
+/** La misma nota desde los derivados ya resueltos: `[{ fieldName, spec }]`. */
+export function computedNoteOf(entityName, fields) {
   if (fields.length === 0) return null;
   const list = fields.map(({ fieldName, spec }) => `${fieldName} (${spec.kind === 'count' ? `count de ${spec.relation}` : `sum de ${spec.relation}.${spec.field}${spec.times ? ` × ${spec.times}` : ''}`})`);
   return (

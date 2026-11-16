@@ -35,6 +35,7 @@ import * as embeddables from './embeddables.js';
 import * as persistenceEntities from './persistence-entities.js';
 import * as auditing from './auditing.js';
 import * as exceptions from './exceptions.js';
+import * as entityChecks from './entity-checks.js';
 import { warnUnsupportedDialect } from './claim.js';
 import * as repositories from './repositories.js';
 import * as dtos from './dtos.js';
@@ -128,6 +129,7 @@ const GENERATORS = [
   textFold,
   auditing,
   exceptions,
+  entityChecks,
   repositories,
   documentRepositories,
   dtos,

@@ -9,20 +9,38 @@
 | A0 | Medir antes de nada | hecho (2026-11-16, § Medidas de A0) |
 | A1 | keel-core: schema, reglas, `INVARIANT_VIOLATED`, docs, enum a 2.31 y la frontera de los cuatro | hecho (2026-11-16) |
 | A2 | Lo neutral: `entity-checks.js` (plan, referencia, contrato, casos `IC-*`), `computed.js` (D5, casos `CP-*`), el modelo y el OpenAPI | hecho (2026-11-16) |
-| A3-A9 | Fase A: DSL 2.31 (R7) | pendiente |
+| A3 | keel-spring: `ensureInvariants()`, su llamada en el save, el derivado como getter, `InvariantViolatedException` y `invariant-check` | hecho (2026-11-16, § Medidas de A3) |
+| A4-A9 | Fase A: DSL 2.31 (R7) | pendiente |
 | B0-B9 | Fase B: DSL 2.32 (R8) | pendiente |
 
-**Para retomar.** A2 hecho: M8 medido (D21) y lo neutral escrito. `invariantPlan(layers, raíz)` es lo que hace
-`ensureInvariants()` como datos (derivados, cotas y checks del agregado, hijas primero); `evaluateInvariants` y
-`evaluateComputed` son las referencias ejecutables; el modelo lleva `entity.checks`, `entity.bounds`,
-`entity.invariantPlan`/`guardsInvariants` (la raíz) y `field.computedSpec`; el OpenAPI anuncia el 422 en los commands que
-escriben un agregado guardado y `readOnly` en el derivado. El sujeto es `catalog-invariants`/`-mongo`
-(`keel-core/test/helpers/entity-check-designs.js`) con `INVARIANT_VECTORS`: cada sabotaje con `reference: true` cae en
-exactamente sus casos contra la referencia (`test/entity-checks.test.js`). Siguiente: A3, keel-spring. Emitir
-`ensureInvariants()` en la entidad (`entities.js`), su llamada al principio del `save` de los dos adaptadores (antes del
-armado y del historial), el getter del derivado y su columna, la traducción de `INVARIANT_VIOLATED`, las notas
-(`invariantsHandlerNote`, `computedHandlerNote`), quitar `entityChecksPendingErrors` de su frontera y escribir
-`npm run invariant-check` sobre los vectores, con `ic-no-call` e `ic-after-write` como sabotajes del generador.
+**Para retomar.** A3 hecho: keel-spring genera la guarda entera y su frontera ya no rechaza la 2.31. `src/scaffold/entity-checks.js`
+emite en cada entidad cuyo agregado guarda algo `ensureInvariants()` (hijas, derivados, cotas, checks: el orden de D23),
+el derivado como getter que calcula (`compute<Campo>()`) e `InvariantViolatedException` (422, extiende
+`BusinessException`, así que el `ApiExceptionHandler` ya la traduce); `saveGuardLine` es la primera línea del save de
+los dos adaptadores. El mensaje es neutral (`invariantMessage`) y las notas del handler también
+(`invariantHandlerNotes(model, operation)`). Red: `npm run invariant-check` (`src/lib/invariant-probes.js`). Siguiente:
+A4, keel-nest, con los mismos vectores (`INVARIANT_VECTORS`) en `scripts/lib/invariant-probes.js` de su
+`db-check`/`doc-check`, quitando `entityChecksPendingErrors` de su frontera; las notas y el mensaje ya son neutrales, y
+`keel-nest` tiene que decir lo mismo que keel-spring (paridad).
+
+## Medidas de A3 (2026-11-16)
+
+- `invariant-check`: 30/30 en PostgreSQL, MySQL y MongoDB (`catalog-invariants` sin la réplica del precio del proveedor,
+  que deja el `main` sin compilar recién generado, como en precondition-check). Los 12 sabotajes caen en exactamente sus
+  casos en PostgreSQL y en MongoDB; en MySQL se pasaron los tres que dependen del motor (`ic-no-call`, `ic-after-write`,
+  `cp-no-overflow`).
+- Dos correcciones a lo que declaraba A2 sobre los sabotajes del generador: `ic-no-call` no puede tumbar IC-7 (sus dos
+  vectores se cumplen, con o sin guarda) y sí tumba CP-4 (sin la llamada nadie comprueba que la suma quepa);
+  `ic-after-write` tumba IC-10 **y** CP-4 (el desbordamiento llega a la base antes que la guarda).
+- **En keel-spring `ic-after-write` no lo puede ver IC-10**: el save es `@Transactional` en los dos modelos del sujeto
+  y revierte la fila que la guarda rechaza después de escribirla, así que el orden de D21 lo sostiene también la
+  transacción. Lo ve CP-4 en relacional (la columna `numeric(19,2)` rechaza la suma con otro error antes de la guarda);
+  en documental no cae nada, porque Decimal128 admite la suma. El script lo lee de lo emitido y lo dice con su motivo.
+- La «prueba emitida» de la tabla de incrementos es en keel-spring la red `invariant-check` (una clase JUnit que el
+  script escribe dentro del proyecto, como history-check): build no deja en el proyecto una prueba de los vectores.
+- Consecuencia ya conocida (ventana de A8): casi todas las fixtures ganan la guarda por sus cotas (U1, U6). La cota de
+  `ProductInfo.productStock` de `shop-api` responde 422 en `cancelOrder` por encima del máximo hasta que A8 la mueva al
+  input.
 
 ## Medidas de A0 (2026-11-16)
 

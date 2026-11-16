@@ -14,6 +14,7 @@ import { refIdJava } from './persistence-members.js';
 import { pluralize } from '../lib/naming.js';
 import * as claim from './claim.js';
 import { adapterArming } from './timer.js';
+import { saveGuardLine } from './entity-checks.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
 import * as conditionalUniqueness from './conditional-uniqueness.js';
 import { textFoldImport } from './text-fold.js';
@@ -699,12 +700,12 @@ ${arming ? `${arming.before}\n` : ''}        applyToJpa(entity, jpa);`;
   // cambios y su @Version se quedaría quieta, mientras que los otros tres generadores la suben siempre (medido en
   // precondition-check, CW-4). forceNewVersion la sube con la misma comprobación de versión.
   const persisted = versioned ? `forceNewVersion(entity, ${jpaField}.${save}(jpa))` : `${jpaField}.${save}(jpa)`;
-  const saveBody = emitsEvents || arming
+  const saveBody = `${saveGuardLine(entity)}${emitsEvents || arming
     ? `${loadManaged}
         ${entity.name} saved = toDomain(${persisted});
 ${arming ? `${arming.after}\n` : ''}${emitsEvents ? '        entity.pullDomainEvents().forEach(eventPublisher::publishEvent);\n' : ''}        return saved;`
     : `${loadManaged}
-        return toDomain(${persisted});`;
+        return toDomain(${persisted});`}`;
   if (versioned) {
     imports.add('jakarta.persistence.EntityManager');
     imports.add('jakarta.persistence.LockModeType');

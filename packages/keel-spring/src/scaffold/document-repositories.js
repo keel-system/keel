@@ -31,6 +31,7 @@ import {
 } from './repositories.js';
 import * as claim from './claim.js';
 import { adapterArming } from './timer.js';
+import { saveGuardLine } from './entity-checks.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
 import { DOC_PKG } from './document-entities.js';
 import { documentValueObjects } from './document-embeddables.js';
@@ -292,10 +293,10 @@ function renderAdapter(model, entity, paginated, batchLookup, listed = paginated
                 : ${repoField}.findById(entity.${id.getter}()).map(${entity.name}Document::get${lifecycleField}).orElse(null);
 ${arming.before}\n`
     : '';
-  const saveBody = emitsEvents || arming
+  const saveBody = `${saveGuardLine(entity)}${emitsEvents || arming
     ? `${previousRead}        ${documentExpr}${entity.name} saved = toDomain(${savedExpr});
 ${arming ? `${arming.after}\n` : ''}${emitsEvents ? '        entity.pullDomainEvents().forEach(eventPublisher::publishEvent);\n' : ''}        return saved;`
-    : `        ${documentExpr}return toDomain(${savedExpr});`;
+    : `        ${documentExpr}return toDomain(${savedExpr});`}`;
 
   // Los reclamos: el del barrido de una cola (findAndModify sobre el propio documento) y
   // el de la reconciliación (marca aparte con caducidad). El puerto los declara para los
