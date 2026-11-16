@@ -38,6 +38,8 @@ import { READ_SCOPE_DESIGNS } from '../../keel-core/test/helpers/read-scope-desi
 import { DATA_LIFECYCLE_DESIGNS } from '../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { LIFECYCLE_SABOTAGE_SPECS, isLifecycleSabotage, lifecycleBlock, lifecycleCases, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
 import { HISTORY_DESIGNS } from '../../keel-core/test/helpers/history-designs.js';
+import { ENTITY_CHECK_DESIGNS } from '../../keel-core/test/helpers/entity-check-designs.js';
+import { INVARIANT_SABOTAGE_SPECS, isInvariantSabotage, invariantBlock, invariantCases, invariantSabotageVerdict } from './lib/invariant-probes.js';
 import { batchJobStoreOperations } from '@keel-system/keel-core/gen/batch';
 import { BATCH_JOB, BATCH_ITEM_RESULT } from '@keel-system/keel-core/gen/batch-store';
 import { BATCH_DESIGNS, BATCH_JOB_DESIGNS, BATCH_KEY_DESIGNS } from '../../keel-core/test/helpers/batch-designs.js';
@@ -155,7 +157,9 @@ const SABOTAGES = {
   ...Object.fromEntries(Object.entries(BATCH_JOB_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational])),
   // Los lotes síncronos con clave (DSL 2.30, D15): con --subject=catalog-batch-keyed o catalog-batch-atomic-keyed, cada uno
   // cae en exactamente sus casos BK.
-  ...Object.fromEntries(Object.entries(BATCH_KEY_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational]))
+  ...Object.fromEntries(Object.entries(BATCH_KEY_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational])),
+  // La guarda del agregado (DSL 2.31): con --subject=catalog-invariants, cada uno cae en exactamente sus casos IC/CP.
+  ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational]))
 };
 const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -179,7 +183,7 @@ const only = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ??
 const onlySubject = args.find((arg) => arg.startsWith('--subject='))?.split('=')[1] ?? null;
 const ENGINES = (only ? [only] : ['postgresql', 'mysql']).filter((engine) => DATABASES[engine]);
 // Las formas del esquema que cubre cada sujeto (ver la cabecera).
-const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional', 'verification-codes', 'vault-scoped', 'shop-scoped', 'cards-logical', 'codes-anonymize', 'codes-delete', 'vault-logical-scoped', 'cards-history', 'cards-history-anonymize', 'vault-history-scoped', 'catalog-batch', 'catalog-batch-atomic', 'catalog-batch-async', 'catalog-batch-keyed', 'catalog-batch-atomic-keyed'];
+const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional', 'verification-codes', 'vault-scoped', 'shop-scoped', 'cards-logical', 'codes-anonymize', 'codes-delete', 'vault-logical-scoped', 'cards-history', 'cards-history-anonymize', 'vault-history-scoped', 'catalog-batch', 'catalog-batch-atomic', 'catalog-batch-async', 'catalog-batch-keyed', 'catalog-batch-atomic-keyed', 'catalog-invariants'];
 // Los sujetos DERIVADOS, por nombre: los finders de las búsquedas (DSL 2.22) en la forma de lista con un subcampo de value
 // object, el MISMO diseño que mide keel-dotnet (keel-core/test/helpers/finder-designs.js); y la autoría, que ninguna
 // fixture relacional declara: por política sobre product-catalog y DECLARADA sobre notification-mailer (raíz e hija),
@@ -206,7 +210,9 @@ const DERIVED = {
   // Los lotes asíncronos (DSL 2.30, BJ-1 a BJ-9): el MISMO diseño relacional que mide keel-spring.
   ...Object.fromEntries(BATCH_JOB_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design])),
   // Los lotes síncronos con clave (DSL 2.30, D15, BK-1 a BK-5): los MISMOS diseños relacionales que mide keel-spring.
-  ...Object.fromEntries(BATCH_KEY_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design]))
+  ...Object.fromEntries(BATCH_KEY_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design])),
+  // La guarda del agregado (DSL 2.31, IC-1 a IC-11 y CP-1 a CP-5): el MISMO diseño relacional que mide keel-spring.
+  ...Object.fromEntries(ENTITY_CHECK_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design]))
 };
 const results = [];
 
@@ -353,6 +359,13 @@ function probeScript(model, engine, db, expected) {
   const batchCode = batchBlock(model, ctx, { document: false, engine, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterCtorArgs(model, owner, ctx)})` });
   const batchJobCode = batchJobBlock(model, ctx, { document: false, engine, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterCtorArgs(model, owner, ctx)})` });
   const batchKeyCode = batchKeyBlock(model, ctx, { document: false, engine, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterCtorArgs(model, owner, ctx)})` });
+  // La guarda del agregado (DSL 2.31), también antes de los imports.
+  const invariantCode = invariantBlock(model, ctx, {
+    sampleEntity,
+    adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterCtorArgs(model, owner, ctx)})`,
+    rawOf: (id) => `await rawRow(${JSON.stringify(model.entities.find((entity) => entity.name === 'Product')?.tableName)}, ${id})`,
+    keys: derivedColumns(model, 'Product')
+  });
   const imports = [...ctx.imports].map((entry) => {
     const [symbol, file] = entry.split('|');
     return `import { ${symbol} } from '${distOf(file)}';`;
@@ -444,20 +457,11 @@ try {
   check('${bounded.table}.${bounded.column} rechaza un texto más largo que ${bounded.max}', /too long|Data too long|22001|1406/i.test(String(error?.driverError?.code ?? '') + String(error?.message)), error?.message);
 }
 ` : ''}
-${blocks.join('\n')}
-${concurrencyBlock(model, engine, roots[0], ctx)}
-${idempotencyBlock(model, engine)}
-${messagingCode}
-${claimCode}
-${reconciliationCode}
-${timerCode}
-${purgeBlock(model)}
-${purgeTimerBlock(model)}
-${lifecycleCode}
-${historyCode}
-${batchCode}
-${batchJobCode}
-${batchKeyCode}
+${invariantCode
+  // El sujeto de la guarda (DSL 2.31) solo mide sus vectores: la muestra de los demás bloques no cumple sus checks a
+  // propósito (los vectores parten de ella), y lo demás de catalog-extended ya lo mide su propio sujeto.
+  ? invariantCode
+  : [blocks.join('\n'), concurrencyBlock(model, engine, roots[0], ctx), idempotencyBlock(model, engine), messagingCode, claimCode, reconciliationCode, timerCode, purgeBlock(model), purgeTimerBlock(model), lifecycleCode, historyCode, batchCode, batchJobCode, batchKeyCode].join('\n')}
 
 await dataSource.destroy();
 console.log('@@RESULTS@@' + JSON.stringify(results));
@@ -473,6 +477,13 @@ async function rawRow(table, id, column = 'id', uuid = true) {
 ${PROBE_HELPERS}
 `
   };
+}
+
+/** Las columnas de los derivados estructurados (DSL 2.31) de una raíz, por campo. */
+function derivedColumns(model, rootName) {
+  const root = model.entities.find((entity) => entity.name === rootName);
+  if (!root) return {};
+  return Object.fromEntries(persistedMembers(model, root).filter((member) => member.kind === 'scalar' && member.field.computedSpec).map((member) => [member.name, member.field.columns.name]));
 }
 
 /**
@@ -1743,6 +1754,12 @@ for (const engine of ENGINES) {
         continue;
       }
       // El historial de cambios (DSL 2.29): verde si caen EXACTAMENTE sus casos HI de este sujeto (y ningún otro).
+      if (isInvariantSabotage(sabotage) && invariantCases(model).length > 0) {
+        const verdict = invariantSabotageVerdict(checks, sabotage, model, { document: false });
+        for (const check of checks.filter((entry) => !entry.ok && /^(IC|CP)-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
+        step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]${verdict.masked.length > 0 ? `; enmascarados: ${verdict.masked.join(', ')} (save transaccional${verdict.masked.includes('CP-4') ? ', Decimal128' : ''})` : ''}`);
+        continue;
+      }
       if (isHistorySabotage(sabotage) && historyCases(model).length > 0) {
         const verdict = historySabotageVerdict(checks, sabotage, model);
         for (const check of checks.filter((entry) => !entry.ok && /^HI-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);

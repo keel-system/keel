@@ -49,6 +49,8 @@ import { foldedShadow } from '@keel-system/keel-core/gen/relational';
 import { planService } from '../src/scaffold/index.js';
 import { DB_NAME, run, resolveRuntime, startMongo, stopDatabase } from './lib/database-container.js';
 import { sampleEntity, PROBE_HELPERS } from './lib/samples.js';
+import { ENTITY_CHECK_DESIGNS } from '../../keel-core/test/helpers/entity-check-designs.js';
+import { INVARIANT_SABOTAGE_SPECS, isInvariantSabotage, invariantBlock, invariantCases, invariantSabotageVerdict } from './lib/invariant-probes.js';
 import { finderBlock } from './lib/finder-probes.js';
 import { rankBlock, inverseBlock } from './lib/rank-inverse-probes.js';
 import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
@@ -110,7 +112,9 @@ const SABOTAGES = {
   ...Object.fromEntries(Object.entries(BATCH_JOB_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document])),
   // Los lotes síncronos con clave (DSL 2.30, D15): con --subject=catalog-batch-keyed-mongo, cada uno cae en exactamente sus
   // casos BK.
-  ...Object.fromEntries(Object.entries(BATCH_KEY_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document]))
+  ...Object.fromEntries(Object.entries(BATCH_KEY_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document])),
+  // La guarda del agregado (DSL 2.31): con --subject=catalog-invariants-mongo, cada uno cae en exactamente sus casos IC/CP.
+  ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document]))
 };
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -198,6 +202,8 @@ const SUBJECTS = [
   ...BATCH_JOB_DESIGNS.filter((design) => design.name.endsWith('-mongo')).map((design) => ({ name: design.from, label: design.name, withoutLayers: [], mutate: design.mutate })),
   // Los lotes síncronos con clave sobre documentos (DSL 2.30, D15, BK-1 a BK-4): el MISMO diseño que mide keel-spring.
   ...BATCH_KEY_DESIGNS.filter((design) => design.name.endsWith('-mongo')).map((design) => ({ name: design.from, label: design.name, withoutLayers: [], mutate: design.mutate })),
+  // La guarda del agregado sobre documentos (DSL 2.31, IC-1 a IC-11 y CP-1 a CP-5): el MISMO diseño que mide keel-spring.
+  ...ENTITY_CHECK_DESIGNS.filter((design) => design.name.endsWith('-mongo')).map((design) => ({ name: design.from, label: design.name, withoutLayers: [], mutate: design.mutate })),
   ...HISTORY_DESIGNS.filter((design) => design.name.endsWith('-mongo')).map((design) => ({
     name: design.from,
     label: design.name,
@@ -265,6 +271,14 @@ function probeScript(model, db) {
   const batchCode = batchBlock(model, ctx, { document: true, engine: 'mongodb', adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterArgs(model, owner)})` });
   const batchJobCode = batchJobBlock(model, ctx, { document: true, engine: 'mongodb', adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterArgs(model, owner)})` });
   const batchKeyCode = batchKeyBlock(model, ctx, { document: true, engine: 'mongodb', adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterArgs(model, owner)})` });
+  // La guarda del agregado (DSL 2.31), también antes de los imports.
+  const invariantRoot = model.entities.find((entity) => entity.name === 'Product');
+  const invariantCode = invariantBlock(model, ctx, {
+    sampleEntity,
+    adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterArgs(model, owner)})`,
+    rawOf: (id) => `await database.collection(${JSON.stringify(invariantRoot?.collectionName)}).findOne({ _id: new UUID(${id}).toBinary() })`,
+    keys: invariantRoot ? Object.fromEntries(documentShape(model, invariantRoot).filter((entry) => entry.field?.computedSpec).map((entry) => [entry.member, entry.name])) : {}
+  });
   const shapes = expectedShapes(model);
   const enums = new Set([
     ...Object.values(shapes.entities).flat(),
@@ -336,16 +350,11 @@ for (const { collection, specs } of INDEXES) {
   }
 }
 
-${blocks.join('\n')}
-${race}
-${stores}
-${timerCode}
-${lifecycleCode}
-${historyCode}
-${batchCode}
-${batchJobCode}
-${batchKeyCode}
-${purgeTimerBlock(model)}
+${invariantCode
+  // El sujeto de la guarda (DSL 2.31) solo mide sus vectores: la muestra de los demás bloques no cumple sus checks a
+  // propósito (los vectores parten de ella), y lo demás de catalog-extended lo mide db-check.
+  ? invariantCode
+  : [blocks.join('\n'), race, stores, timerCode, lifecycleCode, historyCode, batchCode, batchJobCode, batchKeyCode, purgeTimerBlock(model)].join('\n')}
 
 await client.close();
 console.log('@@RESULTS@@' + JSON.stringify(results));
@@ -693,6 +702,13 @@ try {
       const verdict = batchSabotageVerdict(checks, sabotage, model, 'mongodb');
       for (const check of checks.filter((entry) => !entry.ok && /^BA-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
       step(`${label}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, verdict.unmeasured ? `no observable en ${'mongodb'}: ver BATCH_ONE_TX` : `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+      continue;
+    }
+    // La guarda del agregado (DSL 2.31): verde si caen EXACTAMENTE sus casos IC/CP (sin los que enmascara el documental).
+    if (isInvariantSabotage(sabotage) && invariantCases(model).length > 0) {
+      const verdict = invariantSabotageVerdict(checks, sabotage, model, { document: true });
+      for (const check of checks.filter((entry) => !entry.ok && /^(IC|CP)-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
+      step(`${label}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]${verdict.masked.length > 0 ? `; enmascarados: ${verdict.masked.join(', ')} (save transaccional, Decimal128)` : ''}`);
       continue;
     }
     // El historial de cambios (DSL 2.29): verde si caen EXACTAMENTE sus casos HI de este sujeto (y ningún otro).

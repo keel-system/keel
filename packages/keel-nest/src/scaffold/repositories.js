@@ -43,6 +43,7 @@ import { readScopePortMethods, readScopeRelationalHelpers, readScopeRelationalMe
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import * as lifecycle from './data-lifecycle.js';
 import * as history from './history.js';
+import { saveGuardLine, DERIVED_MARK } from './entity-checks.js';
 import { parametersClass, parametersPath } from './service-parameters.js';
 import { repositoryRoots, isPaginated, resolvedByOf } from '@keel-system/keel-core/gen/features';
 export { repositoryRoots, isPaginated };
@@ -674,7 +675,7 @@ function saveMethod(model, entity, imports) {
   const versionProp = entity.declaresLockVersion ? 'lockVersion' : LOCK_VERSION.field;
   const idName = entity.idField?.name ?? 'id';
   const audits = auditStamps(model, entity);
-  const lines = [`      const orm = toOrm${entity.name}(entity);`];
+  const lines = [...saveGuardLine(entity), `      const orm = toOrm${entity.name}(entity);`];
   if (audits.some((line) => line.includes('now;'))) lines.push('      const now = new Date();');
   if (audits.some((line) => line.includes('actor;'))) {
     imports.push({ symbol: 'currentActor', from: AUDIT_ACTOR_TS });
@@ -906,6 +907,8 @@ function toOrmFunction(model, entity, root, imports, helpers) {
   const domainProps = new Set(domainMembers(model, entity).map((member) => member.name));
   for (const member of persistedMembers(model, entity)) {
     if (member.kind === 'scalar') {
+      // Un derivado estructurado (DSL 2.31) se guarda con el valor que calcula su getter.
+      if (member.field.computedSpec) lines.push(`  ${DERIVED_MARK}`);
       lines.push(`  orm.${member.name} = entity.${member.name};`);
       if (member.folded) {
         imports.push({ symbol: 'TextFold', from: TEXT_FOLD_TS });

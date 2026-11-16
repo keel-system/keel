@@ -32,6 +32,7 @@ import * as entities from './entities.js';
 import * as ids from './ids.js';
 import * as events from './events.js';
 import * as exceptions from './exceptions.js';
+import * as entityChecks from './entity-checks.js';
 import * as dtos from './dtos.js';
 import * as mappers from './mappers.js';
 import * as services from './services.js';
@@ -105,6 +106,7 @@ const GENERATORS = [
   ids,
   events,
   exceptions,
+  entityChecks,
   // Aplicación: mensajes, handlers, DTOs y mappers; el mediator que los despacha y el módulo que
   // los cablea (este necesita saber qué mappers hay).
   dtos,

@@ -35,6 +35,7 @@ import { ANNOTATIONS_TS, ENTRY_GATE_TS, HANDLERS_TS, MESSAGES_TS } from './media
 import { PAGED_RESPONSE_TS } from './dtos.js';
 import { repositoryRoots, portClass, portPath, occupantFinders, naturalKeyBatchFinder, naturalKeyFinder, PAGE_TS } from './repositories.js';
 import { deadlineHandlerNote, lateTransitionNote } from '@keel-system/keel-core/gen/deadlines';
+import { invariantHandlerNotes } from '@keel-system/keel-core/gen/entity-checks';
 import { clockDependencies, lateTransitionHint } from './timer.js';
 import { relievingOperations, idempotencyOutcomeCode, scheduleDispatch, dispatchNote, carriesEntryGate, entryGateNote, usesEntryGate, ownershipNotes } from '@keel-system/keel-core/gen';
 import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
@@ -496,6 +497,8 @@ function handlerNotes(model, operation) {
   if (expiring) notes.push(expiring);
   const late = lateTransitionNote(model, operation);
   if (late) notes.push(`${late} ${lateTransitionHint(model)}`);
+  // La guarda del agregado y sus derivados (DSL 2.31): neutrales, las mismas en los cuatro.
+  for (const note of invariantHandlerNotes(model, operation)) notes.push(note);
   const cacheParam = operation.messageKind === 'query' ? 'query' : 'command';
   const cached = cacheNote(model, operation, { call: `await this.operationCache.getOrLoad({cache}, ${cacheParam}, () => ...)` });
   if (cached) notes.push(cached);

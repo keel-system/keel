@@ -35,6 +35,7 @@ import { DOCUMENT_SCOPE_LINE, readScopeDocumentHelpers, readScopeDocumentMethods
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import * as lifecycle from './data-lifecycle.js';
 import * as history from './history.js';
+import { saveGuardLine, DERIVED_MARK } from './entity-checks.js';
 import { sortablePaths } from '@keel-system/keel-core/gen/document';
 
 // ─── Valores ─────────────────────────────────────────────────────────────────
@@ -143,7 +144,9 @@ function entityFunctions(model, entity, use, vos) {
   for (const entry of shape) {
     const value = `entity.${entry.member}`;
     if (entry.kind === 'id' || entry.kind === 'scalar') {
-      writes.push(`    ${entry.name}: ${writeScalar(entry.field, value, use)}`);
+      // Un derivado estructurado (DSL 2.31) se guarda con el valor que calcula su getter.
+      const derived = entry.field?.computedSpec ? `    ${DERIVED_MARK}\n` : '';
+      writes.push(`${derived}    ${entry.name}: ${writeScalar(entry.field, value, use)}`);
     } else if (entry.kind === 'folded') {
       const folded = members.find((m) => m.kind === 'scalar' && m.name === entry.of)?.folded;
       use.import({ symbol: 'TextFold', from: TEXT_FOLD_TS });
@@ -315,7 +318,7 @@ function saveMethod(model, entity, use) {
   const versioned = entity.usesOptimisticLocking;
   const policyTimestamps = model.audit?.timestamps === 'all';
   const policyAuthorship = model.audit?.authorship === 'all';
-  const lines = [`      const document = toDocument${entity.name}(entity);`];
+  const lines = [...saveGuardLine(entity), `      const document = toDocument${entity.name}(entity);`];
   const declared = declaredAuditStamps(model, entity);
   if (declared.some((line) => line.includes('now;')) || policyTimestamps) lines.push('      const now = new Date();');
   if (declared.some((line) => line.includes('actor;')) || policyAuthorship) {

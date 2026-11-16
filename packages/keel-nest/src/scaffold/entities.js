@@ -14,6 +14,7 @@ import { DIRS, classPath, declType, entityDir, fieldImports, tsModule, tsdoc } f
 import { INVALID_TRANSITION_TS } from './exceptions.js';
 import { DOMAIN_EVENT_TS } from './events.js';
 import { lateGuardBlock, transitionNeedsClock } from './timer.js';
+import { invariantMembers } from './entity-checks.js';
 
 export function generate(model) {
   return (model.entities ?? []).map((entity) => renderEntity(model, entity));
@@ -126,17 +127,24 @@ ${assigns.join('\n')}
   // Con plazos de negocio (DSL 2.26) la guarda lleva además el rechazo tardío, con la hora y los plazos vigentes.
   if (entity.lifecycle) parts.push(lateGuardBlock(model, entity, imports) ?? renderTransitionTo(entity));
 
+  // La guarda del agregado (DSL 2.31): ensureInvariants(), sus derivados y sus ayudas (scaffold/entity-checks.js).
+  const guard = invariantMembers(model, entity, imports);
+  if (guard.members.length > 0) parts.push(guard.members.join('\n\n'));
+
   // Solo getters. Las colecciones salen como copia: el alta y la baja de hijas las gobiernan
-  // métodos de negocio de la raíz.
+  // métodos de negocio de la raíz. Un derivado estructurado no lee su campo: lo calcula.
   parts.push(
     stateMembers
-      .map((member) => `  get ${member.name}(): ${member.type} {\n    return ${isCollection(member) ? `[...this.#${member.name}]` : `this.#${member.name}`};\n  }`)
+      .map((member) => guard.getters.get(member.name) ?? `  get ${member.name}(): ${member.type} {\n    return ${isCollection(member) ? `[...this.#${member.name}]` : `this.#${member.name}`};\n  }`)
       .join('\n\n')
   );
 
   const stateDoc = stateMembers.map((member) => {
     const description = member.field?.description ?? member.doc ?? (member.kind === 'externalRef' ? `Id de la raíz del agregado ${member.relation.entity} (otro agregado: solo el id).` : null);
-    const computed = member.field?.computed ? `TODO computed: ${member.field.computed}` : null;
+    // Un derivado en prosa lo escribe el agente; el estructurado (DSL 2.31) lo calcula el getter y este valor se ignora.
+    const computed = member.field?.computedSpec
+      ? 'Derivado (DSL 2.31): lo calcula el getter desde las hijas; el valor que llega aquí se ignora.'
+      : member.field?.computed ? `TODO computed: ${member.field.computed}` : null;
     return `${tsdoc([description, computed], '  ')}  readonly ${member.name}: ${member.type};`;
   });
 
@@ -147,7 +155,7 @@ ${stateDoc.join('\n')}
 
 ${header.length > 0 ? `${header.join('\n')}\n` : ''}export class ${entity.name} {
 ${parts.join('\n\n')}
-}`;
+}${guard.module.length > 0 ? `\n\n${guard.module.join('\n\n')}` : ''}`;
   return { path: file, content: tsModule(file, imports, body) };
 }
 

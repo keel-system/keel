@@ -10,18 +10,35 @@
 | A1 | keel-core: schema, reglas, `INVARIANT_VIOLATED`, docs, enum a 2.31 y la frontera de los cuatro | hecho (2026-11-16) |
 | A2 | Lo neutral: `entity-checks.js` (plan, referencia, contrato, casos `IC-*`), `computed.js` (D5, casos `CP-*`), el modelo y el OpenAPI | hecho (2026-11-16) |
 | A3 | keel-spring: `ensureInvariants()`, su llamada en el save, el derivado como getter, `InvariantViolatedException` y `invariant-check` | hecho (2026-11-16, § Medidas de A3) |
-| A4-A9 | Fase A: DSL 2.31 (R7) | pendiente |
+| A4 | keel-nest: la misma guarda sobre el `Decimal` del proyecto, su llamada en el save de los dos adaptadores y las sondas de db-check/doc-check | hecho (2026-11-16, § Medidas de A4) |
+| A5-A9 | Fase A: DSL 2.31 (R7) | pendiente |
 | B0-B9 | Fase B: DSL 2.32 (R8) | pendiente |
 
-**Para retomar.** A3 hecho: keel-spring genera la guarda entera y su frontera ya no rechaza la 2.31. `src/scaffold/entity-checks.js`
-emite en cada entidad cuyo agregado guarda algo `ensureInvariants()` (hijas, derivados, cotas, checks: el orden de D23),
-el derivado como getter que calcula (`compute<Campo>()`) e `InvariantViolatedException` (422, extiende
-`BusinessException`, así que el `ApiExceptionHandler` ya la traduce); `saveGuardLine` es la primera línea del save de
-los dos adaptadores. El mensaje es neutral (`invariantMessage`) y las notas del handler también
-(`invariantHandlerNotes(model, operation)`). Red: `npm run invariant-check` (`src/lib/invariant-probes.js`). Siguiente:
-A4, keel-nest, con los mismos vectores (`INVARIANT_VECTORS`) en `scripts/lib/invariant-probes.js` de su
-`db-check`/`doc-check`, quitando `entityChecksPendingErrors` de su frontera; las notas y el mensaje ya son neutrales, y
-`keel-nest` tiene que decir lo mismo que keel-spring (paridad).
+**Para retomar.** A4 hecho: keel-nest genera la guarda entera y su frontera ya no rechaza la 2.31.
+`src/scaffold/entity-checks.js` emite `ensureInvariants()` en cada entidad cuyo agregado guarda algo (el orden de D23), el
+derivado como getter que calcula sobre el `Decimal` del proyecto (`#compute<Campo>()`), las ayudas fuera de la clase e
+`InvariantViolatedException` (422, extiende `BusinessException`); `saveGuardLine` es la primera línea dentro de la
+transacción del save de los dos adaptadores, y el mapeo marca la línea del derivado (`DERIVED_MARK`). Red:
+`test/entity-checks.test.js` (ejecuta la entidad transpilada contra los vectores sin base) y `db-check`/`doc-check`
+sobre `catalog-invariants`/`-mongo` (`scripts/lib/invariant-probes.js`). Siguiente: A5, keel-dotnet, con los mismos
+vectores en `scripts/lib/invariant-probes.js` de su `db-check`/`doc-check`, quitando `entityChecksPendingErrors` de su
+frontera. Pendiente para A7: ninguna matriz de paridad tiene todavía fila para la guarda ni el derivado (tampoco
+keel-spring); se abren a la vez en el catálogo neutral (`gen/mechanisms.js`) y en los cuatro.
+
+## Medidas de A4 (2026-11-16)
+
+- `db-check --subject=catalog-invariants`: 102/102 en PostgreSQL y en MySQL (el esquema y los 30 vectores). `doc-check
+  --subject=catalog-invariants-mongo`: 43/43. Ese sujeto solo ejecuta sus vectores: la muestra de los demás bloques no
+  cumple sus checks a propósito, y lo demás de catalog-extended ya lo mide su propio sujeto.
+- Los 12 sabotajes caen en exactamente sus casos en PostgreSQL y en MongoDB, y los tres que dependen del motor
+  (`ic-no-call`, `ic-after-write`, `cp-no-overflow`) también en MySQL. Lo mismo que midió A3 en keel-spring:
+  `ic-after-write` no lo ve IC-10 (el save es transaccional en los dos modelos), y en documental tampoco CP-4
+  (Decimal128 admite la suma); `invariantMasks` lo dice con su motivo.
+- `cp-stale` en keel-nest es quitar la línea del derivado del mapeo: TypeORM no toca una columna `undefined` al
+  actualizar (conserva la de antes), y el `$set` del documento no lleva el campo.
+- Lo destapó la guarda: el generador de muestras de las sondas ignoraba el formato del ELEMENTO de una lista (su
+  `text` es nulo; el formato es el heredado del value type), y `notification-mailer-mongo` dejaba de guardar su muestra
+  en `document-persistence.test.js`. Arreglado en `scripts/lib/samples.js`.
 
 ## Medidas de A3 (2026-11-16)
 

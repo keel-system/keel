@@ -154,7 +154,9 @@ export function sampleValue(model, field, ctx, salt) {
     if (args.some((arg) => arg == null || arg === '[null]')) return null;
     return `new ${vo.name}(${args.join(', ')})`;
   }
-  const text = field.text ?? {};
+  // El elemento de una lista no trae `text`: su formato es el heredado de su value type, y desde la guarda del agregado
+  // (DSL 2.31) la entidad lo hace cumplir al guardar.
+  const text = field.text ?? (field.inheritedPattern ? { pattern: field.inheritedPattern } : {});
   const numeric = field.numeric ?? {};
   switch (field.base) {
     case 'uuid':
