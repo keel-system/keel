@@ -1,8 +1,30 @@
 # Evaluación del DSL 2.24: lo que la industria pide y el diseño todavía no puede decir
 
-Fecha: 2026-11-06 · Alcance: `keel-core/assets/core` (schemas y `docs/dsl/`), DSL 2.24 · Naturaleza: **evaluación con
-recomendaciones justificadas**. No es un plan: no fija orden de ejecución ni incrementos, y ninguna propuesta está
-lista para entrar tal cual.
+Fecha: 2026-11-06 · Estado actualizado: **2026-11-16 (DSL 2.30)** · Alcance: `keel-core/assets/core` (schemas y
+`docs/dsl/`), DSL 2.24 · Naturaleza: **evaluación con recomendaciones justificadas**. No es un plan: no fija orden de
+ejecución ni incrementos, y ninguna propuesta está lista para entrar tal cual.
+
+## 0. Estado (2026-11-16)
+
+Diez días después de escribirse, las cuatro recomendaciones de prioridad alta, la del historial y la de los lotes ya
+están en el DSL. Cada una entró con su plan, se implementó en los cuatro generadores con red en vivo y sabotaje, y
+cerró con corridas de control. El texto de §§ 1-8 se conserva como se escribió, con una nota de estado en cada
+recomendación. **El orden de lo que queda, por el valor que añade a Keel, está en § 9.**
+
+| # | Entró en | Plan (en `completed_plans/`) | Cierre | Lo que quedó fuera |
+|---|---|---|---|---|
+| R1 | DSL 2.25 (`api.concurrency`) | `PLAN-DSL-225-ESCRITURA-CONDICIONAL.md` | 2026-11-07, control 4×55/55 | `If-None-Match`/`304` (optimización, como decía la evaluación) y la paridad de cabeceras en keel-recover |
+| R2 | DSL 2.26 (`lifecycle.deadlines` + cronómetro único) | `PLAN-DSL-226-PLAZOS.md` | 2026-11-09 | Medir con más de dos réplicas, la purga de `keel_timer` en lotes, `catalog-extended` a `--ready` |
+| R3b, R3c | DSL 2.27 (`reads`/`readMiss` en `scoping` y `ownership`, `level: optional`) | `PLAN-DSL-227-LECTURA-ACOTADA.md` | 2026-11-11, 8 de 11 corridas | La paridad en vivo de keel-recover sobre `shop-api` y `conduit` |
+| R3a | **Parcial** en 2.27: `scoping` estructural en lectura | ídem | ídem | El bloque `tenancy` (todas las raíces, unicidad por inquilino) y la *row-level security* (D9) |
+| R4 | DSL 2.28 (`personal`, `deletion: logical`, `restorableFor`, `retention`) | `PLAN-DSL-228-CICLO-DE-VIDA.md` | 2026-11-12, 5 corridas 24/24 | La operación de supresión del interesado (RGPD art. 17) y la red en vivo de PD-3 en keel-spring |
+| R12 | DSL 2.29 (`audit.history`, `output: { history }`) | `PLAN-DSL-229-HISTORIAL.md` | 2026-11-13, 5 corridas 37/37 | La reconstrucción `asOf`, el historial de entidades que no son raíz y la caché de la query de historial |
+| R5 | DSL 2.30 (`use-cases.<op>.batch`, `sync` y `async`) | `PLAN-DSL-230-LOTES.md` | 2026-11-15, 6 corridas 36/36 | Nada del DSL. **Corrige § 7**: `execution: async` sí entró como primitivo (el trabajo es del método, tabla `batch_job`) |
+
+Se cumplió también la predicción de § 8: `gen/read-scope.js` se diseñó como **el** predicado implícito y el borrado
+lógico de 2.28 se le compuso, y los plazos (R2) y la retención (R4) salen del mismo cronómetro.
+
+**Pendientes: R6, R7, R8, R9, R10, R11, R13, R14, R15, R16 y R17**, más los dos restos de R3a y R4.
 
 ## 1. Cómo leer este documento
 
@@ -59,31 +81,37 @@ Prioridad = cuánto daño evita × con qué frecuencia aparece el escenario. Cos
 los cuatro generadores (S: un emisor neutral y notas; M: emisores por generador y redes en vivo; L: capa o mecanismo
 nuevo con sus checks).
 
-| # | Recomendación | Escenario típico | Hoy | Prioridad | Coste |
-|---|---|---|---|---|---|
-| R1 | Concurrencia optimista de extremo a extremo | Dos personas editan la misma ficha | Defecto silencioso | **Alta** | M |
-| R2 | Plazos de negocio sobre el estado | Reserva que caduca a los 15 min | Prosa + carrera silenciosa | **Alta** | M |
-| R3 | Autorización a nivel de fila en lectura | Multiinquilino, «mis pedidos», lecturas personalizadas | Prosa por operación; dos `F-*` | **Alta** | L |
-| R4 | Ciclo de vida del dato | Borrado lógico, retención, RGPD | Inexpresable | **Alta** | L |
-| R5 | Lotes con resultado por elemento | Importar 500 filas y que fallen 3 | Inexpresable | Media | M |
-| R6 | Tipos suma (variantes discriminadas) | Medio de pago tarjeta \| transferencia | Prosa o `json` opaco | Media | M |
-| R7 | Invariantes entre campos y derivados, con vocabulario cerrado | `endDate > startDate`, `total = Σ líneas` | Prosa | Media | M |
-| R8 | Búsqueda: `in`/`ne`, texto libre, orden elegido por el cliente, cursor | Listados de back-office | Parcial; `cursor` sin significado | Media | M |
-| R9 | Evolución del contrato: deprecación y versión de eventos | Retirar un endpoint o el campo de un evento | Inexpresable | Media | M |
-| R10 | Orden de eventos por clave | Los eventos de un pedido llegan en orden | Implícito | Media-baja | S |
-| R11 | Webhooks salientes | Notificar por HTTP a sistemas de clientes | Inexpresable | Media | L |
-| R12 | Historial de cambios consultable | Auditoría regulatoria | Inexpresable | Media-baja | M |
-| R13 | Subida directa al almacenamiento | Archivos grandes | Inexpresable | Media-baja | M |
-| R14 | Tipos temporales (`time`, `duration`) y zona | Horarios, SLA | Prosa o `string` | Baja | S |
-| R15 | Cuotas de negocio por plan | Plan gratuito con límite mensual | Inexpresable | Baja | M |
-| R16 | Notificaciones por otros canales (SMS, push) | Avisos al usuario | Inexpresable | Baja | L |
-| R17 | Contenido localizado | Catálogo en varios idiomas | Prosa | Baja | M |
+La columna **Estado** es de 2026-11-16; la prioridad es la original de la evaluación. El orden vigente de lo pendiente
+está en § 9.
+
+| # | Recomendación | Escenario típico | Hoy (2.24) | Prioridad | Coste | Estado |
+|---|---|---|---|---|---|---|
+| R1 | Concurrencia optimista de extremo a extremo | Dos personas editan la misma ficha | Defecto silencioso | **Alta** | M | Hecha (2.25) |
+| R2 | Plazos de negocio sobre el estado | Reserva que caduca a los 15 min | Prosa + carrera silenciosa | **Alta** | M | Hecha (2.26) |
+| R3 | Autorización a nivel de fila en lectura | Multiinquilino, «mis pedidos», lecturas personalizadas | Prosa por operación; dos `F-*` | **Alta** | L | Hecha (2.27), salvo `tenancy` |
+| R4 | Ciclo de vida del dato | Borrado lógico, retención, RGPD | Inexpresable | **Alta** | L | Hecha (2.28), salvo la supresión del interesado |
+| R5 | Lotes con resultado por elemento | Importar 500 filas y que fallen 3 | Inexpresable | Media | M | Hecha (2.30), con `async` |
+| R6 | Tipos suma (variantes discriminadas) | Medio de pago tarjeta \| transferencia | Prosa o `json` opaco | Media | M | Pendiente (§ 9: 4.º) |
+| R7 | Invariantes entre campos y derivados, con vocabulario cerrado | `endDate > startDate`, `total = Σ líneas` | Prosa | Media | M | Pendiente (§ 9: 1.º) |
+| R8 | Búsqueda: `in`/`ne`, texto libre, orden elegido por el cliente, cursor | Listados de back-office | Parcial; `cursor` sin significado | Media | M | Pendiente (§ 9: 2.º) |
+| R9 | Evolución del contrato: deprecación y versión de eventos | Retirar un endpoint o el campo de un evento | Inexpresable | Media | M | Pendiente (§ 9: 3.º) |
+| R10 | Orden de eventos por clave | Los eventos de un pedido llegan en orden | Implícito | Media-baja | S | Pendiente (§ 9: 3.º, con R9) |
+| R11 | Webhooks salientes | Notificar por HTTP a sistemas de clientes | Inexpresable | Media | L | Pendiente (§ 9: 5.º) |
+| R12 | Historial de cambios consultable | Auditoría regulatoria | Inexpresable | Media-baja | M | Hecha (2.29) |
+| R13 | Subida directa al almacenamiento | Archivos grandes | Inexpresable | Media-baja | M | Pendiente (§ 9: 6.º) |
+| R14 | Tipos temporales (`time`, `duration`) y zona | Horarios, SLA | Prosa o `string` | Baja | S | Pendiente (§ 9: 9.º) |
+| R15 | Cuotas de negocio por plan | Plan gratuito con límite mensual | Inexpresable | Baja | M | Pendiente (§ 9: vigilar) |
+| R16 | Notificaciones por otros canales (SMS, push) | Avisos al usuario | Inexpresable | Baja | L | Pendiente (§ 9: vigilar) |
+| R17 | Contenido localizado | Catálogo en varios idiomas | Prosa | Baja | M | Pendiente (§ 9: vigilar) |
 
 ---
 
 ## 4. Prioridad alta
 
 ### R1. Concurrencia optimista de extremo a extremo
+
+> **Estado (2026-11-16): hecha en DSL 2.25** (`api.concurrency`, `PRECONDITION_FAILED`/`PRECONDITION_REQUIRED` en
+> `framework-errors.md`). Plan: `completed_plans/PLAN-DSL-225-ESCRITURA-CONDICIONAL.md`.
 
 **Escenario.** Ana abre la ficha de un producto a las 10:00. Luis cambia el precio a las 10:02. Ana guarda la
 descripción a las 10:05 con el formulario que cargó a las 10:00, y el precio de Luis desaparece. Es el problema de la
@@ -132,6 +160,9 @@ optimización y no corrección.
 ---
 
 ### R2. Plazos de negocio sobre el estado
+
+> **Estado (2026-11-16): hecha en DSL 2.26** (`lifecycle.deadlines`), y con ella el cronómetro único del servicio
+> (`keel_timer`), al que migraron las purgas, el `schedule` y el relay. Plan: `completed_plans/PLAN-DSL-226-PLAZOS.md`.
 
 **Escenario.** Una reserva de stock caduca a los 15 minutos si no se paga. Una invitación caduca a los 7 días. Un
 carrito se abandona a las 24 horas. Una oferta vence en su fecha. Un código de verificación vale 10 minutos. Es de lo
@@ -190,6 +221,11 @@ para validar sobre `stock-reservation`, que ya tiene la forma «reserva → conf
 ---
 
 ### R3. Autorización a nivel de fila en lectura
+
+> **Estado (2026-11-16): hecha en DSL 2.27, salvo el bloque `tenancy`.** R3b y R3c entraron como se proponen aquí
+> (`reads`/`readMiss`, `level: optional`). R3a entró como `scoping` estructural en lectura, no como un bloque nuevo:
+> `tenancy` (todas las raíces a la vez y la unicidad por inquilino) espera a un diseño multiinquilino real (D9 del plan).
+> Plan: `completed_plans/PLAN-DSL-227-LECTURA-ACOTADA.md`.
 
 Son tres escenarios con la misma raíz: **el DSL decide quién puede *ejecutar* una operación, pero apenas decide qué
 *filas* ve cada uno.** Es el riesgo número uno del OWASP API Security Top 10 (Broken Object Level Authorization), y el
@@ -273,6 +309,10 @@ de todo el método.
 
 ### R4. Ciclo de vida del dato: borrado lógico, retención y datos personales
 
+> **Estado (2026-11-16): hecha en DSL 2.28** (`personal`, `deletion: logical`, `restorableFor`/`restores`,
+> `retention`, y `docs/keel/personal-data.md` igual en los cuatro). Queda fuera la operación de supresión del
+> interesado (RGPD art. 17). Plan: `completed_plans/PLAN-DSL-228-CICLO-DE-VIDA.md`.
+
 **Escenario.**
 
 - **Borrado lógico**: «borrar» un cliente lo oculta pero conserva sus facturas, puede deshacerse durante 30 días, y su
@@ -335,6 +375,10 @@ hecho a mano: la unicidad que impide volver a registrar el email de alguien que 
 
 ### R5. Lotes con resultado por elemento
 
+> **Estado (2026-11-16): hecha en DSL 2.30** (`use-cases.<op>.batch`). Fue más allá de la propuesta: `execution: async`
+> entró también, con el trabajo como tabla del método (`batch_job`), y no como el patrón de la nota de abajo. La
+> idempotencia del lote, síncrono y asíncrono, la guarda ese mismo trabajo. Plan: `completed_plans/PLAN-DSL-230-LOTES.md`.
+
 **Escenario.** Importar un CSV de 500 productos, actualizar en bloque 200 precios o enviar 50 notificaciones de una
 vez. Lo habitual es que se procesen las válidas y se informe de cada inválida con su error: respuesta multiestado o
 207 con un resultado por elemento.
@@ -372,6 +416,8 @@ patrón en `methodology.md` antes que añadir sintaxis.
 
 ### R6. Tipos suma (variantes discriminadas)
 
+> **Estado (2026-11-16): pendiente.** 4.º en el orden de § 9.
+
 **Escenario.** Un medio de pago es una tarjeta (últimos 4 dígitos y marca) **o** una transferencia (IBAN). Un destino
 de notificación es un email **o** un teléfono. Una regla de precio es un porcentaje **o** un importe fijo. En el cable
 suele ser `{"kind": "card", ...}` con `oneOf` en OpenAPI.
@@ -407,6 +453,10 @@ que un value object no tiene, y su valor es mucho menor.
 ---
 
 ### R7. Invariantes entre campos y derivados, con vocabulario cerrado
+
+> **Estado (2026-11-16): pendiente, 1.º en el orden de § 9.** Desde la evaluación ha ganado evidencia propia: el
+> `designGap` `cart-line-sum-over-max` (cuatro corridas de `shop-api`) ya da dos servidores distintos para el mismo
+> diseño, y la 2.27 dejó aquí los derivados que dependen del llamante (D9).
 
 **Escenario.** Validaciones como `endDate` posterior a `startDate`, «si el estado es `cancelled`, `cancellationReason`
 es obligatorio», «el descuento no supera el subtotal» o «el total es la suma de las líneas». Las validaciones y los
@@ -450,6 +500,10 @@ cruzan agregados (la referencia ya las prohíbe).
 
 ### R8. Búsqueda: `in`/`ne`, texto libre, orden elegido por el cliente y cursor
 
+> **Estado (2026-11-16): pendiente, 2.º en el orden de § 9.** `pagination.style: cursor` sigue en el enum de
+> `api.schema.json` sin que ningún generador lo sirva. La 2.29 lo volvió a dejar fuera a propósito (el historial tiene
+> orden fijo: D10), y el `designGap` `list-order-in-prose` salió en tres corridas de `catalog`.
+
 **Escenario.** Las pantallas de back-office filtran por «estado en (`active`, `draft`)», buscan «texto en nombre o
 descripción», dejan al usuario ordenar por columna y, en volúmenes grandes, paginan por cursor.
 
@@ -492,6 +546,8 @@ relevancia o el *ranking* de la búsqueda.
 
 ### R9. Evolución del contrato: deprecación y versión de eventos
 
+> **Estado (2026-11-16): pendiente.** 3.º en el orden de § 9, junto con R10.
+
 **Escenario.** Un endpoint se retira en seis meses y sus consumidores reciben las cabeceras `Deprecation` y `Sunset`
 (RFC 8594) entretanto. Un evento cambia de forma de manera incompatible y se publica v2 junto a v1 durante una
 transición.
@@ -532,6 +588,8 @@ lo largo del tiempo, y encaja con `system.yaml` y con el registry.
 
 ### R10. Orden de eventos por clave
 
+> **Estado (2026-11-16): pendiente.** 3.º en el orden de § 9, junto con R9.
+
 **Escenario.** Los eventos de un mismo pedido (`OrderPlaced`, `OrderPaid`, `OrderShipped`) se consumen en orden. Los
 de pedidos distintos pueden ir en paralelo.
 
@@ -548,6 +606,8 @@ las compensaciones y las réplicas de `dependencies`.
 ---
 
 ### R11. Webhooks salientes
+
+> **Estado (2026-11-16): pendiente.** 5.º en el orden de § 9.
 
 **Escenario.** En una plataforma B2B, los clientes registran una URL y reciben un `POST` firmado cuando cambia algo
 suyo, con reintentos, desactivación tras fallos sostenidos y la posibilidad de verificar la firma. Es el modelo de
@@ -582,6 +642,9 @@ elige un tercero.
 
 ### R12. Historial de cambios consultable
 
+> **Estado (2026-11-16): hecha en DSL 2.29** (`audit.history`, `output: { history }` con `historyFilter`), con los
+> campos `personal` anonimizados también en el historial. Plan: `completed_plans/PLAN-DSL-229-HISTORIAL.md`.
+
 **Escenario.** En banca, salud o seguros hay que poder responder qué valía un campo en una fecha, quién lo cambió y
 desde qué valor.
 
@@ -599,6 +662,8 @@ la propiedad observable que se suele pedir de él.
 
 ### R13. Subida directa al almacenamiento
 
+> **Estado (2026-11-16): pendiente.** 6.º en el orden de § 9.
+
 **Escenario.** Un vídeo de 2 GB no debe atravesar el servicio. El cliente pide una URL de subida prefirmada, sube
 directamente al almacenamiento y confirma.
 
@@ -615,6 +680,9 @@ confirmar» del campo `file`: cuándo se valida el tipo y el tamaño declarados 
 ---
 
 ## 6. Prioridad baja (vigilar)
+
+> **Estado (2026-11-16): las cuatro siguen pendientes.** R14 es el 9.º en el orden de § 9; R15, R16 y R17 siguen en
+> vigilancia hasta que un diseño los pida.
 
 - **R14. Tipos temporales.** Faltan `time` (hora del día: horarios de apertura) y `duration` (un SLA, una ventana).
   Hoy acaban como `string` con patrón o como `int` en una unidad que solo dice la `description`. La zona horaria de
@@ -643,7 +711,7 @@ Esta lista es la mitad del valor del documento: lo que el test de admisión mand
 | CQRS, *event sourcing*, réplicas de lectura, vistas materializadas | Patrones de implementación. Lo observable (historial, lectura replicada de un dato ajeno) ya tiene o tendría su primitivo (R12, `dependencies.replica`) |
 | Sagas orquestadas | `activations` + `compensations` + `reconciledBy` ya expresan los hechos. El orquestador es una forma de construirlo |
 | GraphQL, gRPC, SSE/WebSocket | Un estilo de API sí es contrato con el cliente. Pero `api.style: rest` es la única puerta que hoy miden los cuatro generadores, y abrir otra multiplica las redes por estilo. Habría que esperar a un diseño real que lo exija, sobre todo para el tiempo real (SSE), que es el más pedido |
-| Operaciones asíncronas como primitivo | Ya expresables (ver la nota de R5). Mejor documentar el patrón |
+| ~~Operaciones asíncronas como primitivo~~ | **Revertido por la 2.30** (2026-11-15): el lote `async` entró con el trabajo como tabla del método, porque obligar a cada diseño a modelar su entidad de trabajo repetía la misma mecánica en todos. Sigue sin entrar una operación asíncrona genérica que no sea un lote |
 | Herencia entre entidades | Coste alto, valor bajo frente a R6 |
 
 ## 8. Lectura de conjunto
@@ -667,14 +735,63 @@ robustez añaden.
 **Con qué contrastar cada una antes de admitirla.** Siguiendo la regla del propio método (ningún primitivo sin un
 diseño que lo pida):
 
-| Recomendación | Diseño de contraste |
-|---|---|
-| R1 | `product-catalog` o `catalog-extended`, con un escenario de dos lecturas y dos escrituras separadas |
-| R2 | `stock-reservation`, añadiendo la caducidad de la reserva |
-| R3b, R3c | `shop-api` y `conduit`: las fronteras ya están registradas y la paridad las mediría |
-| R3a | `asset-vault`, que ya usa `scoping` |
-| R4 | `profile-directory`, el más cercano a datos personales |
-| R8 | `catalog-extended`, la búsqueda que 2.22 dejó fuera |
+| Recomendación | Diseño de contraste | Estado (2026-11-16) |
+|---|---|---|
+| R1 | `product-catalog` o `catalog-extended`, con un escenario de dos lecturas y dos escrituras separadas | Contrastada y cerrada (2.25) |
+| R2 | `stock-reservation`, añadiendo la caducidad de la reserva | Cerrada (2.26) |
+| R3b, R3c | `shop-api` y `conduit`: las fronteras ya están registradas y la paridad las mediría | Cerradas (2.27); falta la paridad en vivo de keel-recover |
+| R3a | `asset-vault`, que ya usa `scoping` | `scoping` en lectura cerrado (2.27); `tenancy` sin diseño |
+| R4 | `profile-directory`, el más cercano a datos personales | Cerrada (2.28) |
+| R8 | `catalog-extended`, la búsqueda que 2.22 dejó fuera | Pendiente |
 
 Con eso, cada recomendación pasaría de hipótesis de industria a hueco medido, que es la única forma en que el DSL ha
 crecido hasta ahora.
+
+## 9. Lo pendiente, ordenado por el valor que añade a Keel (2026-11-16)
+
+La prioridad de § 3 medía daño evitado × frecuencia en la industria. Con seis recomendaciones dentro, el orden de lo
+que queda se mide con lo que más pesa en Keel, por este orden:
+
+1. **Rompe la regla de equivalencia o es un defecto silencioso.** Si el mismo diseño ya da servidores distintos en los
+   cuatro generadores, o falla sin que lo vea una corrida verde, va primero. Es la tesis del método.
+2. **Hay evidencia propia**: `designGap` repetidos (`corrida-metrics.js series`), fronteras `F-*`, o una regla escrita
+   del propio método que hoy no se cumple. Lo que solo tiene evidencia de industria sigue siendo hipótesis (§ 1).
+3. **Reduce la huella del agente**: código que hoy escribe el agente en cada corrida y podría escribir `build`.
+4. **Amplía qué servicios se pueden diseñar**, o protege la flota (`system.yaml`, registry), que es la tesis de producto.
+5. **Coste**: a igual valor, primero lo más barato.
+
+| Orden | # | Qué | Valor para Keel | Evidencia propia | Coste |
+|---|---|---|---|---|---|
+| 1 | R7 | Invariantes entre campos y derivados (`checks`, `computed: { sum, count }`) | Corrección + equivalencia + huella | `cart-line-sum-over-max` (4 corridas, keel-go rechaza y keel-dotnet acepta); «guarda solo donde hay escenario»; derivados por llamante dejados por la 2.27 | M |
+| 2 | R8 | Búsqueda: retirar o definir `cursor`, `sortable`, `in`/`ne`, texto libre | Regla escrita incumplida + huella + contrato con la interfaz | `cursor` valida sin significar nada; `list-order-in-prose` (3 corridas); 2.22 y 2.29 lo dejaron fuera por escrito | S (cursor, `in`/`ne`) → M (texto libre, `sortable`) |
+| 3 | R9 + R10 | Contrato de eventos en el tiempo: deprecación, `version`/`alsoPublish` y orden por clave | Primer primitivo de flota; regla nueva para `keel system check` | Ninguna corrida; `eventVersion` de la envoltura no tiene dónde declararse | M + S |
+| 4 | R6 | Tipos suma (`discriminator` + `variants`) | Validación en el borde, `oneOf` en el OpenAPI derivado | Ninguna; hipótesis de industria | M |
+| 5 | R11 | Webhooks salientes | Abre una clase de servicio nueva (plataforma B2B); reutiliza outbox, reintentos y anti-SSRF | Ninguna | L |
+| 6 | R13 | Subida directa al almacenamiento | Desbloquea medios grandes; decide dónde se cumplen `allowedContentTypes`/`maxSizeMb` | Indirecta: la subida es zona de fricción (`upload-type-rejection`, 5 corridas, aunque es de errores sin declarar y no de subida directa) | M |
+| 7 | R4 (resto) | Operación de supresión del interesado (RGPD art. 17) | Cumplimiento verificable; contrastable con los campos `personal` que ya existen | Fuera de la 2.28 a propósito | M |
+| 8 | R3a (resto) | Bloque `tenancy` y unicidad por inquilino | Defensa por construcción en SaaS multiinquilino | Esperando un diseño multiinquilino real (D9 de la 2.27) | L |
+| 9 | R14 | Tipos temporales `time` y `duration` | Comodidad con algo de corrección (unidades en prosa) | Ninguna | S |
+| — | R15, R16, R17 | Cuotas de negocio, otros canales, contenido localizado | Bajo hasta que un diseño los pida | Ninguna | M / L / M |
+
+**Por qué R7 primero.** Es el único pendiente que ya rompe la regla que da sentido a los cuatro generadores: el mismo
+diseño de `shop-api` produce un 400 en keel-go y un alta silenciosa en keel-dotnet. Además, las invariantes entre
+campos son la mayor parte de las reglas de un CRUD, y hoy las escribe el agente solo donde hay un escenario que las
+pida. Contraste natural: `shop-api` (`addToCart`/`mergeCart` contra el máximo de `count`).
+
+**Por qué R8 segundo, y empezando por lo barato.** `pagination.style: cursor` es la única deuda de esta lista que
+contradice una regla escrita del método («un spec que valida es un spec que esta CLI entiende entero»), y se arregla
+con coste S retirándolo del enum mientras no haya un generador que lo sirva. `in`/`ne` amplía el vocabulario de 2.22
+sin cambiar su naturaleza. `sortable` y la búsqueda libre ya tienen corridas que los piden. Contraste: `catalog-extended`.
+
+**Por qué R9 + R10 por delante de R6 sin tener evidencia.** Todo lo que entró hasta ahora protege un servicio aislado.
+R9 es el primero que protege la flota a lo largo del tiempo, que es lo que el registry y `system.yaml` prometen, y R10
+cuesta poco y hace explícita una suposición de la que dependen las compensaciones y las réplicas. Antes de admitirlos
+hace falta un diseño de contraste con dos servicios en un `system.yaml` (emisor y consumidor) y una evolución
+incompatible de un evento.
+
+**Lo que no se reordena.** R6 y R11 siguen siendo hipótesis de industria: no entran sin un diseño que los pida
+(`payment-checkout` es el candidato natural para R6: el medio de pago). R15, R16 y R17 siguen en vigilancia.
+
+**Fuera de esta evaluación**, pero abiertos en los planes cerrados y sin primitivo de DSL: medir el cronómetro con más
+de dos réplicas y la purga de `keel_timer` en lotes (2.26), `catalog-extended` a `--ready`, la red en vivo de PD-3 en
+keel-spring (2.28/2.29) y la paridad en vivo de keel-recover sobre `shop-api` y `conduit` (2.27).
