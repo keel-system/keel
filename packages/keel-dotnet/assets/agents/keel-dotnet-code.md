@@ -83,6 +83,12 @@ escenario que ya estaba en verde.
      lista detiene el lote: lánzalo y no lo captures. En un lote `async` el handler corre fuera de la petición y
      sin token (el actor de autoría es quien creó el trabajo): lo que necesite tiene que venir en el mensaje. El
      trabajo, su cursor y sus dos rutas también son de build.
+   - **La guarda del agregado** (DSL 2.31). Con `checks`, cotas en los campos o un `computed` estructurado, la
+     raíz tiene `EnsureInvariants()` y el save generado la llama antes de escribir nada: comprueba las cotas y los
+     checks del agregado entero y recalcula los derivados. Ningún handler repite esas comprobaciones ni rodea el
+     save para esquivarlas; si un estado es inválido, la guarda lo rechaza (`INVARIANT_VIOLATED`, 422, o el `error`
+     del check) y ese error sube tal cual, sin capturarlo. El derivado es una propiedad que calcula desde las hijas: no lo asignes ni lo
+     leas de la entrada. Lo que el agente decide es el estado al que llega la entidad, no si es válido.
    - **Los mappers**: los `Todo.Value<T>(...)` que build dejó donde no supo derivar un campo.
    - **Los puertos**: lo que pidan las `preconditions` y `rules` (un `ExistsBy…`, un contador) se añade al puerto
      de `Domain/Repository/` **y** a su adaptador de `Infrastructure/Persistence/Repositories/`, con el

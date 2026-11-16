@@ -847,6 +847,54 @@ export const MECHANISMS = {
         why: 'catalog-batch-mongo y catalog-batch-async-mongo contra MongoDB.Driver en un replica set real, con las MISMAS sondas; la comprobación de los índices vivos mira las colecciones del trabajo contra BATCH_JOB_COLLECTIONS de keel-core. Falsado con los mismos sabotajes, cada uno en exactamente sus casos (ba-one-tx en BA-2 y BA-5)'
       }
     }
+  },
+  'entity-checks': {
+    emitter: 'src/scaffold/entity-checks.js (EnsureInvariants() y sus ayudas) · entities.js · repositories.js y document-repositories.js (saveGuardLines, dentro de la transacción del Save)',
+    why: 'Una guarda que nadie llama, que corre después de escribir, que no baja a las hijas, que trata la igualdad como rotura o el operando ausente como fallo, que no hace cumplir las cotas o que responde con el code por defecto en vez del del diseño compilan igual de bien y no rompen ningún escenario feliz.',
+    parity: {
+      skip: 'ninguna fixture declara checks ni computed estructurado hasta el incremento A8 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md (y ninguna tiene un sum natural, M4): los sujetos son los diseños derivados de keel-core/test/helpers/entity-check-designs.js (catalog-invariants y catalog-invariants-mongo, el mismo diseño salvo el modelo) con sus INVARIANT_VECTORS, los MISMOS que miden keel-spring y keel-nest; test/entity-checks.test.js fija la forma y compara las notas y los mensajes con keel-spring',
+      test: 'test/entity-checks.test.js'
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'catalog-invariants (scripts/lib/invariant-probes.js, un [Fact] por vector) contra el adaptador de EF Core, con el catálogo del motor igual al esquema emitido: IC-1 a IC-11 en PostgreSQL y en MySQL. Falsado, cada sabotaje en exactamente sus casos: ic-boundary en IC-3, ic-null-fails en IC-5, ic-absent-null-only en IC-7, ic-no-bounds en IC-8, ic-children en IC-9, ic-default-code en IC-11, ic-no-call en IC-1 a IC-4, IC-6, IC-8 a IC-11 y CP-4, e ic-after-write en CP-4 (IC-10 no lo ve: el Save es transaccional en los dos modelos)'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'catalog-invariants-mongo contra MongoDB.Driver en un replica set real, con los MISMOS vectores y los índices vivos del contrato: IC-1 a IC-11. Falsado: los mismos, salvo ic-after-write, que queda enmascarado entero (el Save es transaccional en los dos modelos, y Decimal128 admite la suma de CP-4): la red lo dice con su motivo en vez de pedir una sonda que no puede existir'
+      }
+    }
+  },
+  computed: {
+    emitter: 'src/scaffold/entity-checks.js (la propiedad que calcula sobre el decimal de .NET, MidpointRounding.AwayFromZero) · repositories.js y document-repositories.js (la línea del derivado en Apply, con DERIVED_MARK)',
+    why: 'Un derivado que redondea cada línea, que redondea la mitad al par, que no comprueba que el resultado quepa o que se persiste con el valor que la entidad traía compilan igual de bien y no rompen ningún escenario feliz.',
+    parity: {
+      skip: 'ninguna fixture declara checks ni computed estructurado hasta el incremento A8 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md (y ninguna tiene un sum natural, M4): los sujetos son los diseños derivados de keel-core/test/helpers/entity-check-designs.js (catalog-invariants y catalog-invariants-mongo, el mismo diseño salvo el modelo) con sus INVARIANT_VECTORS, los MISMOS que miden keel-spring y keel-nest; test/entity-checks.test.js fija la forma y compara las notas y los mensajes con keel-spring',
+      test: 'test/entity-checks.test.js'
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'catalog-invariants (scripts/lib/invariant-probes.js, un [Fact] por vector) contra el adaptador de EF Core, con el catálogo del motor igual al esquema emitido: CP-1 a CP-5 en PostgreSQL y en MySQL, con el valor leído de vuelta de la columna. Falsado: cp-round-each y cp-half-even en CP-2, cp-no-overflow en CP-4 y cp-stale en CP-5 (EF no toca la columna de una fila rastreada que nadie asignó)'
+      },
+      document: {
+        state: 'verificado',
+        net: 'doc-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'catalog-invariants-mongo contra MongoDB.Driver en un replica set real, con los MISMOS vectores y los índices vivos del contrato: CP-1 a CP-5, con el valor leído del documento crudo (CP-4 lo ve la guarda: el resultado no cabe en la escala y la precisión del campo aunque Decimal128 lo admita). Falsado: cp-round-each y cp-half-even en CP-2, cp-no-overflow en CP-4 y cp-stale en CP-5 (el $set del documento no lleva el campo)'
+      }
+    }
   }
 };
 

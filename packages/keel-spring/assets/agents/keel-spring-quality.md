@@ -410,6 +410,11 @@ devuelve es el error de no encontrado; ningún handler escribe una entrada (las 
 del mensaje sin recorrer una lista, sin abrir una transacción y sin capturar un error para convertirlo en un resultado
 (capturarlo compila, y el lote sigue donde el diseño dice que se detiene) → si lo hay, `remaining`.
 
+**La guarda del agregado** (DSL 2.31) no tiene script: en cada handler cuya nota diga que el agregado se guarda con
+`ensureInvariants()`, el handler no repite una cota ni un check del diseño, no captura el `INVARIANT_VIOLATED` (ni
+el `error` del check) para convertirlo en otra respuesta y no asigna un derivado (duplicarlo compila, y desincroniza el
+code o el valor de los otros generadores) → si lo hay, `remaining`.
+
 **Ejecuta `bash infra/check-logging.sh`.** Se genera siempre y tiene cuatro reglas, más una quinta si el diseño marca
 campos `personal`:
 

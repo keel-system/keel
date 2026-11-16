@@ -25,6 +25,8 @@ import { HISTORY_CHANGES, HISTORY_ENTRY_FIELDS, historyPersonalPaths } from '@ke
 import { HISTORY_DESIGNS } from '../../keel-core/test/helpers/history-designs.js';
 import { BATCH_ACCEPTED_STATUS, BATCH_ITEM_STATUSES, BATCH_MULTI_STATUS, batchContractClause, batchJobPaths } from '@keel-system/keel-core/gen/batch';
 import { BATCH_JOB_STATUSES } from '@keel-system/keel-core/gen/batch-store';
+import { INVARIANT_CONTRACT_CLAUSE, INVARIANT_VIOLATED, guardedRootsWrittenBy } from '@keel-system/keel-core/gen/entity-checks';
+import { ENTITY_CHECK_DESIGNS } from '../../keel-core/test/helpers/entity-check-designs.js';
 import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
 import { BATCH_DESIGNS, BATCH_JOB_DESIGNS, BATCH_KEY_DESIGNS } from '../../keel-core/test/helpers/batch-designs.js';
 import { planFixture, transpileTree } from './helpers/emitted.js';
@@ -442,6 +444,60 @@ for (const derived of [...BATCH_DESIGNS, ...BATCH_JOB_DESIGNS, ...BATCH_KEY_DESI
     }
 
     const docsDir = tmpDir('keel-openapi-ba-');
+    fs.writeFileSync(path.join(docsDir, 'openapi.yaml'), fromNest);
+    const { findings } = checkDerivedCoherence({ layers: { api: layers.api, 'use-cases': layers['use-cases'], domain: layers.domain }, manifest, docsDir });
+    assert.deepEqual(findings.filter((finding) => finding.id === 'CHK-DOCS-OPENAPI-DRIFT').map((finding) => finding.message), []);
+  });
+}
+
+// La guarda del agregado y los derivados (DSL 2.31): sus sujetos son los diseños derivados que miden los cuatro
+// generadores. El mismo documento en los cuatro; toda escritura de una raíz guardada responde el 422 de framework
+// (INVARIANT_VIOLATED, U1) junto al 422 del diseño cuando lo hay, ninguna lectura lo anuncia, el derivado viaja readOnly
+// en la salida y nunca en la entrada (D4); y sin deriva para CHK-DOCS-OPENAPI-DRIFT.
+for (const derived of ENTITY_CHECK_DESIGNS) {
+  test(`${derived.name}: el openapi describe el 422 de la guarda y el derivado de solo lectura, el mismo en los cuatro generadores`, () => {
+    const load = () => {
+      const service = loadService(path.join(FIXTURES_DIR, derived.from));
+      derived.mutate(service.layers);
+      return service;
+    };
+    const { manifest, layers } = load();
+    const database = layers.persistence?.default?.model === 'document' ? 'mongodb' : 'postgresql';
+    const documents = [planSpring, planDotnet, planGo].map((plan) => {
+      const service = load();
+      return plan({ ...service, workspace: FIXTURES_DIR, stack: { database } }).files.find((f) => f.path === DOC)?.content;
+    });
+    const nest = planFixture(derived.from, { mutate: derived.mutate, stack: { database } });
+    const fromNest = nest.files.find((f) => f.path === DOC).content;
+    for (const other of documents) assert.equal(other, fromNest, 'el mismo contrato en los cuatro generadores');
+
+    const document = YAML.parse(fromNest);
+    assert.deepEqual(danglingRefs(document), []);
+    const byId = new Map(Object.values(document.paths).flatMap((methods) => Object.values(methods)).map((op) => [op.operationId, op]));
+    const routed = nest.model.services.flatMap((s) => s.operations).filter((op) => op.route);
+    let guarded = 0;
+    for (const operation of routed) {
+      const op = byId.get(operation.name);
+      const unprocessable = op.responses['422']?.description ?? '';
+      const writes = guardedRootsWrittenBy(nest.model, operation).length > 0;
+      if (writes) guarded += 1;
+      assert.equal(unprocessable.includes(`\`${INVARIANT_VIOLATED}\``), writes, `${operation.name}: el 422 de la guarda, solo en las escrituras de una raíz guardada`);
+      if (writes) assert.ok(unprocessable.includes(INVARIANT_CONTRACT_CLAUSE), `${operation.name}: la frase del contrato`);
+    }
+    assert.ok(guarded > 0, 'el sujeto escribe alguna raíz guardada');
+    assert.match(byId.get('updateProduct').responses['422'].description, /`DISCOUNT_EXCEEDS_PRICE`/, 'el error del check convive con el de framework');
+
+    const schemas = document.components.schemas;
+    for (const field of ['printTotal', 'imageCount']) {
+      const carriers = Object.entries(schemas).filter(([, schema]) => schema.properties?.[field]);
+      assert.ok(carriers.some(([name]) => name.endsWith('ResponseDto')), `${field}: el derivado sale en el output`);
+      for (const [name, schema] of carriers) {
+        assert.ok(name.endsWith('ResponseDto'), `${name}.${field}: un derivado nunca viene del cliente`);
+        assert.equal(schema.properties[field].readOnly, true, `${name}.${field}: el derivado viaja de solo lectura`);
+      }
+    }
+
+    const docsDir = tmpDir('keel-openapi-ic-');
     fs.writeFileSync(path.join(docsDir, 'openapi.yaml'), fromNest);
     const { findings } = checkDerivedCoherence({ layers: { api: layers.api, 'use-cases': layers['use-cases'], domain: layers.domain }, manifest, docsDir });
     assert.deepEqual(findings.filter((finding) => finding.id === 'CHK-DOCS-OPENAPI-DRIFT').map((finding) => finding.message), []);

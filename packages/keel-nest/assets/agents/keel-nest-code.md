@@ -87,6 +87,12 @@ corto a romper un escenario que ya estaba en verde.
      lista detiene el lote: lánzalo y no lo captures. En un lote `async` el handler corre fuera de la petición y
      sin token (el actor de autoría es quien creó el trabajo): lo que necesite tiene que venir en el mensaje. El
      trabajo, su cursor y sus dos rutas también son de build.
+   - **La guarda del agregado** (DSL 2.31). Con `checks`, cotas en los campos o un `computed` estructurado, la
+     raíz tiene `ensureInvariants()` y el save generado la llama antes de escribir nada: comprueba las cotas y los
+     checks del agregado entero y recalcula los derivados. Ningún handler repite esas comprobaciones ni rodea el
+     save para esquivarlas; si un estado es inválido, la guarda lo rechaza (`INVARIANT_VIOLATED`, 422, o el `error`
+     del check) y ese error sube tal cual, sin capturarlo. El derivado es un getter que calcula desde las hijas: no lo asignes ni lo
+     leas de la entrada. Lo que el agente decide es el estado al que llega la entidad, no si es válido.
    - **La mensajería**, si el diseño la declara: lee el SKILL.md de `{{keel:skills}}/keel-nest-<broker>/`
      (el broker de `keel-stack.json`). Escribes el envío —la implementación de `OutboxDispatcher` con
      `reliability: outbox`, o de cada `<Evento>Publisher` con `best-effort`— y los listeners (con RabbitMQ, uno

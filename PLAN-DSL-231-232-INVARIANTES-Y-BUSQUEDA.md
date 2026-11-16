@@ -1,6 +1,6 @@
 # DSL 2.31 (R7: invariantes y derivados) y DSL 2.32 (R8: búsqueda)
 
-**Estado: aprobado el 2026-11-16, en curso (A0-A6 hechos).** Origen: R7 y R8 de `docs/evaluacion-dsl-2.24.md` (§ 9, puestos 1.º y 2.º).
+**Estado: aprobado el 2026-11-16, en curso (A0-A7 hechos).** Origen: R7 y R8 de `docs/evaluacion-dsl-2.24.md` (§ 9, puestos 1.º y 2.º).
 
 ## Estado
 
@@ -13,19 +13,26 @@
 | A4 | keel-nest: la misma guarda sobre el `Decimal` del proyecto, su llamada en el save de los dos adaptadores y las sondas de db-check/doc-check | hecho (2026-11-16, § Medidas de A4) |
 | A5 | keel-dotnet: `EnsureInvariants()` y el derivado como propiedad sobre el `decimal` de .NET, su llamada en el Save de los dos adaptadores y las sondas de db-check/doc-check | hecho (2026-11-16, § Medidas de A5) |
 | A6 | keel-go: `EnsureInvariants() error` y el derivado como accesor que calcula sobre el `wire.Decimal` del proyecto, su llamada al principio del Save de los dos adaptadores y las sondas de db-check/doc-check | hecho (2026-11-16, § Medidas de A6) |
-| A7-A9 | Fase A: DSL 2.31 (R7) | pendiente |
+| A7 | Contrato y método: las filas `entity-checks` y `computed` de las cuatro matrices, el contrato en los cuatro, `wire-contract.md`, `/keel-design`, `/keel-recover` y los agentes | hecho (2026-11-16, § Medidas de A7) |
+| A8-A9 | Fase A: DSL 2.31 (R7) | pendiente |
 | B0-B9 | Fase B: DSL 2.32 (R8) | pendiente |
 
-**Para retomar.** A6 hecho: los cuatro generadores emiten la guarda entera y ninguna frontera rechaza la 2.31;
-`entityChecksPendingErrors` ya no existe en keel-core. En keel-go `src/scaffold/entity-checks.js` emite
-`EnsureInvariants() error` en cada entidad cuyo agregado guarda algo (el orden de D23, los checks ya negados), el derivado
-como accesor que calcula sobre el `wire.Decimal` (`compute<Campo>() (T, bool)`, un solo `Rescale(escala,
-wire.RoundHalfUp)`; el struct no lleva el miembro y `Rehydrate` ignora el del estado), las ayudas compartidas en
-`internal/domain/invariants.go` y el centinela `ErrInvariantViolated`; `saveGuardLines` es lo primero del Save, antes de
-`PullEvents`. Red: `test/entity-checks.test.js` y `db-check --only=catalog-invariants`/`doc-check
---only=catalog-invariants-mongo` (`scripts/lib/invariant-probes.js`, `invariant_probe_test.go`). Siguiente: A7, contrato y
-método. Pendiente para A7: ninguna matriz de paridad tiene todavía fila para la guarda ni el derivado; se abren a la vez en
-el catálogo neutral (`gen/mechanisms.js`) y en los cuatro.
+**Para retomar.** A7 hecho: el catálogo neutral (`gen/mechanisms.js`) tiene las filas `entity-checks` y `computed` y la
+red `invariant-check`, y las cuatro matrices las declaran verificadas y falsadas con los sabotajes que midieron A3-A6
+(`npm run matrix` sin nada sin ejecutar ni sin falsar). `keel-nest/test/openapi.test.js` compara el contrato de los dos
+sujetos en los cuatro: el 422 en toda escritura de una raíz guardada y en ninguna otra, el error del check junto a él y el
+derivado `readOnly` solo en las respuestas. `wire-contract.md` § Invariantes del agregado, la clase 3 de `gap-analysis.md`
+(`/keel-design`), tres filas de `evidence-to-dsl.md` (`/keel-recover`) y los agentes de código y de calidad de los cuatro
+dicen lo mismo. `/keel-validate` ya lo tenía desde A1. Siguiente: A8, las fixtures.
+
+## Medidas de A7 (2026-11-16)
+
+- Ninguna red nueva: las celdas declaran lo que midieron A3-A6. En keel-go, `test/engine-support.test.js` comprueba que
+  cada sabotaje nombrado existe en `INVARIANT_SABOTAGE_SPECS`; `ic-after-write` falsa solo la rama relacional (en
+  documental queda enmascarado entero en los cuatro).
+- El contrato sale el mismo byte a byte en los cuatro para `catalog-invariants` y `-mongo`, sin deriva para
+  `CHK-DOCS-OPENAPI-DRIFT`. El derivado viaja `readOnly` en los ocho `*ResponseDto` que lo llevan y en ningún cuerpo de
+  entrada.
 
 ## Medidas de A6 (2026-11-16)
 

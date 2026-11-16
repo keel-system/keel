@@ -162,7 +162,8 @@ test('sin checks, cotas ni derivados no se emite la guarda ni su centinela', () 
   const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: 'postgresql' } });
   assert.doesNotMatch(fileOf(files, 'internal/domain/errors.go'), /ErrInvariantViolated/);
   assert.ok(!files.some((file) => file.path === 'internal/domain/invariants.go'));
-  assert.ok(!files.some((file) => typeof file.content === 'string' && file.content.includes('EnsureInvariants()')));
+  // El código, no los agentes: el agente de código nombra la guarda en todo proyecto.
+  assert.ok(!files.some((file) => !file.path.endsWith('.md') && typeof file.content === 'string' && file.content.includes('EnsureInvariants()')));
 });
 
 test('un diseño que sustituye INVARIANT_VIOLATED con su propio error devuelve el suyo', () => {

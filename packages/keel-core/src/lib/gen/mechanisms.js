@@ -49,6 +49,8 @@ export const NETS = {
     'npm run history-check — el HISTORIAL DE CAMBIOS (DSL 2.29) contra el motor con el contexto del perfil local: la entrada en la transacción de la escritura, el diff, lo que no entra, el autor, la página con su orden y sus filtros, la lectura acotada como la ficha, la restauración y la retención que se lleva o anonimiza el historial (HI-1 a HI-10)',
   'batch-check':
     'npm run batch-check — los LOTES (DSL 2.30) contra el motor: el 207 por elemento, la validación de cada elemento, la transacción por elemento o la que abarca el lote, el lote que se detiene (BA-1 a BA-9), y el trabajo asíncrono con su alta idempotente, el chunk sobre el cronómetro, la reanudación desde el cursor, la valla y el dueño (BJ-1 a BJ-9)',
+  'invariant-check':
+    'npm run invariant-check — la GUARDA DEL AGREGADO (DSL 2.31) contra el motor por el save del puerto: las cotas y los checks del agregado entero, las hijas primero, el 422 o el error del diseño, la fila rechazada sin escribir y el derivado recalculado, redondeado y persistido (IC-1 a IC-11, CP-1 a CP-5)',
   corrida: 'una corrida en vivo: no es determinista ni repetible en CI, así que nombra cuál',
   ninguna: 'nadie lo ejecuta'
 };
@@ -187,6 +189,14 @@ export const MECHANISM_CATALOG = {
   },
   batch: {
     title: 'Lotes con resultado por elemento (DSL 2.30): el 207 con una transacción por elemento o una que abarca el lote, cada elemento validado y traducido como la operación sola, y el trabajo asíncrono por chunks sobre el cronómetro con su cursor como valla, su clave y su dueño',
+    axis: 'model'
+  },
+  'entity-checks': {
+    title: 'Guarda del agregado (DSL 2.31): ensureInvariants() con las cotas de la entidad y sus checks sobre el agregado entero, las hijas antes que su padre, llamada por el save antes de escribir nada, con el 422 INVARIANT_VIOLATED o el error del diseño',
+    axis: 'model'
+  },
+  computed: {
+    title: 'Derivado del agregado (DSL 2.31, computed: { sum, count }): calculado desde las hijas con la aritmética de D5 y D24, su desbordamiento como INVARIANT_VIOLATED y el valor recalculado persistido en cada save',
     axis: 'model'
   }
 };

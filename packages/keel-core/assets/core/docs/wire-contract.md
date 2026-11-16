@@ -192,3 +192,23 @@ Solo en las operaciones de `api.concurrency` (ver `docs/dsl/api.md § concurrenc
   su `404` o su `403` antes que el `412`. El `409` (`CONCURRENT_MODIFICATION`) sigue siendo otra cosa: dos escrituras que
   se cruzan dentro del servidor con la versión correcta.
 - `ETag` va en las cabeceras expuestas de CORS, o un navegador no la puede leer.
+
+## Invariantes del agregado
+
+Solo en las entidades con `checks`, con cotas en sus campos o con un `computed` estructurado (DSL 2.31, ver
+`docs/dsl/domain.md`).
+
+- **`422 INVARIANT_VIOLATED`** — la escritura dejaría el agregado fuera de una invariante con un valor que calculó el
+  servidor (una cantidad que se suma a la que había, un derivado que no cabe en su tipo). No se escribe nada. Lo anuncia
+  el contrato en toda operación que escribe una raíz guardada; ninguna lectura lo responde. Un check con `error` propio
+  responde ese `code` con el `http` que declara la operación.
+- La misma cota rota por la **entrada** sigue siendo `400 VALIDATION_ERROR`, en el borde y antes que la guarda: el
+  cliente sí mandó algo inválido.
+- El `message` nombra la regla del diseño y nunca el valor (`Product: discount ≤ listPrice.`,
+  `Product: stockCount queda fuera de sus cotas.`): el valor lo calculó el servidor y puede venir de un campo
+  `sensitive`. `details` es `null`.
+- Cuando se rompen dos a la vez, gana la primera en este orden, el mismo en los cuatro generadores: las hijas antes que
+  su padre, y en cada entidad sus derivados, las cotas en el orden de sus campos y los checks en el del diseño.
+- Un **derivado** (`computed: { sum | count }`) viaja como cualquier campo de su tipo, marcado `readOnly` en el contrato:
+  sale en las respuestas y nunca se lee de la entrada. Su valor es el último que guardó el servidor; la lectura no lo
+  recalcula.
