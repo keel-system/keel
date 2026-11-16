@@ -43,6 +43,7 @@ import {
   batchStatements,
   batchSyncStatements
 } from '@keel-system/keel-core/gen/batch-store';
+import { WRITE_CONFLICT_ATTEMPTS } from '@keel-system/keel-core/gen/transactions';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { idempotencyOutcomeCode } from '@keel-system/keel-core/gen/declared-errors';
 import { FRAMEWORK_RESPONSES } from '@keel-system/keel-core/gen/api-errors';
@@ -840,6 +841,14 @@ function jobs(model) {
 @Component
 public class BatchJobs {
 
+    /**
+     * Intentos del alta cuando el motor la mata por INTERBLOQUEO. En MySQL (InnoDB), el UPDATE de releaseKey sobre una clave
+     * que aún no existe toma un bloqueo de hueco en el índice único: dos altas con la misma clave lo toman las dos, el
+     * INSERT de cada una espera al de la otra y el motor aborta a una. Repetida, su releaseKey espera al registro de la
+     * ganadora hasta que confirma y la encuentra, como la que pierde en PostgreSQL por la unicidad.
+     */
+    private static final int KEY_RACE_ATTEMPTS = ${WRITE_CONFLICT_ATTEMPTS};
+
     /** El alta: el trabajo, recién creado o el de la misma clave, y si hay que arrancarlo. */
     private record Accepted(UUID id) {
     }
@@ -873,13 +882,21 @@ public class BatchJobs {
         String key = "payload-hash".equals(keySource) ? signature : clientKey;
         Long ttlMs = key == null || ttlSeconds == null ? null : ttlSeconds * 1000L;
         String input = new String(body, StandardCharsets.UTF_8);
-        Accepted accepted;
-        try {
-            accepted = transaction.execute(status -> accept(operation, kind, owner, key, signature, ttlMs, input, total));
-        } catch (DataIntegrityViolationException race) {
-            // Dos altas con la misma clave a la vez: la que pierde espera a la ganadora en la unicidad del motor y responde su
-            // trabajo, sin el 409 «en curso» (D13).
-            accepted = transaction.execute(status -> repeat(operation, owner, key, signature).orElseThrow(() -> race));
+        Accepted accepted = null;
+        for (int attempt = 1; accepted == null; attempt++) {
+            try {
+                accepted = transaction.execute(status -> accept(operation, kind, owner, key, signature, ttlMs, input, total));
+            } catch (DataIntegrityViolationException race) {
+                // Dos altas con la misma clave a la vez: la que pierde espera a la ganadora en la unicidad del motor y responde
+                // su trabajo, sin el 409 «en curso» (D13).
+                accepted = transaction.execute(status -> repeat(operation, owner, key, signature).orElseThrow(() -> race));
+            } catch (RuntimeException conflict) {
+                // Perdió la carrera de la clave sin llegar a la unicidad (el interbloqueo de MySQL): se repite el alta entera,
+                // que ahora espera a la otra y responde su trabajo.
+                if (key == null || !BatchJobSteps.lostKeyRace(conflict) || attempt >= KEY_RACE_ATTEMPTS) {
+                    throw conflict;
+                }
+            }
         }
         BatchJobView view = BatchJobView.of(store.job(accepted.id()).orElseThrow());
         URI location = ServletUriComponentsBuilder.fromCurrentRequest().path("/jobs/{${BATCH_JOB_PARAM}}").buildAndExpand(accepted.id()).toUri();
@@ -1136,7 +1153,9 @@ public class ${className} implements TimerHandler {
 
 function steps(model) {
   const { aborted } = BATCH_JOB_STATUSES;
+  const document = isDocument(model);
   const imports = [
+    document ? 'com.mongodb.MongoException' : 'org.springframework.dao.PessimisticLockingFailureException',
     `${subPackage(model, BATCH_STORE_PKG)}.BatchJobStore`,
     'jakarta.validation.ConstraintViolation',
     'jakarta.validation.ConstraintViolationException',
@@ -1186,6 +1205,24 @@ public class BatchJobSteps {
         FenceLost() {
             super(null, null, false, false);
         }
+    }
+
+    /**
+     * Si el alta de un trabajo perdió la carrera de su clave con un conflicto TRANSITORIO, que se arregla repitiéndola:
+     * ${document
+       ? 'el WriteConflict de MongoDB (código 112, etiqueta TransientTransactionError), que aborta a la que llega segunda en vez\n     * de hacerla esperar'
+       : 'el interbloqueo (PessimisticLockingFailureException). En MySQL, el releaseKey de dos altas con la misma clave toma un\n     * bloqueo de hueco en el índice único, el INSERT de cada una espera al de la otra y el motor aborta a una'}. Se busca en la
+     * CADENA de causas, como en el mediator. Lo usan BatchJobs y KeyedBatches.
+     */
+    static boolean lostKeyRace(Throwable ex) {
+        for (Throwable cause = ex; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
+            if (${document
+              ? 'cause instanceof MongoException mongo\n                    && (mongo.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL) || mongo.getCode() == 112)'
+              : 'cause instanceof PessimisticLockingFailureException'}) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private final BatchJobStore store;
@@ -1476,6 +1513,14 @@ function keyedBatches(model) {
  */
 @Component
 public class KeyedBatches {
+
+    /**
+     * Intentos del alta cuando el motor la mata por INTERBLOQUEO. En MySQL (InnoDB), el UPDATE de releaseKey sobre una clave
+     * que aún no existe toma un bloqueo de hueco en el índice único: dos altas con la misma clave lo toman las dos, el
+     * INSERT de cada una espera al de la otra y el motor aborta a una. Repetida, su releaseKey espera al registro de la
+     * ganadora hasta que confirma y la encuentra, como la que pierde en PostgreSQL por la unicidad.
+     */
+    private static final int KEY_RACE_ATTEMPTS = ${WRITE_CONFLICT_ATTEMPTS};
 ${secured ? '' : `
     /** El dueño de un lote sin capa security: no hay llamante, y la clave la acota solo la operación. */
     private static final String OWNER = "${BATCH_ANONYMOUS_OWNER}";
@@ -1514,19 +1559,27 @@ ${secured ? '' : `
         String owner = owner();
         Long ttlMs = ttlSeconds == null ? null : ttlSeconds * 1000L;
         String input = new String(body, StandardCharsets.UTF_8);
-        try {
-            return transaction.execute(status -> {
-                store.releaseKey(operation, owner, key);
-                return repeat(operation, owner, key, signature).orElseGet(() -> {
-                    UUID id = Uuids.v7();
-                    store.insert(id, operation, owner, key, signature, ttlMs, input, total);
-                    return new Started(id, 0, false);
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return transaction.execute(status -> {
+                    store.releaseKey(operation, owner, key);
+                    return repeat(operation, owner, key, signature).orElseGet(() -> {
+                        UUID id = Uuids.v7();
+                        store.insert(id, operation, owner, key, signature, ttlMs, input, total);
+                        return new Started(id, 0, false);
+                    });
                 });
-            });
-        } catch (DataIntegrityViolationException race) {
-            // Dos peticiones con la misma clave a la vez: la que pierde espera a la ganadora en la unicidad del motor y
-            // encuentra su trabajo, en marcha.
-            return transaction.execute(status -> repeat(operation, owner, key, signature).orElseThrow(() -> race));
+            } catch (DataIntegrityViolationException race) {
+                // Dos peticiones con la misma clave a la vez: la que pierde espera a la ganadora en la unicidad del motor y
+                // encuentra su trabajo, en marcha.
+                return transaction.execute(status -> repeat(operation, owner, key, signature).orElseThrow(() -> race));
+            } catch (RuntimeException conflict) {
+                // Perdió la carrera de la clave sin llegar a la unicidad (el interbloqueo de MySQL): se repite el alta entera,
+                // que ahora espera a la otra y encuentra su trabajo.
+                if (!BatchJobSteps.lostKeyRace(conflict) || attempt >= KEY_RACE_ATTEMPTS) {
+                    throw conflict;
+                }
+            }
         }
     }
 

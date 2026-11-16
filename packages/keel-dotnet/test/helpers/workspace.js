@@ -257,8 +257,9 @@ export async function planFixture(name, { mutate = null, stack = null } = {}) {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
   if (mutate) mutate(manifest, layers);
   // Un lote exige api y persistence, y el asíncrono security (DSL 2.30): product-catalog sin una de ellas es la v1.1.0,
-  // sin sus lotes (inc. 11 de PLAN-DSL-230-LOTES.md).
-  if (name === 'product-catalog' && ['api', 'persistence', 'security'].some((layer) => !manifest.layers[layer] || !layers[layer])) {
+  // sin sus lotes (inc. 11 de PLAN-DSL-230-LOTES.md). Solo si los lotes son los SUYOS (sigue su importCatalog): los sujetos
+  // de BATCH_DESIGNS derivan de product-catalog, quitan los suyos y declaran otros, y el síncrono con clave no lleva security.
+  if (name === 'product-catalog' && layers['use-cases']?.operations?.importCatalog && ['api', 'persistence', 'security'].some((layer) => !manifest.layers[layer] || !layers[layer])) {
     const { withoutBatches } = await import('../../../keel-core/test/helpers/batch-designs.js');
     withoutBatches(layers);
     delete manifest.layers.security;

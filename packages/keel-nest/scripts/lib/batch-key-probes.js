@@ -1,4 +1,4 @@
-// Los lotes SÍNCRONOS con clave (DSL 2.30, D15, incremento 10b) contra lo emitido, para db-check y doc-check: BK-1 a BK-5
+// Los lotes SÍNCRONOS con clave (DSL 2.30, D15, incremento 10b) contra lo emitido, para db-check y doc-check: BK-1 a BK-6
 // de keel-core/gen/batch.js, con los ids que ejecuta keel-spring (batch-check) sobre los MISMOS diseños
 // (BATCH_KEY_DESIGNS de keel-core/test/helpers/batch-designs.js). El handler de la sonda es el de batch-probes.js
 // (batchProbePatch).
@@ -10,7 +10,7 @@
 // mover el cursor, como el Error del gancho de keel-spring. Que lleve muerto más que `batch.sync-stale-ms` se simula
 // envejeciendo su `updated_at`.
 
-import { BATCH_KEY_CASES, BATCH_KEY_SABOTAGES } from '@keel-system/keel-core/gen/batch';
+import { BATCH_KEY_CASES, BATCH_KEY_RACE_ROUNDS, BATCH_KEY_SABOTAGES } from '@keel-system/keel-core/gen/batch';
 import { BATCH_JOB, BATCH_ITEM_RESULT, BATCH_SYNC_STALE } from '@keel-system/keel-core/gen/batch-store';
 import { batchOperations } from './batch-probes.js';
 import { CONTAINER_TS, MEDIATOR_TS } from '../../src/scaffold/mediator.js';
@@ -26,11 +26,11 @@ const js = (value) => JSON.stringify(value);
 /** Las operaciones síncronas con clave del modelo. */
 const keyedOperations = (model) => batchOperations(model).filter((operation) => operation.batch.idempotency);
 
-/** Los casos de un lote síncrono con clave que ejecuta este diseño: BK-1 a BK-4 con un per-item, BK-5 con un todo o nada. */
+/** Los casos de un lote síncrono con clave que ejecuta este diseño: BK-1 a BK-4 y BK-6 con un per-item, BK-5 con un todo o nada. */
 export function batchKeyCases(model) {
   const atomicities = new Set(keyedOperations(model).map((operation) => operation.batch.atomicity));
   const ids = [];
-  if (atomicities.has('per-item')) ids.push('BK-1', 'BK-2', 'BK-3', 'BK-4');
+  if (atomicities.has('per-item')) ids.push('BK-1', 'BK-2', 'BK-3', 'BK-4', 'BK-6');
   if (atomicities.has('all-or-nothing')) ids.push('BK-5');
   return BATCH_KEY_CASES.map((entry) => entry.id).filter((id) => ids.includes(id));
 }
@@ -53,7 +53,12 @@ export const BATCH_KEY_SABOTAGE_SPECS = {
   // La reanudación empieza en el principio y no en el cursor.
   'bk-no-resume': SAME([KEYED, 'for (let index = started.from; index < items.length; index++) {', 'for (let index = 0; index < items.length; index++) {']),
   // El todo o nada que falla deja su trabajo.
-  'bk-keep-failed': SAME([KEYED, 'await this.transactions.inTransaction(() => this.store.discard(id));', 'void id;'])
+  'bk-keep-failed': SAME([KEYED, 'await this.transactions.inTransaction(() => this.store.discard(id));', 'void id;']),
+  // El alta que el motor mata por interbloqueo no se repite (solo cae en MySQL: en PostgreSQL la carrera llega por la
+  // unicidad). En keel-nest la relectura de la ganadora que sigue al reintento ya absorbía el interbloqueo en la sonda (la
+  // ganadora confirma antes de que la perdedora relea): quitar solo el reintento no se ve, así que el sabotaje quita las DOS
+  // defensas ante el conflicto transitorio, que es lo que le faltaba a keel-spring.
+  'bk-no-race-retry': SAME([KEYED, 'if (isTransientWriteConflict(error) && attempt < KEY_RACE_ATTEMPTS) continue;', 'if (isTransientWriteConflict(error)) throw error;'])
 };
 
 export const isBatchKeySabotage = (id) => Boolean(BATCH_KEY_SABOTAGE_SPECS[id]);
@@ -76,6 +81,7 @@ function storage(document, engine, product) {
   if (document) {
     return `  const jobsOf = () => database.collection(${js(BATCH_JOB.table)});
   const jobCount = () => jobsOf().countDocuments({});
+  const keyJobCount = (key) => jobsOf().countDocuments({ idempotency_key: key });
   const resultCount = () => database.collection(${js(BATCH_ITEM_RESULT.table)}).countDocuments({});
   const age = (key, column, seconds) => jobsOf().updateOne({ idempotency_key: key }, { $set: { [column]: new Date(Date.now() - seconds * 1000) } });
   const wipe = async () => {
@@ -88,6 +94,7 @@ function storage(document, engine, product) {
   const mysql = engine === 'mysql';
   return `  const one = async (sql, params) => Number(Object.values((await dataSource.query(sql, params))[0] ?? {})[0] ?? 0);
   const jobCount = () => one(${js(`SELECT count(*) AS n FROM ${q(BATCH_JOB.table)}`)}, []);
+  const keyJobCount = (key) => one(${js(`SELECT count(*) AS n FROM ${q(BATCH_JOB.table)} WHERE idempotency_key = ${mysql ? '?' : '$1'}`)}, [key]);
   const resultCount = () => one(${js(`SELECT count(*) AS n FROM ${q(BATCH_ITEM_RESULT.table)}`)}, []);
   const age = (key, column, seconds) =>
     dataSource.query(\`UPDATE ${q(BATCH_JOB.table)} SET \${column} = ${mysql ? '?' : '$1'} WHERE idempotency_key = ${mysql ? '?' : '$2'}\`, [new Date(Date.now() - seconds * 1000), key]);
@@ -98,7 +105,7 @@ function storage(document, engine, product) {
   };`;
 }
 
-/** El bloque de BK-1 a BK-5, con `check` y `tx` del script de la sonda. `adapterOf` da el adaptador de la raíz Product. */
+/** El bloque de BK-1 a BK-6, con `check` y `tx` del script de la sonda. `adapterOf` da el adaptador de la raíz Product. */
 export function batchKeyBlock(model, ctx, { document, engine, adapterOf }) {
   const operations = keyedOperations(model);
   if (operations.length === 0) return '';
@@ -164,6 +171,20 @@ ${code}
     check('BK-4: el 207 los cuenta todos, sin repetir ninguno', summaryIs(resumed.json, 3, 3, 0, 0), js(resumed.json));
     check('BK-4: un resultado por elemento', (await resultCount()) === 3, await resultCount());
     check('BK-4: el último entró', (await batchProducts.findBySku('KDD-0003')) != null);`);
+    const contents = Array.from({ length: BATCH_KEY_RACE_ROUNDS }, (_, round) => body(item(`KFF-${String(round).padStart(4, '0')}`)));
+    test('BK-6', 'la carrera de la clave', `    const contents = ${js(contents)};
+    const wrong = [];
+    for (let round = 0; round < contents.length; round++) {
+      const key = 'carrera-' + round;
+      const both = await Promise.all([0, 1].map(() => post(${op}, contents[round], key).catch((error) => ({ status: 0, json: { exception: String(error) } }))));
+      for (const answer of both) {
+        if (answer.status !== 207 && !(answer.status === 409 && answer.json.code === 'IDEMPOTENCY_KEY_IN_PROGRESS')) wrong.push(round + ': ' + js(answer));
+      }
+      if (!both.some((answer) => answer.status === 207)) wrong.push(round + ': ninguno es 207');
+      const jobs = await keyJobCount(key);
+      if (jobs !== 1) wrong.push(round + ': ' + jobs + ' trabajos con la clave');
+    }
+    check('BK-6: cada respuesta es el 207 o 409 IDEMPOTENCY_KEY_IN_PROGRESS, y un solo trabajo por clave', wrong.length === 0, wrong.join(' | '));`);
   }
   if (atomic) {
     const op = js(atomic.name);
@@ -184,7 +205,7 @@ ${code}
   }
 
   return `
-// ── Lotes síncronos con clave (DSL 2.30, D15): BK-1 a BK-5, con el controlador, KeyedBatches y los almacenes emitidos.
+// ── Lotes síncronos con clave (DSL 2.30, D15): BK-1 a BK-6, con el controlador, KeyedBatches y los almacenes emitidos.
 {
   const batchProducts = ${adapterOf(product)};
   const jobStore = new ${document ? 'MongoBatchJobStore' : 'SqlBatchJobStore'}(tx);

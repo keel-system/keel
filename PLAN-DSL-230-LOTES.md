@@ -1,6 +1,6 @@
 # DSL 2.30: lotes con resultado por elemento (R5)
 
-**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 10 cerrados el 2026-11-14 (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores, con la fase B neutral en keel-core, y el contrato y el método); el 10b (D15, la idempotencia del lote síncrono) se cerró el 2026-11-15 en la parte neutral y en los cuatro generadores. Del 11 está hecha la fixture (product-catalog v1.2.0, en `--ready`); faltan sus corridas de control. Al cerrar pasa a `completed_plans/`.
+**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 10 cerrados el 2026-11-14 (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores, con la fase B neutral en keel-core, y el contrato y el método); el 10b (D15, la idempotencia del lote síncrono) se cerró el 2026-11-15 en la parte neutral y en los cuatro generadores. Del 11 están hechas la fixture (product-catalog v1.2.0, en `--ready`) y las cinco corridas de control (2026-11-15): cuatro en verde a la primera o con un arbitraje de pruebas, y la de MySQL, que destapó la carrera de la clave como interbloqueo, arreglada en el generador. Falta repetir la de MySQL sobre el arreglo. Al cerrar pasa a `completed_plans/`.
 
 ## Contexto
 
@@ -669,15 +669,55 @@ Inc. 11, la fixture (2026-11-15):
   cuando a la fixture le falta api, persistence o security. El derivado `product-catalog-authorship` de keel-go (autoría
   sin seguridad) también.
 
+## Inc. 11, las corridas de control (2026-11-15)
+
+Cinco corridas sobre product-catalog v1.2.0, en `docs/corridas/2026-11-15-product-catalog-230-*`:
+
+| Generador | Motor | Matriz | Huella |
+|---|---|---|---|
+| keel-spring | PostgreSQL | 36/36 a la primera | 8 (todos TODO) |
+| keel-nest | PostgreSQL | 36/36 tras un arbitraje de pruebas (enteros sobre `jsonExact()`) | 9 (8 TODO y el README) |
+| keel-dotnet | PostgreSQL | 36/36 a la primera | 9 (8 TODO y el README) |
+| keel-go | PostgreSQL | 36/36 a la primera | 9 (8 TODO y el README) |
+| keel-spring | MySQL | 36/36 con el agente parcheando dos archivos de `build` | 10 (8 TODO y **2 del generador**) |
+
+Lo que se miraba:
+
+- **El sondeo del trabajo**: los cinco agentes lo escribieron con la convención del diseño, con un helper propio de unas
+  diez líneas. **No entra un helper en el arnés**, como no entró `historyOf` en la 2.29.
+- **Las carreras (FL-PRD-008-E, 009-F)**: en verde en PostgreSQL sin forzar nada. En MySQL, no (abajo).
+- **Los mismos bytes en la repetición**: los cinco guardan el cuerpo en una constante y lo mandan tal cual.
+
+**El hueco del generador: la carrera de la clave es un interbloqueo en MySQL.** El alta de un trabajo (`releaseKey`, `byKey`
+y el `INSERT`, en una transacción) toma en InnoDB un bloqueo de hueco en el índice único con el `UPDATE` de `releaseKey`
+sobre una clave que aún no existe. Las dos altas lo toman, el `INSERT` de cada una espera al de la otra y el motor aborta a
+una por interbloqueo. keel-spring solo esperaba la violación de unicidad de PostgreSQL, y la perdedora salía como 500.
+keel-nest relee a la ganadora tras cualquier error que no sea de dominio, y en la sonda eso basta: hay interbloqueo en
+las diez rondas, pero la ganadora confirma antes de que la perdedora relea. Si no ha confirmado todavía, también sale
+un 500. El arreglo **repite el alta entera**: repetida, su `releaseKey` espera al registro de la ganadora hasta que
+confirma y `byKey` la encuentra (el mismo 202, o el 207 guardado o el 409 en curso del síncrono). keel-spring lo hace en
+`KeyedBatches.start` y `BatchJobs.submit` con `BatchJobSteps.lostKeyRace` (el interbloqueo, o el WriteConflict transitorio
+de MongoDB), y keel-nest en los mismos dos sitios con `isTransientWriteConflict`; keel-dotnet y keel-go ya lo repetían,
+porque su transacción (`PersistenceTransactions`, `fresh`) repite todo conflicto transitorio. Ninguna red lo veía: las sondas
+BK y BJ eran secuenciales. Entran **BK-6 y BJ-10** (`BATCH_KEY_RACE_ROUNDS` rondas de dos altas con la misma clave a la
+vez) y sus sabotajes `bk-no-race-retry` y `bj-no-race-retry`, que solo caen en MySQL: en PostgreSQL la carrera llega por la
+unicidad. En keel-nest el sabotaje quita las dos defensas, el reintento y la relectura: quitar solo el reintento no se ve.
+En keel-dotnet y keel-go apaga el reintento de la transacción, así que en keel-go caen también sus dos sondas
+`TestTransaction_*`, declaradas en el sabotaje (`alsoFalls`).
+
+**Una regresión del propio inc. 11, destapada al falsar.** El `planFixture` de keel-dotnet (y el de
+`integration-harness.test.js` de keel-go) quitaba los lotes a product-catalog cuando le faltaba security. Los sujetos de
+`BATCH_DESIGNS` derivan de product-catalog, quitan los lotes de la fixture y declaran los suyos, y los síncronos no llevan
+security. Así que, desde `d790035f`, `db-check` de keel-dotnet planificaba `catalog-batch`, `-atomic`, `-keyed` y
+`-atomic-keyed` sin su lote y salía en verde sin ejecutar ningún caso BA ni BK. Ahora el recorte solo se hace si los lotes
+son los de la fixture (sigue su `importCatalog`). Una prueba de `keel-dotnet/test/batch-keys.test.js` planifica cada
+sujeto como lo hace `db-check` y cae sin la guarda.
+
 ## Para retomar
 
-Las corridas de control del inc. 11, que lanza el usuario: product-catalog v1.2.0 en los cuatro generadores sobre
-PostgreSQL y una más sobre MySQL o MongoDB (`keel-<tech> build specs/product-catalog`, `cd services/product-catalog-<tech>`,
-`/keel-generate-<tech>`). Qué mirar en ellas: si el agente sondea el trabajo con la convención o necesita un helper del arnés
-(como `ageDeletion` en la 2.28), si los escenarios de carrera (FL-PRD-008-E, FL-PRD-009-F) salen en verde sin forzar nada, si
-el 409 de la clave en curso aparece en la carrera del asíncrono (el contrato solo promete el mismo 202) y si algún agente
-manda el JSON reformateado en una repetición (la firma es de los bytes). Se registran en `docs/corridas/` con la huella de
-`corrida-metrics.js`; con las cinco en verde el plan pasa a `completed_plans/`.
+Repetir la corrida de control de MySQL sobre el arreglo, que lanza el usuario: product-catalog v1.2.0 en keel-spring sobre
+MySQL, sin tocar lo que escribe `build`. Qué mirar: FL-PRD-008-E y 009-F en verde a la primera, y la huella sin archivos del
+generador. Con ella en verde, el plan pasa a `completed_plans/`.
 
 ## Verificación
 

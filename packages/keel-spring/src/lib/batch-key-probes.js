@@ -9,7 +9,7 @@
 // primero queda confirmado y el trabajo se queda sin terminar. Que lleve muerto más que `batch.sync-stale-ms` se simula
 // envejeciendo su `updated_at`.
 
-import { BATCH_KEY_CASES } from '@keel-system/keel-core/gen/batch';
+import { BATCH_KEY_CASES, BATCH_KEY_RACE_ROUNDS } from '@keel-system/keel-core/gen/batch';
 import { BATCH_SYNC_STALE } from '@keel-system/keel-core/gen/batch-store';
 import { PACKAGE_LEAF, batchOperations, body, item } from './batch-probes.js';
 
@@ -19,11 +19,11 @@ export const KEY_CLASS_NAME = 'BatchKeyCheckTest';
 /** Las operaciones síncronas con clave del modelo. */
 const keyedOperations = (model) => batchOperations(model).filter((operation) => operation.batch.execution !== 'async' && operation.batch.idempotency);
 
-/** Los casos de un lote síncrono con clave que ejecuta este diseño: BK-1 a BK-4 con un per-item, BK-5 con un todo o nada. */
+/** Los casos de un lote síncrono con clave que ejecuta este diseño: BK-1 a BK-4 y BK-6 con un per-item, BK-5 con un todo o nada. */
 export function keyCasesOf(model) {
   const atomicities = new Set(keyedOperations(model).map((operation) => operation.batch.atomicity));
   const ids = [];
-  if (atomicities.has('per-item')) ids.push('BK-1', 'BK-2', 'BK-3', 'BK-4');
+  if (atomicities.has('per-item')) ids.push('BK-1', 'BK-2', 'BK-3', 'BK-4', 'BK-6');
   if (atomicities.has('all-or-nothing')) ids.push('BK-5');
   return BATCH_KEY_CASES.map((entry) => entry.id).filter((id) => ids.includes(id));
 }
@@ -41,6 +41,12 @@ export function batchKeyTestClass(model, { packages, document, engine, propertie
     'java.time.Instant',
     'java.time.temporal.ChronoUnit',
     'java.util.List',
+    'java.util.ArrayList',
+    'java.util.concurrent.Callable',
+    'java.util.concurrent.CyclicBarrier',
+    'java.util.concurrent.ExecutorService',
+    'java.util.concurrent.Executors',
+    'java.util.concurrent.Future',
     'java.util.concurrent.atomic.AtomicInteger',
     'org.junit.jupiter.api.AfterEach',
     'org.junit.jupiter.api.BeforeEach',
@@ -144,6 +150,30 @@ export function batchKeyTestClass(model, { packages, document, engine, propertie
         assertTrue(products.findBySku("KDD-0003").isPresent(), "BK-4");
     }`);
     }
+    if (cases.has('BK-6')) {
+      const contents = Array.from({ length: BATCH_KEY_RACE_ROUNDS }, (_, round) => body(item(`KFF-${String(round).padStart(4, '0')}`)));
+      tests.push(`    @Test
+    void bk6_carreraDeLaClave() throws Exception {
+        String[] contents = {
+${contents.map((content) => `            ${content}`).join(',\n')}
+        };
+        for (int round = 0; round < contents.length; round++) {
+            String content = contents[round];
+            String key = "carrera-" + round;
+            int succeeded = 0;
+            for (Answer answer : race(() -> post(${at}, content, key))) {
+                if (answer.status() == 207) {
+                    succeeded++;
+                } else {
+                    assertEquals(409, answer.status(), "BK-6, ronda " + round + ": 207 o 409, nunca otra cosa: " + answer.json());
+                    assertEquals("IDEMPOTENCY_KEY_IN_PROGRESS", answer.json().path("code").asString(), "BK-6, ronda " + round + ": " + answer.json());
+                }
+            }
+            assertTrue(succeeded >= 1, "BK-6, ronda " + round + ": al menos uno es 207");
+            assertEquals(1L, keyJobCount(key), "BK-6, ronda " + round + ": un solo trabajo por clave");
+        }
+    }`);
+    }
   }
   if (atomic && cases.has('BK-5')) {
     const at = url(atomic);
@@ -172,6 +202,10 @@ export function batchKeyTestClass(model, { packages, document, engine, propertie
         return mongo.count(new Query(), "batch_job");
     }
 
+    private long keyJobCount(String key) {
+        return mongo.count(new Query(Criteria.where("idempotency_key").is(key)), "batch_job");
+    }
+
     private long resultCount() {
         return mongo.count(new Query(), "batch_item_result");
     }
@@ -192,6 +226,10 @@ export function batchKeyTestClass(model, { packages, document, engine, propertie
 
     private long jobCount() {
         return jdbc().sql("SELECT count(*) FROM batch_job").query(Long.class).single();
+    }
+
+    private long keyJobCount(String key) {
+        return jdbc().sql("SELECT count(*) FROM batch_job WHERE idempotency_key = :key").param("key", key).query(Long.class).single();
     }
 
     private long resultCount() {
@@ -251,6 +289,32 @@ ${fields.join('\n\n')}
                 .header("Idempotency-Key", key)).andReturn();
         String text = result.getResponse().getContentAsString();
         return new Answer(result.getResponse().getStatus(), text.isBlank() ? mapper.createObjectNode() : mapper.readTree(text));
+    }
+
+    /** Dos peticiones a la vez, cada una en su hilo y soltadas juntas por una barrera. La que lanza cuenta como status 0. */
+    private List<Answer> race(Callable<Answer> request) throws Exception {
+        CyclicBarrier start = new CyclicBarrier(2);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            List<Future<Answer>> both = new ArrayList<>();
+            for (int n = 0; n < 2; n++) {
+                both.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        return request.call();
+                    } catch (Exception failed) {
+                        return new Answer(0, mapper.createObjectNode().put("exception", String.valueOf(failed)));
+                    }
+                }));
+            }
+            List<Answer> answers = new ArrayList<>();
+            for (Future<Answer> answer : both) {
+                answers.add(answer.get());
+            }
+            return answers;
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     /** La petición muere tras el efecto del SEGUNDO elemento: el primero queda confirmado y el trabajo, sin terminar. */

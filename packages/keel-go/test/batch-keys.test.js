@@ -56,7 +56,7 @@ test('los sujetos pasan la frontera de keel-go y su sonda ejecuta los MISMOS cas
     assert.deepEqual(cases, dotnetKeyCases(plan(name, { generator: planDotnet }).model), name);
     assert.ok(batchKeyProbeFile(plan(name).model), name);
   }
-  assert.deepEqual(batchKeyCases(plan('catalog-batch-keyed').model), ['BK-1', 'BK-2', 'BK-3', 'BK-4']);
+  assert.deepEqual(batchKeyCases(plan('catalog-batch-keyed').model), ['BK-1', 'BK-2', 'BK-3', 'BK-4', 'BK-6']);
   assert.deepEqual(batchKeyCases(plan('catalog-batch-atomic-keyed').model), ['BK-5']);
   assert.deepEqual([...BATCH_KEY_SUBJECTS.relational, ...BATCH_KEY_SUBJECTS.document].sort(), BATCH_KEY_DESIGNS.map((entry) => entry.name).sort());
 });

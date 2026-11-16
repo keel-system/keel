@@ -94,6 +94,10 @@ const SABOTAGES = {
   'bk-steal-running': [['KeyedBatches.java', 'store.takeOver(job.id(), staleMs)', 'store.takeOver(job.id(), 0L)']],
   // La reanudación empieza en el principio y no en el cursor.
   'bk-no-resume': [['KeyedBatches.java', 'for (int index = started.from(); index < items.size(); index++) {', 'for (int index = 0; index < items.size(); index++) {']],
+  // El alta que el motor mata por interbloqueo no se repite (solo cae en MySQL: en PostgreSQL la carrera llega por la
+  // unicidad).
+  'bk-no-race-retry': [['KeyedBatches.java', 'if (!BatchJobSteps.lostKeyRace(conflict) || attempt >= KEY_RACE_ATTEMPTS)', 'if (true || attempt >= KEY_RACE_ATTEMPTS)']],
+  'bj-no-race-retry': [['BatchJobs.java', 'if (key == null || !BatchJobSteps.lostKeyRace(conflict) || attempt >= KEY_RACE_ATTEMPTS)', 'if (true || attempt >= KEY_RACE_ATTEMPTS)']],
   // El todo o nada que falla deja su trabajo.
   'bk-keep-failed': [
     [

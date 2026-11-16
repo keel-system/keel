@@ -55,7 +55,9 @@ import { idempotencyOutcomeCode } from '@keel-system/keel-core/gen/declared-erro
 import { IDEMPOTENCY_HEADER } from '@keel-system/keel-core/gen/request-idempotency';
 import { cronWithDefault, envWithDefault } from '@keel-system/keel-core/gen/profile-values';
 import { PAGEABLE_DEFAULT_SIZE, PAGEABLE_MAX_SIZE } from '@keel-system/keel-core/gen/pagination';
+import { WRITE_CONFLICT_ATTEMPTS } from '@keel-system/keel-core/gen/transactions';
 import { classPath, tsModule, tsString } from './render.js';
+import { PERSISTENCE_ERRORS_TS } from './repositories.js';
 import { optionsLiteral, physicalColumn } from './persistence-entities.js';
 
 const STORE_DIR = 'infrastructure/persistence/batch';
@@ -921,6 +923,7 @@ function jobsFile(model) {
       { symbol: 'Uuids', from: UUIDS_TS },
       { symbol: 'currentActor', from: AUDIT_ACTOR_TS },
       { symbol: 'TransactionContext', from: TRANSACTION_CONTEXT_TS },
+      { symbol: 'isTransientWriteConflict', from: PERSISTENCE_ERRORS_TS },
       { symbol: 'TimerStore', from: TIMER_STORE_TS },
       { symbol: 'BatchJob', from: BATCH_JOB_STORE_TS, type: true },
       { symbol: 'BatchJobStore', from: BATCH_JOB_STORE_TS }
@@ -967,6 +970,14 @@ export class BatchJobNotFoundException extends NotFoundException {
  *
  * No lo edites: lo regenera build.
  */
+/**
+ * Intentos del alta cuando el motor la mata por un conflicto TRANSITORIO. En MySQL (InnoDB), el releaseKey de dos altas con
+ * la misma clave toma un bloqueo de hueco en el índice único sobre una clave que aún no existe, el INSERT de cada una espera
+ * al de la otra y el motor aborta a una por interbloqueo. Repetida, su releaseKey espera al registro de la ganadora hasta
+ * que confirma y la encuentra, como la que pierde en PostgreSQL por la unicidad.
+ */
+const KEY_RACE_ATTEMPTS = ${WRITE_CONFLICT_ATTEMPTS};
+
 @Injectable()
 export class BatchJobs {
   constructor(
@@ -995,20 +1006,29 @@ export class BatchJobs {
     const signature = batchSignature(body);
     const key = keySource === 'payload-hash' ? signature : keySource == null ? null : clientKey;
     const ttlMs = key == null || ttlSeconds == null ? null : ttlSeconds * 1000;
-    let id: string;
-    try {
-      id = await this.transactions.inTransaction(() => this.accept(operation, kind, owner, key, signature, ttlMs, body, total));
-    } catch (error) {
-      if (error instanceof DomainException || key == null) throw error;
-      // Dos altas con la misma clave a la vez: la que pierde choca con la unicidad del motor y responde el trabajo de la
-      // ganadora, sin el 409 «en curso» (D13).
-      const winner = await this.transactions.inTransaction(() => this.repeat(operation, owner, key, signature));
-      if (winner == null) throw error;
-      id = winner;
-    }
+    const id = await this.acceptRacing(operation, kind, owner, key, signature, ttlMs, body, total);
     const job = await this.store.job(id);
     if (job == null) throw new BatchJobNotFoundException(id);
     return BatchJobView.of(job);
+  }
+
+  /** El alta en su transacción, con la carrera de la clave resuelta: el trabajo de la ganadora si esta petición perdió. */
+  private async acceptRacing(operation: string, kind: string, owner: string, key: string | null, signature: string, ttlMs: number | null, input: string, total: number): Promise<string> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.transactions.inTransaction(() => this.accept(operation, kind, owner, key, signature, ttlMs, input, total));
+      } catch (error) {
+        if (error instanceof DomainException || key == null) throw error;
+        // Perdió la carrera de la clave sin llegar a la unicidad (el interbloqueo de MySQL): se repite el alta entera, que
+        // ahora espera a la otra y responde su trabajo.
+        if (isTransientWriteConflict(error) && attempt < KEY_RACE_ATTEMPTS) continue;
+        // Dos altas con la misma clave a la vez: la que pierde choca con la unicidad del motor y responde el trabajo de la
+        // ganadora, sin el 409 «en curso» (D13).
+        const winner = await this.transactions.inTransaction(() => this.repeat(operation, owner, key, signature));
+        if (winner == null) throw error;
+        return winner;
+      }
+    }
   }
 
   private async accept(operation: string, kind: string, owner: string, key: string | null, signature: string, ttlMs: number | null, input: string, total: number): Promise<string> {
@@ -1443,6 +1463,7 @@ function keyedFile(model) {
       { symbol: 'Uuids', from: UUIDS_TS },
       ...(secured ? [{ symbol: 'currentActor', from: AUDIT_ACTOR_TS }] : []),
       { symbol: 'TransactionContext', from: TRANSACTION_CONTEXT_TS },
+      { symbol: 'isTransientWriteConflict', from: PERSISTENCE_ERRORS_TS },
       { symbol: 'BATCH_SETTINGS', from: BATCH_SETTINGS_TS },
       { symbol: 'BatchSettings', from: BATCH_SETTINGS_TS, type: true },
       { symbol: 'BatchJobStore', from: BATCH_JOB_STORE_TS },
@@ -1503,6 +1524,14 @@ function keyOf(keySource: string, clientKey: string | null, signature: string): 
  *
  * No lo edites: lo regenera build.
  */
+/**
+ * Intentos del alta cuando el motor la mata por un conflicto TRANSITORIO. En MySQL (InnoDB), el releaseKey de dos altas con
+ * la misma clave toma un bloqueo de hueco en el índice único sobre una clave que aún no existe, el INSERT de cada una espera
+ * al de la otra y el motor aborta a una por interbloqueo. Repetida, su releaseKey espera al registro de la ganadora hasta
+ * que confirma y la encuentra, como la que pierde en PostgreSQL por la unicidad.
+ */
+const KEY_RACE_ATTEMPTS = ${WRITE_CONFLICT_ATTEMPTS};
+
 @Injectable()
 export class KeyedBatches {
   private readonly steps: BatchJobSteps;
@@ -1524,22 +1553,27 @@ export class KeyedBatches {
   private async start(operation: string, key: string, signature: string, ttlSeconds: number | null, body: string, total: number): Promise<Started> {
     const owner = ${secured ? 'currentActor()' : 'OWNER'};
     const ttlMs = ttlSeconds == null ? null : ttlSeconds * 1000;
-    try {
-      return await this.transactions.inTransaction(async () => {
-        await this.store.releaseKey(operation, owner, key);
-        const found = await this.repeat(operation, owner, key, signature);
-        if (found != null) return found;
-        const id = Uuids.v7();
-        await this.store.insert(id, operation, owner, key, signature, ttlMs, body, total);
-        return { id, from: 0, replay: false };
-      });
-    } catch (error) {
-      if (error instanceof DomainException) throw error;
-      // Dos peticiones con la misma clave a la vez: la que pierde choca con la unicidad del motor y encuentra el trabajo de
-      // la ganadora, en marcha.
-      const found = await this.transactions.inTransaction(() => this.repeat(operation, owner, key, signature));
-      if (found == null) throw error;
-      return found;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.transactions.inTransaction(async () => {
+          await this.store.releaseKey(operation, owner, key);
+          const found = await this.repeat(operation, owner, key, signature);
+          if (found != null) return found;
+          const id = Uuids.v7();
+          await this.store.insert(id, operation, owner, key, signature, ttlMs, body, total);
+          return { id, from: 0, replay: false };
+        });
+      } catch (error) {
+        if (error instanceof DomainException) throw error;
+        // Perdió la carrera de la clave sin llegar a la unicidad (el interbloqueo de MySQL): se repite el alta entera, que
+        // ahora espera a la otra y encuentra su trabajo.
+        if (isTransientWriteConflict(error) && attempt < KEY_RACE_ATTEMPTS) continue;
+        // Dos peticiones con la misma clave a la vez: la que pierde choca con la unicidad del motor y encuentra el trabajo
+        // de la ganadora, en marcha.
+        const found = await this.transactions.inTransaction(() => this.repeat(operation, owner, key, signature));
+        if (found == null) throw error;
+        return found;
+      }
     }
   }
 

@@ -121,7 +121,7 @@ test('el contrato formal: 207 con el resultado por elemento, y ningún error del
 // ─── La fase B: lotes asíncronos (inc. 6 de PLAN-DSL-230-LOTES.md) ───────────
 //
 // Lo que esto NO dice —que el chunk reanude desde el cursor, que la valla revierta al que perdió el trabajo, que el dueño
-// sea el único lector— lo mide scripts/batch-check.js sobre catalog-batch-async y -mongo (BJ-1 a BJ-9).
+// sea el único lector— lo mide scripts/batch-check.js sobre catalog-batch-async y -mongo (BJ-1 a BJ-10).
 
 const jobDesign = (name) => BATCH_JOB_DESIGNS.find((entry) => entry.name === name);
 
@@ -137,12 +137,12 @@ function planJob(name, { database = null, mutate = null } = {}) {
   return planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: database ?? (document ? 'mongodb' : 'postgresql') } });
 }
 
-test('fase B: los sujetos asíncronos pasan la frontera y su sonda ejecuta BJ-1 a BJ-9', () => {
+test('fase B: los sujetos asíncronos pasan la frontera y su sonda ejecuta BJ-1 a BJ-10', () => {
   for (const { name } of BATCH_JOB_DESIGNS) {
     const { manifest, layers, document } = loadJob(name);
     assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, [], name);
     const model = buildModel({ manifest, layers, stack: { database: document ? 'mongodb' : 'postgresql' } });
-    assert.deepEqual(jobCasesOf(model), ['BJ-1', 'BJ-2', 'BJ-3', 'BJ-4', 'BJ-5', 'BJ-6', 'BJ-7', 'BJ-8', 'BJ-9'], name);
+    assert.deepEqual(jobCasesOf(model), ['BJ-1', 'BJ-2', 'BJ-3', 'BJ-4', 'BJ-5', 'BJ-6', 'BJ-7', 'BJ-8', 'BJ-9', 'BJ-10'], name);
   }
 });
 
@@ -242,8 +242,8 @@ function planKeyed(name, { database = null } = {}) {
 
 test('D15: los sujetos con clave pasan la frontera y su sonda ejecuta los BA-* y los BK-* que les tocan', () => {
   const expected = {
-    'catalog-batch-keyed': ['BK-1', 'BK-2', 'BK-3', 'BK-4'],
-    'catalog-batch-keyed-mongo': ['BK-1', 'BK-2', 'BK-3', 'BK-4'],
+    'catalog-batch-keyed': ['BK-1', 'BK-2', 'BK-3', 'BK-4', 'BK-6'],
+    'catalog-batch-keyed-mongo': ['BK-1', 'BK-2', 'BK-3', 'BK-4', 'BK-6'],
     'catalog-batch-atomic-keyed': ['BK-5']
   };
   for (const { name } of BATCH_KEY_DESIGNS) {

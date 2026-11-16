@@ -47,7 +47,7 @@ test('los sujetos pasan la frontera de keel-nest y su sonda ejecuta los MISMOS c
     assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, [], name);
     const nest = plan(name);
     assert.deepEqual(batchJobCases(nest.model), springJobCases(plan(name, { generator: planSpring }).model), name);
-    assert.equal(batchJobCases(nest.model).length, 9, name);
+    assert.equal(batchJobCases(nest.model).length, 10, name);
   }
 });
 

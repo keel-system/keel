@@ -1,4 +1,4 @@
-// Los LOTES ASÍNCRONOS (DSL 2.30, fase B) contra lo emitido, para db-check y doc-check: BJ-1 a BJ-9 de
+// Los LOTES ASÍNCRONOS (DSL 2.30, fase B) contra lo emitido, para db-check y doc-check: BJ-1 a BJ-10 de
 // keel-core/gen/batch.js, con los ids que ejecuta keel-spring (batch-check) sobre los MISMOS diseños
 // (BATCH_JOB_DESIGNS de keel-core/test/helpers/batch-designs.js). El handler de la sonda es el de batch-probes.js
 // (batchProbePatch), con su gancho `probeHooks.afterEffect`.
@@ -9,7 +9,7 @@
 // mitad de chunk (BJ-4) es un almacén que lanza al escribir un resultado; la réplica que le quita el trabajo (BJ-5) es el
 // gancho del handler, que mueve el cursor FUERA de la transacción del elemento, tras el efecto.
 
-import { BATCH_JOB_CASES, BATCH_JOB_SABOTAGES } from '@keel-system/keel-core/gen/batch';
+import { BATCH_JOB_CASES, BATCH_JOB_SABOTAGES, BATCH_KEY_RACE_ROUNDS } from '@keel-system/keel-core/gen/batch';
 import { BATCH_JOB, BATCH_ITEM_RESULT, batchKind } from '@keel-system/keel-core/gen/batch-store';
 import { KEEL_TIMER } from '@keel-system/keel-core/gen/timer-store';
 import { allBatchOperations, UNDECLARED_FAILURE_NAME } from './batch-probes.js';
@@ -62,7 +62,12 @@ export const BATCH_JOB_SABOTAGE_SPECS = {
     'const result = await this.transactions.inTransaction(() => process(item));\n      await this.transactions.inTransaction(() => this.keep(jobId, index, BatchItem.succeeded(index, result)));'
   ]),
   // Las rutas del trabajo no miran el dueño.
-  'bj-foreign-reader': SAME([JOBS, 'await this.store.owned(jobId, operation, currentActor());', 'await this.store.job(jobId).then((found) => (found?.operation === operation ? found : null));'])
+  'bj-foreign-reader': SAME([JOBS, 'await this.store.owned(jobId, operation, currentActor());', 'await this.store.job(jobId).then((found) => (found?.operation === operation ? found : null));']),
+  // El alta que el motor mata por interbloqueo no se repite (solo cae en MySQL: en PostgreSQL la carrera llega por la
+  // unicidad). En keel-nest la relectura de la ganadora que sigue al reintento ya absorbía el interbloqueo en la sonda (la
+  // ganadora confirma antes de que la perdedora relea): quitar solo el reintento no se ve, así que el sabotaje quita las DOS
+  // defensas ante el conflicto transitorio, que es lo que le faltaba a keel-spring.
+  'bj-no-race-retry': SAME([JOBS, 'if (isTransientWriteConflict(error) && attempt < KEY_RACE_ATTEMPTS) continue;', 'if (isTransientWriteConflict(error)) throw error;'])
 };
 
 export const isBatchJobSabotage = (id) => Boolean(BATCH_JOB_SABOTAGE_SPECS[id]);
@@ -87,6 +92,7 @@ function storage(document, engine, product, operationName) {
     return `  const jobsOf = () => database.collection(${js(BATCH_JOB.table)});
   const resultsOf = () => database.collection(${js(BATCH_ITEM_RESULT.table)});
   const jobCount = () => jobsOf().countDocuments({});
+  const keyJobCount = (key) => jobsOf().countDocuments({ idempotency_key: key });
   const armed = (id) => database.collection(${js(KEEL_TIMER.table)}).countDocuments({ kind: ${kind}, entity_id: id });
   const setTime = (id, column, value) => jobsOf().updateOne({ _id: id }, { $set: { [column]: value } });
   const cursor = async (id) => Number((await jobsOf().findOne({ _id: id }))?.next_index);
@@ -107,6 +113,7 @@ function storage(document, engine, product, operationName) {
   const at = (n) => (mysql ? '?' : `$${n}`);
   return `  const one = async (sql, params) => Number(Object.values((await dataSource.query(sql, params))[0] ?? {})[0] ?? 0);
   const jobCount = () => one(${js(`SELECT count(*) AS n FROM ${q(BATCH_JOB.table)}`)}, []);
+  const keyJobCount = (key) => one(${js(`SELECT count(*) AS n FROM ${q(BATCH_JOB.table)} WHERE idempotency_key = ${at(1)}`)}, [key]);
   const armed = (id) => one(${js(`SELECT count(*) AS n FROM ${q(KEEL_TIMER.table)} WHERE kind = ${at(1)} AND entity_id = ${mysql ? 'UUID_TO_BIN(?)' : '$2'}`)}, [${kind}, id]);
   const setTime = (id, column, value) => dataSource.query(\`UPDATE ${q(BATCH_JOB.table)} SET \${column} = ${at(1)} WHERE id = ${mysql ? 'UUID_TO_BIN(?)' : '$2'}\`, [value, id]);
   const cursor = (id) => one(${js(`SELECT next_index FROM ${q(BATCH_JOB.table)} WHERE id = ${id}`)}, [id]);
@@ -122,7 +129,7 @@ function storage(document, engine, product, operationName) {
   };`;
 }
 
-/** El bloque de BJ-1 a BJ-9, con `check` y `tx` del script de la sonda. `adapterOf` da el adaptador de la raíz Product. */
+/** El bloque de BJ-1 a BJ-10, con `check` y `tx` del script de la sonda. `adapterOf` da el adaptador de la raíz Product. */
 export function batchJobBlock(model, ctx, { document, engine, adapterOf }) {
   const operation = asyncOperation(model);
   if (!operation) return '';
@@ -271,9 +278,21 @@ ${code}
       check('BJ-9: más elementos que maxItems', many.status === 400, js(many));
       check('BJ-9: un cuerpo que no se lee', (await post('{"items":', null)).status === 400);
       check('BJ-9: ningún trabajo', (await jobCount()) === before);`);
+  const contents = Array.from({ length: BATCH_KEY_RACE_ROUNDS }, (_, round) => body(item(`JKK-${String(round).padStart(4, '0')}`)));
+  test('BJ-10', 'la carrera de la clave', `      const contents = ${js(contents)};
+      const wrong = [];
+      for (let round = 0; round < contents.length; round++) {
+        const key = 'carrera-' + round;
+        const both = await Promise.all([0, 1].map(() => post(contents[round], key).catch((error) => ({ status: 0, location: null, json: { exception: String(error) } }))));
+        for (const answer of both) if (answer.status !== 202) wrong.push(round + ': ' + js(answer));
+        if (both[0].location !== both[1].location) wrong.push(round + ': dos Location, ' + both[0].location + ' y ' + both[1].location);
+        const jobs = await keyJobCount(key);
+        if (jobs !== 1) wrong.push(round + ': ' + jobs + ' trabajos con la clave');
+      }
+      check('BJ-10: las dos responden 202 con el mismo Location (D13), y un solo trabajo por clave', wrong.length === 0, wrong.join(' | '));`);
 
   return `
-// ── Lotes asíncronos (DSL 2.30, fase B): BJ-1 a BJ-9, con el controlador, el procesador y los almacenes emitidos.
+// ── Lotes asíncronos (DSL 2.30, fase B): BJ-1 a BJ-10, con el controlador, el procesador y los almacenes emitidos.
 {
   const batchProducts = ${adapterOf(product)};
   const timerStore = new ${document ? 'MongoTimerStore' : 'SqlTimerStore'}(tx, new TimerArmedSignal());

@@ -55,7 +55,7 @@ test('los sujetos pasan la frontera de keel-go y su sonda ejecuta los MISMOS cas
     assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, [], name);
     const { model } = plan(name);
     const cases = batchJobCases(model);
-    assert.equal(cases.length, 9, name);
+    assert.equal(cases.length, 10, name);
     assert.deepEqual(cases, springJobCases(plan(name, { generator: planSpring }).model), name);
     assert.deepEqual(cases, nestJobCases(plan(name, { generator: planNest }).model), name);
     assert.deepEqual(cases, dotnetJobCases(plan(name, { generator: planDotnet }).model), name);

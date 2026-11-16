@@ -1,4 +1,4 @@
-// Los lotes SÍNCRONOS con clave (DSL 2.30, D15, incremento 10b) contra lo emitido, para db-check y doc-check: BK-1 a BK-5
+// Los lotes SÍNCRONOS con clave (DSL 2.30, D15, incremento 10b) contra lo emitido, para db-check y doc-check: BK-1 a BK-6
 // de keel-core/gen/batch.js, con los ids que ejecutan keel-spring (batch-check) y keel-nest (scripts/lib/batch-key-probes.js)
 // sobre los MISMOS diseños (BATCH_KEY_DESIGNS de keel-core/test/helpers/batch-designs.js). El handler de la sonda es el de
 // batch-probes.js (batchProbePatch).
@@ -14,7 +14,7 @@
 // fallo y escapa del lote sin mover el cursor, como el Error del gancho de keel-spring. Que lleve muerta más que
 // `batch.sync-stale-ms` se simula envejeciendo su `updated_at`.
 
-import { BATCH_KEY_CASES, BATCH_KEY_SABOTAGES } from '@keel-system/keel-core/gen/batch';
+import { BATCH_KEY_CASES, BATCH_KEY_RACE_ROUNDS, BATCH_KEY_SABOTAGES } from '@keel-system/keel-core/gen/batch';
 import { BATCH_JOB, BATCH_ITEM_RESULT, BATCH_PARAMETERS, BATCH_SYNC_STALE } from '@keel-system/keel-core/gen/batch-store';
 import { csMember, csString, namespaceOf } from '../../src/scaffold/render.js';
 import { endpointsClass } from '../../src/scaffold/endpoints.js';
@@ -31,11 +31,11 @@ export const BATCH_KEY_SUBJECTS = { relational: ['catalog-batch-keyed', 'catalog
 /** Las operaciones síncronas con clave del modelo. */
 export const keyedOperations = (model) => batchOperations(model).filter((operation) => operation.batch.idempotency);
 
-/** Los casos de un lote síncrono con clave que ejecuta este diseño: BK-1 a BK-4 con un per-item, BK-5 con un todo o nada. */
+/** Los casos de un lote síncrono con clave que ejecuta este diseño: BK-1 a BK-4 y BK-6 con un per-item, BK-5 con un todo o nada. */
 export function batchKeyCases(model) {
   const atomicities = new Set(keyedOperations(model).map((operation) => operation.batch.atomicity));
   const ids = [];
-  if (atomicities.has('per-item')) ids.push('BK-1', 'BK-2', 'BK-3', 'BK-4');
+  if (atomicities.has('per-item')) ids.push('BK-1', 'BK-2', 'BK-3', 'BK-4', 'BK-6');
   if (atomicities.has('all-or-nothing')) ids.push('BK-5');
   return BATCH_KEY_CASES.map((entry) => entry.id).filter((id) => ids.includes(id));
 }
@@ -44,6 +44,15 @@ export function batchKeyCases(model) {
 
 const KEYED = 'Rest/KeyedBatches.cs';
 const SAME = (spec) => ({ relational: spec, document: spec });
+
+// El alta que el motor mata por interbloqueo no se repite (solo cae en MySQL: en PostgreSQL la carrera llega por la unicidad).
+// En keel-dotnet la repetición NO es del alta sino de PersistenceTransactions, la de todo caso de uso: el sabotaje la apaga
+// ahí, y el veredicto solo mira los casos de los lotes.
+const NO_RACE_RETRY = SAME([
+  'Persistence/PersistenceTransactions.cs',
+  'catch (Exception error) when (!readOnly && attempt < WriteConflictAttempts && PersistenceErrors.IsTransientWriteConflict(error))',
+  'catch (Exception error) when (!readOnly && attempt < 1 && PersistenceErrors.IsTransientWriteConflict(error))'
+]);
 
 /**
  * Lo que se busca y se sustituye en lo emitido, por sabotaje y por almacén: [sufijo del archivo, texto, sustituto]. Rompen lo
@@ -66,7 +75,8 @@ export const BATCH_KEY_SABOTAGE_SPECS = {
     KEYED,
     '        await transactions.Run(() => store.Discard(id, CancellationToken.None), readOnly: false, CancellationToken.None);',
     '        _ = id;\n        await Task.CompletedTask;'
-  ])
+  ]),
+  'bk-no-race-retry': NO_RACE_RETRY
 };
 
 export const isBatchKeySabotage = (id) => Boolean(id && BATCH_KEY_SABOTAGE_SPECS[id]);
@@ -120,6 +130,8 @@ function storage(model) {
     const results = `root.GetRequiredService<DocumentDatabase>().Collection(${csString(BATCH_ITEM_RESULT.table)})`;
     return `    private static Task<long> KeyJobCount() => ${jobs}.CountDocumentsAsync(new BsonDocument(), cancellationToken: Cancel);
 
+    private static Task<long> KeyJobCountOf(string key) => ${jobs}.CountDocumentsAsync(new BsonDocument("idempotency_key", key), cancellationToken: Cancel);
+
     private static Task<long> KeyResultCount() => ${results}.CountDocumentsAsync(new BsonDocument(), cancellationToken: Cancel);
 
     /// <summary>Una hora del trabajo de esa clave, retrasada a mano.</summary>
@@ -131,6 +143,8 @@ function storage(model) {
   const alias = usesMySql(model) ? 'AS `Value`' : 'AS \\"Value\\"';
   const db = (lambda) => `InScope(services => ${lambda.replace('$DB', `services.GetRequiredService<${context}>().Database`)})`;
   return `    private static Task<long> KeyJobCount() => ${db(`$DB.SqlQuery<long>($"SELECT count(*) ${alias} FROM ${BATCH_JOB.table}").SingleAsync(Cancel)`)};
+
+    private static Task<long> KeyJobCountOf(string key) => ${db(`$DB.SqlQuery<long>($"SELECT count(*) ${alias} FROM ${BATCH_JOB.table} WHERE idempotency_key = {key}").SingleAsync(Cancel)`)};
 
     private static Task<long> KeyResultCount() => ${db(`$DB.SqlQuery<long>($"SELECT count(*) ${alias} FROM ${BATCH_ITEM_RESULT.table}").SingleAsync(Cancel)`)};
 
@@ -207,6 +221,32 @@ ${code}
         AssertKeySummary(resumed.Json!, 3, 3, 0, 0);
         Assert.Equal(results + 3, await KeyResultCount());
         Assert.NotNull(await KeyProduct("ZKD-0003"));`);
+    const contents = Array.from({ length: BATCH_KEY_RACE_ROUNDS }, (_, round) => body(draft(`ZKF-${String(round).padStart(4, '0')}`)));
+    fact('BK-6', 'la carrera de la clave', `        string[] contents = [${contents.join(', ')}];
+        var wrong = new List<string>();
+        for (var round = 0; round < contents.Length; round++)
+        {
+            var content = contents[round];
+            var key = "carrera-bk6-" + round;
+            var both = await KeyRace(() => KeyPost(${call}, content, key));
+            foreach (var answer in both)
+            {
+                if (answer.Status != 207 && !(answer.Status == 409 && answer.Json?["code"]?.GetValue<string>() == "IDEMPOTENCY_KEY_IN_PROGRESS"))
+                {
+                    wrong.Add($"{round}: {answer.Status} {answer.Json}");
+                }
+            }
+            if (!both.Any(answer => answer.Status == 207))
+            {
+                wrong.Add($"{round}: ninguno es 207");
+            }
+            var jobs = await KeyJobCountOf(key);
+            if (jobs != 1)
+            {
+                wrong.Add($"{round}: {jobs} trabajos con la clave");
+            }
+        }
+        Assert.True(wrong.Count == 0, "cada respuesta es el 207 o 409 IDEMPOTENCY_KEY_IN_PROGRESS, y un solo trabajo por clave: " + string.Join(" | ", wrong));`);
   }
   if (atomic) {
     const call = `${endpoints}.${csMember(atomic.name)}`;
@@ -244,6 +284,23 @@ ${code}
         return (http.Response.StatusCode, text.Length == 0 ? null : JsonNode.Parse(text));
     }
 
+    /// <summary>Dos llamadas a la vez, cada una en su tarea. La que lanza cuenta como status 0.</summary>
+    private static async Task<(int Status, JsonNode? Json)[]> KeyRace(Func<Task<(int Status, JsonNode? Json)>> call)
+    {
+        async Task<(int Status, JsonNode? Json)> Guarded()
+        {
+            try
+            {
+                return await call();
+            }
+            catch (Exception failed)
+            {
+                return (0, new JsonObject { ["exception"] = failed.ToString() });
+            }
+        }
+        return await Task.WhenAll(Task.Run(Guarded), Task.Run(Guarded));
+    }
+
     /// <summary>La petición muere al escribir el resultado del SEGUNDO elemento: el primero queda confirmado y el trabajo, sin terminar.</summary>
     private static async Task KeyDies(Func<HttpContext, Task> endpoint, string content, string key)
     {
@@ -269,5 +326,5 @@ ${code}
     }
 
 ${storage(model)}`;
-  return { methods: `    // ─── Lotes síncronos con clave (DSL 2.30, D15): BK-1 a BK-5, con el endpoint, KeyedBatches y los almacenes emitidos ───\n\n${[...methods, helpers].join('\n\n')}` };
+  return { methods: `    // ─── Lotes síncronos con clave (DSL 2.30, D15): BK-1 a BK-6, con el endpoint, KeyedBatches y los almacenes emitidos ───\n\n${[...methods, helpers].join('\n\n')}` };
 }

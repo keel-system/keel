@@ -1,4 +1,4 @@
-// Los LOTES ASÍNCRONOS (DSL 2.30, fase B) contra lo emitido, para db-check y doc-check: BJ-1 a BJ-9 de
+// Los LOTES ASÍNCRONOS (DSL 2.30, fase B) contra lo emitido, para db-check y doc-check: BJ-1 a BJ-10 de
 // keel-core/gen/batch.js, con los ids que ejecutan keel-spring (batch-check), keel-nest y keel-dotnet (su
 // scripts/lib/batch-job-probes.js) sobre los MISMOS diseños (BATCH_JOB_DESIGNS de keel-core/test/helpers/batch-designs.js).
 // El handler de la sonda es el de batch-probes.js (batchProbePatch), con su gancho `ProbeAfterEffect`.
@@ -12,7 +12,7 @@
 // almacén que lanza al escribir el resultado de un elemento (envuelve el emitido en las Dependencies); la réplica que le quita
 // el trabajo (BJ-5) es el gancho del handler, que mueve el cursor FUERA de la transacción del elemento, tras el efecto.
 
-import { BATCH_JOB_CASES, BATCH_JOB_SABOTAGES, batchJobPaths } from '@keel-system/keel-core/gen/batch';
+import { BATCH_JOB_CASES, BATCH_JOB_SABOTAGES, BATCH_KEY_RACE_ROUNDS, batchJobPaths } from '@keel-system/keel-core/gen/batch';
 import { BATCH_JOB, BATCH_ITEM_RESULT } from '@keel-system/keel-core/gen/batch-store';
 import { KEEL_TIMER, KEEL_TIMER_DOCUMENT } from '@keel-system/keel-core/gen/timer-store';
 import { goFile, goString } from '../../src/lib/go-source.js';
@@ -41,6 +41,7 @@ export function batchJobCases(model) {
 
 const JOBS = /^internal\/httpapi\/batch_jobs\.go$/;
 const STORE = /^internal\/infrastructure\/\w+\/batch_jobs\.go$/;
+const TRANSACTIONS = /^internal\/infrastructure\/\w+\/transactions\.go$/;
 const both = (entry) => ({ relational: { ...entry, expect: /_BJ\d+_/ }, document: { ...entry, expect: /_BJ\d+_/ } });
 
 /**
@@ -89,6 +90,19 @@ export const BATCH_JOB_SABOTAGE_SPECS = {
       to: '{Key: "operation", Value: operation}})',
       expect: /_BJ\d+_/
     }
+  },
+  // El alta que el motor mata por interbloqueo no se repite (solo cae en MySQL: en PostgreSQL la carrera llega por la
+  // unicidad). En keel-go la repetición NO es del alta sino de la transacción (fresh/within en transactions.go): el sabotaje
+  // la apaga ahí, así que caen también las dos sondas de la transacción (`alsoFalls`), y ninguna otra.
+  'bj-no-race-retry': {
+    relational: {
+      files: TRANSACTIONS,
+      from: 'if err == nil || options.ReadOnly || !transient(err) {',
+      to: 'if err == nil || options.ReadOnly || !transient(err) || attempt > 0 {',
+      expect: /_BJ\d+_/,
+      alsoFalls: /^TestTransaction_/
+    },
+    document: { files: TRANSACTIONS, from: 'if err == nil || readOnly || !transient(err) {', to: 'if err == nil || readOnly || !transient(err) || attempt > 0 {', expect: /_BJ\d+_/, alsoFalls: /^TestTransaction_/ }
   }
 };
 
@@ -111,6 +125,11 @@ function storage(model) {
     return `func jobCount(t *testing.T) int64 {
 	t.Helper()
 	return jobMust(${collection(job)}.CountDocuments(t.Context(), bson.D{}))
+}
+
+func jobCountOf(t *testing.T, key string) int64 {
+	t.Helper()
+	return jobMust(${collection(job)}.CountDocuments(t.Context(), bson.D{{Key: "idempotency_key", Value: key}}))
 }
 
 func jobArmed(t *testing.T, id uuid.UUID) int64 {
@@ -168,6 +187,11 @@ func jobSetTime(t *testing.T, id uuid.UUID, field string, value time.Time) {
 func jobCount(t *testing.T) int64 {
 	t.Helper()
 	return jobScalar(t, ${goString(`SELECT count(*) FROM ${job}`)})
+}
+
+func jobCountOf(t *testing.T, key string) int64 {
+	t.Helper()
+	return jobScalar(t, ${goString(`SELECT count(*) FROM ${job} WHERE idempotency_key = ${p(1)}`)}, key)
 }
 
 func jobArmed(t *testing.T, id uuid.UUID) int64 {
@@ -417,6 +441,37 @@ ${code}
 	if after := jobCount(t); after != before {
 		t.Fatalf("ningún trabajo: %d → %d", before, after)
 	}`);
+  const contents = Array.from({ length: BATCH_KEY_RACE_ROUNDS }, (_, round) => body(draft(`JKK-${String(round).padStart(4, '0')}`)));
+  probe('BJ-10', 'la carrera de la clave', `	contents := []string{
+${contents.map((content) => `		${content},`).join('\n')}
+	}
+	var wrong []string
+	for round, content := range contents {
+		key := "carrera-bj10-" + strconv.Itoa(round)
+		var statuses [2]int
+		var locations [2]string
+		var wg sync.WaitGroup
+		for n := range statuses {
+			wg.Go(func() {
+				statuses[n], _, locations[n] = jobPost(t, content, key, "alice")
+			})
+		}
+		wg.Wait()
+		for _, status := range statuses {
+			if status != http.StatusAccepted {
+				wrong = append(wrong, strconv.Itoa(round)+": "+strconv.Itoa(status))
+			}
+		}
+		if locations[0] != locations[1] {
+			wrong = append(wrong, strconv.Itoa(round)+": dos Location, "+locations[0]+" y "+locations[1])
+		}
+		if jobs := jobCountOf(t, key); jobs != 1 {
+			wrong = append(wrong, strconv.Itoa(round)+": "+strconv.FormatInt(jobs, 10)+" trabajos con la clave")
+		}
+	}
+	if len(wrong) > 0 {
+		t.Fatalf("las dos responden 202 con el mismo Location (D13), y un solo trabajo por clave: %s", strings.Join(wrong, " | "))
+	}`);
 
   const repository = `New${product.name}Repository(${repositoryArgs(model, product, 'probeTx', 'nil', { sweeps: 'probeSweeps', parameters: 'probeParameters', reconciliation: PROBE_RECONCILIATION })})`;
   const helpers = `// jobMust es el valor, o un pánico si la lectura de la sonda falló.
@@ -628,6 +683,7 @@ ${storage(model)}`;
     'log/slog',
     'net/http',
     'net/http/httptest',
+    'strconv',
     'strings',
     'sync',
     'sync/atomic',
@@ -646,7 +702,7 @@ ${storage(model)}`;
     pkg: dir.split('/').pop(),
     imports,
     body: `// La sonda de los lotes asíncronos (DSL 2.30, fase B) de db-check y doc-check (scripts/lib/batch-job-probes.js de keel-go):
-// BJ-1 a BJ-9 por el http.Handler y el procesador emitidos, contra un ${document ? 'MongoDB' : 'motor relacional'} real. No es parte del proyecto
+// BJ-1 a BJ-10 por el http.Handler y el procesador emitidos, contra un ${document ? 'MongoDB' : 'motor relacional'} real. No es parte del proyecto
 // generado.
 
 ${[...tests, helpers].join('\n\n')}

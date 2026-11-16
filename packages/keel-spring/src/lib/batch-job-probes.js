@@ -9,7 +9,7 @@
 // envuelto que lanza un Error al escribir un resultado; la réplica que le quita el trabajo (BJ-5) es el gancho del
 // handler, que mueve el cursor en OTRA transacción tras el efecto.
 
-import { BATCH_JOB_CASES } from '@keel-system/keel-core/gen/batch';
+import { BATCH_JOB_CASES, BATCH_KEY_RACE_ROUNDS } from '@keel-system/keel-core/gen/batch';
 import { PACKAGE_LEAF, batchOperations, body, item } from './batch-probes.js';
 
 /** La clase JUnit de los casos BJ-*. */
@@ -42,6 +42,12 @@ export function batchJobTestClass(model, { packages, document, engine, propertie
     'java.time.temporal.ChronoUnit',
     'java.util.List',
     'java.util.UUID',
+    'java.util.ArrayList',
+    'java.util.concurrent.Callable',
+    'java.util.concurrent.CyclicBarrier',
+    'java.util.concurrent.ExecutorService',
+    'java.util.concurrent.Executors',
+    'java.util.concurrent.Future',
     'java.util.stream.Collectors',
     'java.util.stream.IntStream',
     'org.junit.jupiter.api.AfterEach',
@@ -253,6 +259,29 @@ export function batchJobTestClass(model, { packages, document, engine, propertie
         assertEquals(400, post(many(${operation.batch.maxItems + 1}), null).status(), "BJ-9: más elementos que maxItems");
         assertEquals(400, post("{\\"items\\":", null).status(), "BJ-9: un cuerpo que no se lee");
         assertEquals(before, jobCount(), "BJ-9: ningún trabajo");
+    }`,
+    `    @Test
+    void bj10_carreraDeLaClave() throws Exception {
+        String[] contents = {
+${Array.from({ length: BATCH_KEY_RACE_ROUNDS }, (_, round) => `            ${body(item(`JKK-${String(round).padStart(4, '0')}`))}`).join(',\n')}
+        };
+        for (int round = 0; round < contents.length; round++) {
+            String content = contents[round];
+            String key = "carrera-" + round;
+            List<Answer> both = race(() -> {
+                as("alice");
+                try {
+                    return post(content, key);
+                } finally {
+                    SecurityContextHolder.clearContext();
+                }
+            });
+            for (Answer answer : both) {
+                assertEquals(202, answer.status(), "BJ-10, ronda " + round + ": las dos responden 202 (D13): " + answer.json());
+            }
+            assertEquals(both.get(0).location(), both.get(1).location(), "BJ-10, ronda " + round + ": con el mismo Location");
+            assertEquals(1L, keyJobCount(key), "BJ-10, ronda " + round + ": un solo trabajo por clave");
+        }
     }`
   ];
 
@@ -308,6 +337,32 @@ ${fields.join('\n\n')}
 
     private Answer get(String url) throws Exception {
         return answer(mvc.perform(MockMvcRequestBuilders.get(url)).andReturn());
+    }
+
+    /** Dos peticiones a la vez, cada una en su hilo y soltadas juntas por una barrera. La que lanza cuenta como status 0. */
+    private List<Answer> race(Callable<Answer> request) throws Exception {
+        CyclicBarrier start = new CyclicBarrier(2);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            List<Future<Answer>> both = new ArrayList<>();
+            for (int n = 0; n < 2; n++) {
+                both.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        return request.call();
+                    } catch (Exception failed) {
+                        return new Answer(0, null, mapper.createObjectNode().put("exception", String.valueOf(failed)));
+                    }
+                }));
+            }
+            List<Answer> answers = new ArrayList<>();
+            for (Future<Answer> answer : both) {
+                answers.add(answer.get());
+            }
+            return answers;
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     private Answer answer(MvcResult result) throws Exception {
@@ -393,6 +448,10 @@ function mongoStorage(kind) {
         return mongo.count(new Query(), "batch_job");
     }
 
+    private long keyJobCount(String key) {
+        return mongo.count(new Query(Criteria.where("idempotency_key").is(key)), "batch_job");
+    }
+
     private long armed(UUID id) {
         return mongo.count(new Query(Criteria.where("kind").is(${kind}).and("entity_id").is(id.toString())), "keel_timer");
     }
@@ -436,6 +495,10 @@ function jdbcStorage(kind, mysql) {
 
     private long jobCount() {
         return jdbc().sql("SELECT count(*) FROM batch_job").query(Long.class).single();
+    }
+
+    private long keyJobCount(String key) {
+        return jdbc().sql("SELECT count(*) FROM batch_job WHERE idempotency_key = :key").param("key", key).query(Long.class).single();
     }
 
     private long armed(UUID id) {

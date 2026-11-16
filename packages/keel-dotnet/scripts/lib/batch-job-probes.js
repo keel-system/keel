@@ -1,4 +1,4 @@
-// Los LOTES ASÍNCRONOS (DSL 2.30, fase B) contra lo emitido, para db-check y doc-check: BJ-1 a BJ-9 de
+// Los LOTES ASÍNCRONOS (DSL 2.30, fase B) contra lo emitido, para db-check y doc-check: BJ-1 a BJ-10 de
 // keel-core/gen/batch.js, con los ids que ejecutan keel-spring (batch-check) y keel-nest (scripts/lib/batch-job-probes.js)
 // sobre los MISMOS diseños (BATCH_JOB_DESIGNS de keel-core/test/helpers/batch-designs.js). El handler de la sonda es el de
 // batch-probes.js (batchProbePatch), con su gancho `AfterEffect`.
@@ -12,7 +12,7 @@
 // contenedor en el lugar del emitido, porque cada elemento resuelve el suyo en su ámbito); la réplica que le quita el
 // trabajo (BJ-5) es el gancho del handler, que mueve el cursor FUERA de la transacción del elemento, tras el efecto.
 
-import { BATCH_JOB_CASES, BATCH_JOB_SABOTAGES } from '@keel-system/keel-core/gen/batch';
+import { BATCH_JOB_CASES, BATCH_JOB_SABOTAGES, BATCH_KEY_RACE_ROUNDS } from '@keel-system/keel-core/gen/batch';
 import { BATCH_JOB, BATCH_ITEM_RESULT, batchKind } from '@keel-system/keel-core/gen/batch-store';
 import { KEEL_TIMER } from '@keel-system/keel-core/gen/timer-store';
 import { csMember, csString, namespaceOf } from '../../src/scaffold/render.js';
@@ -43,6 +43,15 @@ export function batchJobCases(model) {
 const JOBS = 'Rest/BatchJobs.cs';
 const STEPS = 'Rest/BatchJobSteps.cs';
 const SAME = (spec) => ({ relational: spec, document: spec });
+
+// El alta que el motor mata por interbloqueo no se repite (solo cae en MySQL: en PostgreSQL la carrera llega por la unicidad).
+// En keel-dotnet la repetición NO es del alta sino de PersistenceTransactions, la de todo caso de uso: el sabotaje la apaga
+// ahí, y el veredicto solo mira los casos de los lotes.
+const NO_RACE_RETRY = SAME([
+  'Persistence/PersistenceTransactions.cs',
+  'catch (Exception error) when (!readOnly && attempt < WriteConflictAttempts && PersistenceErrors.IsTransientWriteConflict(error))',
+  'catch (Exception error) when (!readOnly && attempt < 1 && PersistenceErrors.IsTransientWriteConflict(error))'
+]);
 
 /** Lo que se busca y se sustituye en lo emitido, por sabotaje y por almacén: [sufijo del archivo, texto, sustituto]. */
 export const BATCH_JOB_SABOTAGE_SPECS = {
@@ -77,7 +86,8 @@ export const BATCH_JOB_SABOTAGE_SPECS = {
     JOBS,
     'await store.Owned(jobId, operation, AuditActor.Current(), cancellationToken) ?? throw',
     '(await store.Job(jobId, cancellationToken) is { } found && found.Operation == operation ? found : null) ?? throw'
-  ])
+  ]),
+  'bj-no-race-retry': NO_RACE_RETRY
 };
 
 export const isBatchJobSabotage = (id) => Boolean(id && BATCH_JOB_SABOTAGE_SPECS[id]);
@@ -181,6 +191,8 @@ function storage(model) {
     const byId = (id) => `new BsonDocument("_id", ${id}.ToString("D"))`;
     return `    private static Task<long> JobCount() => ${jobs}.CountDocumentsAsync(new BsonDocument(), cancellationToken: Cancel);
 
+    private static Task<long> JobCountOf(string key) => ${jobs}.CountDocumentsAsync(new BsonDocument("idempotency_key", key), cancellationToken: Cancel);
+
     private static Task<long> JobArmed(Guid id) => ${timers}.CountDocumentsAsync(new BsonDocument { { "kind", ${kind} }, { "entity_id", id.ToString("D") } }, cancellationToken: Cancel);
 
     private static async Task<int> JobCursor(Guid id) => (await ${jobs}.Find(${byId('id')}).FirstAsync(Cancel))["next_index"].ToInt32();
@@ -200,6 +212,8 @@ function storage(model) {
   const alias = usesMySql(model) ? 'AS `Value`' : 'AS \\"Value\\"';
   const db = (lambda) => `InScope(services => ${lambda.replace('$DB', `services.GetRequiredService<${context}>().Database`)})`;
   return `    private static Task<long> JobCount() => ${db(`$DB.SqlQuery<long>($"SELECT count(*) ${alias} FROM ${BATCH_JOB.table}").SingleAsync(Cancel)`)};
+
+    private static Task<long> JobCountOf(string key) => ${db(`$DB.SqlQuery<long>($"SELECT count(*) ${alias} FROM ${BATCH_JOB.table} WHERE idempotency_key = {key}").SingleAsync(Cancel)`)};
 
     private static Task<long> JobArmed(Guid id) => ${db(`$DB.SqlQuery<long>($"SELECT count(*) ${alias} FROM ${KEEL_TIMER.table} WHERE kind = {${kind}} AND entity_id = {id}").SingleAsync(Cancel)`)};
 
@@ -376,6 +390,32 @@ ${code}
         Assert.True(many.Status == 400, $"más elementos que maxItems: {many.Status} {many.Json}");
         Assert.Equal(400, (await JobPost("{\\"items\\":", null)).Status);
         Assert.Equal(before, await JobCount());`);
+  const contents = Array.from({ length: BATCH_KEY_RACE_ROUNDS }, (_, round) => body(draft(`JKK-${String(round).padStart(4, '0')}`)));
+  fact('BJ-10', 'la carrera de la clave', `        string[] contents = [${contents.join(', ')}];
+        var wrong = new List<string>();
+        for (var round = 0; round < contents.Length; round++)
+        {
+            var content = contents[round];
+            var key = "carrera-bj10-" + round;
+            var both = await JobRace(() => JobPost(content, key));
+            foreach (var answer in both)
+            {
+                if (answer.Status != 202)
+                {
+                    wrong.Add($"{round}: {answer.Status} {answer.Json}");
+                }
+            }
+            if (both[0].Location != both[1].Location)
+            {
+                wrong.Add($"{round}: dos Location, {both[0].Location} y {both[1].Location}");
+            }
+            var jobs = await JobCountOf(key);
+            if (jobs != 1)
+            {
+                wrong.Add($"{round}: {jobs} trabajos con la clave");
+            }
+        }
+        Assert.True(wrong.Count == 0, "las dos responden 202 con el mismo Location (D13), y un solo trabajo por clave: " + string.Join(" | ", wrong));`);
 
   const helpers = `    private const string JobKind = ${csString(batchKind(operation.name))};
 
@@ -416,6 +456,23 @@ ${code}
         http.Response.Body.Position = 0;
         var text = await new StreamReader(http.Response.Body).ReadToEndAsync(Cancel);
         return (http.Response.StatusCode, text.Length == 0 ? null : JsonNode.Parse(text), http.Response.Headers.Location.FirstOrDefault());
+    }
+
+    /// <summary>Dos altas a la vez, cada una en su tarea. La que lanza cuenta como status 0.</summary>
+    private static async Task<(int Status, JsonNode? Json, string? Location)[]> JobRace(Func<Task<(int Status, JsonNode? Json, string? Location)>> call)
+    {
+        async Task<(int Status, JsonNode? Json, string? Location)> Guarded()
+        {
+            try
+            {
+                return await call();
+            }
+            catch (Exception failed)
+            {
+                return (0, new JsonObject { ["exception"] = failed.ToString() }, null);
+            }
+        }
+        return await Task.WhenAll(Task.Run(Guarded), Task.Run(Guarded));
     }
 
     private static Task<(int Status, JsonNode? Json, string? Location)> JobPost(string content, string? key) => JobCall(${alta}, "POST", content, key, null, null);
@@ -472,5 +529,5 @@ ${code}
     }
 
 ${storage(model)}`;
-  return { methods: `    // ─── Lotes asíncronos (DSL 2.30, fase B): BJ-1 a BJ-9, con el endpoint, el procesador y los almacenes emitidos ───\n\n${[...methods, helpers].join('\n\n')}` };
+  return { methods: `    // ─── Lotes asíncronos (DSL 2.30, fase B): BJ-1 a BJ-10, con el endpoint, el procesador y los almacenes emitidos ───\n\n${[...methods, helpers].join('\n\n')}` };
 }

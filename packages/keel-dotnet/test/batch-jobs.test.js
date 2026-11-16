@@ -48,7 +48,7 @@ test('los sujetos pasan la frontera de keel-dotnet y su sonda ejecuta los MISMOS
     const { manifest, layers } = load(name);
     assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, [], name);
     const cases = batchJobCases(plan(name).model);
-    assert.equal(cases.length, 9, name);
+    assert.equal(cases.length, 10, name);
     assert.deepEqual(cases, springJobCases(plan(name, { generator: planSpring }).model), name);
     assert.deepEqual(cases, nestJobCases(plan(name, { generator: planNest }).model), name);
   }

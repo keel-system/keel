@@ -45,7 +45,7 @@ test('los sujetos pasan la frontera de keel-nest y su sonda ejecuta los MISMOS c
     assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, [], name);
     assert.deepEqual(batchKeyCases(plan(name).model), springKeyCases(plan(name, { generator: planSpring }).model), name);
   }
-  assert.deepEqual(batchKeyCases(plan('catalog-batch-keyed').model), ['BK-1', 'BK-2', 'BK-3', 'BK-4']);
+  assert.deepEqual(batchKeyCases(plan('catalog-batch-keyed').model), ['BK-1', 'BK-2', 'BK-3', 'BK-4', 'BK-6']);
   assert.deepEqual(batchKeyCases(plan('catalog-batch-atomic-keyed').model), ['BK-5']);
 });
 

@@ -48,7 +48,7 @@ test('los sujetos pasan la frontera de keel-dotnet y su sonda ejecuta los MISMOS
     assert.deepEqual(cases, springKeyCases(plan(name, { generator: planSpring }).model), name);
     assert.deepEqual(cases, nestKeyCases(plan(name, { generator: planNest }).model), name);
   }
-  assert.deepEqual(batchKeyCases(plan('catalog-batch-keyed').model), ['BK-1', 'BK-2', 'BK-3', 'BK-4']);
+  assert.deepEqual(batchKeyCases(plan('catalog-batch-keyed').model), ['BK-1', 'BK-2', 'BK-3', 'BK-4', 'BK-6']);
   assert.deepEqual(batchKeyCases(plan('catalog-batch-atomic-keyed').model), ['BK-5']);
   assert.deepEqual([...BATCH_KEY_SUBJECTS.relational, ...BATCH_KEY_SUBJECTS.document].sort(), BATCH_KEY_DESIGNS.map((entry) => entry.name).sort());
 });
@@ -150,5 +150,19 @@ test('los sabotajes de la sonda se aplican a lo emitido hoy', () => {
       const changed = touched.filter((file) => file.content.replaceAll(from, to) !== file.content);
       assert.ok(changed.length > 0, `${id} (${store}) no se aplica a ${subject}`);
     }
+  }
+});
+
+test('db-check planifica cada sujeto de lotes CON su lote: el recorte de product-catalog no se lleva el que declara el sujeto', async () => {
+  // Los sujetos derivan de product-catalog (UNCOVERED_BRANCHES) y db-check los planifica con planFixture, que recorta los
+  // lotes de la fixture cuando le falta una capa. Sin la guarda, el síncrono sin security se quedaba sin su lote y db-check
+  // salía en verde sin ejecutar un solo caso BA ni BK.
+  const { planFixture, UNCOVERED_BRANCHES } = await import('./helpers/workspace.js');
+  const { BATCH_SUBJECTS } = await import('../scripts/lib/batch-probes.js');
+  for (const name of [...BATCH_SUBJECTS.relational, ...BATCH_KEY_SUBJECTS.relational]) {
+    const branch = UNCOVERED_BRANCHES.find((candidate) => candidate.name === name);
+    const { model } = await planFixture(branch.from, { mutate: (manifest, layers) => branch.mutate(manifest, layers, name) });
+    const batched = model.services.flatMap((service) => service.operations).filter((operation) => operation.batch);
+    assert.ok(batched.length > 0, `${name}: sin lote`);
   }
 });

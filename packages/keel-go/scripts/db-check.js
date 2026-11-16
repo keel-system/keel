@@ -267,8 +267,10 @@ try {
     }
     if (isBatchKeySabotage(sabotage)) {
       const verdict = batchKeySabotageVerdict(failed, sabotage, model);
-      // Y ninguna otra sonda: el sabotaje rompe el lote con clave, no el resto del adaptador.
-      const stray = failed.filter((test) => !/_BK\d+_/.test(test));
+      // Y ninguna otra sonda: el sabotaje rompe el lote con clave, no el resto del adaptador; salvo las que declara que
+      // rompe también (`alsoFalls`: el reintento de la transacción, que es de todo caso de uso).
+      const also = BATCH_KEY_SABOTAGE_SPECS[sabotage]?.relational?.alsoFalls;
+      const stray = failed.filter((test) => !/_BK\d+_/.test(test) && !also?.test(test));
       step(
         `falsado: ${sabotage} en ${name} cae en exactamente sus casos`,
         ran > 0 && verdict.exact && stray.length === 0,
@@ -279,8 +281,10 @@ try {
     }
     if (isBatchJobSabotage(sabotage)) {
       const verdict = batchJobSabotageVerdict(failed, sabotage);
-      // Y ninguna otra sonda: el sabotaje rompe el trabajo, no el resto del adaptador.
-      const stray = failed.filter((test) => !/_BJ\d+_/.test(test));
+      // Y ninguna otra sonda: el sabotaje rompe el trabajo, no el resto del adaptador; salvo las que declara que rompe
+      // también (`alsoFalls`: el reintento de la transacción, que es de todo caso de uso).
+      const also = BATCH_JOB_SABOTAGE_SPECS[sabotage]?.relational?.alsoFalls;
+      const stray = failed.filter((test) => !/_BJ\d+_/.test(test) && !also?.test(test));
       step(
         `falsado: ${sabotage} en ${name} cae en exactamente sus casos`,
         ran > 0 && verdict.exact && stray.length === 0,

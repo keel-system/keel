@@ -1,4 +1,4 @@
-// Los lotes SÍNCRONOS con clave (DSL 2.30, D15, incremento 10b) contra lo emitido, para db-check y doc-check: BK-1 a BK-5
+// Los lotes SÍNCRONOS con clave (DSL 2.30, D15, incremento 10b) contra lo emitido, para db-check y doc-check: BK-1 a BK-6
 // de keel-core/gen/batch.js, con los ids que ejecutan keel-spring (batch-check), keel-nest y keel-dotnet (su
 // scripts/lib/batch-key-probes.js) sobre los MISMOS diseños (BATCH_KEY_DESIGNS de keel-core/test/helpers/batch-designs.js).
 // El handler de la sonda es el de batch-probes.js (batchProbePatch).
@@ -11,7 +11,7 @@
 // vuelve a caer al escribir el resultado de fallo y escapa del lote sin mover el cursor, como el Error del gancho de
 // keel-spring. Que lleve muerta más que `batch.sync-stale-ms` se simula envejeciendo su `updated_at`.
 
-import { BATCH_KEY_CASES, BATCH_KEY_SABOTAGES } from '@keel-system/keel-core/gen/batch';
+import { BATCH_KEY_CASES, BATCH_KEY_RACE_ROUNDS, BATCH_KEY_SABOTAGES } from '@keel-system/keel-core/gen/batch';
 import { BATCH_JOB, BATCH_ITEM_RESULT, BATCH_SYNC_STALE } from '@keel-system/keel-core/gen/batch-store';
 import { goFile, goString } from '../../src/lib/go-source.js';
 import { sqlDialect, storeDir } from '../../src/lib/relational-engine.js';
@@ -26,11 +26,11 @@ export const BATCH_KEY_SUBJECTS = { relational: ['catalog-batch-keyed', 'catalog
 /** Las operaciones síncronas con clave del modelo. */
 export const keyedProbeOperations = (model) => batchOperations(model).filter((operation) => operation.batch.idempotency);
 
-/** Los casos de un lote síncrono con clave que ejecuta este diseño: BK-1 a BK-4 con un per-item, BK-5 con un todo o nada. */
+/** Los casos de un lote síncrono con clave que ejecuta este diseño: BK-1 a BK-4 y BK-6 con un per-item, BK-5 con un todo o nada. */
 export function batchKeyCases(model) {
   const atomicities = new Set(keyedProbeOperations(model).map((operation) => operation.batch.atomicity));
   const ids = [];
-  if (atomicities.has('per-item')) ids.push('BK-1', 'BK-2', 'BK-3', 'BK-4');
+  if (atomicities.has('per-item')) ids.push('BK-1', 'BK-2', 'BK-3', 'BK-4', 'BK-6');
   if (atomicities.has('all-or-nothing')) ids.push('BK-5');
   return BATCH_KEY_CASES.map((entry) => entry.id).filter((id) => ids.includes(id));
 }
@@ -39,6 +39,7 @@ export function batchKeyCases(model) {
 
 const JOBS = /^internal\/httpapi\/batch_jobs\.go$/;
 const STORE = /^internal\/infrastructure\/\w+\/batch_jobs\.go$/;
+const TRANSACTIONS = /^internal\/infrastructure\/\w+\/transactions\.go$/;
 const both = (entry) => ({ relational: { ...entry, expect: /_BK\d+_/ }, document: { ...entry, expect: /_BK\d+_/ } });
 
 /**
@@ -66,7 +67,20 @@ export const BATCH_KEY_SABOTAGE_SPECS = {
     from: `		_, err := a.useCases.BatchJobs().Discard(ctx, id)
 		return err`,
     to: `		return nil`
-  })
+  }),
+  // El alta que el motor mata por interbloqueo no se repite (solo cae en MySQL: en PostgreSQL la carrera llega por la
+  // unicidad). En keel-go la repetición NO es del alta sino de la transacción (fresh/within en transactions.go): el sabotaje
+  // la apaga ahí, así que caen también las dos sondas de la transacción (`alsoFalls`), y ninguna otra.
+  'bk-no-race-retry': {
+    relational: {
+      files: TRANSACTIONS,
+      from: 'if err == nil || options.ReadOnly || !transient(err) {',
+      to: 'if err == nil || options.ReadOnly || !transient(err) || attempt > 0 {',
+      expect: /_BK\d+_/,
+      alsoFalls: /^TestTransaction_/
+    },
+    document: { files: TRANSACTIONS, from: 'if err == nil || readOnly || !transient(err) {', to: 'if err == nil || readOnly || !transient(err) || attempt > 0 {', expect: /_BK\d+_/, alsoFalls: /^TestTransaction_/ }
+  }
 };
 
 export const isBatchKeySabotage = (id) => Boolean(id && BATCH_KEY_SABOTAGE_SPECS[id]);
@@ -99,6 +113,11 @@ func keyResultCount(t *testing.T) int64 {
 	return keyMust(${collection(result)}.CountDocuments(t.Context(), bson.D{}))
 }
 
+func keyJobCountOf(t *testing.T, key string) int64 {
+	t.Helper()
+	return keyMust(${collection(job)}.CountDocuments(t.Context(), bson.D{{Key: "idempotency_key", Value: key}}))
+}
+
 // keyAge retrasa a mano una hora del trabajo de esa clave.
 func keyAge(t *testing.T, key, field string, ago time.Duration) {
 	t.Helper()
@@ -126,6 +145,15 @@ func keyJobCount(t *testing.T) int64 {
 func keyResultCount(t *testing.T) int64 {
 	t.Helper()
 	return keyScalar(t, ${goString(`SELECT count(*) FROM ${result}`)})
+}
+
+func keyJobCountOf(t *testing.T, key string) int64 {
+	t.Helper()
+	var n int64
+	if err := keyMust(probeTx.conn(t.Context())).QueryRowContext(t.Context(), ${goString(`SELECT count(*) FROM ${job} WHERE idempotency_key = ${p(1)}`)}, key).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 // keyAge retrasa a mano una hora del trabajo de esa clave: la columna es una de las de la tabla, nunca un valor de fuera.
@@ -224,6 +252,41 @@ ${code}
 		t.Fatalf("un resultado por elemento, sin repetir ninguno: %d → %d", results, after)
 	}
 	keyPresent(t, "ZKD-0003")`);
+    const contents = Array.from({ length: BATCH_KEY_RACE_ROUNDS }, (_, round) => body(draft(`ZKF-${String(round).padStart(4, '0')}`)));
+    probe('BK-6', 'la carrera de la clave', `	contents := []string{
+${contents.map((content) => `		${content},`).join('\n')}
+	}
+	var wrong []string
+	for round, content := range contents {
+		key := "carrera-bk6-" + strconv.Itoa(round)
+		var statuses [2]int
+		var answers [2]map[string]any
+		var wg sync.WaitGroup
+		for n := range answers {
+			wg.Go(func() {
+				statuses[n], answers[n], _ = keyPost(t, ${path}, content, key)
+			})
+		}
+		wg.Wait()
+		succeeded := 0
+		for n, status := range statuses {
+			switch {
+			case status == http.StatusMultiStatus:
+				succeeded++
+			case status != http.StatusConflict || answers[n]["code"] != "IDEMPOTENCY_KEY_IN_PROGRESS":
+				wrong = append(wrong, strconv.Itoa(round)+": "+strconv.Itoa(status)+" "+fmtAnswer(answers[n]))
+			}
+		}
+		if succeeded == 0 {
+			wrong = append(wrong, strconv.Itoa(round)+": ninguno es 207")
+		}
+		if jobs := keyJobCountOf(t, key); jobs != 1 {
+			wrong = append(wrong, strconv.Itoa(round)+": "+strconv.FormatInt(jobs, 10)+" trabajos con la clave")
+		}
+	}
+	if len(wrong) > 0 {
+		t.Fatalf("cada respuesta es el 207 o 409 IDEMPOTENCY_KEY_IN_PROGRESS, y un solo trabajo por clave: %s", strings.Join(wrong, " | "))
+	}`);
   }
   if (atomic) {
     const path = goString(`${model.api.routeBase}${atomic.route.path}`);
@@ -254,7 +317,16 @@ ${code}
   }
 
   const repository = `New${product.name}Repository(${repositoryArgs(model, product, 'probeTx', 'nil', { sweeps: 'probeSweeps', parameters: 'probeParameters', reconciliation: PROBE_RECONCILIATION })})`;
-  const helpers = `// keyMust es el valor, o un pánico si la lectura de la sonda falló.
+  const helpers = `// fmtAnswer es la respuesta leída, para el mensaje de un fallo.
+func fmtAnswer(answer map[string]any) string {
+	text, err := json.Marshal(answer)
+	if err != nil {
+		return err.Error()
+	}
+	return string(text)
+}
+
+// keyMust es el valor, o un pánico si la lectura de la sonda falló.
 func keyMust[T any](v T, err error) T {
 	if err != nil {
 		panic(err)
@@ -366,7 +438,9 @@ ${storage(model)}`;
     'log/slog',
     'net/http',
     'net/http/httptest',
+    ...(cases.has('BK-6') ? ['strconv'] : []),
     'strings',
+    ...(cases.has('BK-6') ? ['sync'] : []),
     'sync/atomic',
     'testing',
     'time',
@@ -381,7 +455,7 @@ ${storage(model)}`;
     pkg: dir.split('/').pop(),
     imports,
     body: `// La sonda de los lotes síncronos con clave (DSL 2.30, D15) de db-check y doc-check (scripts/lib/batch-key-probes.js de
-// keel-go): BK-1 a BK-5 por el http.Handler emitido, contra un ${document ? 'MongoDB' : 'motor relacional'} real. No es parte del proyecto generado.
+// keel-go): BK-1 a BK-6 por el http.Handler emitido, contra un ${document ? 'MongoDB' : 'motor relacional'} real. No es parte del proyecto generado.
 
 ${[...tests, helpers].join('\n\n')}
 `,

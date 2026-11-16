@@ -488,6 +488,17 @@ export function batchNote(batch) {
 
 // ─── Casos y sabotajes ───────────────────────────────────────────────────────
 
+/**
+ * Rondas de la carrera de BK-6 y BJ-10: dos altas con la misma clave a la vez, cada ronda con su clave. En MySQL (InnoDB),
+ * el `releaseKey` de las dos toma un bloqueo de hueco en el índice único sobre una clave que aún no existe, el INSERT de
+ * cada una espera al de la otra y el motor aborta a una por INTERBLOQUEO: el alta tiene que repetirse, y repetida espera al
+ * registro de la ganadora y la encuentra (corrida de control de MySQL del inc. 11 de PLAN-DSL-230-LOTES.md). En
+ * PostgreSQL no hay hueco: la que pierde espera en la unicidad y recibe la violación, así que sus sabotajes
+ * (`bk-no-race-retry`, `bj-no-race-retry`) solo caen en MySQL. Las rondas son para que el entrelazado se dé: una sola
+ * puede no llegar a cruzarse.
+ */
+export const BATCH_KEY_RACE_ROUNDS = 10;
+
 /** Los casos de un lote síncrono que los cuatro generadores ejecutan con el mismo id, y en qué red. */
 export const BATCH_CASES = Object.freeze([
   { id: 'BA-1', level: 'adapter', asserts: 'per-item: un lote sin fallos responde 207 con todos succeeded y su result, en orden de índice' },
@@ -507,7 +518,8 @@ export const BATCH_KEY_CASES = Object.freeze([
   { id: 'BK-2', level: 'adapter', asserts: 'la misma clave con otro cuerpo es IDEMPOTENCY_KEY_REUSED sin procesar nada; pasada su ventana, un lote nuevo' },
   { id: 'BK-3', level: 'adapter', asserts: 'la repetición mientras el primero sigue en marcha es 409 IDEMPOTENCY_KEY_IN_PROGRESS sin procesar nada' },
   { id: 'BK-4', level: 'adapter', asserts: 'reanudación: si el primero murió a mitad, la repetición sigue desde el cursor sin repetir ningún elemento, y su 207 los cuenta todos' },
-  { id: 'BK-5', level: 'adapter', asserts: 'all-or-nothing: el lote confirmado se repite con la misma respuesta; uno que falló no deja trabajo, y repetirlo lo vuelve a procesar' }
+  { id: 'BK-5', level: 'adapter', asserts: 'all-or-nothing: el lote confirmado se repite con la misma respuesta; uno que falló no deja trabajo, y repetirlo lo vuelve a procesar' },
+  { id: 'BK-6', level: 'adapter', asserts: `per-item: dos lotes con la misma clave A LA VEZ, en ${BATCH_KEY_RACE_ROUNDS} rondas: cada respuesta es el 207 o 409 IDEMPOTENCY_KEY_IN_PROGRESS, nunca otra cosa, y queda un solo trabajo por clave` }
 ]);
 
 /** Los sabotajes de la clave de un lote síncrono y los casos en los que tiene que caer cada uno: exactamente esos. */
@@ -519,7 +531,9 @@ export const BATCH_KEY_SABOTAGES = Object.freeze({
   // La reanudación empieza en el principio y no en el cursor.
   'bk-no-resume': ['BK-4'],
   // El todo o nada que falla deja su trabajo: la repetición devuelve un lote que nunca se confirmó.
-  'bk-keep-failed': ['BK-5']
+  'bk-keep-failed': ['BK-5'],
+  // El alta que el motor mata por interbloqueo no se repite: sale como 500. Solo cae en MySQL (ver BATCH_KEY_RACE_ROUNDS).
+  'bk-no-race-retry': ['BK-6']
 });
 
 /** Los casos de un lote ASÍNCRONO (fase B) que los cuatro generadores ejecutan con el mismo id. */
@@ -532,7 +546,8 @@ export const BATCH_JOB_CASES = Object.freeze([
   { id: 'BJ-6', level: 'adapter', asserts: 'solo lo lee quien lo creó: otro llamante, u otro id, recibe 404 en las dos rutas' },
   { id: 'BJ-7', level: 'adapter', asserts: 'idempotency (D13): la misma clave responde el mismo 202 con el mismo Location y el estado actual; con otro contenido, IDEMPOTENCY_KEY_REUSED; pasada su ventana, un trabajo nuevo' },
   { id: 'BJ-8', level: 'adapter', asserts: 'la purga se lleva los trabajos terminados hace más de la retención con sus resultados, y nunca uno en marcha' },
-  { id: 'BJ-9', level: 'adapter', asserts: 'el sobre: exceder maxItems o el campo over ausente es un 400 sin crear ningún trabajo' }
+  { id: 'BJ-9', level: 'adapter', asserts: 'el sobre: exceder maxItems o el campo over ausente es un 400 sin crear ningún trabajo' },
+  { id: 'BJ-10', level: 'adapter', asserts: `dos altas con la misma clave A LA VEZ, en ${BATCH_KEY_RACE_ROUNDS} rondas: las dos responden 202 con el mismo Location (D13, sin el 409 «en curso») y queda un solo trabajo por clave` }
 ]);
 
 /** Los sabotajes de la fase B en los generadores y los casos en los que tiene que caer cada uno: exactamente esos. */
@@ -544,7 +559,9 @@ export const BATCH_JOB_SABOTAGES = Object.freeze({
   // deja su efecto.
   'bj-cursor-outside-tx': ['BJ-4', 'BJ-5'],
   // Las rutas del trabajo no miran el dueño.
-  'bj-foreign-reader': ['BJ-6']
+  'bj-foreign-reader': ['BJ-6'],
+  // El alta que el motor mata por interbloqueo no se repite: sale como 500. Solo cae en MySQL (ver BATCH_KEY_RACE_ROUNDS).
+  'bj-no-race-retry': ['BJ-10']
 });
 
 /** Los sabotajes y los casos en los que tiene que caer cada uno: exactamente esos. */
