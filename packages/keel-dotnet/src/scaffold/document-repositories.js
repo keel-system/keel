@@ -34,6 +34,7 @@ import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import { DOCUMENT_SCOPE_LINE, readScopeDocumentMethods, scopedLoadsOf } from './read-scope.js';
 import * as lifecycle from './data-lifecycle.js';
 import * as history from './history.js';
+import { saveGuardLines, DERIVED_MARK } from './entity-checks.js';
 import { isLogicallyDeleted } from '@keel-system/keel-core/gen/relational';
 export { sortablePaths };
 
@@ -165,6 +166,8 @@ function entityFunctions(model, entity, collection) {
     } else if (entry.kind === 'array' && entry.element.entity) expression = `BsonValues.Array(${value}, child => ToDocument${entry.element.entity}(child))`;
     else if (entry.kind === 'array') expression = writeField(entry.field, value);
     // `version` y `audit` no salen del dominio: los pone Save.
+    // Un derivado estructurado (DSL 2.31) se guarda con el valor que calcula su propiedad.
+    if (expression && entry.field?.computedSpec) writes.push(`            ${DERIVED_MARK}`);
     if (expression) writes.push(`            { ${csString(entry.name)}, ${expression} },`);
   }
 
@@ -295,7 +298,7 @@ function saveMethodBody(model, entity) {
   const policyAuthorship = entity.auditAuthorship === 'all' && documentShape(model, entity).some((entry) => entry.kind === 'audit' && entry.name === 'created_by');
   const needs = { now: policyTimestamps, actor: policyAuthorship };
   const declared = declaredAuditStamps(model, entity, needs);
-  const lines = [`var document = ToDocument${entity.name}(entity);`];
+  const lines = [...saveGuardLines(entity), `var document = ToDocument${entity.name}(entity);`];
   if (needs.now) lines.push('var now = BsonValues.Of(DateTimeOffset.UtcNow);');
   if (needs.actor) lines.push('var actor = BsonValues.Of(AuditActor.Current());');
   lines.push(...declared);

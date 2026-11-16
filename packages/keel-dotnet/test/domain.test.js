@@ -41,7 +41,10 @@ function springErrors(files) {
     const fixed = /super\(message, "([A-Z0-9_]+)", (\d+), null\)/.exec(file.content);
     const dynamic = /super\(message, "([A-Z0-9_]+)", httpStatus, null\)/.exec(file.content);
     const transition = /"(INVALID_STATE_TRANSITION)", (\d+), null\)/.exec(file.content);
+    // La de la invariante rota (DSL 2.31) lleva el code en su constante CODE.
+    const constant = /CODE = "([A-Z0-9_]+)";[\s\S]*super\(message, CODE, (\d+), null\)/.exec(file.content);
     if (fixed) errors.set(name, { code: fixed[1], http: Number(fixed[2]) });
+    else if (constant) errors.set(name, { code: constant[1], http: Number(constant[2]) });
     else if (dynamic) errors.set(name, { code: dynamic[1], http: 'dinámico' });
     else if (transition) errors.set(name, { code: transition[1], http: Number(transition[2]) });
   }
@@ -54,7 +57,9 @@ function nestErrors(files) {
   for (const file of files) {
     if (!/^src\/domain\/errors\/.+\.ts$/.test(file.path)) continue;
     const name = /export (?:abstract )?class (\w+)/.exec(file.content)?.[1];
-    const code = /code: '([A-Z0-9_]+)'/.exec(file.content)?.[1];
+    // La de la invariante rota (DSL 2.31) lleva el code en su constante CODE (y su status fijo, de BusinessException).
+    const constant = /extends BusinessException/.test(file.content) ? /static readonly CODE = '([A-Z0-9_]+)'/.exec(file.content)?.[1] : undefined;
+    const code = /code: '([A-Z0-9_]+)'/.exec(file.content)?.[1] ?? constant;
     if (!name || !code) continue;
     const http = /httpStatus: (\d+)/.exec(file.content)?.[1];
     errors.set(name, { code, http: http ? Number(http) : 'dinámico' });

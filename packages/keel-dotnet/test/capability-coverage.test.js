@@ -31,10 +31,11 @@ const MOTIVOS = {
   hueco: 'hueco'
 };
 
-// Los checks de la entidad (DSL 2.31) los rechaza la frontera de keel-dotnet (entityChecksPendingErrors) hasta el incremento
-// A5 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md, y ninguna fixture los declara hasta el A8; entonces estas filas se borran.
+// Los checks de la entidad (DSL 2.31) los genera keel-dotnet desde el incremento A5 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md
+// (test/entity-checks.test.js y db-check/doc-check, sobre el sujeto catalog-invariants), y ninguna fixture los declara
+// hasta el A8; entonces estas filas se borran.
 const CHECKS_PENDIENTES =
-  'los checks de la entidad (DSL 2.31) los rechaza la frontera de keel-dotnet hasta el incremento A5 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md, y ninguna fixture los declara hasta el A8; entonces esta fila se borra.';
+  'los checks de la entidad (DSL 2.31) se miden sobre el sujeto sintético catalog-invariants (db-check y doc-check) y ninguna fixture los declara hasta el incremento A8 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md; entonces esta fila se borra.';
 
 const EXCEPCIONES = new Map([
   ['domain.entities.*.checks', { motivo: MOTIVOS.hueco, porque: CHECKS_PENDIENTES }],

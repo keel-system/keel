@@ -53,6 +53,7 @@ import { historyProbeBlock, historyProbeUsings } from './history-probes.js';
 import { batchFixtureRegistration, batchProbeBlock, batchProbeUsings, batchProjectReference } from './batch-probes.js';
 import { batchJobFixtureRegistration, batchJobProbeBlock, batchJobProbeClasses, batchJobProbeUsings } from './batch-job-probes.js';
 import { batchKeyFixtureRegistration, batchKeyProbeBlock, batchKeyProbeUsings } from './batch-key-probes.js';
+import { derivedColumn, derivedKey, invariantProbeBlock } from './invariant-probes.js';
 import { claimOrderField, claimsForEntity, rescueProbes, screamingSnake, snakeCase, sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
@@ -383,7 +384,14 @@ function probesCs(model, namespace, harness = null) {
   const errors = constraintErrors(model);
   const blocks = [];
   const samples = [];
-  for (const root of roots) {
+  // La guarda del agregado (DSL 2.31): el sujeto catalog-invariants solo ejecuta sus vectores IC-* y CP-* (la muestra de
+  // los demás bloques no cumple sus checks a propósito, y lo demás de catalog-extended lo mide su propio sujeto).
+  const invariant = invariantProbeBlock(model, ctx, {
+    sampleState,
+    rawDerived: (id, field) =>
+      `await other.GetRequiredService<${dbContext(model)}>().Database.SqlQuery<string>($"SELECT ${sqlDialect(model).text(derivedColumn(field))} ${sqlDialect(model).alias} FROM ${roots.find((root) => root.name === 'Product').tableName} WHERE ${roots.find((root) => root.name === 'Product').idField?.columns?.name ?? 'id'} = {${id}}").SingleAsync(Cancel)`
+  });
+  for (const root of invariant ? [] : roots) {
     const refsBefore = new Set(ctx.refs);
     ctx.refs.clear();
     const states = [];
@@ -653,6 +661,7 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
   // Los lotes síncronos con clave (DSL 2.30, D15): BK-1 a BK-5 en ESTA clase, con el endpoint y KeyedBatches emitidos.
   const batchKeys = batchKeyProbeBlock(model);
   if (batchKeys) blocks.push(batchKeys.methods);
+  if (invariant) blocks.splice(0, blocks.length, invariant.methods);
 
   // Las raíces a las que apunta una referencia obligatoria: se guarda UNA de cada, y su id vale para todas las sondas.
   const ensures = [];
@@ -686,10 +695,10 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
 
   // El cronómetro y los plazos (DSL 2.26): sus casos van en ESTA clase, que comparte la base con ellos.
   const timer = timerProbeBlock(model, ctx);
-  if (timer) blocks.push(timer.methods);
+  if (timer && !invariant) blocks.push(timer.methods);
   // Las purgas en modo clúster (DSL 2.26, inc. 7): dos réplicas sobre la misma base, en ESTA clase.
   const purgeTimer = purgeTimerProbeBlock(model);
-  if (purgeTimer) blocks.push(purgeTimer.methods);
+  if (purgeTimer && !invariant) blocks.push(purgeTimer.methods);
   const usings = [
     ...timerProbeUsings(model),
     ...purgeTimerProbeUsings(model),

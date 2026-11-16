@@ -40,6 +40,7 @@ import { historyProbeBlock, historyProbeUsings } from './history-probes.js';
 import { batchFixtureRegistration, batchProbeBlock, batchProbeUsings, batchProjectReference } from './batch-probes.js';
 import { batchJobFixtureRegistration, batchJobProbeBlock, batchJobProbeClasses, batchJobProbeUsings } from './batch-job-probes.js';
 import { batchKeyFixtureRegistration, batchKeyProbeBlock, batchKeyProbeUsings } from './batch-key-probes.js';
+import { derivedColumn, derivedKey, invariantProbeBlock } from './invariant-probes.js';
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
 import { parametersNamespace, parametersTestInstance, usesServiceParameters } from '../../src/scaffold/service-parameters.js';
@@ -246,7 +247,15 @@ function probesCs(model, namespace) {
   const blocks = [];
   const samples = [];
   const shapes = [];
-  for (const root of roots) {
+  // La guarda del agregado (DSL 2.31): el sujeto catalog-invariants-mongo solo ejecuta sus vectores IC-* y CP-* (la muestra
+  // de los demás bloques no cumple sus checks a propósito, y lo demás de catalog-extended lo mide su propio sujeto).
+  const invariantRoot = roots.find((root) => root.name === 'Product');
+  const invariant = invariantProbeBlock(model, ctx, {
+    sampleState,
+    rawDerived: (id, field) =>
+      `(await Raw(other, ${csString(invariantRoot?.collectionName ?? '')}, BsonValues.Of(${id}))).GetValue(${csString(derivedKey(model, invariantRoot, field))}, BsonNull.Value).ToString()`
+  });
+  for (const root of invariant ? [] : roots) {
     const refsBefore = new Set(ctx.refs);
     ctx.refs.clear();
     const states = [];
@@ -529,6 +538,7 @@ function probesCs(model, namespace) {
   // Los lotes síncronos con clave (DSL 2.30, D15): BK-1 a BK-5 en ESTA clase, con el endpoint y KeyedBatches emitidos.
   const batchKeys = batchKeyProbeBlock(model);
   if (batchKeys) blocks.push(batchKeys.methods);
+  if (invariant) blocks.splice(0, blocks.length, invariant.methods);
 
   // Las raíces a las que apunta una referencia: se guarda UNA de cada, y su id vale para todas las sondas.
   const ensures = [];
@@ -562,10 +572,10 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
 
   // El cronómetro y los plazos (DSL 2.26): sus casos van en ESTA clase, que comparte la base con ellos.
   const timer = timerProbeBlock(model, ctx);
-  if (timer) blocks.push(timer.methods);
+  if (timer && !invariant) blocks.push(timer.methods);
   // Las purgas en modo clúster (DSL 2.26, inc. 7): dos réplicas sobre la misma base, en ESTA clase.
   const purgeTimer = purgeTimerProbeBlock(model);
-  if (purgeTimer) blocks.push(purgeTimer.methods);
+  if (purgeTimer && !invariant) blocks.push(purgeTimer.methods);
   const usings = [
     ...timerProbeUsings(model),
     ...purgeTimerProbeUsings(model),

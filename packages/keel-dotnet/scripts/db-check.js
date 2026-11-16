@@ -81,6 +81,10 @@
 // catalog-batch-atomic-keyed; sin --only, ese): verde = cada uno cae en EXACTAMENTE sus casos BK
 // (scripts/lib/batch-key-probes.js):
 //   bk-replay-reprocess  bk-steal-running  bk-no-resume  bk-keep-failed
+// Y los de la guarda del agregado (DSL 2.31), sobre catalog-invariants (sin --only, ese): verde = cada uno cae en
+// EXACTAMENTE sus casos IC y CP, sin los que enmascara el Save transaccional (scripts/lib/invariant-probes.js):
+//   ic-boundary  ic-null-fails  ic-absent-null-only  ic-no-bounds  ic-children  ic-default-code  ic-no-call
+//   ic-after-write  cp-round-each  cp-half-even  cp-no-overflow  cp-stale
 //
 // Necesita el SDK de .NET 10, podman o docker y red la primera vez (NuGet).
 
@@ -104,6 +108,7 @@ import { HISTORY_SABOTAGE_SPECS, HISTORY_SUBJECTS, isHistorySabotage, historySab
 import { BATCH_SABOTAGE_SPECS, BATCH_SUBJECTS, batchProbePatch, batchSabotageVerdict, isBatchSabotage } from './lib/batch-probes.js';
 import { BATCH_JOB_SABOTAGE_SPECS, BATCH_JOB_SUBJECTS, batchJobSabotageVerdict, isBatchJobSabotage } from './lib/batch-job-probes.js';
 import { BATCH_KEY_SABOTAGE_SPECS, BATCH_KEY_SUBJECTS, batchKeySabotageVerdict, isBatchKeySabotage } from './lib/batch-key-probes.js';
+import { INVARIANT_SABOTAGE_SPECS, invariantCases, invariantSabotageVerdict, isInvariantSabotage } from './lib/invariant-probes.js';
 import { resolveRuntime, startDatabase, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const args = process.argv.slice(2);
@@ -216,7 +221,9 @@ const SABOTAGES = {
   ...Object.fromEntries(Object.entries(BATCH_JOB_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational])),
   // Los lotes síncronos con clave (DSL 2.30, D15): sobre catalog-batch-keyed o catalog-batch-atomic-keyed, cada uno cae en
   // exactamente sus casos BK.
-  ...Object.fromEntries(Object.entries(BATCH_KEY_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
+  ...Object.fromEntries(Object.entries(BATCH_KEY_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational])),
+  // La guarda del agregado (DSL 2.31): sobre catalog-invariants, cada uno cae en exactamente sus casos IC y CP.
+  ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
 };
 
 /** El sabotaje para un motor: [sufijo, texto, sustituto], o null si no aplica a ese motor. */
@@ -277,7 +284,9 @@ const DERIVED = {
   // Los lotes asíncronos (DSL 2.30, fase B): BJ-1 a BJ-9 (scripts/lib/batch-job-probes.js).
   ...Object.assign({}, ...BATCH_JOB_SUBJECTS.relational.map((name) => uncoveredBranch(name))),
   // Los lotes síncronos con clave (DSL 2.30, D15): BK-1 a BK-5 (scripts/lib/batch-key-probes.js).
-  ...Object.assign({}, ...BATCH_KEY_SUBJECTS.relational.map((name) => uncoveredBranch(name)))
+  ...Object.assign({}, ...BATCH_KEY_SUBJECTS.relational.map((name) => uncoveredBranch(name))),
+  // La guarda del agregado (DSL 2.31): IC-1 a IC-11 y CP-1 a CP-5 (scripts/lib/invariant-probes.js).
+  ...uncoveredBranch('catalog-invariants')
 };
 
 function uncoveredBranch(name) {
@@ -293,6 +302,8 @@ const SUBJECTS = only
     ? BATCH_JOB_SUBJECTS.relational
   : isBatchKeySabotage(sabotage)
     ? [sabotage === 'bk-keep-failed' ? 'catalog-batch-atomic-keyed' : 'catalog-batch-keyed']
+  : isInvariantSabotage(sabotage)
+    ? ['catalog-invariants']
   : isHistorySabotage(sabotage)
     ? HISTORY_SUBJECTS.relational
     : isLifecycleSabotage(sabotage)
@@ -405,6 +416,11 @@ async function checkEngine(engine) {
       // Con el espacio delante: `Catalog.DbProbes.` es subcadena de `ProductCatalog.DbProbes.`.
       const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
       const ran = tested.output.includes(`${subject.probes.name}.dll`);
+      if (isInvariantSabotage(sabotage) && invariantCases(subject.model).length > 0) {
+        const verdict = invariantSabotageVerdict(mine, sabotage, subject.model, { document: false });
+        step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]${verdict.masked.length > 0 ? `; enmascarados: ${verdict.masked.join(', ')} (Save transaccional)` : ''}`);
+        continue;
+      }
       if (isBatchKeySabotage(sabotage)) {
         const verdict = batchKeySabotageVerdict(mine, sabotage, subject.model);
         step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);

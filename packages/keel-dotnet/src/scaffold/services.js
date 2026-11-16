@@ -52,6 +52,7 @@ import { FILE_STORAGE_PORT, UPLOAD_NOTE_NAMES_CS, storageNamespace } from './sto
 import { isPartialUpdate } from '@keel-system/keel-core/gen/features';
 import { compensationNote } from '@keel-system/keel-core/gen/compensation';
 import { deadlineHandlerNote, lateTransitionNote } from '@keel-system/keel-core/gen/deadlines';
+import { invariantHandlerNotes } from '@keel-system/keel-core/gen/entity-checks';
 import { deadlinesClass, deadlinesNamespace } from './timer.js';
 import * as history from './history.js';
 
@@ -459,6 +460,8 @@ function handlerNotes(model, operation) {
   if (expiring) notes.push(expiring);
   const late = lateTransitionNote(model, operation);
   if (late) notes.push(`${late} En C#: timeProvider.GetUtcNow() y ${deadlinesLocal(model)}.`);
+  // La guarda del agregado y sus derivados (DSL 2.31): neutrales, las mismas en los cuatro.
+  for (const note of invariantHandlerNotes(model, operation)) notes.push(note);
   // La escritura condicional (api.concurrency): cargar con LoadExpecting y devolver la versión persistida.
   const conditional = conditionalHandlerNote(model, operation, operation.messageKind === 'query' ? 'query' : 'command');
   if (conditional) notes.push(conditional);

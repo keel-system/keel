@@ -40,6 +40,7 @@ import { adapterReconciliationMethods, portReconciliationMethods, reconciliation
 import { renderDocumentAdapter } from './document-repositories.js';
 import * as lifecycle from './data-lifecycle.js';
 import * as history from './history.js';
+import { saveGuardLines, DERIVED_MARK } from './entity-checks.js';
 import { isLogicallyDeleted } from '@keel-system/keel-core/gen/relational';
 import {
   usesPersistence,
@@ -674,7 +675,7 @@ function saveMethodBody(model, entity, helpers) {
   const stamps = auditStamps(model, entity, helpers);
   // El armado del plazo (DSL 2.26): el estado que la fila tenía ANTES de volcar el agregado dice si la entidad ENTRA en él.
   const arming = relationalArming(model, entity);
-  const lines = [];
+  const lines = saveGuardLines(entity).map((line) => `                ${line}`);
   if (arming) lines.push(`                ${arming.declare}`);
   // El historial (DSL 2.29, T1): lo que había, tomado de la fila RASTREADA que el Save ya carga, antes de volcar el agregado.
   const recorded = history.recordsHistory(entity);
@@ -933,6 +934,8 @@ function applyMethod(model, entity, root, helpers) {
       const field = member.field;
       // El id es la clave: lo pone quien crea la fila, y una clave ya guardada no se reescribe.
       if (field.isId) continue;
+      // Un derivado estructurado (DSL 2.31) se guarda con el valor que calcula su propiedad.
+      if (field.computedSpec) lines.push(`        ${DERIVED_MARK}`);
       lines.push(`        row.${csMember(field.name)} = ${writeColumn(`entity.${csMember(field.name)}`, field.columns, isNullable(field))};`);
       if (member.folded) {
         helpers.usings.push(persistenceNamespace(model));

@@ -14,6 +14,7 @@ import { LOCK_VERSION } from '@keel-system/keel-core/gen';
 import { memberOf } from './enums.js';
 import { csFile, csLocal, csMember, declType, entityPlace, fieldUsings, located, namespaceOf, typeUsings, xmlDoc } from './render.js';
 import { lateGuardBlock, transitionNeedsClock } from './timer.js';
+import { invariantMembers } from './entity-checks.js';
 
 export function generate(model) {
   return (model.entities ?? []).map((entity) => renderEntity(model, entity));
@@ -112,9 +113,15 @@ function renderEntity(model, entity) {
     // campos generated/computed y fije el estado inicial del lifecycle. La mutación va por métodos de
     // negocio, no por setters.${initialTodo}${guardTodo}`);
 
-  const assigns = stateMembers.map((member) =>
-    member.element ? `        ${backingField(member)} = [.. state.${csMember(member.name)}];` : `        ${csMember(member.name)} = state.${csMember(member.name)};`
-  );
+  // La guarda del agregado (DSL 2.31): EnsureInvariants(), sus derivados y sus ayudas (scaffold/entity-checks.js). Un
+  // derivado estructurado es una propiedad que calcula: el valor que llega en el estado se ignora.
+  const guard = invariantMembers(model, entity);
+  usings.push(...guard.usings);
+  const assigns = stateMembers
+    .filter((member) => !guard.getters.has(member.name))
+    .map((member) =>
+      member.element ? `        ${backingField(member)} = [.. state.${csMember(member.name)}];` : `        ${csMember(member.name)} = state.${csMember(member.name)};`
+    );
   parts.push(`    /// <summary>
     /// Rehidratación desde persistencia: el estado ya es válido y no se revalida. La creación de negocio va
     /// por el factory. Las colecciones se copian: quien entrega el estado no puede cambiarlas después por la
@@ -129,6 +136,7 @@ ${assigns.join('\n')}
   parts.push(
     stateMembers
       .map((member) => {
+        if (guard.getters.has(member.name)) return guard.getters.get(member.name);
         const doc = xmlDoc(memberDoc(member), '    ');
         return member.element
           ? `${doc}    public ${member.type} ${csMember(member.name)} => ${backingField(member)}.AsReadOnly();`
@@ -138,6 +146,7 @@ ${assigns.join('\n')}
   );
 
   if (entity.lifecycle) parts.push(renderTransitionTo(model, entity, usings));
+  if (guard.members.length > 0) parts.push(guard.members.join('\n\n'));
 
   const state = stateMembers.map((member) => `${xmlDoc(memberDoc(member), '    ')}    public required ${member.type} ${csMember(member.name)} { get; init; }`);
   const body = `${xmlDoc(`El estado completo de ${entity.name}, tal como lo rehidrata la persistencia.`)}public sealed class ${entity.name}State
@@ -145,7 +154,7 @@ ${assigns.join('\n')}
 ${state.join('\n\n')}
 }
 
-${header.length > 0 ? `${header.join('\n')}\n` : ''}public class ${entity.name}
+${header.length > 0 ? `${header.join('\n')}\n` : ''}public ${guard.partial ? 'partial ' : ''}class ${entity.name}
 {
 ${parts.join('\n\n')}
 }`;
@@ -161,7 +170,11 @@ function memberDoc(member) {
     member.field?.description ??
     member.doc ??
     (member.declaredLock ? 'Versión de concurrencia optimista; la gestiona la persistencia. Null hasta la primera escritura.' : null) ?? (member.kind === 'externalRef' ? `Id de la raíz del agregado ${member.relation.entity} (otro agregado: solo el id).` : null);
-  return [description, member.field?.computed ? `TODO computed: ${member.field.computed}` : null];
+  // Un derivado en prosa lo escribe el agente; el estructurado (DSL 2.31) lo calcula la propiedad y este valor se ignora.
+  const computed = member.field?.computedSpec
+    ? 'Derivado (DSL 2.31): lo calcula la propiedad de la entidad desde sus hijas; el valor que llega aquí se ignora.'
+    : member.field?.computed ? `TODO computed: ${member.field.computed}` : null;
+  return [description, computed];
 }
 
 // Acumulación de eventos en la raíz: el método de negocio que provoca el cambio hace Raise(...); el adaptador

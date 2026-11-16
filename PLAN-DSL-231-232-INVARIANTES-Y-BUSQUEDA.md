@@ -11,19 +11,38 @@
 | A2 | Lo neutral: `entity-checks.js` (plan, referencia, contrato, casos `IC-*`), `computed.js` (D5, casos `CP-*`), el modelo y el OpenAPI | hecho (2026-11-16) |
 | A3 | keel-spring: `ensureInvariants()`, su llamada en el save, el derivado como getter, `InvariantViolatedException` y `invariant-check` | hecho (2026-11-16, § Medidas de A3) |
 | A4 | keel-nest: la misma guarda sobre el `Decimal` del proyecto, su llamada en el save de los dos adaptadores y las sondas de db-check/doc-check | hecho (2026-11-16, § Medidas de A4) |
-| A5-A9 | Fase A: DSL 2.31 (R7) | pendiente |
+| A5 | keel-dotnet: `EnsureInvariants()` y el derivado como propiedad sobre el `decimal` de .NET, su llamada en el Save de los dos adaptadores y las sondas de db-check/doc-check | hecho (2026-11-16, § Medidas de A5) |
+| A6-A9 | Fase A: DSL 2.31 (R7) | pendiente |
 | B0-B9 | Fase B: DSL 2.32 (R8) | pendiente |
 
-**Para retomar.** A4 hecho: keel-nest genera la guarda entera y su frontera ya no rechaza la 2.31.
-`src/scaffold/entity-checks.js` emite `ensureInvariants()` en cada entidad cuyo agregado guarda algo (el orden de D23), el
-derivado como getter que calcula sobre el `Decimal` del proyecto (`#compute<Campo>()`), las ayudas fuera de la clase e
-`InvariantViolatedException` (422, extiende `BusinessException`); `saveGuardLine` es la primera línea dentro de la
-transacción del save de los dos adaptadores, y el mapeo marca la línea del derivado (`DERIVED_MARK`). Red:
-`test/entity-checks.test.js` (ejecuta la entidad transpilada contra los vectores sin base) y `db-check`/`doc-check`
-sobre `catalog-invariants`/`-mongo` (`scripts/lib/invariant-probes.js`). Siguiente: A5, keel-dotnet, con los mismos
-vectores en `scripts/lib/invariant-probes.js` de su `db-check`/`doc-check`, quitando `entityChecksPendingErrors` de su
-frontera. Pendiente para A7: ninguna matriz de paridad tiene todavía fila para la guarda ni el derivado (tampoco
+**Para retomar.** A5 hecho: keel-dotnet genera la guarda entera y su frontera ya no rechaza la 2.31.
+`src/scaffold/entity-checks.js` emite `EnsureInvariants()` en cada entidad cuyo agregado guarda algo (el orden de D23), el
+derivado como propiedad que calcula sobre el `decimal` de .NET (`Compute<Campo>()`, null si desborda el `decimal`; la
+propiedad redondea con `MidpointRounding.AwayFromZero` y suma `0.00m` para quedarse con la escala), las ayudas como
+estáticos privados (los patrones con `[GeneratedRegex]`: la clase es `partial`) e `InvariantViolatedException` (422,
+extiende `BusinessException`); `saveGuardLines` son las primeras líneas dentro de la transacción del Save de los dos
+adaptadores, y el mapeo marca la línea del derivado (`DERIVED_MARK`). Red: `test/entity-checks.test.js` y
+`db-check --only=catalog-invariants`/`doc-check --only=catalog-invariants-mongo` (`scripts/lib/invariant-probes.js`, un
+`[Fact]` por vector). Siguiente: A6, keel-go, con los mismos vectores en su `scripts/lib/invariant-probes.js` y quitando
+`entityChecksPendingErrors` de su frontera (`entityChecksPendingErrors` queda entonces sin usuarios: borrarlo de keel-core
+con su test). Pendiente para A7: ninguna matriz de paridad tiene todavía fila para la guarda ni el derivado (tampoco
 keel-spring); se abren a la vez en el catálogo neutral (`gen/mechanisms.js`) y en los cuatro.
+
+## Medidas de A5 (2026-11-16)
+
+- `db-check --only=catalog-invariants`: 30/30 sondas en PostgreSQL y en MySQL, con el catálogo del motor igual al esquema
+  emitido. `doc-check --only=catalog-invariants-mongo`: 30/30, con los índices vivos del contrato. Lo emitido compila con
+  `TreatWarningsAsErrors` a la primera.
+- Los 12 sabotajes caen en exactamente sus casos en PostgreSQL y en MongoDB, y los tres que dependen del motor
+  (`ic-no-call`, `ic-after-write`, `cp-no-overflow`) también en MySQL. Lo mismo que en keel-spring y keel-nest:
+  `ic-after-write` no lo ve IC-10 (Save transaccional en los dos modelos), y en documental tampoco CP-4 (Decimal128
+  admite la suma).
+- `cp-stale` en keel-dotnet es quitar la línea del derivado de `Apply`: EF no toca la columna de una fila rastreada que
+  nadie asignó (conserva la de antes), y el `$set` del documento no lleva el campo.
+- La red se equivocó dos veces, lo emitido ninguna: `ic-null-fails` tocaba también el `item.X is null ||` del bucle de la
+  suma (lo emitido saboteado dejaba de compilar; ahora solo casa con un miembro de la entidad), y `doc-check` no tenía
+  registrados los sabotajes. Y el lector de errores de `test/domain.test.js` no veía la excepción de keel-spring ni la de
+  keel-nest, que llevan el code en su constante `CODE`.
 
 ## Medidas de A4 (2026-11-16)
 
