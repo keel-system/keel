@@ -40,6 +40,7 @@ import { BSON, MONGO_DRIVER, MONGO_OPTIONS } from './document-persistence.js';
 import { parameterAccessor } from './service-parameters.js';
 import { loadExpectingAdapter, loadsExpecting } from './conditional-writes.js';
 import { documentGuardMethods } from './mail.js';
+import { saveGuardLines } from './entity-checks.js';
 
 const ADAPTER_IMPORTS = [
   'cmp',
@@ -605,7 +606,7 @@ ${appendAll(created, 'inserted').map((line) => `\t${line}`).join('\n')}
   }
   return `// Save implementa domain.${portName(entity)}: escribe el documento del agregado entero en una transacción (la abierta,
 // o una suya) y lo relee en ella.${outbox ? ' Los documentos del outbox de sus eventos van en esa misma transacción.' : events ? ' Sus eventos se publican cuando esa transacción confirma.' : ''}
-func (r *${type}) Save(ctx context.Context, ${local} *domain.${name}) (*domain.${name}, error) {${events ? `
+func (r *${type}) Save(ctx context.Context, ${local} *domain.${name}) (*domain.${name}, error) {${saveGuardLines(entity, local)}${events ? `
 	events := ${local}.PullEvents()` : ''}
 	var saved *domain.${name}
 	err := r.tx.write(ctx, func(ctx context.Context) error {

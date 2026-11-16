@@ -36,6 +36,7 @@ import { BATCH_SABOTAGE_SPECS, BATCH_SUBJECTS, batchProbeFile, batchProbePatch, 
 import { BATCH_JOB_SABOTAGE_SPECS, BATCH_JOB_SUBJECTS, batchJobProbeFile, batchJobSabotageVerdict, isBatchJobSabotage } from './lib/batch-job-probes.js';
 import { BATCH_KEY_SABOTAGE_SPECS, BATCH_KEY_SUBJECTS, batchKeyProbeFile, batchKeySabotageSubject, batchKeySabotageVerdict, isBatchKeySabotage } from './lib/batch-key-probes.js';
 import { HISTORY_ALSO, HISTORY_SABOTAGE_SPECS, HISTORY_SUBJECTS, historyProbeFile, historySabotageVerdict, isHistorySabotage } from './lib/history-probes.js';
+import { INVARIANT_RUN, INVARIANT_SABOTAGE_SPECS, INVARIANT_SUBJECTS, invariantProbeFile, invariantSabotageVerdict, isInvariantSabotage } from './lib/invariant-probes.js';
 
 // Los del cronómetro y los plazos (DSL 2.26) caen en EXACTAMENTE sus casos DL (scripts/lib/timer-probes.js).
 // Los de la lectura acotada (DSL 2.27) caen en EXACTAMENTE sus casos RS (scripts/lib/read-scope-probes.js).
@@ -56,7 +57,9 @@ const SABOTAGES = {
   ...Object.fromEntries(Object.entries(BATCH_JOB_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document])),
   // Los lotes síncronos con clave (DSL 2.30, D15): sobre catalog-batch-keyed-mongo, cada uno cae en exactamente sus casos BK.
   // bk-keep-failed no: el todo o nada con clave solo tiene sujeto relacional (BATCH_KEY_DESIGNS).
-  ...Object.fromEntries(Object.entries(BATCH_KEY_SABOTAGE_SPECS).filter(([id]) => id !== 'bk-keep-failed').map(([id, spec]) => [id, spec.document]))
+  ...Object.fromEntries(Object.entries(BATCH_KEY_SABOTAGE_SPECS).filter(([id]) => id !== 'bk-keep-failed').map(([id, spec]) => [id, spec.document])),
+  // Los de la guarda del agregado (DSL 2.31) caen en EXACTAMENTE sus casos IC y CP (scripts/lib/invariant-probes.js).
+  ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document]))
 };
 import { resolveRuntime, startMongo, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 
@@ -112,14 +115,17 @@ try {
     // Los lotes asíncronos (DSL 2.30, BJ-1 a BJ-9): los MISMOS diseños que miden los otros tres.
     ...UNCOVERED_BRANCHES.filter((design) => BATCH_JOB_SUBJECTS.document.includes(design.name)),
     // Los lotes síncronos con clave (DSL 2.30, D15, BK-1 a BK-4): los MISMOS diseños que miden los otros tres.
-    ...UNCOVERED_BRANCHES.filter((design) => BATCH_KEY_SUBJECTS.document.includes(design.name))
+    ...UNCOVERED_BRANCHES.filter((design) => BATCH_KEY_SUBJECTS.document.includes(design.name)),
+    // La guarda del agregado (DSL 2.31, IC-1 a IC-11 y CP-1 a CP-5): el MISMO sujeto que miden los otros tres.
+    ...UNCOVERED_BRANCHES.filter((design) => INVARIANT_SUBJECTS.document.includes(design.name))
   ]
     .filter((design) => only || !isReadScopeSabotage(sabotage) || READ_SCOPE_SUBJECTS.document.includes(design.name))
     .filter((design) => only || !isLifecycleSabotage(sabotage) || LIFECYCLE_SUBJECTS.document.includes(design.name))
     .filter((design) => only || !isHistorySabotage(sabotage) || HISTORY_SUBJECTS.document.includes(design.name))
     .filter((design) => only || !isBatchSabotage(sabotage) || BATCH_SUBJECTS.document.includes(design.name))
     .filter((design) => only || !isBatchJobSabotage(sabotage) || BATCH_JOB_SUBJECTS.document.includes(design.name))
-    .filter((design) => only || !isBatchKeySabotage(sabotage) || BATCH_KEY_SUBJECTS.document.includes(design.name));
+    .filter((design) => only || !isBatchKeySabotage(sabotage) || BATCH_KEY_SUBJECTS.document.includes(design.name))
+    .filter((design) => only || !isInvariantSabotage(sabotage) || INVARIANT_SUBJECTS.document.includes(design.name));
   for (const { name, from, mutate } of designs) {
     // `--only` admite una lista separada por comas.
     if (only && !only.split(',').includes(name)) continue;
@@ -154,24 +160,28 @@ try {
     const batchJobProbe = batchJobProbeFile(plan.model);
     // Los lotes síncronos con clave (DSL 2.30, D15): por el http.Handler emitido, también en el paquete del almacén.
     const batchKeyProbe = batchKeyProbeFile(plan.model);
+    // La guarda del agregado (DSL 2.31): su archivo aparte, también en el paquete del almacén.
+    const invariantProbe = invariantProbeFile(plan.model);
     const dir = path.join(root, name);
-    for (const file of [...files, probe, ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : []), ...(lifecycleProbe ? [lifecycleProbe] : []), ...(historyProbe ? [historyProbe] : []), ...(batchProbe ? [batchProbe] : []), ...(batchJobProbe ? [batchJobProbe] : []), ...(batchKeyProbe ? [batchKeyProbe] : [])]) {
+    for (const file of [...files, probe, ...(invariantProbe ? [invariantProbe] : []), ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : []), ...(lifecycleProbe ? [lifecycleProbe] : []), ...(historyProbe ? [historyProbe] : []), ...(batchProbe ? [batchProbe] : []), ...(batchJobProbe ? [batchJobProbe] : []), ...(batchKeyProbe ? [batchKeyProbe] : [])]) {
       const target = path.join(dir, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, file.content);
     }
     if (probe.unsampled.length > 0) console.log(`  (${name}: sin muestra para ${probe.unsampled.join(', ')})`);
-    subjects.push({ name, dir, model: plan.model, db: `${name.replace(/-/g, '_')}_doc_probes`, purgeTimer: Boolean(purgeTimerProbe), drain: probe.content.includes('TestDrain_DR1_') });
+    subjects.push({ name, dir, model: plan.model, invariants: Boolean(invariantProbe), db: `${name.replace(/-/g, '_')}_doc_probes`, purgeTimer: Boolean(purgeTimerProbe), drain: probe.content.includes('TestDrain_DR1_') });
   }
   const url = (db) => database.url.replace(/\/keel_db_check\?/, `/${db}?`);
-  const outcomes = await pool(subjects, 2, async ({ dir, db }) => {
+  const outcomes = await pool(subjects, 2, async ({ dir, db, invariants }) => {
     const tidied = await runAsync('go', ['mod', 'tidy'], { cwd: dir });
     if (!tidied.ok) return { tidied };
     // Compilada aparte y ejecutada desde el sujeto: en Windows el antivirus puede denegar el .test.exe de %TEMP%\go-build.
     const binary = path.join(dir, process.platform === 'win32' ? 'doc-probe.test.exe' : 'doc-probe.test');
     const built = await runAsync('go', ['test', '-c', '-o', binary, `./${storePath}/`], { cwd: dir });
     if (!built.ok) return { tidied, tested: built };
-    return { tidied, tested: await runAsync(binary, ['-test.count=1', '-test.v'], { cwd: path.join(dir, storePath), env: { DOC_CHECK_URL: url(db) } }) };
+    // El sujeto de la guarda (DSL 2.31) solo ejecuta sus vectores: la muestra de los demás bloques no cumple sus checks.
+    const run = invariants ? [`-test.run=${INVARIANT_RUN}`] : [];
+    return { tidied, tested: await runAsync(binary, ['-test.count=1', '-test.v', ...run], { cwd: path.join(dir, storePath), env: { DOC_CHECK_URL: url(db) } }) };
   });
   subjects.forEach(({ name, model, purgeTimer, drain }, index) => {
     const { tidied, tested } = outcomes[index];
@@ -183,6 +193,20 @@ try {
       const ok = tested.ok && ran > 0;
       step(`${name}: los adaptadores documentales guardan, leen y traducen contra MongoDB (${passed.length} sondas)`, ok, ok ? '' : failed.join(', ') || tested.output.slice(-3000));
       if (!ok && failed.length > 0) console.error(failureLines(tested.output));
+      return;
+    }
+    if (isInvariantSabotage(sabotage)) {
+      const verdict = invariantSabotageVerdict(failed, sabotage, model, { document: true });
+      // Y ninguna otra sonda: el sabotaje rompe la guarda, no el resto del adaptador.
+      const stray = failed.filter((test) => !/_(IC|CP)\d+_/.test(test));
+      step(
+        `falsado: ${sabotage} en ${name} cae en exactamente sus casos`,
+        ran > 0 && verdict.exact && stray.length === 0,
+        `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]${verdict.masked.length > 0 ? ` (enmascarados: ${verdict.masked.join(', ')})` : ''}${stray.length > 0 ? `; además ${stray.join(', ')}` : ''}`
+      );
+      if (verdict.exact && verdict.want.length > 0) results.at(-1).caught = true;
+      // Enmascarado entero en este modelo (Save transaccional y Decimal128, invariantMasks): no hay sonda que pueda verlo.
+      if (verdict.exact && verdict.want.length === 0 && verdict.masked.length > 0) results.at(-1).masked = true;
       return;
     }
     if (isBatchKeySabotage(sabotage)) {
@@ -276,7 +300,10 @@ try {
   });
   if (sabotage) {
     if (step(`el sabotaje ${sabotage} se aplica a lo emitido`, applied > 0, applied === 0 ? '¿cambió el texto emitido?' : `${applied} archivo(s)`)) {
-      step(`el sabotaje ${sabotage} lo ve al menos una sonda`, results.some((result) => result.caught));
+      // Uno enmascarado entero en todos sus sujetos lo dice con su motivo en vez de pedir una sonda que no puede existir.
+      if (!results.some((result) => result.caught) && results.some((result) => result.masked)) {
+        step(`el sabotaje ${sabotage} está enmascarado entero en este modelo (invariantMasks: su motivo medido)`, true);
+      } else step(`el sabotaje ${sabotage} lo ve al menos una sonda`, results.some((result) => result.caught));
     }
   }
 } finally {

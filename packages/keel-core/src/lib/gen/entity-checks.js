@@ -4,8 +4,8 @@
 // Un check es una invariante que la ENTIDAD comprueba al final de cada mutación, antes de guardar (D2 de
 // PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md): no la escribe el agente donde un escenario la pide, sino build donde el
 // diseño la declara. Una rota es INVARIANT_VIOLATED (422) o el `error` del check. Aquí vive lo que la validación y los
-// cuatro generadores tienen que leer igual: el inventario, cómo se resuelve la ruta de un check sobre la entidad y la
-// frontera mientras un generador no lo genera.
+// cuatro generadores tienen que leer igual: el inventario, cómo se resuelve la ruta de un check sobre la entidad, el plan
+// de la guarda y su referencia ejecutable.
 
 import { FRAMEWORK_ERRORS } from '../framework-errors.js';
 import { operationTargetEntity } from './model.js';
@@ -141,25 +141,6 @@ export function operationsWriting(layers, entityName) {
       return target === entityName || target === root || (op.transitions ?? []).some((transition) => transition?.entity === entityName);
     })
     .map(([opName, op]) => ({ opName, op }));
-}
-
-// ─── La frontera mientras un generador no lo genera ─────────────────────────
-
-/**
- * Lo que un generador rechaza hasta su incremento: los checks y los derivados estructurados, con el mismo mensaje en los
- * cuatro. A medias fallarían en silencio: un check que no se comprueba es exactamente la invariante en prosa de antes.
- */
-export function entityChecksPendingErrors(layers, generator, increment) {
-  const pending = (what, fix) =>
-    `${what} (DSL 2.31): ${generator} todavía no lo genera — llega en el incremento ${increment} de ` +
-    `PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md, y a medias fallaría en silencio. ${fix} para generar este diseño.`;
-  const errors = [];
-  const withChecks = [...new Set(declaredChecks(layers).map(({ entityName }) => entityName))];
-  if (withChecks.length > 0) errors.push(pending(`domain: checks [${withChecks.join(', ')}]`, 'Pasa los checks a invariants'));
-  for (const { entityName, fieldName } of declaredComputed(layers)) {
-    errors.push(pending(`domain: ${entityName}.${fieldName}.computed estructurado`, 'Escribe el computed en prosa'));
-  }
-  return errors;
 }
 
 // ─── El plan de la guarda: qué comprueba la entidad al guardar ───────────────

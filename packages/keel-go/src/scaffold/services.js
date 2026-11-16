@@ -44,6 +44,7 @@ import { batchNote } from '@keel-system/keel-core/gen/batch';
 import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { cacheHandlerNote } from './cache.js';
 import { uploadHandlerNotes } from './storage.js';
+import { invariantHandlerNotes } from '@keel-system/keel-core/gen/entity-checks';
 import { READ_SCOPE_FIELD, readScopeHandlerNote } from './read-scope.js';
 import { EXPECTED_VERSIONS, carriesExpectedVersions, conditionalHandlerNote, returnsVersioned, versionedType } from './conditional-writes.js';
 
@@ -445,6 +446,8 @@ function handlerNotes(model, operation) {
   if (gate) notes.push(gate);
   // Los plazos (DSL 2.26): la nota de la operación que caduca y la de las que salen del estado. Neutrales, las mismas en los cuatro.
   notes.push(...deadlineNotes(model, operation));
+  // La guarda del agregado y sus derivados (DSL 2.31): neutrales, las mismas en los cuatro.
+  notes.push(...invariantHandlerNotes(model, operation));
   // La escritura condicional (api.concurrency): cargar con LoadExpecting y devolver la versión persistida.
   const root = operation.targetEntity ?? operation.responseDto?.entity ?? 'Raiz';
   const conditional = conditionalHandlerNote(model, operation, operation.messageKind === 'query' ? 'query' : 'cmd', repositoryParam({ name: root }));

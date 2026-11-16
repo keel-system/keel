@@ -61,7 +61,10 @@ function springErrors(files) {
     if (!/\/domain\/errors\/\w+\.java$/.test(file.path)) continue;
     const fixed = /"([A-Z0-9_]+)", (\d+), null\)/.exec(file.content);
     const dynamic = /super\(message, "([A-Z0-9_]+)", httpStatus, null\)/.exec(file.content);
+    // La de la invariante rota (DSL 2.31) lleva el code en su constante CODE.
+    const constant = /CODE = "([A-Z0-9_]+)";[\s\S]*super\(message, CODE, (\d+), null\)/.exec(file.content);
     if (fixed) errors.add(`${fixed[1]}:${fixed[2]}`);
+    else if (constant) errors.add(`${constant[1]}:${constant[2]}`);
     else if (dynamic) errors.add(`${dynamic[1]}:dinámico`);
   }
   return errors;

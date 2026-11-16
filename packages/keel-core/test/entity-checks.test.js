@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { loadService } from '../src/lib/loader.js';
 import { checkCrossRefs } from '../src/lib/crossrefs.js';
 import {
-  declaredChecks, declaredComputed, checkKind, checkCondition, checkErrorCode, resolveCheckPath, entityChecksPendingErrors,
+  declaredChecks, declaredComputed, checkKind, checkCondition, checkErrorCode, resolveCheckPath,
   INVARIANT_VIOLATED, invariantPlan, evaluateInvariants, guardsAggregate, boundGuards, isAbsentValue, invariantsHandlerNote,
   INVARIANT_CASES, INVARIANT_SABOTAGES
 } from '../src/lib/gen/entity-checks.js';
@@ -126,18 +126,6 @@ test('resolveCheckPath distingue campo, subcampo de value object y relación, y 
   assert.equal(resolveCheckPath(layers, 'Product', 'price.nothing'), null);
   assert.equal(resolveCheckPath(layers, 'Product', 'nothing'), null);
   assert.equal(resolveCheckPath(layers, 'Product', 'status').type.category, 'enum');
-});
-
-test('la frontera de los generadores rechaza checks y computed estructurado, y deja pasar la prosa', () => {
-  const { layers } = loadService(path.join(FIXTURES, 'product-catalog'));
-  assert.deepEqual(entityChecksPendingErrors(layers, 'keel-x', 3), []);
-  layers.domain.entities.Product.checks = [{ field: 'price.amount', op: 'gt', value: 0 }];
-  layers.domain.entities.Product.fields.imageCount = { type: 'int', computed: { count: 'images' } };
-  const errors = entityChecksPendingErrors(layers, 'keel-x', 3);
-  assert.equal(errors.length, 2);
-  assert.match(errors[0], /domain: checks \[Product\] \(DSL 2\.31\): keel-x todavía no lo genera — llega en el incremento 3/);
-  assert.match(errors[1], /Product\.imageCount\.computed estructurado/);
-  assert.equal(declaredComputed(layers).length, 1);
 });
 
 // ─── La referencia ejecutable (A2) ───────────────────────────────────────────

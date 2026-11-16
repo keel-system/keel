@@ -22,6 +22,7 @@ import { idempotencySentinels } from './request-idempotency.js';
 import { storageSentinels } from './storage.js';
 import { conditionalWriteSentinels } from './conditional-writes.js';
 import { batchJobSentinels } from './batch-jobs.js';
+import { invariantSentinels } from './entity-checks.js';
 
 /** El centinela de un `code`: `SKU_ALREADY_EXISTS` → `ErrSKUAlreadyExists`. */
 export function sentinelOf(code) {
@@ -55,7 +56,14 @@ export function frameworkSentinels(model) {
     }
   ];
   // La escritura condicional (api.concurrency): la precondición fallida (412) y la que falta (428).
-  return [...list.filter((entry) => entry.needed), ...persistenceSentinels(model), ...storageSentinels(model), ...conditionalWriteSentinels(model)];
+  // La invariante rota (DSL 2.31, 422), la que devuelve EnsureInvariants() si el diseño no declara el code.
+  return [
+    ...list.filter((entry) => entry.needed),
+    ...persistenceSentinels(model),
+    ...storageSentinels(model),
+    ...conditionalWriteSentinels(model),
+    ...invariantSentinels(model)
+  ];
 }
 
 /**

@@ -15,6 +15,7 @@ import { READ_SCOPE_DESIGNS } from '../../../keel-core/test/helpers/read-scope-d
 import { DATA_LIFECYCLE_DESIGNS } from '../../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { HISTORY_DESIGNS } from '../../../keel-core/test/helpers/history-designs.js';
 import { BATCH_DESIGNS, BATCH_JOB_DESIGNS, BATCH_KEY_DESIGNS, withoutBatches } from '../../../keel-core/test/helpers/batch-designs.js';
+import { ENTITY_CHECK_DESIGNS } from '../../../keel-core/test/helpers/entity-check-designs.js';
 
 const here = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.join(here, '..', '..', '..');
@@ -271,6 +272,24 @@ export const UNCOVERED_BRANCHES = [
     mutate(manifest, layers) {
       manifest.service.name = design.name;
       design.mutate(layers);
+    }
+  })),
+  // La guarda del agregado (DSL 2.31, PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md): el sujeto de
+  // keel-core/test/helpers/entity-check-designs.js, el MISMO que miden los otros tres. Ninguna fixture lo declara hasta el
+  // incremento A8.
+  ...ENTITY_CHECK_DESIGNS.map((design) => ({
+    name: design.name,
+    from: design.from,
+    mutate(manifest, layers) {
+      manifest.service.name = design.name;
+      design.mutate(layers);
+      // La réplica sobre documentos es un rechazo escrito de keel-go (README § La frontera), como en la escritura
+      // condicional: el precio del proveedor se pide en el momento. No toca nada de la guarda (Product y sus imágenes).
+      if (layers.persistence.default?.model === 'document') {
+        const need = layers.dependencies.dependencies.pricing.needs.supplierPrice;
+        delete need.replica;
+        need.strategy = 'on-demand';
+      }
     }
   }))
 ];

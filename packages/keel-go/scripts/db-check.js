@@ -48,6 +48,7 @@ import { BATCH_SABOTAGE_SPECS, BATCH_SUBJECTS, batchProbeFile, batchProbePatch, 
 import { BATCH_JOB_SABOTAGE_SPECS, BATCH_JOB_SUBJECTS, batchJobProbeFile, batchJobSabotageVerdict, isBatchJobSabotage } from './lib/batch-job-probes.js';
 import { BATCH_KEY_SABOTAGE_SPECS, BATCH_KEY_SUBJECTS, batchKeyProbeFile, batchKeySabotageSubject, batchKeySabotageVerdict, isBatchKeySabotage } from './lib/batch-key-probes.js';
 import { HISTORY_ALSO, HISTORY_SABOTAGE_SPECS, HISTORY_SUBJECTS, historyProbeFile, historySabotageVerdict, isHistorySabotage } from './lib/history-probes.js';
+import { INVARIANT_RUN, INVARIANT_SABOTAGE_SPECS, INVARIANT_SUBJECTS, invariantProbeFile, invariantSabotageVerdict, isInvariantSabotage } from './lib/invariant-probes.js';
 import { resolveRuntime, startDatabase, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 import { ENGINE_LABELS, STORE_PACKAGES } from '../src/lib/relational-engine.js';
 import { SUPPORTED_DATABASES } from '../src/lib/supported-features.js';
@@ -84,7 +85,9 @@ const SABOTAGES = {
   ...Object.fromEntries(Object.entries(BATCH_JOB_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational])),
   // Los lotes síncronos con clave (DSL 2.30, D15): sobre catalog-batch-keyed (bk-keep-failed, catalog-batch-atomic-keyed),
   // cada uno cae en exactamente sus casos BK.
-  ...Object.fromEntries(Object.entries(BATCH_KEY_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
+  ...Object.fromEntries(Object.entries(BATCH_KEY_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational])),
+  // Los de la guarda del agregado (DSL 2.31) caen en EXACTAMENTE sus casos IC y CP (scripts/lib/invariant-probes.js).
+  ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
 };
 
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -158,14 +161,18 @@ try {
     // Los lotes asíncronos (DSL 2.30, BJ-1 a BJ-9): los MISMOS diseños que miden los otros tres.
     ...UNCOVERED_BRANCHES.filter((design) => BATCH_JOB_SUBJECTS.relational.includes(design.name) && (!only || only.split(',').includes(design.name))).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) })),
     // Los lotes síncronos con clave (DSL 2.30, D15, BK-1 a BK-5): los MISMOS diseños que miden los otros tres.
-    ...UNCOVERED_BRANCHES.filter((design) => BATCH_KEY_SUBJECTS.relational.includes(design.name) && (!only || only.split(',').includes(design.name))).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) }))
+    ...UNCOVERED_BRANCHES.filter((design) => BATCH_KEY_SUBJECTS.relational.includes(design.name) && (!only || only.split(',').includes(design.name))).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) })),
+    // La guarda del agregado (DSL 2.31, IC-1 a IC-11 y CP-1 a CP-5): el MISMO sujeto que miden los otros tres
+    // (keel-core/test/helpers/entity-check-designs.js).
+    ...UNCOVERED_BRANCHES.filter((design) => INVARIANT_SUBJECTS.relational.includes(design.name) && (!only || only.split(',').includes(design.name))).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) }))
   ]
     .filter((subject) => only || !isReadScopeSabotage(sabotage) || READ_SCOPE_SUBJECTS.relational.includes(subject.name))
     .filter((subject) => only || !isLifecycleSabotage(sabotage) || LIFECYCLE_SUBJECTS.relational.includes(subject.name))
     .filter((subject) => only || !isHistorySabotage(sabotage) || HISTORY_SUBJECTS.relational.includes(subject.name))
     .filter((subject) => only || !isBatchSabotage(sabotage) || BATCH_SUBJECTS.relational.includes(subject.name))
     .filter((subject) => only || !isBatchJobSabotage(sabotage) || BATCH_JOB_SUBJECTS.relational.includes(subject.name))
-    .filter((subject) => only || !isBatchKeySabotage(sabotage) || subject.name === batchKeySabotageSubject(sabotage, false));
+    .filter((subject) => only || !isBatchKeySabotage(sabotage) || subject.name === batchKeySabotageSubject(sabotage, false))
+    .filter((subject) => only || !isInvariantSabotage(sabotage) || INVARIANT_SUBJECTS.relational.includes(subject.name));
 
   // ─── El esquema ─────────────────────────────────────────────────────────────────────────────────
   if (!sabotage) {
@@ -222,8 +229,10 @@ try {
     const batchJobProbe = batchJobProbeFile(plan.model);
     // Los lotes síncronos con clave (DSL 2.30, D15): por el http.Handler emitido, también en el paquete del almacén.
     const batchKeyProbe = batchKeyProbeFile(plan.model);
+    // La guarda del agregado (DSL 2.31): su archivo aparte, también en el paquete del almacén.
+    const invariantProbe = invariantProbeFile(plan.model);
     const dir = path.join(root, name);
-    for (const file of [...files, probe, ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : []), ...(lifecycleProbe ? [lifecycleProbe] : []), ...(historyProbe ? [historyProbe] : []), ...(batchProbe ? [batchProbe] : []), ...(batchJobProbe ? [batchJobProbe] : []), ...(batchKeyProbe ? [batchKeyProbe] : [])]) {
+    for (const file of [...files, probe, ...(invariantProbe ? [invariantProbe] : []), ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : []), ...(lifecycleProbe ? [lifecycleProbe] : []), ...(historyProbe ? [historyProbe] : []), ...(batchProbe ? [batchProbe] : []), ...(batchJobProbe ? [batchJobProbe] : []), ...(batchKeyProbe ? [batchKeyProbe] : [])]) {
       const target = path.join(dir, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, file.content);
@@ -233,13 +242,13 @@ try {
     // Una base que no se pudo crear daría un rojo de las sondas que no es del generador: se dice aquí.
     const created = recreate(db);
     if (!step(`${name}: base ${db} creada`, created.ok, created.ok ? '' : created.output.trim().slice(0, 300))) continue;
-    subjects.push({ name, dir, db, model: plan.model, purgeTimer: Boolean(purgeTimerProbe), drain: probe.content.includes('TestDrain_DR1_') });
+    subjects.push({ name, dir, db, model: plan.model, invariants: Boolean(invariantProbe), purgeTimer: Boolean(purgeTimerProbe), drain: probe.content.includes('TestDrain_DR1_') });
   }
   const env = (db) =>
     engine === 'mysql'
       ? { DB_CHECK_URL: `mysql://127.0.0.1:${database.port}/${db}`, DB_CHECK_USER: 'root', DB_CHECK_PASSWORD: database.password }
       : { DB_CHECK_URL: `postgresql://127.0.0.1:${database.port}/${db}`, DB_CHECK_USER: database.user, DB_CHECK_PASSWORD: database.password };
-  const outcomes = await pool(subjects, 4, async ({ dir, db }) => {
+  const outcomes = await pool(subjects, 4, async ({ dir, db, invariants }) => {
     const tidied = await runAsync('go', ['mod', 'tidy'], { cwd: dir });
     if (!tidied.ok) return { tidied };
     // La sonda se compila aparte (go test -c) y se ejecuta desde el sujeto, como haría go test desde el paquete. No con
@@ -249,7 +258,9 @@ try {
     const binary = path.join(dir, process.platform === 'win32' ? 'db-probe.test.exe' : 'db-probe.test');
     const built = await runAsync('go', ['test', '-c', '-o', binary, `./${storePath}/`], { cwd: dir, env: env(db) });
     if (!built.ok) return { tidied, tested: built };
-    return { tidied, tested: await runAsync(binary, ['-test.count=1', '-test.v'], { cwd: path.join(dir, storePath), env: env(db) }) };
+    // El sujeto de la guarda (DSL 2.31) solo ejecuta sus vectores: la muestra de los demás bloques no cumple sus checks.
+    const run = invariants ? [`-test.run=${INVARIANT_RUN}`] : [];
+    return { tidied, tested: await runAsync(binary, ['-test.count=1', '-test.v', ...run], { cwd: path.join(dir, storePath), env: env(db) }) };
   });
   subjects.forEach(({ name, model, purgeTimer, drain }, index) => {
     const { tidied, tested } = outcomes[index];
@@ -263,6 +274,20 @@ try {
       const detail = ok ? (skipped.length > 0 ? `se saltan ${skipped.join(', ')}` : '') : failed.join(', ') || tested.output.slice(-3000);
       step(`${name}: los adaptadores guardan, leen y traducen contra ${label} (${passed.length} sondas)`, ok, detail);
       if (!ok && failed.length > 0) console.error(failureLines(tested.output));
+      return;
+    }
+    if (isInvariantSabotage(sabotage)) {
+      const verdict = invariantSabotageVerdict(failed, sabotage, model, { document: false });
+      // Y ninguna otra sonda: el sabotaje rompe la guarda, no el resto del adaptador.
+      const stray = failed.filter((test) => !/_(IC|CP)\d+_/.test(test));
+      step(
+        `falsado: ${sabotage} en ${name} cae en exactamente sus casos`,
+        ran > 0 && verdict.exact && stray.length === 0,
+        `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]${verdict.masked.length > 0 ? ` (enmascarados: ${verdict.masked.join(', ')})` : ''}${stray.length > 0 ? `; además ${stray.join(', ')}` : ''}`
+      );
+      if (verdict.exact && verdict.want.length > 0) results.at(-1).caught = true;
+      // Enmascarado entero en este modelo (Save transaccional y Decimal128, invariantMasks): no hay sonda que pueda verlo.
+      if (verdict.exact && verdict.want.length === 0 && verdict.masked.length > 0) results.at(-1).masked = true;
       return;
     }
     if (isBatchKeySabotage(sabotage)) {
@@ -364,7 +389,10 @@ try {
   if (!sabotage && (!only || only === 'product-catalog')) await generatorSchemaStep(env);
   if (sabotage) {
     if (step(`el sabotaje ${sabotage} se aplica a lo emitido`, applied > 0, applied === 0 ? '¿cambió el texto emitido?' : `${applied} archivo(s)`)) {
-      step(`el sabotaje ${sabotage} lo ve al menos una sonda`, results.some((result) => result.caught));
+      // Uno enmascarado entero en todos sus sujetos lo dice con su motivo en vez de pedir una sonda que no puede existir.
+      if (!results.some((result) => result.caught) && results.some((result) => result.masked)) {
+        step(`el sabotaje ${sabotage} está enmascarado entero en este modelo (invariantMasks: su motivo medido)`, true);
+      } else step(`el sabotaje ${sabotage} lo ve al menos una sonda`, results.some((result) => result.caught));
     }
   }
 } finally {

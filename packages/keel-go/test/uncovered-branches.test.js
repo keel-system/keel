@@ -162,3 +162,16 @@ for (const name of ['catalog-batch', 'catalog-batch-mongo', 'catalog-batch-atomi
     assert.ok(files.some((file) => /_endpoints\.go$/.test(file.path) && file.content.includes(runner)), `${name}: el endpoint no recorre el lote`);
   });
 }
+
+// La guarda del agregado (DSL 2.31): domain entities.<E>.checks y computed estructurado, que ninguna fixture declara hasta el
+// incremento A8 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md. El sujeto es el de keel-core (el mismo que miden los otros
+// tres); la forma la fija entity-checks.test.js, y db-check y doc-check lo ejecutan.
+for (const name of ['catalog-invariants', 'catalog-invariants-mongo']) {
+  test(`${name}: la guarda del agregado entera (domain checks y computed estructurado)`, () => {
+    const files = emitted(name);
+    const product = files.find((file) => file.path === 'internal/domain/product.go')?.content ?? '';
+    assert.ok(product.includes('func (p *Product) EnsureInvariants() error {'), `${name}: sin la guarda de la raíz`);
+    assert.ok(product.includes('func (p *Product) computePrintTotal() (wire.Decimal, bool) {'), `${name}: sin el derivado`);
+    assert.ok(files.some((file) => /_repository\.go$/.test(file.path) && file.content.includes('if err := product.EnsureInvariants(); err != nil {')), `${name}: el Save no llama a la guarda`);
+  });
+}

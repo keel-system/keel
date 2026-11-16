@@ -21,6 +21,7 @@ import { goExported } from '../lib/go-projection.js';
 import { alignRows, commentLines, goString, keyedLiteral } from '../lib/go-source.js';
 import { constantOf } from './enums.js';
 import { lateGuardParts, transitionNeedsClock } from './timer.js';
+import { GUARD_IMPORTS, invariantMembers, isDerived } from './entity-checks.js';
 import { declType, docComment, domainPath, fieldImports, goFileName, isOptional, layout, localName, packageFile } from './render.js';
 
 const IMPORTS = ['slices', 'bytes', 'time', 'errors','encoding/json/jsontext', 'internal/platform/wire'];
@@ -36,7 +37,8 @@ export function behaviorPath(model, entity) {
 
 /** ¿Lee alguna entidad un miembro opcional? Entonces su accesor devuelve una copia con `clonePtr`. */
 export function entitiesClonePointers(model) {
-  return (model.entities ?? []).some((entity) => (entity.usesOptimisticLocking && !entity.declaresLockVersion) || domainMembers(model, entity).some((member) => member.optional));
+  // Un derivado estructurado (DSL 2.31) no se lee del struct: su accesor calcula y no copia nada.
+  return (model.entities ?? []).some((entity) => (entity.usesOptimisticLocking && !entity.declaresLockVersion) || domainMembers(model, entity).some((member) => member.optional && !isDerived(member.field)));
 }
 
 /**
@@ -109,6 +111,12 @@ function renderEntity(model, entity) {
     members.push({ kind: 'lockVersion', name: LOCK_VERSION.field, type: '*int64', optional: true });
   }
   const named = members.map((member) => ({ ...member, field: member.field, local: localName(member.name), method: goExported(member.name) }));
+  // La guarda del agregado (DSL 2.31): EnsureInvariants(), sus derivados y sus formatos (scaffold/entity-checks.js). Un
+  // derivado estructurado no tiene miembro en el struct: su accesor calcula desde las hijas, y el valor que trae el estado
+  // se ignora.
+  const guard = invariantMembers(model, entity);
+  if (guard.blocks.length > 0) imports.push(...GUARD_IMPORTS);
+  const stored = named.filter((member) => !guard.accessors.has(member.name));
   const methods = new Set(named.map((member) => member.method));
   for (const reserved of ['PullEvents']) {
     if (methods.has(reserved)) throw new Error(`entidad ${entity.name}: el campo ${reserved} choca con un método generado en Go; renómbralo en el diseño`);
@@ -118,15 +126,16 @@ function renderEntity(model, entity) {
   const receiver = name[0].toLowerCase();
   const emitted = (model.events ?? []).filter((event) => event.aggregates.includes(name));
   const struct = alignRows([
-    ...named.map((member) => ({ indent: '\t', cells: [member.local, member.type] })),
+    ...stored.map((member) => ({ indent: '\t', cells: [member.local, member.type] })),
     ...(emitted.length > 0 ? [{ indent: '\t', cells: ['domainEvents', '[]Event'] }] : [])
   ]);
   const state = alignRows(named.map((member) => ({ indent: '\t', cells: [member.method, member.type] })));
   const rehydrate = keyedLiteral(
-    named.map((member) => [member.local, member.list ? `slices.Clone(state.${member.method})` : `state.${member.method}`]),
+    stored.map((member) => [member.local, member.list ? `slices.Clone(state.${member.method})` : `state.${member.method}`]),
     '\t\t'
   );
   const accessors = named.map((member) => {
+    if (guard.accessors.has(member.name)) return guard.accessors.get(member.name);
     const doc = docComment(member.method, memberDoc(member), `el campo ${member.name}`);
     let result = `${receiver}.${member.local}`;
     if (member.list) result = `slices.Clone(${result})`;
@@ -154,6 +163,7 @@ ${rehydrate.join('\n')}
   parts.push(...accessors);
   if (entity.lifecycle) parts.push(...renderLifecycle(model, entity, receiver));
   if (emitted.length > 0) parts.push(...renderDomainEvents(emitted, entity, receiver));
+  parts.push(...guard.blocks);
 
   return { path: domainPath(model, name), content: packageFile(model, domain, { imports, body: `\n${parts.join('\n\n')}\n` }) };
 }
@@ -198,7 +208,8 @@ function constructorTodo(model, entity, receiver) {
       lines.push(`  ${field.typeName}Format.Validate(${value})`);
     }
   }
-  const computed = entity.fields.filter((field) => field.computed);
+  // Un derivado estructurado (DSL 2.31) lo calcula su accesor: no es del agente.
+  const computed = entity.fields.filter((field) => field.computed && !isDerived(field));
   for (const field of computed) lines.push(`${localName(field.name)} es computed: ${field.computed}`);
   return commentLines(lines.join('\n')).join('\n');
 }

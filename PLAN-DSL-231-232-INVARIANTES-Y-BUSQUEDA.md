@@ -1,6 +1,6 @@
 # DSL 2.31 (R7: invariantes y derivados) y DSL 2.32 (R8: búsqueda)
 
-**Estado: aprobado el 2026-11-16, sin empezar.** Origen: R7 y R8 de `docs/evaluacion-dsl-2.24.md` (§ 9, puestos 1.º y 2.º).
+**Estado: aprobado el 2026-11-16, en curso (A0-A6 hechos).** Origen: R7 y R8 de `docs/evaluacion-dsl-2.24.md` (§ 9, puestos 1.º y 2.º).
 
 ## Estado
 
@@ -12,21 +12,36 @@
 | A3 | keel-spring: `ensureInvariants()`, su llamada en el save, el derivado como getter, `InvariantViolatedException` y `invariant-check` | hecho (2026-11-16, § Medidas de A3) |
 | A4 | keel-nest: la misma guarda sobre el `Decimal` del proyecto, su llamada en el save de los dos adaptadores y las sondas de db-check/doc-check | hecho (2026-11-16, § Medidas de A4) |
 | A5 | keel-dotnet: `EnsureInvariants()` y el derivado como propiedad sobre el `decimal` de .NET, su llamada en el Save de los dos adaptadores y las sondas de db-check/doc-check | hecho (2026-11-16, § Medidas de A5) |
-| A6-A9 | Fase A: DSL 2.31 (R7) | pendiente |
+| A6 | keel-go: `EnsureInvariants() error` y el derivado como accesor que calcula sobre el `wire.Decimal` del proyecto, su llamada al principio del Save de los dos adaptadores y las sondas de db-check/doc-check | hecho (2026-11-16, § Medidas de A6) |
+| A7-A9 | Fase A: DSL 2.31 (R7) | pendiente |
 | B0-B9 | Fase B: DSL 2.32 (R8) | pendiente |
 
-**Para retomar.** A5 hecho: keel-dotnet genera la guarda entera y su frontera ya no rechaza la 2.31.
-`src/scaffold/entity-checks.js` emite `EnsureInvariants()` en cada entidad cuyo agregado guarda algo (el orden de D23), el
-derivado como propiedad que calcula sobre el `decimal` de .NET (`Compute<Campo>()`, null si desborda el `decimal`; la
-propiedad redondea con `MidpointRounding.AwayFromZero` y suma `0.00m` para quedarse con la escala), las ayudas como
-estáticos privados (los patrones con `[GeneratedRegex]`: la clase es `partial`) e `InvariantViolatedException` (422,
-extiende `BusinessException`); `saveGuardLines` son las primeras líneas dentro de la transacción del Save de los dos
-adaptadores, y el mapeo marca la línea del derivado (`DERIVED_MARK`). Red: `test/entity-checks.test.js` y
-`db-check --only=catalog-invariants`/`doc-check --only=catalog-invariants-mongo` (`scripts/lib/invariant-probes.js`, un
-`[Fact]` por vector). Siguiente: A6, keel-go, con los mismos vectores en su `scripts/lib/invariant-probes.js` y quitando
-`entityChecksPendingErrors` de su frontera (`entityChecksPendingErrors` queda entonces sin usuarios: borrarlo de keel-core
-con su test). Pendiente para A7: ninguna matriz de paridad tiene todavía fila para la guarda ni el derivado (tampoco
-keel-spring); se abren a la vez en el catálogo neutral (`gen/mechanisms.js`) y en los cuatro.
+**Para retomar.** A6 hecho: los cuatro generadores emiten la guarda entera y ninguna frontera rechaza la 2.31;
+`entityChecksPendingErrors` ya no existe en keel-core. En keel-go `src/scaffold/entity-checks.js` emite
+`EnsureInvariants() error` en cada entidad cuyo agregado guarda algo (el orden de D23, los checks ya negados), el derivado
+como accesor que calcula sobre el `wire.Decimal` (`compute<Campo>() (T, bool)`, un solo `Rescale(escala,
+wire.RoundHalfUp)`; el struct no lleva el miembro y `Rehydrate` ignora el del estado), las ayudas compartidas en
+`internal/domain/invariants.go` y el centinela `ErrInvariantViolated`; `saveGuardLines` es lo primero del Save, antes de
+`PullEvents`. Red: `test/entity-checks.test.js` y `db-check --only=catalog-invariants`/`doc-check
+--only=catalog-invariants-mongo` (`scripts/lib/invariant-probes.js`, `invariant_probe_test.go`). Siguiente: A7, contrato y
+método. Pendiente para A7: ninguna matriz de paridad tiene todavía fila para la guarda ni el derivado; se abren a la vez en
+el catálogo neutral (`gen/mechanisms.js`) y en los cuatro.
+
+## Medidas de A6 (2026-11-16)
+
+- `db-check --only=catalog-invariants`: 30/30 sondas en PostgreSQL y en MySQL. `doc-check --only=catalog-invariants-mongo`:
+  30/30. El sujeto, emitido, pasa gofmt, vet, staticcheck y sus pruebas emitidas a la primera en los dos modelos.
+- Los 12 sabotajes caen en exactamente sus casos en PostgreSQL y en MongoDB, y los tres que dependen del motor
+  (`ic-no-call`, `ic-after-write`, `cp-no-overflow`) también en MySQL. Lo mismo que en los otros tres: `ic-after-write`
+  no lo ve IC-10 (el Save es transaccional en los dos modelos: la guarda dentro de la transacción revierte la fila), y en
+  documental tampoco CP-4 (Decimal128 admite la suma); ahí el sabotaje queda enmascarado entero, y db-check y doc-check lo
+  dicen con su motivo en vez de pedir una sonda que no puede existir.
+- `cp-stale` en Go es el UPDATE con `COALESCE(columna, $n)`: el SQL propio no tiene una línea del derivado que quitar, y
+  conservar lo que la fila traía es exactamente el defecto. En documental, la entrada del derivado fuera del codificador.
+- El sujeto documental de keel-go quita la réplica del precio del proveedor (rechazo escrito de su frontera), como el de
+  la escritura condicional: no toca nada de la guarda.
+- La paridad de errores de `test/domain.test.js` no veía la excepción de keel-spring (el code en su constante `CODE`), el
+  mismo hueco que A5 cerró en keel-dotnet.
 
 ## Medidas de A5 (2026-11-16)
 

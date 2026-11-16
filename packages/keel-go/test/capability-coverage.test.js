@@ -29,27 +29,28 @@ const MOTIVOS = {
   pendiente: 'pendiente'
 };
 
-// Los checks de la entidad (DSL 2.31) los rechaza la frontera de keel-go (entityChecksPendingErrors) hasta el incremento
-// A6 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md, y ninguna fixture los declara hasta el A8; entonces estas filas se borran.
+// Los checks de la entidad (DSL 2.31) los genera keel-go desde el incremento A6 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md
+// (test/entity-checks.test.js y db-check/doc-check, sobre el sujeto catalog-invariants), y ninguna fixture los declara hasta
+// el A8; entonces estas filas se borran.
 const CHECKS_PENDIENTES =
-  'los checks de la entidad (DSL 2.31) los rechaza la frontera de keel-go hasta el incremento A6 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md, y ninguna fixture los declara hasta el A8; entonces esta fila se borra.';
+  'los checks de la entidad (DSL 2.31) se miden sobre el sujeto sintético catalog-invariants (db-check y doc-check), que es un parche de UNCOVERED_BRANCHES, y ninguna fixture los declara hasta el incremento A8 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md; entonces esta fila se borra.';
 
 const EXCEPCIONES = new Map([
-  ['domain.entities.*.checks', { motivo: MOTIVOS.pendiente, porque: CHECKS_PENDIENTES }],
-  ['domain.entities.*.checks[].error', { motivo: MOTIVOS.pendiente, porque: CHECKS_PENDIENTES }],
-  ['domain.entities.*.checks[].exactlyOne', { motivo: MOTIVOS.pendiente, porque: CHECKS_PENDIENTES }],
-  ['domain.entities.*.checks[].field', { motivo: MOTIVOS.pendiente, porque: CHECKS_PENDIENTES }],
-  ['domain.entities.*.checks[].forbids', { motivo: MOTIVOS.pendiente, porque: CHECKS_PENDIENTES }],
-  ['domain.entities.*.checks[].op', { motivo: MOTIVOS.pendiente, porque: CHECKS_PENDIENTES }],
-  ['domain.entities.*.checks[].requires', { motivo: MOTIVOS.pendiente, porque: CHECKS_PENDIENTES }],
-  ['domain.entities.*.checks[].than', { motivo: MOTIVOS.pendiente, porque: CHECKS_PENDIENTES }],
-  ['domain.entities.*.checks[].unless', { motivo: MOTIVOS.pendiente, porque: CHECKS_PENDIENTES }],
-  ['domain.entities.*.checks[].unless.equals', { motivo: MOTIVOS.pendiente, porque: CHECKS_PENDIENTES }],
-  ['domain.entities.*.checks[].unless.in', { motivo: MOTIVOS.pendiente, porque: CHECKS_PENDIENTES }],
-  ['domain.entities.*.checks[].value', { motivo: MOTIVOS.pendiente, porque: CHECKS_PENDIENTES }],
-  ['domain.entities.*.checks[].when', { motivo: MOTIVOS.pendiente, porque: CHECKS_PENDIENTES }],
-  ['domain.entities.*.checks[].when.equals', { motivo: MOTIVOS.pendiente, porque: CHECKS_PENDIENTES }],
-  ['domain.entities.*.checks[].when.in', { motivo: MOTIVOS.pendiente, porque: CHECKS_PENDIENTES }],
+  ['domain.entities.*.checks', { motivo: MOTIVOS.soloCadenas, porque: CHECKS_PENDIENTES }],
+  ['domain.entities.*.checks[].error', { motivo: MOTIVOS.soloCadenas, porque: CHECKS_PENDIENTES }],
+  ['domain.entities.*.checks[].exactlyOne', { motivo: MOTIVOS.soloCadenas, porque: CHECKS_PENDIENTES }],
+  ['domain.entities.*.checks[].field', { motivo: MOTIVOS.soloCadenas, porque: CHECKS_PENDIENTES }],
+  ['domain.entities.*.checks[].forbids', { motivo: MOTIVOS.soloCadenas, porque: CHECKS_PENDIENTES }],
+  ['domain.entities.*.checks[].op', { motivo: MOTIVOS.soloCadenas, porque: CHECKS_PENDIENTES }],
+  ['domain.entities.*.checks[].requires', { motivo: MOTIVOS.soloCadenas, porque: CHECKS_PENDIENTES }],
+  ['domain.entities.*.checks[].than', { motivo: MOTIVOS.soloCadenas, porque: CHECKS_PENDIENTES }],
+  ['domain.entities.*.checks[].unless', { motivo: MOTIVOS.soloCadenas, porque: CHECKS_PENDIENTES }],
+  ['domain.entities.*.checks[].unless.equals', { motivo: MOTIVOS.soloCadenas, porque: CHECKS_PENDIENTES }],
+  ['domain.entities.*.checks[].unless.in', { motivo: MOTIVOS.soloCadenas, porque: CHECKS_PENDIENTES }],
+  ['domain.entities.*.checks[].value', { motivo: MOTIVOS.soloCadenas, porque: CHECKS_PENDIENTES }],
+  ['domain.entities.*.checks[].when', { motivo: MOTIVOS.soloCadenas, porque: CHECKS_PENDIENTES }],
+  ['domain.entities.*.checks[].when.equals', { motivo: MOTIVOS.soloCadenas, porque: CHECKS_PENDIENTES }],
+  ['domain.entities.*.checks[].when.in', { motivo: MOTIVOS.soloCadenas, porque: CHECKS_PENDIENTES }],
   [
     'messaging.subscriptions.*.contract.schemaRef',
     { motivo: MOTIVOS.informativo, porque: 'solo entra en el comentario del mensaje de la suscripción (messaging.js): ningún lector depende de él.' }

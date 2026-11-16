@@ -25,6 +25,7 @@ import * as errors from './errors.js';
 import * as enums from './enums.js';
 import * as valueTypes from './value-types.js';
 import * as entities from './entities.js';
+import * as entityChecks from './entity-checks.js';
 import * as events from './events.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
 import * as idempotencyCheck from './idempotency-check.js';
@@ -111,6 +112,8 @@ const GENERATORS = [
   valueTypes,
   longIds,
   entities,
+  // La guarda del agregado (DSL 2.31): las ayudas que comparten las EnsureInvariants() de las entidades.
+  entityChecks,
   events,
   domainGuardsCheck,
   idempotencyCheck,

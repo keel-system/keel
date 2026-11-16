@@ -53,6 +53,7 @@ import { loadExpectingAdapter, loadExpectingPort, loadsExpecting } from './condi
 import { portGuardMethods, relationalGuardMethods } from './mail.js';
 import { deletePortDoc, lifecycleDependencies, liveCondition, liveSuffix, relationalAdapterMethods, restorePortMethods } from './data-lifecycle.js';
 import * as history from './history.js';
+import { saveGuardLines } from './entity-checks.js';
 
 // Un identificador en el SQL del adaptador, citado como en el baseline si es una palabra reservada (`"primary"` en
 // PostgreSQL, `` `primary` `` en MySQL).
@@ -1178,7 +1179,7 @@ function saveMethods(model, entity, root, tables, type) {
   const arming = entity.lifecycle ? relationalArming(model, entity, local, 'q', (n) => ph(model, n)) : null;
   return `// Save implementa domain.${portName(entity)}: escribe el agregado entero en una transacción (la abierta, o una
 // suya) y lo relee en ella.${outbox ? ' Las filas del outbox de sus eventos van en esa misma transacción.' : events ? ' Sus eventos se publican cuando esa transacción confirma.' : ''}
-func (r *${type}) Save(ctx context.Context, ${local} *domain.${name}) (*domain.${name}, error) {${events ? `
+func (r *${type}) Save(ctx context.Context, ${local} *domain.${name}) (*domain.${name}, error) {${saveGuardLines(entity, local)}${events ? `
 	events := ${local}.PullEvents()` : ''}
 	var saved *domain.${name}
 	${isReplica(model, entity) ? `// La copia local de una dependencia replicada se guarda en su PROPIA transacción, aunque ctx traiga una abierta: el
