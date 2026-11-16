@@ -6,13 +6,35 @@
 
 | Inc. | Qué | Estado |
 |---|---|---|
-| A0 | Medir antes de nada | pendiente |
+| A0 | Medir antes de nada | hecho (2026-11-16, § Medidas de A0) |
 | A1-A9 | Fase A: DSL 2.31 (R7) | pendiente |
 | B0-B9 | Fase B: DSL 2.32 (R8) | pendiente |
 
-**Para retomar.** Empezar por A0 en un contexto nuevo, desde `main`: medir lo que este plan da por supuesto (la guarda de
-la cota en los cuatro generadores, si `ProductInOrder` es hija de `OrderMain`, el inventario de `invariants` de las
-fixtures) y anotar las medidas aquí antes de tocar el schema.
+**Para retomar.** A0 está medido y movió el plan (§ Medidas de A0): M2 y M3 piden dos decisiones del usuario (U5 y U6)
+antes de A1. Con ellas contestadas, A1 desde `main`: schema, reglas con sus mutaciones, `INVARIANT_VIOLATED` y el enum a
+2.31.
+
+## Medidas de A0 (2026-11-16)
+
+Medido con `build -y --accept-unready` de los cuatro generadores sobre `shop-api` en un workspace de usar y tirar, y con
+un recorrido de las `domain.keel.yaml` de las 19 fixtures.
+
+| | Medida | Qué cambia en el plan |
+|---|---|---|
+| M1 | **Ningún generador emite guarda de cotas en la entidad.** `ProductInOrder` sale de `build` con estado, rehidratación y getters en los cuatro (Java, TS, C# y Go), sin un solo mutador ni comprobación de `min`/`max`. El 400 de keel-go (`AddCount` con `ErrInvalidValue`) y la suma sin guarda de keel-dotnet son código **del agente**, no de `build` | U1 no cambia nada que `build` emita hoy: no hace falta aviso de contrato en `EVOLUTION.md` por este lado. El riesgo «si keel-spring o keel-nest ya ponían la guarda con otro code» queda descartado |
+| M2 | **Una cota del dominio no siempre es invariante.** `shop-api` declara `ProductInfo.productStock` con `max: 1000000`, y su descripción y la regla de `cancelOrder` dicen que la devolución de stock **puede dejarlo por encima**. El `max` vive en la entidad solo para que `createProduct` (`input: { entity: ProductInfo }`) lo herede; `updateProduct` ya lo repite en su `input.fields`. `ProductInOrder.productStock` ya resolvió lo mismo quitando el `max` | Con «las cotas del dominio son invariantes de la entidad», `cancelOrder` respondería 422 donde el legacy (flujo `keep`) acepta. Pide la decisión **U6** |
+| M3 | **`ProductInOrder` no es hija de `OrderMain`.** `shop-api` no declara `aggregates` (decisión humana, `decisions.yaml` 3.7: la línea cambia de propietario del carrito al pedido). Sin agregados, `OrderMain.products` es una colección hacia otro agregado: el modelo la clasifica `unsupported` y **no existe** en la entidad de ninguno de los cuatro. Además `orderAmount` es una foto «en el momento del checkout», no un derivado vivo | `computed: { sum }` sobre `OrderMain.products` no cabe en D4/D8. Pide la decisión **U5**. `exactlyOne: [cart, order]` sí cabe: son dos relaciones a-uno de la propia `ProductInOrder` |
+| M4 | **Ninguna fixture tiene un `sum` natural.** Las hijas internas a-muchos son `Asset.revisions`, `Product.images` (catalog-extended), `Article.comments`, `InspectionReport.sections` y `Template.variables` (el par del MVP); ningún campo numérico que sumar (`revisionNumber` y `position` son ordinales) | El sujeto del `sum` es sintético (`keel-core/test/helpers/entity-check-designs.js`, como los demás `*-designs.js`). El `count` sí tiene sujetos reales: `catalog-extended` o `inspection-reports` |
+| M5 | **Inventario: 16 `invariants` en prosa, 11 caben en `checks`.** Caben: «en X tiene Y» (`job-dispatch`, `job-dispatch-mongo`, `job-dispatch-cycles` ×2, `payout-runs` con dos estados, el par `verification-codes`), `refundedAmount ≤ amount`, `customerAction` solo en `actionRequired`, `awaitingSince` solo en cinco estados (un `forbids … unless` que el plan no contaba) y `price.amount > 0` si `active`. No caben: el `username` en minúsculas de conduit (normalización, no comprobación), el `payerId` del medio guardado (cruza agregados, D8), las dos de `metering-digest` (suma de otro agregado e inmutabilidad) y el `orderAmount` de `shop-api` (M3) | A8 crece: `job-dispatch-cycles` y la `awaitingSince` de `payment-checkout` también pasan a `checks` |
+| M6 | **De los cinco `computed` en prosa, ninguno cabe** en la forma estructurada: `following`/`favorited` dependen del llamante, `favoritesCount` cuenta otro agregado (D8), `slug` y `cartId` no son agregaciones | Ningún derivado de fixture migra en A8; el `count` entra en una fixture por declaración nueva (M4) |
+| M7 | **Dos huecos de semántica que D1-D9 no deciden.** `refundedAmount` es opcional: ¿qué hace `lte` con un operando ausente? `customerAction` es `json`: ¿cuándo cuenta un json como ausente para `forbids`? | Se añaden D19 y D20 a la tabla de decisiones |
+
+### Decisiones pendientes del usuario
+
+| | Pregunta | Recomendación |
+|---|---|---|
+| U5 | `computed: { sum }` sin sujeto real (M3, M4): ¿se mantiene el `sum` en la 2.31 con un sujeto sintético, y `orderAmount` de `shop-api` sigue en prosa? | Sí. Abrir el `sum` a relaciones entre agregados contradice D8 y la decisión 3.7 de `shop-api`, y la foto del checkout no es un derivado vivo |
+| U6 | Una cota que **no** es invariante (M2): ¿cómo se dice? (a) la cota sale de la entidad y se escribe en el input que la necesita (`createProduct` pasa a `input.fields`), sin DSL nuevo; (b) una marca nueva en `constraints` que la limite a la entrada | (a): la entidad dice lo que es siempre verdad y el input su propio contrato, que es la doctrina de `crossrefs.js` (el input y el almacén son contratos distintos). Una regla mecánica nueva (`REV-` o `CHK-`) recordaría el caso al diseñador |
 
 ## Contexto
 
@@ -101,6 +123,8 @@ entities:
 | D6 | `requires`/`forbids` cuentan como «ausente» el valor nulo, la lista vacía y la cadena vacía. Igual que `required` en el borde (`required-value-blank`) | Una definición única de vacío para las dos guardas |
 | D7 | `when`/`unless` solo admiten `field` + `in` (o `equals`) sobre un campo del mismo agregado. No hay disyunciones anidadas | Vocabulario cerrado. Lo que no quepa sigue en `invariants` |
 | D8 | Quedan fuera: lo que cruza agregados (el `count` de `Favorite` de conduit, el `totalKwh` de metering), los derivados que dependen del llamante (`favorited`, `following`) y la aritmética más allá de `sum`/`times`/`count` | La referencia prohíbe las invariantes entre agregados. Lo del llamante necesita la lectura de otra raíz por identidad, que es otro primitivo |
+| D19 | Un operador de orden (`lt`, `lte`, `gt`, `gte`) con un operando ausente **se cumple**. Si el diseño quiere el campo presente, lo dice con `requires` | Es la semántica de un `CHECK` de SQL con NULL, y no obliga a duplicar el `when` en cada comparación (M7) |
+| D20 | Un `json` cuenta como ausente solo si es nulo; `{}` y `[]` son presentes | El json es opaco (lo define un tercero): el servidor no puede saber que `{}` significa «nada» (M7) |
 | D9 | El gate derivado `check-domain-guards.sh` gana filas: una por `(entidad, check)` y una por campo acotado escrito por el servidor | Las guardas existen porque el diseño las declara, no porque un escenario las pida |
 
 ### Reglas mecánicas (keel-core)
@@ -166,7 +190,7 @@ La paridad: `keel-go/test/entity-checks-parity.test.js` compara los cuatro contr
 | A5 | keel-dotnet | `cs-check` + `db-check`/`doc-check` con sus sondas |
 | A6 | keel-go | `go-check` + `db-check`/`doc-check` con sus sondas |
 | A7 | Contrato y método: `keel-nest/test/openapi.test.js` en los cuatro, `wire-contract.md` (el 422), la pregunta de `/keel-design` (clase de huecos de invariantes), la tabla de `/keel-recover`, los agentes de código y de calidad de los cuatro y `/keel-validate` (`REV-DOMAIN-INVARIANT-PROSE`) | Pruebas de cadenas, `test/capability-coverage.test.js` |
-| A8 | Fixtures: `shop-api` declara `exactlyOne`, `orderAmount` y la cota de `count` (cierra `cart-line-sum-over-max`). `job-dispatch`/`payout-runs`/`verification-codes` pasan sus «en X tiene Y» a `checks`, y `payment-checkout`/`product-catalog` sus comparaciones. Siguen en `--ready` | `test/mvp-ready.test.js`, `keel validate --ready` |
+| A8 | Fixtures: `shop-api` declara `exactlyOne` y la cota de `count` pasa a guardarse en la entidad (cierra `cart-line-sum-over-max`); `orderAmount` y la cota de `ProductInfo.productStock`, según U5 y U6 (M2, M3). `job-dispatch`/`-mongo`/`-cycles`, `payout-runs` y `verification-codes` pasan sus «en X tiene Y» a `checks`, y `payment-checkout` (con `awaitingSince`) y `product-catalog` sus comparaciones (M5). Un `count` real en `catalog-extended` o `inspection-reports` (M4). Siguen en `--ready` | `test/mvp-ready.test.js`, `keel validate --ready` |
 | A9 | Corridas de control de `shop-api` en los cuatro generadores (PostgreSQL) y una en MySQL | `docs/corridas/…-231-*`: verdes, huella del agente sin crecer y `cart-line-sum-over-max` desaparecido |
 
 ---
