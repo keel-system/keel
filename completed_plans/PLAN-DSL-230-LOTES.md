@@ -1,6 +1,6 @@
 # DSL 2.30: lotes con resultado por elemento (R5)
 
-**Estado: APROBADO el 2026-11-14.** Incrementos 0 a 10 cerrados el 2026-11-14 (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores, con la fase B neutral en keel-core, y el contrato y el método); el 10b (D15, la idempotencia del lote síncrono) se cerró el 2026-11-15 en la parte neutral y en los cuatro generadores. Del 11 están hechas la fixture (product-catalog v1.2.0, en `--ready`) y las cinco corridas de control (2026-11-15): cuatro en verde a la primera o con un arbitraje de pruebas, y la de MySQL, que destapó la carrera de la clave como interbloqueo, arreglada en el generador. Falta repetir la de MySQL sobre el arreglo. Al cerrar pasa a `completed_plans/`.
+**Estado: CERRADO el 2026-11-15.** Aprobado el 2026-11-14; incrementos 0 a 11 cerrados (la fase A, `sync`, y la fase B, `async`, en los cuatro generadores; el contrato y el método; el 10b, la idempotencia del lote síncrono; y el 11, la fixture product-catalog v1.2.0 con sus corridas de control). Seis corridas en `docs/corridas/2026-11-15-product-catalog-230-*`: las cuatro de PostgreSQL y la de MySQL repetida, 36/36 sin tocar lo que escribe `build`; la primera de MySQL destapó la carrera de la clave como interbloqueo, arreglada en `09588592`.
 
 ## Contexto
 
@@ -713,11 +713,18 @@ security. Así que, desde `d790035f`, `db-check` de keel-dotnet planificaba `cat
 son los de la fixture (sigue su `importCatalog`). Una prueba de `keel-dotnet/test/batch-keys.test.js` planifica cada
 sujeto como lo hace `db-check` y cae sin la guarda.
 
-## Para retomar
+## Cierre
 
-Repetir la corrida de control de MySQL sobre el arreglo, que lanza el usuario: product-catalog v1.2.0 en keel-spring sobre
-MySQL, sin tocar lo que escribe `build`. Qué mirar: FL-PRD-008-E y 009-F en verde a la primera, y la huella sin archivos del
-generador. Con ella en verde, el plan pasa a `completed_plans/`.
+La corrida de MySQL repetida sobre el arreglo (`2026-11-15-product-catalog-230-spring-mysql-v2-control.md`) salió 36/36 a
+la primera: FL-PRD-008-E y 009-F en verde, y `KeyedBatches` y `BatchJobs` intactos. Su huella son 8 TODO y 2 consultas de
+negocio (un `existsBySku` que envuelve el `findBySku` emitido). Ningún `designGap` en las seis corridas.
+
+Queda fuera del plan:
+
+- `baselineTested: PENDING` en keel-spring, como en todos los planes anteriores.
+- La matriz de paridad sigue con `parity.skip` en la fila `batch`, porque product-catalog no tiene pareja documental.
+- Lo que el diseño deja sin escenario (el 409 de un lote síncrono en curso con su reanudación, el trabajo abortado y la
+  purga) lo miden las redes (BK-*, BJ-*, `timer-sql-check`), no las corridas.
 
 ## Verificación
 
