@@ -36,6 +36,22 @@ export const FRAMEWORK_ERRORS = {
     when: 'La petición no cumple las cotas declaradas en el input de la operación.'
   },
 
+  // Una invariante de la entidad rota por un valor que NO viene del cliente (DSL 2.31, U1 y D1 de
+  // PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md): una suma que pasa del máximo de su campo, un check de `checks` que una
+  // mutación deja sin cumplir. El cliente no mandó nada inválido —eso es VALIDATION_ERROR, en el borde—, así que es 422:
+  // «entendí la petición y no puedo». Lo comprueba la ENTIDAD al final de cada mutación, antes de guardar. Sustituible:
+  // un check con `error` propio ya lo sustituye por check; la familia cubre el diseño que nombra el genérico a su manera.
+  invariantViolated: {
+    code: 'INVARIANT_VIOLATED',
+    http: 422,
+    overridable: true,
+    family: /(^|_)(INVARIANT_VIOLATED|INVARIANT_VIOLATION|INVARIANT_BROKEN)$/,
+    mechanism: 'domain: entities.<E>.checks y las cotas (constraints) de sus campos',
+    when:
+      'Una mutación deja la entidad fuera de una invariante declarada —un check de checks o la cota de un campo— con un ' +
+      'valor que calculó el servidor (una suma, una copia). La entidad lo rechaza antes de guardar y no se escribe nada.'
+  },
+
   invalidTransition: {
     code: 'INVALID_STATE_TRANSITION',
     http: 409,

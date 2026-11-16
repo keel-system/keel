@@ -80,10 +80,42 @@ export const REVIEWS = {
     scope: 'domain',
     gapClass: 3,
     severity: 'warning',
-    appliesTo: (layers) => hasAny(layers.domain?.entities, (entity) => hasField(entity, (field) => field?.computed !== undefined)),
+    // Solo la prosa: la forma estructurada (DSL 2.31, sum/count) la comprueba CHK-DOMAIN-COMPUTED-PATH.
+    appliesTo: (layers) => hasAny(layers.domain?.entities, (entity) => hasField(entity, (field) => typeof field?.computed === 'string')),
     title: 'regla `computed` que no se deriva de los campos existentes',
     asks: '¿la fórmula de cada computed usa solo campos que la entidad tiene?'
   },
+  'REV-DOMAIN-INVARIANT-PROSE': {
+    scope: 'domain',
+    gapClass: 2,
+    severity: 'warning',
+    // DSL 2.31: una invariante en prosa la hace cumplir el agente donde un escenario la pide; un check, la entidad siempre.
+    appliesTo: (layers) => hasAny(layers.domain?.entities, (entity) => (entity.invariants ?? []).length > 0),
+    title: 'invariante en prosa que cabe en el vocabulario de checks',
+    asks:
+      'por cada invariante, ¿es un campo presente o ausente en unos estados, una comparación entre dos campos o con un literal, ' +
+      'o uno de varios presente? Entonces va en checks, donde la entidad la comprueba en cada escritura; en prosa solo se ' +
+      'cumple donde un escenario la pide'
+  },
+
+  'REV-DOMAIN-BOUND-SERVER-WRITTEN': {
+    scope: 'domain',
+    gapClass: 3,
+    severity: 'strong',
+    // U6 del plan de la 2.31: una cota del dominio es siempre verdad, y la rompe un valor que calcula el servidor con
+    // INVARIANT_VIOLATED (422). Saber qué operación calcula el valor de un campo es leer sus rules.
+    appliesTo: (layers) =>
+      hasAny(layers.domain?.entities, (entity) =>
+        hasField(entity, (field) => field?.constraints?.min !== undefined || field?.constraints?.max !== undefined)
+      ),
+    title: 'una cota del dominio que un valor calculado en el servidor puede romper a propósito',
+    asks:
+      'por cada campo con min o max, ¿alguna operación lo escribe con un valor que no manda el cliente tal cual (una suma, ' +
+      'una devolución, una copia de otro agregado)? Si el resultado puede salirse de la cota y el negocio lo admite, la cota ' +
+      'no es del dominio: sácala de la entidad y escríbela en los input que la necesitan; si no lo admite, esa operación ' +
+      'responde INVARIANT_VIOLATED (o el error que declares), y tiene que tener su escenario'
+  },
+
   'REV-DOMAIN-WIDE-AGGREGATE': {
     scope: 'domain',
     gapClass: 6,

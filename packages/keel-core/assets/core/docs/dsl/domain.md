@@ -79,15 +79,71 @@ Atributos de campo:
 | `unique` | No pueden existir dos registros con el mismo valor |
 | `id` | Identificador de la entidad (exactamente uno por entidad) |
 | `generated` | Lo asigna la infraestructura (ids, timestamps); nunca lo envía el cliente |
-| `computed` | Lo deriva una regla de dominio a partir de otros campos (la regla es el valor del atributo); nunca lo envía el cliente. Excluyente con `generated` |
+| `computed` | Lo deriva una regla de dominio a partir de otros campos; nunca lo envía el cliente. Excluyente con `generated`. En prosa (la regla es el valor del atributo), o un agregado sobre sus hijas que la entidad recalcula: `{ sum: <relación>.<campo>, times: <campo> }` o `{ count: <relación> }` (DSL 2.31, § `checks` y derivados) |
 | `sensitive` | Nunca sale en outputs ni eventos por defecto; solo si un payload lo pide explícitamente vía `fields` |
 | `personal` | Dato personal del titular (DSL 2.28): una clasificación legal, ortogonal a `sensitive`. De ella se derivan que ningún log ni traza del servidor lleve el valor, lo que vacía una retención con `then: anonymize` y el inventario de datos personales del proyecto generado. Se marca en el campo, no en el tipo: un email puede ser de una persona o de un buzón de la empresa |
 | `default` | Valor si el cliente no lo provee. Sobre un campo `enum` debe ser uno de sus `values` — `keel validate` lo comprueba |
 | `list` | El campo es una **colección** de valores del tipo declarado (`{ type: Discount, list: true }`). Excluyente con `id`, `unique`, `generated` y `type: file` |
 | `compare` | Solo sobre texto: cómo se comparan dos valores — `exact` (por defecto), `ignore-case` o `ignore-case-accents`. En un campo `unique` decide qué es un duplicado (`ACME`, `acme` y `Acmé` lo son con `ignore-case-accents`). Es contrato observable: dilo aquí y no en la prosa de los escenarios, que el generador no lee |
-| `constraints` | `min`, `max`, `minLength`, `maxLength`, `pattern`, `scale` (con `scalePolicy`: `reject` o `round`); con `list`, además `minItems` y `maxItems` |
+| `constraints` | `min`, `max`, `minLength`, `maxLength`, `pattern`, `scale` (con `scalePolicy`: `reject` o `round`); con `list`, además `minItems` y `maxItems`. En una entidad son **siempre verdad** (DSL 2.31): rotas por la entrada, `400 VALIDATION_ERROR` en el borde; rotas por un valor que calcula el servidor, `422 INVARIANT_VIOLATED` en la entidad |
 
 **La escala se decide, no se supone.** `scale` dice cuántos decimales tiene un importe; `scalePolicy` dice qué pasa con uno de **entrada** que trae más: `reject` responde `400` (se valida, no se ajusta), `round` lo redondea a la escala. Las dos son legítimas y ninguna es un default seguro —rechazar rompe al cliente que manda `19.999`, redondear le cambia el importe sin decírselo—, así que un decimal con `scale` que llega a un `input` sin `scalePolicy` abre la obligación `OBL-DECIMAL-SCALE-POLICY`. Se declara donde vive la escala: en el value type (`Price: { base: decimal, constraints: { scale: 2, scalePolicy: reject } }`) o en el campo.
+
+### `checks` y derivados — invariantes que se hacen cumplir (DSL 2.31)
+
+Una invariante en `invariants` es prosa: la hace cumplir el agente donde un escenario la pide, y donde no, nadie. Lo que
+cabe en un vocabulario cerrado se escribe en `checks`, y entonces la **entidad** la comprueba al final de cada mutación
+—constructor, transición o cambio de una hija—, antes de guardar. Una rota responde `422 INVARIANT_VIOLATED`
+(`framework-errors.md`), o el `error` del check si lo nombra.
+
+```yaml
+entities:
+  Payment:
+    checks:
+      - { requires: runningSince, when: { field: status, in: [running] } }            # presente en esos estados
+      - { forbids: customerAction, unless: { field: status, in: [actionRequired] } }  # ausente fuera de esos estados
+      - { field: refundedAmount, op: lte, than: amount, error: REFUND_EXCEEDS_AMOUNT } # campo contra campo
+      - { field: price.amount, op: gt, value: 0, when: { field: status, in: [active] } } # campo contra literal
+      - { exactlyOne: [cart, order] }                                                 # uno de varios presente
+```
+
+| Forma | Qué exige |
+|---|---|
+| `requires: <ruta>` | La ruta está presente |
+| `forbids: <ruta>` | La ruta está ausente |
+| `field` + `op` + `than` | Dos campos de la entidad comparados: `eq`, `ne`, y `lt`, `lte`, `gt`, `gte` solo sobre números e instantes, del mismo tipo |
+| `field` + `op` + `value` | Un campo contra un literal de su tipo |
+| `exactlyOne: [<ruta>, …]` | Exactamente una de las rutas está presente |
+
+- Una **ruta** es un campo de la entidad, un subcampo de uno de sus value objects (`price.amount`) o una relación suya.
+  Una colección hacia otro agregado no está en la entidad (`CHK-DOMAIN-CHECK-FIELD-UNKNOWN`): lo que cruza agregados
+  sigue en `invariants`.
+- **Ausente** es el valor nulo, la lista vacía y la cadena vacía, como `required` en el borde. Un `json` es ausente
+  solo si es nulo: el servidor no puede saber que `{}` significa «nada».
+- Una comparación con un operando **ausente se cumple**, como un `CHECK` de SQL con `NULL`. Si el campo tiene que
+  estar, se dice con `requires`.
+- `when` (aplica si) o `unless` (aplica salvo si) acotan el check a unos estados: un campo `enum` o `boolean` de la propia
+  entidad, con `in: [...]` o `equals`. Sin disyunciones anidadas.
+- Si el check nombra `error`, las operaciones que escriben la entidad lo declaran con su `http`
+  (`CHK-DOMAIN-CHECK-ERROR-UNDECLARED`), y su escenario lo pide `CHK-SCEN-ERROR-UNCOVERED` como el de cualquier error.
+
+Las **cotas** de un campo de la entidad (`constraints`) son también invariantes: se cumplen en cada escritura, no solo en
+el borde. Una cota que el negocio deja romper a propósito —la devolución de stock que puede pasar del máximo de alta— no
+es del dominio: va en los `input` que la necesitan, y la entidad no la lleva (`REV-DOMAIN-BOUND-SERVER-WRITTEN`).
+
+Un **derivado** estructurado es un campo `computed` que agrega las hijas de una relación a-muchos del **mismo agregado**:
+
+```yaml
+  Order:
+    fields:
+      amount:    { type: decimal, constraints: { scale: 2 }, computed: { sum: lines.unitPrice, times: quantity } }
+      lineCount: { type: int, computed: { count: lines } }
+```
+
+La entidad lo recalcula en cada cambio de la relación y se guarda: se puede filtrar y ordenar, y la lectura no lo
+recalcula. La suma usa el tipo del derivado —un `decimal` con su `scale` y `HALF_UP`, un entero exacto— y desbordarlo es
+`INVARIANT_VIOLATED`. Nunca viene del cliente. Lo que no quepa —lo que depende del llamante, lo que cuenta otro agregado,
+otra aritmética— sigue en prosa (`CHK-DOMAIN-COMPUTED-PATH`).
 
 ### Nombres reservados
 

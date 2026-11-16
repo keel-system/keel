@@ -191,11 +191,80 @@
           },
           "invariants": {
             "type": "array",
-            "description": "Reglas que siempre deben cumplirse, en lenguaje declarativo legible por humanos y agentes.",
+            "description": "Reglas que siempre deben cumplirse, en lenguaje declarativo legible por humanos y agentes. Lo que cabe en el vocabulario de checks se escribe ahí, donde se hace cumplir.",
             "items": { "type": "string", "minLength": 5 }
+          },
+          "checks": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Invariantes de la entidad que se hacen cumplir (DSL 2.31): la entidad las comprueba al final de cada mutación, antes de guardar, y una rota es INVARIANT_VIOLATED (422) o el error del check. Cinco formas: requires (presente), forbids (ausente), una comparación campo contra campo (than) o contra un literal (value) y exactlyOne. Ausente es nulo, la lista vacía o la cadena vacía; un json solo si es nulo. Lo que no quepa sigue en invariants.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "requires": { "$ref": "#/$defs/checkPath", "description": "Campo o relación a-uno que tiene que estar presente (donde aplique el check)." },
+                "forbids": { "$ref": "#/$defs/checkPath", "description": "Campo o relación a-uno que tiene que estar ausente (donde aplique el check)." },
+                "field": { "$ref": "#/$defs/checkPath", "description": "Campo comparado: de la entidad o un subcampo de uno de sus value objects (price.amount)." },
+                "op": {
+                  "enum": ["eq", "ne", "lt", "lte", "gt", "gte"],
+                  "description": "Cómo se compara field. Los de orden solo sobre números e instantes; con un operando ausente, la comparación se cumple (si tiene que estar, dilo con requires)."
+                },
+                "than": { "$ref": "#/$defs/checkPath", "description": "El otro campo de la comparación, del mismo tipo comparable." },
+                "value": { "type": ["string", "number", "boolean"], "description": "El literal de la comparación." },
+                "exactlyOne": {
+                  "type": "array",
+                  "minItems": 2,
+                  "uniqueItems": true,
+                  "items": { "$ref": "#/$defs/checkPath" },
+                  "description": "Campos o relaciones a-uno de los que exactamente uno está presente."
+                },
+                "when": { "$ref": "#/$defs/checkCondition", "description": "El check solo aplica cuando se cumple la condición." },
+                "unless": { "$ref": "#/$defs/checkCondition", "description": "El check aplica salvo cuando se cumple la condición." },
+                "error": {
+                  "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/errorCode",
+                  "description": "El error del diseño que significa romper este check. Lo declaran, con su http, las operaciones que escriben la entidad. Sin él, INVARIANT_VIOLATED (422)."
+                },
+                "description": { "type": "string" }
+              },
+              "oneOf": [
+                { "required": ["requires"], "not": { "anyOf": [{ "required": ["forbids"] }, { "required": ["field"] }, { "required": ["exactlyOne"] }] } },
+                { "required": ["forbids"], "not": { "anyOf": [{ "required": ["requires"] }, { "required": ["field"] }, { "required": ["exactlyOne"] }] } },
+                {
+                  "required": ["field", "op"],
+                  "oneOf": [{ "required": ["than"] }, { "required": ["value"] }],
+                  "not": { "anyOf": [{ "required": ["requires"] }, { "required": ["forbids"] }, { "required": ["exactlyOne"] }] }
+                },
+                { "required": ["exactlyOne"], "not": { "anyOf": [{ "required": ["requires"] }, { "required": ["forbids"] }, { "required": ["field"] }] } }
+              ],
+              "allOf": [
+                { "not": { "required": ["when", "unless"] } },
+                {
+                  "if": { "not": { "required": ["field"] } },
+                  "then": { "not": { "anyOf": [{ "required": ["op"] }, { "required": ["than"] }, { "required": ["value"] }] } }
+                }
+              ]
+            }
           }
         }
       }
+    }
+  },
+  "$defs": {
+    "checkPath": {
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9]*(\\.[a-z][A-Za-z0-9]*)?$"
+    },
+    "checkCondition": {
+      "type": "object",
+      "required": ["field"],
+      "additionalProperties": false,
+      "description": "Una condición sobre un campo enum o boolean de la propia entidad: in (uno de esos valores) o equals (ese valor). Sin disyunciones anidadas.",
+      "properties": {
+        "field": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+        "in": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": ["string", "boolean"] } },
+        "equals": { "type": ["string", "boolean"] }
+      },
+      "oneOf": [{ "required": ["in"] }, { "required": ["equals"] }]
     }
   }
 }

@@ -10,6 +10,7 @@ import { guardedByNaturalKey } from './gen/natural-key-guard.js';
 import { conditionalWritesOfLayers, undecidedConditionalWrites } from './gen/conditional-writes.js';
 import { domainGuardKind } from './gen/domain-guard.js';
 import { declaredDeadlines } from './gen/deadlines.js';
+import { declaredChecks, declaredComputed, checkPaths, checkCondition, resolveCheckPath, resolveFieldType, sameAggregate, operationsWriting } from './gen/entity-checks.js';
 import { readScopesOfLayers, optionalAuthRules } from './gen/read-scope.js';
 import { declaredLifecycles, restoringOperations, personalFieldsOfAggregate, incomingReferences, substituteProblem, aggregateIndex, FROM_DELETED } from './gen/data-lifecycle.js';
 import { historyRoots, historyQueries, historyFilterFields, isPersistedRoot, HISTORY_FILTERS } from './gen/history.js';
@@ -110,6 +111,112 @@ function checkDeadlines(layers, manifest, error, warnIn) {
       }
     }
   }
+}
+
+// ─── Las invariantes que se hacen cumplir y los derivados (DSL 2.31, checks y computed estructurado) ─────────────
+
+/**
+ * Cada check y cada derivado estructurado contra la entidad. Lo mecanizable es que nombren lo que existe dentro del
+ * agregado, que comparen tipos comparables, que la condición nombre estados del enum y que el `error` de un check lo
+ * declaren las operaciones que lo responderían. Que la invariante sea la que el negocio quiere lo juzga un lector.
+ */
+function checkEntityChecks(layers, error, warn) {
+  const domainTypes = layers.domain?.types ?? {};
+  for (const { entityName, entity, index, check, kind } of declaredChecks(layers)) {
+    const where = `domain: ${entityName}.checks[${index}]`;
+    const unknown = [];
+    const resolved = new Map();
+    for (const path of checkPaths(check)) {
+      const target = resolveCheckPath(layers, entityName, path);
+      if (!target) unknown.push(`'${path}' no es un campo, un subcampo de un value object ni una relación de ${entityName}`);
+      else if (target.kind === 'relation' && !target.inAggregate) {
+        unknown.push(`'${path}' es una colección hacia otro agregado (${target.relation.entity}): no está en la entidad, y una invariante no cruza agregados`);
+      } else resolved.set(path, target);
+    }
+    const condition = checkCondition(check);
+    const conditionField = condition ? entity.fields?.[condition.field] : undefined;
+    if (condition && !conditionField) unknown.push(`la condición nombra '${condition.field}', que no es un campo de ${entityName}`);
+    if (unknown.length > 0) error('CHK-DOMAIN-CHECK-FIELD-UNKNOWN', `${where}: ${unknown.join('; ')}`);
+
+    if (conditionField) {
+      const type = resolveFieldType(conditionField, domainTypes);
+      const allowed = type.list ? null : type.category === 'enum' ? type.values : type.category === 'boolean' ? [true, false] : null;
+      if (!allowed) {
+        error('CHK-DOMAIN-CHECK-WHEN-STATE', `${where}: la condición es sobre '${condition.field}', que no es un enum ni un boolean — when/unless solo distinguen estados`);
+      } else {
+        const strange = condition.values.filter((value) => !allowed.includes(value));
+        if (strange.length > 0) {
+          error('CHK-DOMAIN-CHECK-WHEN-STATE', `${where}: la condición nombra ${strange.map((value) => `'${value}'`).join(', ')}, que no ${strange.length > 1 ? 'son valores' : 'es un valor'} de '${condition.field}' (${allowed.join(', ')})`);
+        }
+      }
+    }
+
+    if (kind === 'compare') {
+      const left = resolved.get(check.field);
+      const right = check.than !== undefined ? resolved.get(check.than) : undefined;
+      const problem = compareProblem(check, left, right);
+      if (problem) error('CHK-DOMAIN-CHECK-OP-TYPE', `${where}: ${problem}`);
+    }
+  }
+
+  for (const { entityName, fieldName, field, spec } of declaredComputed(layers)) {
+    const where = `domain: ${entityName}.${fieldName}.computed`;
+    const problems = [];
+    const [relationName, childField] = spec.sum !== undefined ? spec.sum.split('.') : [spec.count];
+    const relation = layers.domain?.entities?.[entityName]?.relations?.[relationName];
+    const own = resolveFieldType(field, domainTypes);
+    if (!relation) problems.push(`'${relationName}' no es una relación de ${entityName}`);
+    else if (relation.cardinality !== 'one-to-many' || !sameAggregate(layers.domain, entityName, relation.entity)) {
+      problems.push(`'${relationName}' no es una relación a-muchos hacia una entidad interna del agregado de ${entityName} — el derivado se recalcula en la entidad, y solo ve sus hijas`);
+    } else if (spec.sum !== undefined) {
+      const child = layers.domain.entities[relation.entity];
+      for (const name of [childField, ...(spec.times !== undefined ? [spec.times] : [])]) {
+        const childType = child?.fields?.[name] ? resolveFieldType(child.fields[name], domainTypes) : null;
+        if (!childType) problems.push(`'${name}' no es un campo de ${relation.entity}`);
+        else if (childType.category !== 'numeric' || childType.list) problems.push(`'${relation.entity}.${name}' no es numérico`);
+      }
+    }
+    if (own.list) problems.push('un derivado no es una lista');
+    else if (spec.count !== undefined && !['int', 'long'].includes(own.base)) problems.push(`'${fieldName}' cuenta elementos y es ${field.type}: tiene que ser int o long`);
+    else if (spec.sum !== undefined && own.category !== 'numeric') problems.push(`'${fieldName}' es una suma y es ${field.type}: tiene que ser numérico`);
+    if (problems.length > 0) error('CHK-DOMAIN-COMPUTED-PATH', `${where}: ${problems.join('; ')}`);
+  }
+
+  // El `error` de un check tiene que tener status, y lo tiene donde se declara: en las operaciones que lo responderían.
+  for (const { entityName, index, check } of declaredChecks(layers)) {
+    if (!check.error) continue;
+    const writers = operationsWriting(layers, entityName);
+    if (writers.length === 0) continue;
+    if (writers.some(({ op }) => (op.errors ?? []).some((declared) => declared?.code === check.error && declared.http !== undefined))) continue;
+    warn(
+      'CHK-DOMAIN-CHECK-ERROR-UNDECLARED',
+      `domain: ${entityName}.checks[${index}].error: ${check.error} no lo declara ninguna operación que escriba ${entityName} (${writers.map(({ opName }) => opName).join(', ')}) — sin declararlo no tiene status, y ningún escenario lo ve en la matriz`
+    );
+  }
+}
+
+/** Por qué una comparación de check no se puede evaluar, o null. `left`/`right` son rutas ya resueltas. */
+function compareProblem(check, left, right) {
+  if (!left) return null;
+  if (left.kind === 'relation') return `'${check.field}' es una relación: una relación no se compara, se exige con requires o exactlyOne`;
+  const type = left.type;
+  const ordering = ['lt', 'lte', 'gt', 'gte'].includes(check.op);
+  if (type.list || ['object', 'json', 'file', 'unknown'].includes(type.category)) return `'${check.field}' es ${type.list ? 'una lista' : type.base}: no se compara`;
+  if (ordering && !['numeric', 'instant'].includes(type.category)) return `'${check.op}' ordena, y '${check.field}' es ${type.base}: solo números e instantes tienen orden`;
+  if (check.than !== undefined) {
+    if (!right) return null;
+    if (right.kind === 'relation') return `'${check.than}' es una relación: una relación no se compara`;
+    const other = right.type;
+    const comparable = other.category === type.category && !other.list &&
+      (type.category === 'instant' ? other.base === type.base : type.category === 'enum' ? other.enumName === type.enumName && other.values.join() === type.values.join() : true);
+    return comparable ? null : `'${check.field}' (${type.base}) y '${check.than}' (${other.base}) no son comparables`;
+  }
+  const value = check.value;
+  const fits = type.category === 'numeric' ? typeof value === 'number'
+    : type.category === 'boolean' ? typeof value === 'boolean'
+      : type.category === 'enum' ? type.values.includes(value)
+        : typeof value === 'string';
+  return fits ? null : `el literal ${JSON.stringify(value)} no es un valor de '${check.field}' (${type.category === 'enum' ? type.values.join(', ') : type.base})`;
 }
 
 // ─── El ciclo de vida del dato (DSL 2.28: deletion, restorableFor, retention, restores, personal) ────────────────
@@ -5457,6 +5564,9 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
 
   // Los plazos de negocio (DSL 2.26): su forma contra el lifecycle, los parámetros y la operación que caduca.
   checkDeadlines(layers, manifest, error, warnIn);
+
+  // Las invariantes que se hacen cumplir y los derivados estructurados (DSL 2.31).
+  checkEntityChecks(layers, error, warn);
 
   // El ciclo de vida del dato (DSL 2.28): borrado lógico, restauración, retención y datos personales.
   checkDataLifecycle(layers, manifest, error, obligation);

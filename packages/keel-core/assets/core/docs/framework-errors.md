@@ -31,6 +31,7 @@ La regla, entonces, es más precisa que «nunca inventes un code»:
 |---|---|---|---|
 | `use-cases`: constraints de `input` | `VALIDATION_ERROR` | 400 | no |
 | `domain`: `entities.<E>.lifecycle` | `INVALID_STATE_TRANSITION` | 409 | sí |
+| `domain`: `entities.<E>.checks` y las cotas de sus campos, rotas por un valor del servidor | `INVARIANT_VIOLATED` | 422 | sí |
 | `persistence`: `naturalKey` / campo `unique` | `<ENTITY>_<CAMPOS>_ALREADY_EXISTS` | 409 | sí |
 | `persistence`: `consistency.optimisticLocking` | `CONCURRENT_MODIFICATION` | 409 | sí |
 | `api`: `concurrency.operations` — If-Match no coincide | `PRECONDITION_FAILED` | 412 | sí |
@@ -83,6 +84,12 @@ Qué significa cada uno:
   Sin ese tope, una espera de bloqueo —infinita por defecto en varios motores— retiene su
   conexión sin límite y el pool se agota para todas las demás peticiones. No es sustituible: no
   lo provoca ninguna operación concreta.
+- **`INVARIANT_VIOLATED`** — una mutación deja la entidad fuera de una invariante declarada (DSL
+  2.31): un check de `checks`, o la cota de un campo (`min`, `max`, `maxLength`…) rota por un valor
+  que calculó el servidor —una cantidad que se suma a la que ya había, una copia de otro agregado—.
+  La comprueba la entidad al final de la mutación, antes de guardar, y no se escribe nada. No es
+  `VALIDATION_ERROR`: el cliente no mandó nada inválido, y la misma cota rota por la ENTRADA sigue
+  siendo 400 en el borde. Un check con `error` propio se responde con ese `code`; sin él, con este.
 - **`BATCH_ABORTED`** — un elemento de un lote `per-item` (DSL 2.30) falló por una causa que no
   es suya —infraestructura, un defecto— y el lote se detuvo en él: lo confirmado antes se queda,
   y los siguientes salen `notAttempted`. No es una respuesta, sino el `error` de ese elemento
@@ -118,6 +125,7 @@ El generador lo detecta y usa **ese** código en vez del canónico. Las familias
 | `IDEMPOTENCY_KEY_IN_PROGRESS` | `KEY_IN_PROGRESS`, `IDEMPOTENCY_IN_PROGRESS`, `REQUEST_IN_PROGRESS` |
 | `IDEMPOTENCY_KEY_REUSED` | `KEY_REUSED`, `KEY_MISMATCH`, `KEY_SIGNATURE_MISMATCH`, `KEY_CONFLICT` |
 | `INVALID_STATE_TRANSITION` | `INVALID_STATE_TRANSITION`, `INVALID_STATE`, `INVALID_TRANSITION`, `ILLEGAL_STATE_TRANSITION` |
+| `INVARIANT_VIOLATED` | `INVARIANT_VIOLATED`, `INVARIANT_VIOLATION`, `INVARIANT_BROKEN` |
 | `FILE_TOO_LARGE` | `FILE_TOO_LARGE`, `PAYLOAD_TOO_LARGE`, `UPLOAD_TOO_LARGE` |
 | `UNSUPPORTED_CONTENT_TYPE` | `UNSUPPORTED_CONTENT_TYPE`, `UNSUPPORTED_MEDIA_TYPE`, `CONTENT_TYPE_NOT_ALLOWED`, `FILE_TYPE_NOT_ALLOWED` |
 | `<ENTITY>_<CAMPOS>_ALREADY_EXISTS` | cualquier `code` que acabe en `<CAMPOS>_ALREADY_EXISTS` |

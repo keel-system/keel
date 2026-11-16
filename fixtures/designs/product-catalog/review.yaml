@@ -1,3 +1,4 @@
+# DSL 2.31 (2026-11-16): REV-DOMAIN-BOUND-SERVER-WRITTEN y REV-DOMAIN-INVARIANT-PROSE nacen y aplican; leídos a mano. Las cotas de la entidad solo las escribe la entrada con la misma cota, o el servidor con un valor que no sale de ella.
 # Revisión semántica de la v1.2.0 (DSL 2.30: los lotes importProducts e importCatalog, la capa security y el orden
 # del listado). Hecha al llevar la fixture a --ready (incremento 11 de PLAN-DSL-230-LOTES.md, 2026-11-15), sobre las
 # capas enteras y no solo sobre lo nuevo: hasta la v1.1.0 era una fixture parcial sin revisión.
@@ -63,3 +64,8 @@ findings:
       catalog-editor es global a propósito: el catálogo es de toda la tienda, y la prosa no dice en ningún sitio que
       un usuario solo opere sobre sus productos. Lo único que se acota a quien lo creó es un trabajo de
       importCatalog, y eso no sale de un rol sino del método (solo lo lee su dueño, FL-PRD-009-D).
+  - id: REV-DOMAIN-INVARIANT-PROSE
+    scope: domain.entities.Product
+    verdict: accepted
+    note: >-
+      Aceptado hasta A8 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md: price.amount > 0 en active es un check campo contra literal con when, pero los cuatro generadores rechazan checks hasta sus incrementos A3-A6.

@@ -1,3 +1,4 @@
+# DSL 2.31 (2026-11-16): REV-DOMAIN-BOUND-SERVER-WRITTEN y REV-DOMAIN-INVARIANT-PROSE nacen y aplican; leídos a mano. Las cotas de la entidad solo las escribe la entrada con la misma cota, o el servidor con un valor que no sale de ella.
 # Reafirmado a mano en v2.1.0 (2026-10-19), por decisión del diseñador: el delta de la minor —el patrón no-blanco
 # de TemplateVariableValue.value, el truncado del asunto y los escenarios FL-NTF-001 y FL-DSP-001— no toca ninguno de estos veredictos.
 # v2.1.2 (2026-11-06): REV-MSG-DEDUPE-WINDOW se retira porque deja de aplicar. Su veredicto decía en prosa que la
@@ -101,3 +102,6 @@ findings:
       Ninguna regla depende de un fallo posterior a la aceptación del relay: la regla de
       sendAcceptedNotification y las notas de FL-DSP-001 dejan el rebote diferido explícitamente
       fuera de alcance, y no hay supresión de direcciones ni conteo de quejas.
+  - id: REV-DOMAIN-BOUND-SERVER-WRITTEN
+    scope: domain.entities.Template
+    verdict: ok

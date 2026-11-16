@@ -1,4 +1,4 @@
-keel: "2.30"
+keel: "2.31"
 service:
   name: conduit
   version: 0.1.2

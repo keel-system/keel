@@ -17,6 +17,7 @@ import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/me
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
 import { optionalAuthFrontierErrors } from '@keel-system/keel-core/gen/read-scope';
 import { batchFrontierErrors, batchPendingErrors } from '@keel-system/keel-core/gen/batch';
+import { entityChecksPendingErrors } from '@keel-system/keel-core/gen/entity-checks';
 import { declaredDeadlines, modelDeadlines } from '@keel-system/keel-core/gen/deadlines';
 import { repositoryRoots } from '@keel-system/keel-core/gen/features';
 import { compositeUrlParamErrors } from '@keel-system/keel-core/gen/outbound-params';
@@ -83,6 +84,9 @@ export function checkSupportedFeatures(manifest, layers) {
   // (scaffold/batch.js y scaffold/batch-jobs.js), también la idempotencia del lote síncrono (D15); lo que depende del stack
   // lo rechaza planService (batchJobStackErrors).
   errors.push(...batchPendingErrors(layers, 'keel-go', { syncIncrement: null, asyncIncrement: null }));
+  // Las invariantes que se hacen cumplir y los derivados estructurados (DSL 2.31) llegan en el incremento A6 de
+  // PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md: hasta entonces se rechazan enteros, con el mismo mensaje en los cuatro.
+  errors.push(...entityChecksPendingErrors(layers, 'keel-go', 'A6'));
   errors.push(...batchFrontierErrors(layers, 'keel-go', { syncIdempotency: true }));
   // El historial de cambios consultable (DSL 2.29: audit.history y output: { history }) se genera entero
   // (scaffold/history.js); lo que depende del motor elegido lo rechaza planService (historyStackErrors).

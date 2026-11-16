@@ -127,9 +127,41 @@
           "description": "La infraestructura asigna el valor (ids, timestamps de auditoría); nunca viene del cliente."
         },
         "computed": {
-          "type": "string",
-          "minLength": 5,
-          "description": "Regla de dominio que deriva el valor a partir de otros campos; nunca viene del cliente. Excluyente con generated."
+          "description": "Regla de dominio que deriva el valor a partir de otros campos; nunca viene del cliente. Excluyente con generated. En prosa, o (DSL 2.31) un agregado sobre una relación a-muchos del mismo agregado, que la entidad recalcula en cada mutación de la relación y se guarda: { sum: <relación>.<campo>, times: <campo de la hija> } o { count: <relación> }.",
+          "oneOf": [
+            { "type": "string", "minLength": 5 },
+            {
+              "type": "object",
+              "required": ["sum"],
+              "additionalProperties": false,
+              "properties": {
+                "sum": {
+                  "type": "string",
+                  "pattern": "^[a-z][A-Za-z0-9]*\\.[a-z][A-Za-z0-9]*$",
+                  "description": "La relación a-muchos y el campo numérico de la hija que se suma: lines.productPrice. Con la escala del campo derivado y HALF_UP; el desbordamiento es INVARIANT_VIOLATED."
+                },
+                "times": {
+                  "type": "string",
+                  "pattern": "^[a-z][A-Za-z0-9]*$",
+                  "description": "Un solo factor: otro campo numérico de la misma hija, que multiplica a sum antes de sumar (productPrice × count)."
+                },
+                "description": { "type": "string" }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["count"],
+              "additionalProperties": false,
+              "properties": {
+                "count": {
+                  "type": "string",
+                  "pattern": "^[a-z][A-Za-z0-9]*$",
+                  "description": "La relación a-muchos cuyos elementos se cuentan."
+                },
+                "description": { "type": "string" }
+              }
+            }
+          ]
         },
         "sensitive": {
           "type": "boolean",

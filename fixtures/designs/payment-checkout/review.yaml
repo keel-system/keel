@@ -1,3 +1,4 @@
+# DSL 2.31 (2026-11-16): REV-DOMAIN-BOUND-SERVER-WRITTEN y REV-DOMAIN-INVARIANT-PROSE nacen y aplican; leídos a mano. Las cotas de la entidad solo las escribe la entrada con la misma cota, o el servidor con un valor que no sale de ella.
 reviewedBy: keel-design-review
 reviewedAt: 1.2.0
 findings:
@@ -143,3 +144,11 @@ findings:
       con invalidPaymentMethod sin llamar a la pasarela, así que gatewayPaymentId también queda
       vacío. FL-EVT-003 lo verifica (savedPaymentMethodId null, gatewayPaymentId null). Por HTTP no
       queda cobro.
+  - id: REV-DOMAIN-BOUND-SERVER-WRITTEN
+    scope: domain.entities.Payment
+    verdict: ok
+  - id: REV-DOMAIN-INVARIANT-PROSE
+    scope: domain.entities.Payment
+    verdict: accepted
+    note: >-
+      Aceptado hasta A8 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md: refundedAmount ≤ amount, customerAction solo en actionRequired y awaitingSince solo en los estados de espera caben en checks, pero los cuatro generadores los rechazan hasta sus incrementos A3-A6. El payerId del medio guardado cruza agregados y se queda en prosa.

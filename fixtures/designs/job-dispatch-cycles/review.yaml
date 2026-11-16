@@ -1,3 +1,4 @@
+# DSL 2.31 (2026-11-16): REV-DOMAIN-BOUND-SERVER-WRITTEN y REV-DOMAIN-INVARIANT-PROSE nacen y aplican; leídos a mano. Las cotas de la entidad solo las escribe la entrada con la misma cota, o el servidor con un valor que no sale de ella.
 # Revisión semántica (review-checklist.md), hecha al preparar la corrida del incremento 10 de keel-nest
 # (2026-10-07) por quien la preparaba, siguiendo la checklist de /keel-validate id a id, por delegación
 # del diseñador. Los veredictos que no son `ok` llevan su porqué.
@@ -43,3 +44,8 @@ findings:
       getJob y completeJob buscan por id (clave primaria); enqueueJob por reference (naturalKey, índice
       único). El barrido filtra por status (el lote de la cola) y por status + runningSince (el del
       rescate): los dos índices están declarados.
+  - id: REV-DOMAIN-INVARIANT-PROSE
+    scope: domain.entities.Job
+    verdict: accepted
+    note: >-
+      Aceptado hasta A8 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md: las dos invariantes son requires + when (runningSince en running, completedAt en done, abandonedAt en abandoned), pero los cuatro generadores rechazan checks hasta sus incrementos A3-A6.

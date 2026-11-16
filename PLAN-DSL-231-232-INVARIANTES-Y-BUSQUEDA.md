@@ -7,12 +7,17 @@
 | Inc. | Qué | Estado |
 |---|---|---|
 | A0 | Medir antes de nada | hecho (2026-11-16, § Medidas de A0) |
-| A1-A9 | Fase A: DSL 2.31 (R7) | pendiente |
+| A1 | keel-core: schema, reglas, `INVARIANT_VIOLATED`, docs, enum a 2.31 y la frontera de los cuatro | hecho (2026-11-16) |
+| A2-A9 | Fase A: DSL 2.31 (R7) | pendiente |
 | B0-B9 | Fase B: DSL 2.32 (R8) | pendiente |
 
-**Para retomar.** A0 está medido y movió el plan (§ Medidas de A0): M2 y M3 piden dos decisiones del usuario (U5 y U6)
-antes de A1. Con ellas contestadas, A1 desde `main`: schema, reglas con sus mutaciones, `INVARIANT_VIOLATED` y el enum a
-2.31.
+**Para retomar.** A1 hecho: el DSL es 2.31; `checks` y el `computed` estructurado validan, con cinco `CHK-*` falsados
+en el corpus (extensión `checks`) y las formas reales de M5 en verde (`keel-core/test/entity-checks.test.js`); dos `REV-*`
+nuevas con veredicto en las siete fixtures listas; `INVARIANT_VIOLATED` en el catálogo; los cuatro generadores rechazan
+`checks` y `computed` estructurado con `entityChecksPendingErrors` (`keel-core/src/lib/gen/entity-checks.js`) hasta A3-A6.
+Siguiente: A2 desde `main`. Empezar por medir M8 en los cuatro (dónde está el `save` generado de cada raíz y si puede
+llamar a `ensureInvariants()`), fijar la propuesta como D21 y escribir `evaluateChecks`/`evaluateComputed` con los casos
+`IC-*`/`CP-*`.
 
 ## Medidas de A0 (2026-11-16)
 
@@ -28,13 +33,14 @@ un recorrido de las `domain.keel.yaml` de las 19 fixtures.
 | M5 | **Inventario: 16 `invariants` en prosa, 11 caben en `checks`.** Caben: «en X tiene Y» (`job-dispatch`, `job-dispatch-mongo`, `job-dispatch-cycles` ×2, `payout-runs` con dos estados, el par `verification-codes`), `refundedAmount ≤ amount`, `customerAction` solo en `actionRequired`, `awaitingSince` solo en cinco estados (un `forbids … unless` que el plan no contaba) y `price.amount > 0` si `active`. No caben: el `username` en minúsculas de conduit (normalización, no comprobación), el `payerId` del medio guardado (cruza agregados, D8), las dos de `metering-digest` (suma de otro agregado e inmutabilidad) y el `orderAmount` de `shop-api` (M3) | A8 crece: `job-dispatch-cycles` y la `awaitingSince` de `payment-checkout` también pasan a `checks` |
 | M6 | **De los cinco `computed` en prosa, ninguno cabe** en la forma estructurada: `following`/`favorited` dependen del llamante, `favoritesCount` cuenta otro agregado (D8), `slug` y `cartId` no son agregaciones | Ningún derivado de fixture migra en A8; el `count` entra en una fixture por declaración nueva (M4) |
 | M7 | **Dos huecos de semántica que D1-D9 no deciden.** `refundedAmount` es opcional: ¿qué hace `lte` con un operando ausente? `customerAction` es `json`: ¿cuándo cuenta un json como ausente para `forbids`? | Se añaden D19 y D20 a la tabla de decisiones |
+| M8 | **Los mutadores de la entidad son del agente** (consecuencia de M1): `build` emite estado, rehidratación y getters, nada más. «Al final de cada mutación» (D2) no tiene un punto de `build` dentro de la entidad; el único punto de `build` por el que pasa toda escritura es el `save` del adaptador | Propuesta para A2 (se mide en cada generador antes de fijarla): `build` emite en la entidad `ensureInvariants()` (checks y cotas) y el derivado como getter que calcula desde las hijas; el `save` generado llama a `ensureInvariants()` y persiste el valor del getter. Así la guarda y su llamada son las dos de `build`, y la fila de D9 en `check-domain-guards.sh` sobra para los checks |
 
-### Decisiones pendientes del usuario
+### Decisiones del usuario tras A0 (2026-11-16)
 
-| | Pregunta | Recomendación |
-|---|---|---|
-| U5 | `computed: { sum }` sin sujeto real (M3, M4): ¿se mantiene el `sum` en la 2.31 con un sujeto sintético, y `orderAmount` de `shop-api` sigue en prosa? | Sí. Abrir el `sum` a relaciones entre agregados contradice D8 y la decisión 3.7 de `shop-api`, y la foto del checkout no es un derivado vivo |
-| U6 | Una cota que **no** es invariante (M2): ¿cómo se dice? (a) la cota sale de la entidad y se escribe en el input que la necesita (`createProduct` pasa a `input.fields`), sin DSL nuevo; (b) una marca nueva en `constraints` que la limite a la entrada | (a): la entidad dice lo que es siempre verdad y el input su propio contrato, que es la doctrina de `crossrefs.js` (el input y el almacén son contratos distintos). Una regla mecánica nueva (`REV-` o `CHK-`) recordaría el caso al diseñador |
+| | Decisión |
+|---|---|
+| U5 | `computed: { sum, count }` se queda en la 2.31 solo sobre hijas del mismo agregado. El `sum` se mide con un sujeto sintético y el `orderAmount` de `shop-api` sigue en prosa |
+| U6 | Una cota de la entidad es siempre verdad. La que solo vale en la entrada sale de la entidad y se escribe en el input que la necesita: `createProduct` pasa a `input.fields` y `ProductInfo.productStock` pierde el `max`. Sin DSL nuevo. Lo recuerda al diseñador `REV-DOMAIN-BOUND-SERVER-WRITTEN`: un campo acotado que alguna operación escribe con un valor calculado en el servidor |
 
 ## Contexto
 
@@ -141,8 +147,13 @@ Cada una con su id, su entrada en `checks.js` con `nature` y su mutación en `te
   `sum` que no es numérico.
 - `CHK-DOMAIN-CHECK-ERROR-UNDECLARED` (aviso, `incoherence`): el `error` de un check no aparece en `errors` de ninguna
   operación que escriba la entidad, con su `http`.
-- `CHK-SCEN-CHECK-UNCOVERED` (aviso): ningún escenario provoca el code de un check. Es aviso como todo `CHK-SCEN-*`.
+- ~~`CHK-SCEN-CHECK-UNCOVERED`~~ **descartado en A1**: el `error` de un check lo declaran sus operaciones
+  (`CHK-DOMAIN-CHECK-ERROR-UNDECLARED`), y desde ahí su escenario ya lo pide `CHK-SCEN-ERROR-UNCOVERED`. Sería un
+  co-disparo sin señal propia. Un check sin `error` (`INVARIANT_VIOLATED`) guarda un defecto del servidor, que ningún
+  cliente provoca: su red es la prueba emitida con los casos `IC-*`, no un escenario.
 - `REV-DOMAIN-INVARIANT-PROSE` (revisión): una `invariants` en prosa que cabe en el vocabulario de `checks`.
+- `REV-DOMAIN-BOUND-SERVER-WRITTEN` (revisión, U6): un campo acotado de la entidad que alguna operación escribe con un
+  valor calculado en el servidor. El lector confirma que la cota es siempre verdad, o la mueve al input.
 - `INVARIANT_VIOLATED` en `keel-core/src/lib/framework-errors.js` y en la tabla de
   `assets/core/docs/framework-errors.md`, el dato y su doc (un test ata las dos).
 

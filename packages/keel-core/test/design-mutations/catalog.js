@@ -690,6 +690,24 @@ function withDeadline(d) {
 }
 
 /**
+ * Las invariantes que se hacen cumplir (DSL 2.31): un ticket cerrado tiene `closedAt` y uno abierto no, el nivel de
+ * escalado no pasa de 5, y dos derivados sobre sus notas (cuántas y cuántos minutos). Ningún check lleva `error`
+ * propio, así que no hay code que declarar ni escenario que pedir: el diseño sigue en silencio.
+ */
+function withChecks(d) {
+  const ticket = entity(d, 'Ticket');
+  ticket.fields.closedAt = { type: 'timestamp', description: 'Cuándo se cerró el ticket.' };
+  ticket.fields.noteCount = { type: 'int', computed: { count: 'notes' }, description: 'Cuántas notas tiene.' };
+  ticket.fields.totalMinutes = { type: 'int', computed: { sum: 'notes.minutes' }, description: 'Minutos dedicados, según sus notas.' };
+  entity(d, 'TicketNote').fields.minutes = { type: 'int', required: true, default: 0, constraints: { min: 0, max: 600 } };
+  ticket.checks = [
+    { requires: 'closedAt', when: { field: 'status', in: ['closed'] } },
+    { forbids: 'closedAt', unless: { field: 'status', in: ['closed'] } },
+    { field: 'escalationLevel', op: 'lte', value: 5 }
+  ];
+}
+
+/**
  * El ciclo de vida del dato (DSL 2.28): el email del solicitante es personal y un ticket cerrado se conserva seis años y
  * después se anonimiza; una cola se borra lógicamente y `restoreQueue` la restaura durante 30 días. Cada pieza tiene su
  * escenario, así que el diseño sigue en silencio.
@@ -830,6 +848,7 @@ export const EXTENSIONS = {
   ownedHistory: withOwnedHistory,
   dataLifecycle: withDataLifecycle,
   deadline: withDeadline,
+  checks: withChecks,
   concurrency: withConcurrency,
   payments: withPayments,
   m2m: withM2m,
@@ -2229,6 +2248,51 @@ export const MUTATIONS = [
     expect: ['CHK-SCEN-HISTORY-UNCOVERED']
   },
   // ── Los plazos de negocio (DSL 2.26) ──
+  {
+    id: 'M-DOMAIN-CHECK-FIELD-UNKNOWN',
+    title: 'un check exige un campo que la entidad no tiene',
+    extends: 'checks',
+    mutate: (d) => {
+      entity(d, 'Ticket').checks[0].requires = 'resolvedAt';
+    },
+    expect: ['CHK-DOMAIN-CHECK-FIELD-UNKNOWN']
+  },
+  {
+    id: 'M-DOMAIN-CHECK-OP-TYPE',
+    title: 'un check ordena un campo de texto',
+    extends: 'checks',
+    mutate: (d) => {
+      entity(d, 'Ticket').checks[2] = { field: 'subject', op: 'gt', value: 'a' };
+    },
+    expect: ['CHK-DOMAIN-CHECK-OP-TYPE']
+  },
+  {
+    id: 'M-DOMAIN-CHECK-WHEN-STATE',
+    title: 'la condición de un check nombra un estado que el enum no tiene',
+    extends: 'checks',
+    mutate: (d) => {
+      entity(d, 'Ticket').checks[0].when.in = ['archived'];
+    },
+    expect: ['CHK-DOMAIN-CHECK-WHEN-STATE']
+  },
+  {
+    id: 'M-DOMAIN-COMPUTED-PATH',
+    title: 'un derivado suma un campo de texto de la hija',
+    extends: 'checks',
+    mutate: (d) => {
+      entity(d, 'Ticket').fields.totalMinutes.computed = { sum: 'notes.body' };
+    },
+    expect: ['CHK-DOMAIN-COMPUTED-PATH']
+  },
+  {
+    id: 'M-DOMAIN-CHECK-ERROR-UNDECLARED',
+    title: 'un check con error propio que ninguna operación que escribe la entidad declara',
+    extends: 'checks',
+    mutate: (d) => {
+      entity(d, 'Ticket').checks[2].error = 'ESCALATION_LIMIT_REACHED';
+    },
+    expect: ['CHK-DOMAIN-CHECK-ERROR-UNDECLARED']
+  },
   {
     id: 'M-DOMAIN-DEADLINE-TO-UNDECLARED',
     title: 'el plazo lleva a un estado al que no se llega desde el suyo',

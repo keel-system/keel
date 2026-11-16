@@ -467,6 +467,41 @@ export const CHECKS = {
     closes: 'declarar el mismo error en la operación, o dejar escrito por qué ahí una referencia inexistente no es un error'
   },
   // ─── Los plazos de negocio sobre el estado (DSL 2.26, lifecycle.deadlines) ──────────────────
+  'CHK-DOMAIN-CHECK-FIELD-UNKNOWN': {
+    layer: 'domain',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'un check nombra un campo o una relación que no está en la entidad, o una colección de otro agregado',
+    closes: 'nombrar un campo, un subcampo de un value object o una relación de la entidad; lo que cruza agregados sigue en invariants'
+  },
+  'CHK-DOMAIN-CHECK-OP-TYPE': {
+    layer: 'domain',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'un check compara lo que no se puede comparar: un orden sobre algo sin orden, dos tipos distintos o un literal que no es del campo',
+    closes: 'comparar números o instantes con lt/lte/gt/gte, y campos del mismo tipo o un literal de ese tipo con eq/ne'
+  },
+  'CHK-DOMAIN-CHECK-WHEN-STATE': {
+    layer: 'domain',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'la condición de un check no es sobre un enum o boolean de la entidad, o nombra un valor que no tiene',
+    closes: 'condicionar sobre un campo enum o boolean de la propia entidad, con valores de ese campo'
+  },
+  'CHK-DOMAIN-COMPUTED-PATH': {
+    layer: 'domain',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'un derivado estructurado no suma o cuenta una relación a-muchos hacia una hija del agregado, o suma algo que no es numérico',
+    closes: 'sum/count sobre una relación one-to-many hacia una entidad interna del agregado, con campos numéricos y el derivado de un tipo numérico; lo demás sigue en prosa'
+  },
+  'CHK-DOMAIN-CHECK-ERROR-UNDECLARED': {
+    layer: 'use-cases',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'el error de un check no lo declara ninguna operación que escriba la entidad',
+    closes: 'declarar el code del check, con su http, en los errors de las operaciones que escriben la entidad'
+  },
   'CHK-DOMAIN-DEADLINE-TO-UNDECLARED': {
     layer: 'domain',
     severity: 'error',
