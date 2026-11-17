@@ -23,7 +23,9 @@ export function finderBlock(model, root, index, ctx, { sampleEntity }) {
       const fixedLiteral = (entry) => (entry.field.kind === 'enum' ? `${enumOf(entry.field)}.${screamingSnake(String(entry.value))}` : js(entry.value));
       const otherThan = (field, expr) =>
         field.kind === 'enum' ? `Object.values(${enumOf(field)}).find((value) => value !== ${expr})` : field.base === 'boolean' ? `!${expr}` : field.base === 'long' ? `${expr} + 1n` : field.base === 'int' ? `${expr} + 1` : `${expr} + '-otro'`;
-      const textCriteria = finder.criteria.filter((criterion) => criterion.match !== 'exact' && (criterion.target.field.textMaxLength ?? Infinity) > FINDER_PROBE_TEXT.length);
+      // Los criterios de 2.32 (in, ne, search) los miden los casos FS-* de su sujeto (search-probes.js), no esta sonda.
+      const classic = (criterion) => !['in', 'ne', 'search'].includes(criterion.op);
+      const textCriteria = finder.criteria.filter((criterion) => classic(criterion) && criterion.match !== 'exact' && (criterion.target.field.textMaxLength ?? Infinity) > FINDER_PROBE_TEXT.length);
       const overrides = (entries, text) => [...textCriteria.map((criterion) => `${criterion.target.field.name}: ${js(text)}`), ...entries].join(', ');
       const inside = overrides(finder.fixed.map((entry) => `${entry.name}: ${fixedLiteral(entry)}`), FINDER_PROBE_TEXT);
       // La de fuera lleva otro texto: si el campo es único (una clave natural), el mismo chocaría al guardarla.
@@ -46,6 +48,7 @@ export function finderBlock(model, root, index, ctx, { sampleEntity }) {
       const locals = [];
       const cases = finder.criteria
         .map((criterion, at) => {
+          if (!classic(criterion)) return null;
           if (criterion.match !== 'exact') {
             if (!textCriteria.includes(criterion)) return null;
             const { hit, misses } = finderTextProbes(criterion);
@@ -71,7 +74,7 @@ export function finderBlock(model, root, index, ctx, { sampleEntity }) {
         .filter(Boolean);
 
       const filterOf = (probed, value) =>
-        `{ ${finder.criteria.map((criterion, at) => `${criterion.name}: ${criterion === probed ? value : criterion.required ? `v${at}` : 'null'}`).join(', ')} }`;
+        `{ ${finder.criteria.map((criterion, at) => `${criterion.name}: ${criterion === probed ? value : criterion.required && classic(criterion) ? `v${at}` : 'null'}`).join(', ')} }`;
       // Un finder acotado (DSL 2.27) pide el scope: sin filtro, que lo que se mide aquí son los criterios.
       if (finder.scope) ctx.imports.add('ReadScope|src/domain/repository/read-scope.ts');
       const scope = finder.scope ? 'ReadScope.unrestricted()' : null;

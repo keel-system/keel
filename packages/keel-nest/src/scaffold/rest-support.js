@@ -37,6 +37,7 @@ const DECIMAL_TS = 'src/domain/support/decimal.ts';
 const RAW_JSON_TS = 'src/domain/support/raw-json.ts';
 // Los textos de la respuesta de error son contrato y los comparten los generadores (keel-core/gen/api-errors.js).
 const MISSING_PARAMETER = FW.missingParameter.message.split('{name}');
+const INVALID_SORT = FW.invalidSort.message.split('{sort}');
 
 /**
  * ¿Hace falta la correlación sin API? Sí con mensajería: los eventos la llevan en su metadata y los
@@ -203,6 +204,17 @@ export class MissingParameterError extends Error {
   }
 }
 
+/**
+ * Un \`?sort=\` que el listado no ofrece (DSL 2.32, D16): un campo fuera de \`sortable\`, una dirección que no es asc o
+ * desc, más de una coma, el mismo campo dos veces o un valor vacío. Sin \`sortable\`, cualquiera.
+ */
+export class InvalidSortError extends Error {
+  constructor(readonly value: string) {
+    super(\`${INVALID_SORT[0]}\${value}${INVALID_SORT[1]}\`);
+    this.name = 'InvalidSortError';
+  }
+}
+
 /** Falta la parte binaria obligatoria de una subida multipart. */
 export class MissingPartError extends Error {
   constructor(readonly part: string) {
@@ -347,11 +359,18 @@ export const text = {
       return found ? (found[1] as E[keyof E]) : malformed();
     };
   },
-  /** Una lista en la query: el parámetro repetido o separado por comas. */
-  listOf<T>(element: Reader<T>): Reader<T[]> {
+  /**
+   * Una lista en la query (DSL 2.32, U8 y D10): el parámetro repetido, y cada valor partido por comas (un elemento con
+   * coma solo viaja repitiendo el parámetro). Ausente no filtra; vacía, o con un elemento vacío, es 400 con el nombre
+   * del parámetro (\`name\`) en los detalles. La referencia es readQueryList de keel-core.
+   */
+  listOf<T>(element: Reader<T>, name = ''): Reader<T[]> {
     return (value) => {
       if (value == null) return null;
-      const items = Array.isArray(value) ? value.map(String) : String(value).split(',');
+      const values = Array.isArray(value) ? value.map(String) : [String(value)];
+      if (values.length === 0) return null;
+      const items = values.flatMap((item) => item.split(','));
+      if (items.some((item) => item === '')) throw new RequestValidationError([name], 'params');
       return items.map((item) => element(item) as T);
     };
   }
@@ -509,6 +528,7 @@ function filterImports() {
     { symbol: 'ErrorResponse', from: ERROR_RESPONSE_TS },
     { symbol: 'MalformedRequestError', from: REQUEST_ERRORS_TS },
     { symbol: 'MissingParameterError', from: REQUEST_ERRORS_TS },
+    { symbol: 'InvalidSortError', from: REQUEST_ERRORS_TS },
     { symbol: 'MissingPartError', from: REQUEST_ERRORS_TS },
     { symbol: 'UnsupportedMediaTypeError', from: REQUEST_ERRORS_TS },
     { symbol: 'RequestValidationError', from: REQUEST_ERRORS_TS },
@@ -598,6 +618,9 @@ export class ApiExceptionFilter implements ExceptionFilter {
     // ── Errores de framework
     if (exception instanceof MissingParameterError) {
       return ErrorResponse.of(400, '${FW.missingParameter.error}', '${validation}', exception.message);
+    }
+    if (exception instanceof InvalidSortError) {
+      return ErrorResponse.of(400, '${FW.invalidSort.error}', '${validation}', exception.message);
     }
     if (exception instanceof MalformedRequestError) {
       return ErrorResponse.of(400, '${FW.malformed.error}', '${validation}', '${FW.malformed.message}');

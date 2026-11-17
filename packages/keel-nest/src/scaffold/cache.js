@@ -21,6 +21,7 @@
 import {
   cachedOperations,
   cacheInvalidations,
+  cacheKeyExtras,
   CACHE_ENTRY_SEPARATOR,
   CACHE_KEY_PART_SEPARATOR
 } from '@keel-system/keel-core/gen/cache-plan';
@@ -165,7 +166,16 @@ function cachedOperationsTs(model) {
     }
     // Con una lectura acotada (DSL 2.27, D6) el scope del llamante es parte de la clave, con la forma de keel-spring: si
     // no, la caché sirve a uno la fila de otro. Dos exentos comparten entrada (`all`).
-    const parts = [...cache.keyFields.map((field) => `message.${field}`), ...(operation.readScope ? ['ReadScope.cacheKey(message.readScope)'] : [])];
+    // Un listado paginado (DSL 2.32, D18): la página, su tamaño y, con sortable, el orden pedido; si no, dos páginas o dos
+    // órdenes compartirían la entrada.
+    const pageable = components.has('pageable');
+    const EXTRA = {
+      page: pageable ? 'message.pageable.page' : 'message.page',
+      size: pageable ? 'message.pageable.size' : 'message.size',
+      sort: "message.pageable.sort.map((order) => `${order.property},${order.direction}`).join(';')"
+    };
+    const extras = cacheKeyExtras(operation).filter((extra) => extra !== 'sort' || pageable).map((extra) => EXTRA[extra]);
+    const parts = [...cache.keyFields.map((field) => `message.${field}`), ...extras, ...(operation.readScope ? ['ReadScope.cacheKey(message.readScope)'] : [])];
     if (operation.readScope) imports.push(readScopeImport(false));
     const key = parts.length > 0 ? `cacheKey(${parts.join(', ')})` : "cacheKey('all')";
     const by = invalidators.get(cache.cacheName) ?? [];

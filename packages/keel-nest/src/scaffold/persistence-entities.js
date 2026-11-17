@@ -47,6 +47,8 @@ import { hasPatternFilter } from '@keel-system/keel-core/gen/text-filters';
 import { DIRS, classPath, capitalize, decapitalize, isNullable, tsModule, tsString } from './render.js';
 import { usesRelational, usesDocument, usesPersistence } from '@keel-system/keel-core/gen/features';
 import { lifecycleMarks, markComment } from './data-lifecycle.js';
+import { orderedTextColumns } from '@keel-system/keel-core/gen/pagination';
+import { binaryCollationFor } from '@keel-system/keel-core/gen/infra-catalog';
 export { usesRelational, usesDocument, usesPersistence };
 
 export const ORM_DIR = 'infrastructure/persistence/entities';
@@ -66,7 +68,9 @@ export function usesTextFold(model) {
  * que lo viera).
  */
 export function usesLikePattern(model) {
-  return usesRelational(model) && (model.services ?? []).some((service) => service.operations.some(hasPatternFilter));
+  // La búsqueda libre (DSL 2.32) lleva su `match` dentro de `search`.
+  const searchesByPattern = (operation) => (operation.finder?.criteria ?? []).some((criterion) => criterion.op === 'search' && criterion.match !== 'exact');
+  return usesRelational(model) && (model.services ?? []).some((service) => service.operations.some((operation) => hasPatternFilter(operation) || searchesByPattern(operation)));
 }
 
 /** El motor del stack, con PostgreSQL por defecto (la frontera solo admite postgresql y mysql). */
@@ -257,6 +261,17 @@ function inverseCollectionOf(model, entity, relation) {
   return collection?.name ?? null;
 }
 
+/**
+ * Las columnas de texto por las que se ordena (el `sort` o el `sortable` de una query) y la collation binaria del motor
+ * (DSL 2.32, U7 y D17): propiedad → collation, para que el texto se ordene por punto de código en los tres motores. La
+ * de PostgreSQL va sin comillas: TypeORM las pone al escribir el COLLATE.
+ */
+export function orderCollations(model, entity) {
+  const collation = binaryCollationFor(engineOf(model))?.replace(/^"(.*)"$/, '$1');
+  if (!collation) return new Map();
+  return new Map(orderedTextColumns(model, entity.name).map((column) => [column.property, collation]));
+}
+
 function renderEntity(model, entity) {
   const engine = engineOf(model);
   const file = ormPath(entity.name);
@@ -267,8 +282,12 @@ function renderEntity(model, entity) {
   const properties = [];
   const elements = [];
   const props = columnProperties(model, entity, members);
+  const ordered = orderCollations(model, entity);
 
   const addColumn = (args) => {
+    // La collation binaria del orden (DSL 2.32, U7): la de la unicidad, si ya la lleva, es la misma en MySQL.
+    const collation = ordered.get(args.spec?.propertyName);
+    if (collation && !args.spec.collation && !args.spec.enum) args = { ...args, spec: { ...args.spec, collation } };
     const rendered = columnProperty({ engine, ...args });
     properties.push(rendered.text);
     for (const symbol of rendered.imports) transformers.add(symbol);

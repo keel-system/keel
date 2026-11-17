@@ -20,13 +20,15 @@
 | B1 | keel-core: schema, reglas con sus mutaciones, docs, DSL a 2.32 y la frontera de los cuatro | hecho (2026-11-17, § Medidas de B1) |
 | B2 | Lo neutral: los criterios del finder con su referencia (`FS-*`), `readClientSort` (`SO-*`), la lista en la query, el contrato, la clave de la caché y la collation del orden | hecho (2026-11-17, § Medidas de B2) |
 | B3 | keel-spring: el finder (`in`, `ne`, `search`), `QueryParameters` (`?sort=` y la lista de la query), la collation del orden, la clave de la caché y `finder-check` con FS-*/SO-* | hecho (2026-11-17, § Medidas de B3) |
-| B4-B9 | Fase B: DSL 2.32 (R8) | pendiente |
+| B4 | keel-nest: el finder (`In`, `ne` con la fila nula, la búsqueda como ramas OR), `readPageable` contra `sortable`, la lista de la query, la collation del orden, la clave de la caché y las sondas FS-*/SO-* de db-check y doc-check | hecho (2026-11-17, § Medidas de B4) |
+| B5-B9 | Fase B: DSL 2.32 (R8) | pendiente |
 
 **Para retomar.** La fase A (DSL 2.31) está cerrada (A9: cinco corridas de `shop-api` en 92/92). Pendiente de ella:
 `go-check --fixtures` de keel-go (§ Arreglo de la escala), que se pasa en B6. Fase B: B0 medido (U7 y U8 decididas) y B1
 hecho: el DSL es 2.32 y los cuatro generadores rechazan `in`/`ne`/`search`/`sortable` con `searchPendingErrors` hasta su
-incremento. B2 hecho (lo neutral, § Medidas de B2). B3 hecho (keel-spring, § Medidas de B3). Siguiente: B4, keel-nest. Lo que cada
-generador recoge en su incremento, todo de keel-core:
+incremento. B2 hecho (lo neutral, § Medidas de B2). B3 hecho (keel-spring, § Medidas de B3). B4 hecho (keel-nest, § Medidas de B4).
+Siguiente: B5, keel-dotnet; las sondas de keel-nest (`keel-nest/scripts/lib/search-probes.js`) son el molde más cercano.
+Lo que cada generador recoge en su incremento, todo de keel-core:
 - el finder: `criterion.op` `in`/`ne`/`search`, y `search` con `targets[]` en vez de `target`;
 - el lector de `?sort=` contra `operation.sortable` (`readClientSort`, `invalidSortMessage`);
 - el de la lista en la query (`readQueryList`);
@@ -41,6 +43,43 @@ generador recoge en su incremento, todo de keel-core:
 
 Ventana conocida, como la de A2: desde B2 el contrato ya no anuncia `sort` en un listado sin `sortable`, y los
 servidores lo siguen aceptando hasta su incremento.
+
+## Medidas de B4 (2026-11-17)
+
+keel-nest, con `db-check --subject=catalog-search` (PostgreSQL y MySQL) y `doc-check --subject=catalog-search-mongo`:
+76/76 en los dos motores relacionales (el esquema, con la collation del orden, y los 21 casos FS-* y SO-*) y 27/27 en
+MongoDB. Cada sabotaje cae en exactamente sus casos: `finder-in`, `finder-ne-null` y los cuatro `so-*` en los tres
+motores, `finder-search-literal` en los dos relacionales, `finder-search-regex` en MongoDB, y `order-collation` solo en
+MySQL (FS-3 y FS-9; en PostgreSQL no cae ninguno, como en keel-spring). Las dos redes ENTERAS siguen en verde: db-check
+220 pasos sin una falla (también el verify del baseline de `catalog-extended` y `shop-api` con la collation nueva) y
+doc-check sus 21 sujetos.
+
+- **Finder relacional** (`src/scaffold/finders.js`). `in` es `In(lista)`, con cada elemento plegado si el input pliega;
+  `ne` es `Or(IsNull(), Not(Equal(v)))`. La búsqueda no cabe en el mapa de condiciones por propiedad, porque es un OR
+  entre propiedades: se reparte AL FINAL en una rama del `where` por campo de `over` (el array de TypeORM es un OR), cada
+  una con todas las condiciones de arriba, el alcance y la vida incluidos; con dos búsquedas, el producto. Las filas y el
+  total salen de las mismas ramas. `usesLikePattern` cuenta también la búsqueda, que lleva su `match` dentro de `search`.
+- **Finder documental** (`document-repositories.js`). `$in` con cada elemento escrito como se guarda, `$ne` (ya deja pasar
+  el documento sin el campo) y un `$or` de expresiones citadas con `literalPattern` sobre la sombra.
+- **El borde.** `readPageable` lee la página y el tamaño como siempre (indulgente, D16) y el orden con `readSort`, que
+  cumple `readClientSort`: recibe `sortable` (ruta del contrato → propiedad del adaptador) del lector de la operación, y lo
+  que no ofrece es `InvalidSortError` → 400 `VALIDATION_ERROR` con `invalidSort`. Sin `sortable`, cualquier `?sort=` es 400,
+  también en el historial y en los resultados de un trabajo de lote. `text.listOf` aplica U8 (la coma parte también un valor
+  repetido) y D10 (vacía o con un elemento vacío: 400 `invalidParams` con el nombre de la lista en `details`, como
+  keel-spring). Aquí no hay la excepción de B3: la lista con cotas pasa por el mismo lector y `Violations` la valida después.
+  `routes.ts` solo anuncia `sort` con `sortable`.
+- **Collation** (U7). `orderCollations` lleva la de `binaryCollationFor` (sin las comillas: TypeORM las pone) al `@Column`
+  de cada columna de `orderedTextColumns`, sin doblar la de la unicidad. `schemaSteps` pasa el baseline de TypeORM a
+  `orderCollationWork` con una columna por línea (`baselineColumns`: TypeORM escribe un CREATE TABLE por cadena).
+- **Caché** (D18). La clave suma `message.pageable.page`, `size` y, con `sortable`, el orden como `propiedad,dirección`.
+- **Las sondas** (`scripts/lib/search-probes.js`). FS-* guardan las filas por el adaptador emitido y leen la página en el
+  orden del diseño; SO-* llaman al `readPageable` emitido con lo que el controlador le pasa. El sujeto solo ejecuta sus
+  casos (FS-9 cuenta la tabla entera). La sonda de 2.22 (`finder-probes.js`) se salta los criterios de 2.32, como la de
+  keel-spring: se construye para todo sujeto y cascaba con el `target` nulo de un `search`. `test/search.test.js` ejecuta
+  sin base el lector de `?sort=` y el de la lista contra `SO_CASES` y `WIRE_QUERY_LIST_CASES`.
+- **Lo que destapó la suite.** `contract-parity.test.js` comparaba la query de keel-nest con el `Pageable` de keel-spring,
+  que sigue declarando `sort` aunque QueryParameters lo rechace sin `sortable`: ahora `sort` solo cuenta con `sortable`.
+  La ventana de `openapi.test.js` desde B2 queda cerrada.
 
 ## Medidas de B3 (2026-11-17)
 

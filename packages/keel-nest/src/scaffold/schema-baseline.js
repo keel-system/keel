@@ -19,9 +19,12 @@
 // En keel-spring la prueba en vivo del baseline queda PENDIENTE para el diseñador (Flyway en local
 // exigiría borrar el volumen de la no-regresión); aquí no, porque synchronize recrea el esquema.
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { DATA_SOURCE_OPTIONS_TS } from './persistence-runtime.js';
 import { usesRelational } from './persistence-entities.js';
-import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
+import { DATABASES, binaryCollationFor } from '@keel-system/keel-core/gen/infra-catalog';
+import { orderCollationWork } from '@keel-system/keel-core/gen/pagination';
 import { crossAggregateForeignKeys } from '@keel-system/keel-core/gen/relational';
 import { GENERATOR_TABLES, STEP_PREFIX, createdTablesInSql, schemaStepFiles } from '@keel-system/keel-core/gen/schema-steps';
 
@@ -81,7 +84,7 @@ export function createdTablesInMigration(content) {
  */
 export function schemaSteps(model, files, projectDir) {
   if (!usesRelational(model)) return { files: [], added: [], work: [] };
-  return schemaStepFiles({
+  const steps = schemaStepFiles({
     projectDir,
     dir: MIGRATIONS_DIR,
     tables: generatorTables(files),
@@ -92,6 +95,22 @@ export function schemaSteps(model, files, projectDir) {
     renderStep: renderSchemaStep,
     createdTables: createdTablesInMigration
   });
+  // La collation del orden (DSL 2.32, U7) no llega sola a una base desplegada: lo dice el baseline que exportó el agente.
+  const baselineFile = projectDir ? path.join(projectDir, MIGRATIONS_DIR, BASELINE_FILE) : null;
+  const baseline = baselineFile && fs.existsSync(baselineFile) ? baselineColumns(fs.readFileSync(baselineFile, 'utf8')) : null;
+  return { ...steps, work: [...steps.work, ...orderCollationWork(model, baseline, binaryCollationFor(model.stack.database))] };
+}
+
+/**
+ * El baseline de TypeORM con una columna por línea: lo escribe con un CREATE TABLE por cadena, y orderCollationWork
+ * (keel-core) lee el esquema columna a columna. Se parte delante de cada identificador entrecomillado que abre una
+ * columna, sin tocar el `(120)` de su tipo.
+ */
+export function baselineColumns(content) {
+  return String(content)
+    .replace(/\\(["'`])/g, '$1')
+    .split(/(?:,\s*|\(\s*)(?=["`])/)
+    .join('\n');
 }
 
 /**

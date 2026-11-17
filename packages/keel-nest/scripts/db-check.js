@@ -70,7 +70,8 @@ import { planService } from '../src/scaffold/index.js';
 import { DB_NAME, run, resolveRuntime, startDatabase } from './lib/database-container.js';
 import { freshIdLiteral, idFieldOf, sampleEntity, sampleValue, PROBE_HELPERS } from './lib/samples.js';
 import { finderBlock } from './lib/finder-probes.js';
-import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
+import { FINDER_DESIGNS, SEARCH_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
+import { SEARCH_SABOTAGE_SPECS, isSearchSabotage, searchBlock, searchCases, searchSabotageVerdict } from './lib/search-probes.js';
 import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN, declaredAuthorship } from '../test/helpers/workspace.js';
 import { SECURITY_CONTEXT_TS, usesHttpSecurity } from '../src/scaffold/security.js';
 import { CORRELATION_TS, usesApi, usesCorrelation } from '../src/scaffold/rest-support.js';
@@ -82,7 +83,7 @@ import { classPath, entityDir, DIRS } from '../src/scaffold/render.js';
 import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantFinders, credentialFinders, emitsDomainEvents } from '../src/scaffold/repositories.js';
 import { guardClaimsFor } from '../src/scaffold/claim.js';
 import { claimsForEntity, sweepClaims, claimOrderField, screamingSnake, rescueProbes, stallSql, missingClockCountSql } from '@keel-system/keel-core/gen';
-import { ormPath, ormClass, unidirectionalParents } from '../src/scaffold/persistence-entities.js';
+import { ormPath, ormClass, unidirectionalParents, orderCollations } from '../src/scaffold/persistence-entities.js';
 import { usesRequestIdempotency, IDEMPOTENCY_STORE_IMPL_TS, IDEMPOTENCY_CONFLICT_TS } from '../src/scaffold/request-idempotency.js';
 import { IDEMPOTENCY_RECORD } from '@keel-system/keel-core/gen/request-idempotency';
 import { OUTBOX_EVENT, PROCESSED_EVENT } from '@keel-system/keel-core/gen/messaging-stores';
@@ -159,7 +160,10 @@ const SABOTAGES = {
   // cae en exactamente sus casos BK.
   ...Object.fromEntries(Object.entries(BATCH_KEY_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational])),
   // La guarda del agregado (DSL 2.31): con --subject=catalog-invariants, cada uno cae en exactamente sus casos IC/CP.
-  ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational]))
+  ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational])),
+  // La búsqueda de 2.32: con --subject=catalog-search, cada uno cae en exactamente sus casos FS/SO (order-collation, solo
+  // en MySQL).
+  ...Object.fromEntries(Object.entries(SEARCH_SABOTAGE_SPECS).filter(([, specs]) => specs.relational).map(([id, specs]) => [id, specs.relational]))
 };
 const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -183,7 +187,7 @@ const only = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ??
 const onlySubject = args.find((arg) => arg.startsWith('--subject='))?.split('=')[1] ?? null;
 const ENGINES = (only ? [only] : ['postgresql', 'mysql']).filter((engine) => DATABASES[engine]);
 // Las formas del esquema que cubre cada sujeto (ver la cabecera).
-const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional', 'verification-codes', 'vault-scoped', 'shop-scoped', 'cards-logical', 'codes-anonymize', 'codes-delete', 'vault-logical-scoped', 'cards-history', 'cards-history-anonymize', 'vault-history-scoped', 'catalog-batch', 'catalog-batch-atomic', 'catalog-batch-async', 'catalog-batch-keyed', 'catalog-batch-atomic-keyed', 'catalog-invariants'];
+const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional', 'verification-codes', 'vault-scoped', 'shop-scoped', 'cards-logical', 'codes-anonymize', 'codes-delete', 'vault-logical-scoped', 'cards-history', 'cards-history-anonymize', 'vault-history-scoped', 'catalog-batch', 'catalog-batch-atomic', 'catalog-batch-async', 'catalog-batch-keyed', 'catalog-batch-atomic-keyed', 'catalog-invariants', 'catalog-search'];
 // Los sujetos DERIVADOS, por nombre: los finders de las búsquedas (DSL 2.22) en la forma de lista con un subcampo de value
 // object, el MISMO diseño que mide keel-dotnet (keel-core/test/helpers/finder-designs.js); y la autoría, que ninguna
 // fixture relacional declara: por política sobre product-catalog y DECLARADA sobre notification-mailer (raíz e hija),
@@ -212,7 +216,9 @@ const DERIVED = {
   // Los lotes síncronos con clave (DSL 2.30, D15, BK-1 a BK-5): los MISMOS diseños relacionales que mide keel-spring.
   ...Object.fromEntries(BATCH_KEY_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design])),
   // La guarda del agregado (DSL 2.31, IC-1 a IC-11 y CP-1 a CP-5): el MISMO diseño relacional que mide keel-spring.
-  ...Object.fromEntries(ENTITY_CHECK_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design]))
+  ...Object.fromEntries(ENTITY_CHECK_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design])),
+  // La búsqueda de 2.32 (FS-* y SO-*): el MISMO diseño relacional que mide keel-spring.
+  ...Object.fromEntries(SEARCH_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design]))
 };
 const results = [];
 
@@ -243,14 +249,17 @@ function expectedSchema(model, engine) {
   for (const entity of model.entities.filter((candidate) => candidate.persisted)) {
     const t = table(entity.tableName);
     const members = persistedMembers(model, entity);
+    // La collation binaria del orden (DSL 2.32, U7) de cada columna de texto ordenable, por su propiedad.
+    const ordered = orderCollations(model, entity);
+    const orderedSpec = (spec, propertyName) => (ordered.has(propertyName) && !spec.collation && !spec.enum ? { ...spec, collation: ordered.get(propertyName) } : spec);
     for (const member of members) {
       if (member.kind === 'scalar') {
-        column(entity.tableName, member.field.columns);
-        if (member.folded) t.columns.set(member.folded.column, { nullable: !member.folded.required, length: member.folded.maxLength ?? 255, scale: null, collation: null });
+        column(entity.tableName, orderedSpec(member.field.columns, member.name));
+        if (member.folded) t.columns.set(member.folded.column, { nullable: !member.folded.required, length: member.folded.maxLength ?? 255, scale: null, collation: ordered.get(member.folded.name) ?? null });
       } else if (member.kind === 'vo') {
         for (const sub of member.subs) {
           if (sub.subKind === 'composite' || !sub.sub.columns) continue;
-          column(entity.tableName, { ...sub.sub.columns, name: sub.column }, !(sub.ownerRequired && !sub.sub.columns.nullable));
+          column(entity.tableName, orderedSpec({ ...sub.sub.columns, name: sub.column }, sub.name), !(sub.ownerRequired && !sub.sub.columns.nullable));
         }
       } else if (member.kind === 'externalRef') {
         t.columns.set(member.column, { nullable: !member.relation.required, length: null, scale: null, collation: null });
@@ -366,6 +375,8 @@ function probeScript(model, engine, db, expected) {
     rawOf: (id) => `await rawRow(${JSON.stringify(model.entities.find((entity) => entity.name === 'Product')?.tableName)}, ${id})`,
     keys: derivedColumns(model, 'Product')
   });
+  // La búsqueda de 2.32, también antes de los imports.
+  const searchCode = searchBlock(model, ctx, { sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterCtorArgs(model, owner, ctx)})` });
   const imports = [...ctx.imports].map((entry) => {
     const [symbol, file] = entry.split('|');
     return `import { ${symbol} } from '${distOf(file)}';`;
@@ -461,7 +472,11 @@ ${invariantCode
   // El sujeto de la guarda (DSL 2.31) solo mide sus vectores: la muestra de los demás bloques no cumple sus checks a
   // propósito (los vectores parten de ella), y lo demás de catalog-extended ya lo mide su propio sujeto.
   ? invariantCode
-  : [blocks.join('\n'), concurrencyBlock(model, engine, roots[0], ctx), idempotencyBlock(model, engine), messagingCode, claimCode, reconciliationCode, timerCode, purgeBlock(model), purgeTimerBlock(model), lifecycleCode, historyCode, batchCode, batchJobCode, batchKeyCode].join('\n')}
+  : searchCode
+    // El sujeto de la búsqueda (DSL 2.32) solo mide sus casos: FS-9 cuenta las filas de la tabla, y el resto de
+    // product-catalog ya lo mide su propio sujeto.
+    ? searchCode
+    : [blocks.join('\n'), concurrencyBlock(model, engine, roots[0], ctx), idempotencyBlock(model, engine), messagingCode, claimCode, reconciliationCode, timerCode, purgeBlock(model), purgeTimerBlock(model), lifecycleCode, historyCode, batchCode, batchJobCode, batchKeyCode].join('\n')}
 
 await dataSource.destroy();
 console.log('@@RESULTS@@' + JSON.stringify(results));
@@ -1758,6 +1773,13 @@ for (const engine of ENGINES) {
         const verdict = invariantSabotageVerdict(checks, sabotage, model, { document: false });
         for (const check of checks.filter((entry) => !entry.ok && /^(IC|CP)-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
         step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]${verdict.masked.length > 0 ? `; enmascarados: ${verdict.masked.join(', ')} (save transaccional${verdict.masked.includes('CP-4') ? ', Decimal128' : ''})` : ''}`);
+        continue;
+      }
+      // La búsqueda de 2.32: verde si caen EXACTAMENTE sus casos FS/SO (order-collation: FS-3 y FS-9 solo en MySQL).
+      if (isSearchSabotage(sabotage) && searchCases(model).length > 0) {
+        const verdict = searchSabotageVerdict(checks, sabotage, model, { engine });
+        for (const check of checks.filter((entry) => !entry.ok && /^(FS|SO)-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
+        step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
         continue;
       }
       if (isHistorySabotage(sabotage) && historyCases(model).length > 0) {

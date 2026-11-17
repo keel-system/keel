@@ -23,8 +23,15 @@ export function finderSignature(finder, entity) {
 
 const OPERATOR_DOC = { eq: 'igual a', gt: 'mayor que', gte: 'mayor o igual que', lt: 'menor que', lte: 'menor o igual que' };
 function criterionDoc(criterion) {
-  const subject = criterion.target.kind === 'relation' ? `el id de ${criterion.target.path}` : criterion.target.path;
   const folding = criterion.compare === 'ignore-case-accents' ? ', sin mayúsculas ni acentos' : criterion.compare === 'ignore-case' ? ', sin mayúsculas' : '';
+  // La búsqueda libre (DSL 2.32, D13): un OR sobre los campos de over.
+  if (criterion.op === 'search') {
+    const over = criterion.targets.map((entry) => entry.target.path).join(' o ');
+    return criterion.match === 'contains' ? `${over} lo contiene${folding}` : criterion.match === 'prefix' ? `${over} empieza por él${folding}` : `${over} es igual a él${folding}`;
+  }
+  const subject = criterion.target.kind === 'relation' ? `el id de ${criterion.target.path}` : criterion.target.path;
+  if (criterion.op === 'in') return `${subject} es uno de ellos${folding} (la lista vacía es 400 en el borde)`;
+  if (criterion.op === 'ne') return `${subject} distinto de él, también sin valor`;
   if (criterion.match === 'contains') return `${subject} lo contiene${folding}`;
   if (criterion.match === 'prefix') return `${subject} empieza por él${folding}`;
   return `${subject} ${OPERATOR_DOC[criterion.op]} él${folding}`;
@@ -85,6 +92,17 @@ function prepared(criterion, value, imports, textFold) {
   return `TextFold.${criterion.shadow.accents ? 'foldCaseAndAccents' : 'foldCase'}(${value})`;
 }
 
+/** La condición de texto de una búsqueda sobre el valor ya plegado: un patrón LIKE literal, o la igualdad. */
+function textCondition(match, value, imports, likePattern) {
+  if (match === 'exact') {
+    imports.push({ symbol: 'Equal', from: 'typeorm' });
+    return `Equal(${value})`;
+  }
+  // El texto buscado es LITERAL: LikePattern lo escapa (el Like() de TypeORM no escribe cláusula ESCAPE).
+  imports.push({ symbol: 'Like', from: 'typeorm' }, { symbol: 'LikePattern', from: likePattern });
+  return `Like(LikePattern.${match}(${value}))`;
+}
+
 /** Los métodos del adaptador relacional. Usan RELATIONS, withStableOrder y toDomain<Raíz> del propio adaptador. */
 export function relationalFinderMethods(model, entity, imports, { ormClass, hasRelations, pageTs, textFold, likePattern }) {
   const finders = entityFinders(model, entity);
@@ -96,13 +114,29 @@ export function relationalFinderMethods(model, entity, imports, { ormClass, hasR
       imports.push({ symbol: 'Equal', from: 'typeorm' });
       lines.push(`    and(${tsString(entry.name)}, Equal(${fixedValue(entry, imports)}));`);
     }
+    const searches = [];
     for (const criterion of finder.criteria) {
-      const value = prepared(criterion, `filter.${criterion.name}`, imports, textFold);
+      // La búsqueda libre (DSL 2.32, D13) no es una condición más del where: es un OR entre propiedades, y se reparte al
+      // final en una rama por campo de over, cada una con todo lo demás.
+      if (criterion.op === 'search') {
+        searches.push(criterion);
+        continue;
+      }
+      // `in` (D12) pliega cada elemento con la función de la sombra.
+      const value =
+        criterion.op === 'in' && criterion.shadow
+          ? `filter.${criterion.name}.map((item) => ${prepared(criterion, 'item', imports, textFold)})`
+          : prepared(criterion, `filter.${criterion.name}`, imports, textFold);
       let condition;
-      if (criterion.match !== 'exact') {
-        // El texto buscado es LITERAL: LikePattern lo escapa (el Like() de TypeORM no escribe cláusula ESCAPE).
-        imports.push({ symbol: 'Like', from: 'typeorm' }, { symbol: 'LikePattern', from: likePattern });
-        condition = `Like(LikePattern.${criterion.match}(${value}))`;
+      if (criterion.op === 'in') {
+        imports.push({ symbol: 'In', from: 'typeorm' });
+        condition = `In(${value})`;
+      } else if (criterion.op === 'ne') {
+        // Distinto, y la fila sin valor también lo es (D11): el `<>` de SQL a pelo la dejaría fuera.
+        imports.push({ symbol: 'Or', from: 'typeorm' }, { symbol: 'IsNull', from: 'typeorm' }, { symbol: 'Not', from: 'typeorm' }, { symbol: 'Equal', from: 'typeorm' });
+        condition = `Or(IsNull(), Not(Equal(${value})))`;
+      } else if (criterion.match !== 'exact') {
+        condition = textCondition(criterion.match, value, imports, likePattern);
       } else {
         imports.push({ symbol: TYPEORM_OPERATOR[criterion.op], from: 'typeorm' });
         condition = `${TYPEORM_OPERATOR[criterion.op]}(${value})`;
@@ -120,9 +154,26 @@ export function relationalFinderMethods(model, entity, imports, { ormClass, hasR
       imports.push({ symbol: 'IsNull', from: 'typeorm' });
       lines.push(RELATIONAL_LIVE_LINE);
     }
+    // La búsqueda libre: una rama del where por campo de over (el array de TypeORM es un OR), cada una con todas las
+    // condiciones de arriba; con dos búsquedas, el producto. Las filas y el total salen de las mismas ramas.
+    if (searches.length > 0) {
+      lines.push('    let branches: Record<string, FindOperator<any>>[] = [where];');
+      for (const criterion of searches) {
+        const value = prepared({ shadow: criterion.targets[0]?.shadow }, `filter.${criterion.name}`, imports, textFold);
+        const alternatives = criterion.targets
+          .map((entry) => `[${tsString(ormProperty(model, entity, { target: entry.target, shadow: entry.shadow }))}, ${textCondition(criterion.match, 'text', imports, likePattern)}]`)
+          .join(', ');
+        const statement = `{
+      const text = ${value};
+      const anyOf: [string, FindOperator<any>][] = [${alternatives}];
+      branches = branches.flatMap((branch) => anyOf.map(([property, condition]) => ({ ...branch, [property]: branch[property] == null ? condition : And(branch[property], condition) })));
+    }`;
+        lines.push(criterion.required ? `    ${statement}` : `    if (filter.${criterion.name} != null) ${statement}`);
+      }
+    }
     const order = finder.result === 'page' ? 'withStableOrder(pageable)' : `withStableOrder({ page: 0, size: 0, sort: ${sortConstant(finder)} })`;
     const options = `{
-      where: where as FindOptionsWhere<${ormClass}>,
+      where: ${finder.criteria.some((criterion) => criterion.op === 'search') ? `branches as FindOptionsWhere<${ormClass}>[]` : `where as FindOptionsWhere<${ormClass}>`},
       ${hasRelations ? 'relations: RELATIONS,\n      ' : ''}order: ${order}${finder.result === 'page' ? ',\n      skip: pageable.page * pageable.size,\n      take: pageable.size' : ''}
     }`;
     if (finder.result === 'page') imports.push({ symbol: 'pageOf', from: pageTs });

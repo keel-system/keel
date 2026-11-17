@@ -24,7 +24,7 @@ import { CONDITIONAL_REQUESTS_TS, carriesExpectedVersions, controllerLine, retur
 import { READ_SCOPES_TS, readScopeImport, readScopesMethod } from './read-scope.js';
 import { PAGED_RESPONSE_TS, FILE_UPLOAD_TS } from './dtos.js';
 import { MULTIPART_READING_TS } from './storage.js';
-import { REQUEST_READING_TS, ROUTES_TS, usesApi } from './rest-support.js';
+import { REQUEST_ERRORS_TS, REQUEST_READING_TS, ROUTES_TS, usesApi } from './rest-support.js';
 import { CALLER_IDENTITY_TS, callerResolution } from './security.js';
 import { controllerBatchCall, atomicTransaction } from './batch.js';
 import { batchSuccessStatus } from '@keel-system/keel-core/gen/batch';
@@ -83,16 +83,21 @@ function pageableReading() {
   readonly maxSize: number;
   /** El orden del diseño (output.sort), si el cliente no pide uno. */
   readonly defaultSort?: readonly SortOrder[];
+  /** Por qué puede ordenar el cliente (output.sortable): ruta del contrato → propiedad del adaptador. Sin él, ninguna. */
+  readonly sortable?: Readonly<Record<string, string>>;
 }
 
-/** \`?page=&size=&sort=prop,dir\` → Pageable, como lo lee Spring Data. */
+/**
+ * \`?page=&size=&sort=campo,dir\` → Pageable. La página y el tamaño, como los lee Spring Data (indulgente); el orden,
+ * contra \`sortable\` (DSL 2.32, D16), y lo que no ofrece es 400.
+ */
 export function readPageable(query: Record<string, unknown>, defaults: PageableDefaults): Pageable {
   const page = parseBounded(first(query['page']), Number.MAX_SAFE_INTEGER) ?? 0;
   let size = parseBounded(first(query['size']), defaults.maxSize) ?? defaults.defaultSize;
   if (size < 1) size = defaults.defaultSize;
   if (size > defaults.maxSize) size = defaults.maxSize;
-  const sort = readSort(query['sort']);
-  return { page, size, sort: sort.length > 0 ? sort : [...(defaults.defaultSort ?? [])] };
+  const sort = readSort(query['sort'], defaults.sortable ?? {});
+  return { page, size, sort: sort ?? [...(defaults.defaultSort ?? [])] };
 }
 
 function first(value: unknown): string | undefined {
@@ -113,19 +118,25 @@ function parseBounded(text: string | undefined, upper: number): number | null {
 }
 
 /**
- * \`sort\` repetido o con varias propiedades: \`name,desc\`, \`status,name\`. La última pieza es la
- * dirección si lo es (sin distinguir mayúsculas) y vale para todas las propiedades de ese valor.
+ * Lee ?sort= (la referencia es readClientSort de keel-core): cada valor es campo o campo,asc|desc, con el campo en
+ * sortable y la dirección en minúsculas; uno vacío, con más de una coma o con el mismo campo dos veces es 400. El orden
+ * del cliente SUSTITUYE al del diseño (null: no pidió ninguno); el desempate por id lo añade el adaptador.
  */
-function readSort(raw: unknown): SortOrder[] {
+function readSort(raw: unknown, sortable: Readonly<Record<string, string>>): SortOrder[] | null {
   const values = Array.isArray(raw) ? raw.map(String) : raw == null ? [] : [String(raw)];
+  if (values.length === 0) return null;
   const orders: SortOrder[] = [];
+  const seen = new Set<string>();
   for (const value of values) {
-    const parts = value.split(',').filter((part) => part.trim() !== '');
-    if (parts.length === 0) continue;
-    const last = parts[parts.length - 1]!.trim().toLowerCase();
-    const direction = last === 'asc' || last === 'desc' ? last : null;
-    const properties = direction ? parts.slice(0, -1) : parts;
-    for (const property of properties) orders.push({ property, direction: direction ?? 'asc' });
+    const parts = value.split(',');
+    const path = parts[0]!;
+    const direction = parts[1] ?? 'asc';
+    const property = Object.hasOwn(sortable, path) ? sortable[path] : undefined;
+    if (parts.length > 2 || property == null || !(direction === 'asc' || direction === 'desc') || seen.has(path)) {
+      throw new InvalidSortError(value);
+    }
+    seen.add(path);
+    orders.push({ property, direction });
   }
   return orders;
 }`;
@@ -133,7 +144,8 @@ function readSort(raw: unknown): SortOrder[] {
     PAGEABLE_READING_TS,
     [
       { symbol: 'Pageable', from: 'src/domain/repository/page.ts', type: true },
-      { symbol: 'SortOrder', from: 'src/domain/repository/page.ts', type: true }
+      { symbol: 'SortOrder', from: 'src/domain/repository/page.ts', type: true },
+      { symbol: 'InvalidSortError', from: REQUEST_ERRORS_TS }
     ],
     body
   );
@@ -155,7 +167,8 @@ export function readerOf(field, mode) {
     const base = { string: 'string', text: 'string', file: 'string', uuid: 'uuid', int: 'int', long: 'long', decimal: 'decimal', boolean: 'boolean', date: 'date', timestamp: 'timestamp', json: 'json' }[field.base] ?? 'string';
     element = `${mode}.${base}`;
   }
-  return field.list ? `${mode}.listOf(${element})` : element;
+  // En la query, la lista lleva su nombre: es el detalle del 400 de una lista vacía (DSL 2.32, D10).
+  return field.list ? (mode === 'text' ? `${mode}.listOf(${element}, ${tsString(field.name)})` : `${mode}.listOf(${element})`) : element;
 }
 
 /** Imports que necesita leer un campo: su tipo (enum, value object) y su lector de value object. */
@@ -472,6 +485,9 @@ function renderReader(model, operation, name, imports) {
     if (order.length > 0) {
       defaults.push(`defaultSort: [${order.map((c) => `{ property: ${tsString(c.property)}, direction: ${tsString(c.direction)} }`).join(', ')}]`);
     }
+    // Lo que el cliente puede pedir en ?sort= (DSL 2.32): ruta del contrato → propiedad del adaptador. Sin sortable, nada.
+    const sortable = operation.sortable ?? [];
+    if (sortable.length > 0) defaults.push(`sortable: { ${sortable.map((entry) => `${tsString(entry.path)}: ${tsString(entry.property)}`).join(', ')} }`);
     lines.push(`  const pageable = readPageable(query, { ${defaults.join(', ')} });`);
   } else if (operation.paginated) {
     // La paginación sin persistencia: dos enteros de la query con sus defaults (también con cuerpo).
@@ -593,7 +609,8 @@ function routesFile(model) {
         : messageComponents(model, operation)
             .filter((c) => !fromPath.has(c.name) && !c.resolvedIdentity && !c.file)
             // El Pageable viaja como los tres parámetros de Spring Data; el historial (DSL 2.29, D10) no admite `sort`.
-            .flatMap((c) => (c.pageable ? (operation.historyOf ? ['page', 'size'] : ['page', 'size', 'sort']) : [c.name]));
+            // `sort` solo con sortable (DSL 2.32, U3).
+            .flatMap((c) => (c.pageable ? ((operation.sortable ?? []).length > 0 ? ['page', 'size', 'sort'] : ['page', 'size']) : [c.name]));
       rows.push(
         `  { operation: ${tsString(operation.name)}, method: ${tsString(operation.route.method)}, path: ${tsString(`${model.api.routeBase}${operation.route.path}`)}, ` +
           `status: ${batchSuccessStatus(operation)}, location: ${operation.batch?.execution === 'async' || returnsLocation(model, operation)}, query: [${query.map(tsString).join(', ')}], ` +

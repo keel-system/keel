@@ -89,10 +89,7 @@ for (const name of fs.readdirSync(FIXTURES_DIR)) {
       assert.ok(op.responses[String(route.status)], `${route.operation}: status ${route.status}`);
       assert.equal(Boolean(op.responses[String(route.status)].headers?.Location), route.location, `${route.operation}: Location`);
       const query = (op.parameters ?? []).filter((p) => p.in === 'query').map((p) => p.name).sort();
-      // Ventana de B2 a B4 (PLAN-DSL-231-232): desde 2.32 el contrato solo ofrece `sort` con `sortable`, y keel-nest lo
-      // sigue leyendo en todo listado hasta que B4 le ponga el lector de D16.
-      const served = route.query.filter((name) => name !== 'sort' || query.includes('sort'));
-      assert.deepEqual(query, [...served].sort(), `${route.operation}: parámetros de query`);
+      assert.deepEqual(query, [...route.query].sort(), `${route.operation}: parámetros de query`);
       const multipart = Boolean(op.requestBody?.content?.['multipart/form-data']);
       if (!multipart) {
         const body = op.requestBody ? (op.requestBody.required ? 'required' : 'optional') : null;

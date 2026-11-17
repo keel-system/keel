@@ -53,7 +53,8 @@ import { ENTITY_CHECK_DESIGNS } from '../../keel-core/test/helpers/entity-check-
 import { INVARIANT_SABOTAGE_SPECS, isInvariantSabotage, invariantBlock, invariantCases, invariantSabotageVerdict } from './lib/invariant-probes.js';
 import { finderBlock } from './lib/finder-probes.js';
 import { rankBlock, inverseBlock } from './lib/rank-inverse-probes.js';
-import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
+import { FINDER_DESIGNS, SEARCH_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
+import { SEARCH_SABOTAGE_SPECS, isSearchSabotage, searchBlock, searchCases, searchSabotageVerdict } from './lib/search-probes.js';
 import { adapterArgs, storeBlocks, storePreamble } from './lib/document-store-probes.js';
 import { PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSabotage, purgeTimerBlock, purgeTimerSabotageVerdict, timerBlock, timerPreamble, timerProbePatch, timerSabotage, timerSabotageVerdict } from './lib/timer-probes.js';
 import { timerPurges, timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
@@ -114,7 +115,9 @@ const SABOTAGES = {
   // casos BK.
   ...Object.fromEntries(Object.entries(BATCH_KEY_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document])),
   // La guarda del agregado (DSL 2.31): con --subject=catalog-invariants-mongo, cada uno cae en exactamente sus casos IC/CP.
-  ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document]))
+  ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document])),
+  // La búsqueda de 2.32: con --subject=catalog-search-mongo, cada uno cae en exactamente sus casos FS/SO.
+  ...Object.fromEntries(Object.entries(SEARCH_SABOTAGE_SPECS).filter(([, specs]) => specs.document).map(([id, specs]) => [id, specs.document]))
 };
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -204,6 +207,8 @@ const SUBJECTS = [
   ...BATCH_KEY_DESIGNS.filter((design) => design.name.endsWith('-mongo')).map((design) => ({ name: design.from, label: design.name, withoutLayers: [], mutate: design.mutate })),
   // La guarda del agregado sobre documentos (DSL 2.31, IC-1 a IC-11 y CP-1 a CP-5): el MISMO diseño que mide keel-spring.
   ...ENTITY_CHECK_DESIGNS.filter((design) => design.name.endsWith('-mongo')).map((design) => ({ name: design.from, label: design.name, withoutLayers: [], mutate: design.mutate })),
+  // La búsqueda de 2.32 sobre documentos (FS-* y SO-*): el MISMO diseño que mide keel-spring.
+  ...SEARCH_DESIGNS.filter((design) => design.name.endsWith('-mongo')).map((design) => ({ name: design.from, label: design.name, withoutLayers: [], mutate: design.mutate })),
   ...HISTORY_DESIGNS.filter((design) => design.name.endsWith('-mongo')).map((design) => ({
     name: design.from,
     label: design.name,
@@ -279,6 +284,8 @@ function probeScript(model, db) {
     rawOf: (id) => `await database.collection(${JSON.stringify(invariantRoot?.collectionName)}).findOne({ _id: new UUID(${id}).toBinary() })`,
     keys: invariantRoot ? Object.fromEntries(documentShape(model, invariantRoot).filter((entry) => entry.field?.computedSpec).map((entry) => [entry.member, entry.name])) : {}
   });
+  // La búsqueda de 2.32, también antes de los imports.
+  const searchCode = searchBlock(model, ctx, { sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterArgs(model, owner)})` });
   const shapes = expectedShapes(model);
   const enums = new Set([
     ...Object.values(shapes.entities).flat(),
@@ -354,7 +361,10 @@ ${invariantCode
   // El sujeto de la guarda (DSL 2.31) solo mide sus vectores: la muestra de los demás bloques no cumple sus checks a
   // propósito (los vectores parten de ella), y lo demás de catalog-extended lo mide db-check.
   ? invariantCode
-  : [blocks.join('\n'), race, stores, timerCode, lifecycleCode, historyCode, batchCode, batchJobCode, batchKeyCode, purgeTimerBlock(model)].join('\n')}
+  : searchCode
+    // El sujeto de la búsqueda (DSL 2.32) solo mide sus casos: FS-9 cuenta los documentos de la colección.
+    ? searchCode
+    : [blocks.join('\n'), race, stores, timerCode, lifecycleCode, historyCode, batchCode, batchJobCode, batchKeyCode, purgeTimerBlock(model)].join('\n')}
 
 await client.close();
 console.log('@@RESULTS@@' + JSON.stringify(results));
@@ -709,6 +719,13 @@ try {
       const verdict = invariantSabotageVerdict(checks, sabotage, model, { document: true });
       for (const check of checks.filter((entry) => !entry.ok && /^(IC|CP)-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
       step(`${label}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]${verdict.masked.length > 0 ? `; enmascarados: ${verdict.masked.join(', ')} (save transaccional, Decimal128)` : ''}`);
+      continue;
+    }
+    // La búsqueda de 2.32: verde si caen EXACTAMENTE sus casos FS/SO.
+    if (isSearchSabotage(sabotage) && searchCases(model).length > 0) {
+      const verdict = searchSabotageVerdict(checks, sabotage, model, { engine: 'mongodb' });
+      for (const check of checks.filter((entry) => !entry.ok && /^(FS|SO)-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
+      step(`${label}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
       continue;
     }
     // El historial de cambios (DSL 2.29): verde si caen EXACTAMENTE sus casos HI de este sujeto (y ningún otro).

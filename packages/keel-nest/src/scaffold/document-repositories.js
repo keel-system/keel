@@ -630,19 +630,36 @@ function documentFinderMethods(model, entity, use, imports) {
       }
       lines.push(`    conditions.push({ ${tsString(keyOf(model, entity, entry.name))}: ${writeScalar(entry.field, value, use)} });`);
     }
+    const folded = (shadow, value) => {
+      if (!shadow) return value;
+      use.import({ symbol: 'TextFold', from: TEXT_FOLD_TS });
+      return `TextFold.${shadow.accents ? 'foldCaseAndAccents' : 'foldCase'}(${value})`;
+    };
+    const textMatch = (key, match, value) =>
+      match === 'exact' ? `{ ${tsString(key)}: ${value} }` : `{ ${tsString(key)}: { $regex: ${match === 'prefix' ? "'^' + " : ''}literalPattern(${value}) } }`;
     for (const criterion of finder.criteria) {
-      const { key, write } = documentTarget(model, entity, criterion, use);
-      let value = `filter.${criterion.name}`;
-      if (criterion.shadow) {
-        use.import({ symbol: 'TextFold', from: TEXT_FOLD_TS });
-        value = `TextFold.${criterion.shadow.accents ? 'foldCaseAndAccents' : 'foldCase'}(${value})`;
+      let condition;
+      if (criterion.op === 'search') {
+        // La búsqueda libre (DSL 2.32, D13): un $or de expresiones CITADAS sobre la sombra de cada campo de over.
+        const value = folded(criterion.targets[0]?.shadow, `filter.${criterion.name}`);
+        const branches = criterion.targets.map((entry) => textMatch(documentTarget(model, entity, { target: entry.target, shadow: entry.shadow }, use).key, criterion.match, value));
+        condition = `{ $or: [${branches.join(', ')}] }`;
+      } else {
+        const { key, write } = documentTarget(model, entity, criterion, use);
+        const value = folded(criterion.shadow, `filter.${criterion.name}`);
+        condition =
+          criterion.op === 'in'
+            ? // Uno de la lista (D12), cada elemento plegado y escrito como se guarda.
+              `{ ${tsString(key)}: { $in: filter.${criterion.name}.map((item) => ${write(folded(criterion.shadow, 'item'))}) } }`
+            : criterion.op === 'ne'
+              ? // Distinto (D11): $ne ya deja pasar el documento sin el campo o con null.
+                `{ ${tsString(key)}: { $ne: ${write(value)} } }`
+              : criterion.match !== 'exact'
+                ? textMatch(key, criterion.match, value)
+                : RANGE_OPERATORS.has(criterion.op)
+                  ? `{ ${tsString(key)}: { ${MONGO_OPERATOR[criterion.op]}: ${write(value)} } }`
+                  : `{ ${tsString(key)}: ${write(value)} }`;
       }
-      const condition =
-        criterion.match !== 'exact'
-          ? `{ ${tsString(key)}: { $regex: ${criterion.match === 'prefix' ? "'^' + " : ''}literalPattern(${value}) } }`
-          : RANGE_OPERATORS.has(criterion.op)
-            ? `{ ${tsString(key)}: { ${MONGO_OPERATOR[criterion.op]}: ${write(value)} } }`
-            : `{ ${tsString(key)}: ${write(value)} }`;
       const statement = `conditions.push(${condition});`;
       lines.push(criterion.required ? `    ${statement}` : `    if (filter.${criterion.name} != null) ${statement}`);
     }

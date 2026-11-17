@@ -76,8 +76,9 @@ for (const name of fs.readdirSync(FIXTURES_DIR)) {
       if (fromSpring.multipart) continue;
       const expected = { ...fromSpring };
       delete expected.multipart;
-      // La query de historial no anuncia `sort` (D10 de la 2.29): el Pageable de keel-spring lo acepta y lo ignora.
-      if (operation.historyOf) expected.query = expected.query.filter((name) => name !== 'sort');
+      // `sort` solo se ofrece con `sortable` (DSL 2.32, U3): sin él, keel-spring lo recibe en su Pageable pero QueryParameters
+      // lo rechaza con un 400, y el historial (D10 de la 2.29) no lo admite nunca.
+      if (operation.historyOf || (operation.sortable ?? []).length === 0) expected.query = expected.query.filter((name) => name !== 'sort');
       const actual = { method: fromNest.method, path: fromNest.path, status: fromNest.status, location: fromNest.location, query: [...fromNest.query].sort(), body: fromNest.body };
       assert.deepEqual(actual, expected, operation.name);
       if (operation.responseDto) {
