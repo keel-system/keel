@@ -14,6 +14,7 @@
 // salientes) llega con su incremento: el handler de hoy solo inyecta lo que existe.
 
 import { unsupportedContentTypeRaise } from './storage.js';
+import { adjustsInputScale } from '@keel-system/keel-core/gen/constraints';
 import { BATCH_ITEM_COMPONENT } from './batch.js';
 import { batchNote } from '@keel-system/keel-core/gen/batch';
 import { carriesEntryGate, dispatchNote, entryGateNote, ownershipNotes, scheduleDispatch, usesEntryGate } from '@keel-system/keel-core/gen';
@@ -194,13 +195,15 @@ export function componentType(operation, component, model = null) {
 }
 
 /**
- * `constraints.scalePolicy: round` (DSL 2.14): el decimal escalar se redondea a su escala al ENTRAR. No tiene
- * clase propia donde normalizarse —la de un compuesto la pone su value object—, así que va en el mensaje, el
- * primer punto por el que pasa. `reject` no necesita nada aquí: lo dice la validación del borde.
+ * `constraints.scale` (DSL 2.14, `adjustsInputScale` de keel-core): el decimal escalar se pone a su escala al ENTRAR;
+ * con `round` se redondea, y con `reject` solo se rellena, porque la validación del borde ya rechazó los decimales de
+ * más. No tiene clase propia donde normalizarse —la de un compuesto la pone su value object—, así que va en el
+ * mensaje, el primer punto por el que pasa: el `Save` de keel-dotnet devuelve la entidad en memoria, no lo que guardó
+ * la columna.
  */
 function scaleRounding(component, type) {
   const numeric = component.numeric;
-  if (component.kind === 'composite' || !numeric?.decimal || numeric.scalePolicy !== 'round' || numeric.scale == null) return null;
+  if (component.kind === 'composite' || !adjustsInputScale(numeric)) return null;
   if (type.startsWith('Optional<')) return null;
   return type.endsWith('?')
     ? `init => field = value is null ? null : Decimals.SetScale(value.Value, ${numeric.scale});`

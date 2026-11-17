@@ -20,8 +20,25 @@
 
 **Para retomar.** La fase A (DSL 2.31) está cerrada: A9 dio cinco corridas de control de `shop-api` en 92/92, sin
 `cart-line-sum-over-max` ni ningún otro `designGap`, sin que el agente tocara la guarda y con la huella igual o menor
-que en la 2.27. Queda abierto, fuera del plan, el hueco de la escala de keel-nest y keel-dotnet (§ Medidas de A9).
-Siguiente: B0, medir lo de la fase B (DSL 2.32, búsqueda).
+que en la 2.27. El hueco de la escala que destapó A9 está arreglado (§ Arreglo de la escala), con un pendiente: `go-check --fixtures`,
+que se pasa en B6. Siguiente: B0, medir lo de la fase B (DSL 2.32, búsqueda).
+
+## Arreglo de la escala (2026-11-17, tras A9)
+
+- La regla es neutral: `adjustsInputScale` de `keel-core/gen/constraints.js`. El mensaje pone a su escala un decimal de
+  entrada con `scalePolicy: round` (lo redondea, como antes) y también con `reject` (lo rellena: el borde ya rechazó los
+  decimales de más, así que la misma operación HALF_UP no cambia el valor). Sin política no se toca. Los cuatro la usan en
+  el mismo sitio de siempre (`scaleRoundingLines` en keel-spring, `scaleRounded` en keel-nest, `scaleRounding` en
+  keel-dotnet y keel-go, que la aplica también en el lector de la API). `docs/dsl/domain.md` lo dice.
+- Medido: `keel-go/test/input-scale.test.js` (la regla y que los cuatro ajustan `productPrice` en `createProduct` y
+  `updateProduct` de `shop-api`), las suites de los cinco paquetes, `db-check` de `shop-api` en keel-nest (PostgreSQL),
+  keel-dotnet (PostgreSQL y MySQL) y keel-go, y `compile-check` de `shop-api` en keel-spring.
+- **Pendiente: `npm run go-check --workspace packages/keel-go -- --fixtures`.** En keel-go el `db-check` solo compila el
+  paquete del almacén, y el ajuste vive en `internal/application` (el mensaje) y `internal/httpapi` (el lector): lo
+  compilan, formatean y analizan gofmt, vet y staticcheck en `go-check`. Se corta para no esperar ~20 min y se pasa en B6,
+  que ya ejecuta `go-check`.
+- Para llevarlo a un proyecto ya generado: `build --refresh` actualiza el mensaje (es de build); el `setScale` que el
+  agente escribió a mano en la entidad sigue siendo correcto y deja de hacer falta.
 
 ## Medidas de A9 (2026-11-16)
 
@@ -422,7 +439,7 @@ searchProducts:
 | B3 | keel-spring | `npm run finder-check` (sujetos nuevos, `--sabotage=finder-in\|finder-ne-null\|finder-search-literal\|sort-open`) |
 | B4 | keel-nest | `db-check`/`doc-check` `--subject=<nuevos>` con los mismos sabotajes, más `test/empty-page.test.js` |
 | B5 | keel-dotnet | `db-check`/`doc-check` |
-| B6 | keel-go | `db-check`/`doc-check` + `go-check` |
+| B6 | keel-go | `db-check`/`doc-check` + `go-check` (y `go-check --fixtures`, pendiente del arreglo de la escala) |
 | B7 | Contrato y método: `openapi.test.js` en los cuatro, la guía Postman de `/keel-docs`, la pregunta de `/keel-design` (clase 5, el orden), `/keel-recover` y los agentes. El README de cada generador quita el aviso de `cursor` | Pruebas de cadenas, `npx @redocly/cli lint` |
 | B8 | Fixtures: `catalog-extended` declara la búsqueda que 2.22 dejó fuera, `in`, `ne` y `sortable`. `product-catalog` declara `sortable` en su listado (cierra `list-order-in-prose`). Las que no ofrezcan orden aceptan `OBL-QUERY-SORT-UNDECIDED` | `--ready` donde ya lo estaban |
 | B9 | Corridas de control de `catalog-extended` (o `product-catalog`) en los cuatro generadores y una en MySQL | `docs/corridas/…-232-*` |

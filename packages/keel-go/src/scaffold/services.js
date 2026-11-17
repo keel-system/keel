@@ -14,6 +14,7 @@
 // incremento: el handler de hoy solo recibe lo que existe.
 
 import { ENTRY_GATES, carriesEntryGate, dispatchNote, entryGateNote, scheduleDispatch, usesEntryGate } from '@keel-system/keel-core/gen';
+import { adjustsInputScale } from '@keel-system/keel-core/gen/constraints';
 import { operationError } from '@keel-system/keel-core/gen/declared-errors';
 import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
 import { finderNote } from '@keel-system/keel-core/gen/query-filters';
@@ -303,14 +304,15 @@ function fromBody(component) {
 }
 
 /**
- * `constraints.scalePolicy: round` (DSL 2.14): el decimal escalar se redondea a su escala al ENTRAR. No tiene tipo
- * propio donde normalizarse —el de un compuesto lo pone su value object—, así que va en el mensaje, el primer
- * punto por el que pasa. `reject` no necesita nada aquí: lo dice el lector del borde. `target` es la variable del
- * mensaje: el lector de la API (endpoints.js) lee el cuerpo campo a campo y redondea con la misma línea.
+ * `constraints.scale` (DSL 2.14, `adjustsInputScale` de keel-core): el decimal escalar se pone a su escala al ENTRAR;
+ * con `round` se redondea, y con `reject` solo se rellena, porque el lector del borde ya rechazó los decimales de más.
+ * No tiene tipo propio donde normalizarse —el de un compuesto lo pone su value object—, así que va en el mensaje, el
+ * primer punto por el que pasa. `target` es la variable del mensaje: el lector de la API (endpoints.js) lee el cuerpo
+ * campo a campo y ajusta con la misma línea.
  */
 export function scaleRounding(operation, component, target = 'm') {
   const numeric = component.numeric;
-  if (component.kind === 'composite' || component.list || !numeric?.decimal || numeric.scalePolicy !== 'round' || numeric.scale == null) return null;
+  if (component.kind === 'composite' || component.list || !adjustsInputScale(numeric)) return null;
   if (isThreeState(operation, component) || !fromBody(component)) return null;
   const field = `${target}.${goExported(component.name)}`;
   const rescale = (value) => `${value}.Rescale(${numeric.scale}, wire.RoundHalfUp)`;
@@ -357,7 +359,7 @@ function renderMessage(model, operation) {
   const parts = [`${docComment(name, operation.description, `el mensaje de ${operation.name}`)}type ${name} ${struct}`];
   const rounding = components.map((component) => scaleRounding(operation, component)).filter(Boolean);
   if (rounding.length > 0) {
-    parts.push(`// UnmarshalJSONFrom lee ${name} del cable y redondea a su escala los decimales con scalePolicy: round.
+    parts.push(`// UnmarshalJSONFrom lee ${name} del cable y pone a su escala los decimales con escala declarada.
 func (m *${name}) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	type plain ${name}
 	if err := json.UnmarshalDecode(dec, (*plain)(m)); err != nil {

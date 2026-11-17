@@ -7,6 +7,7 @@
 
 import { unsupportedContentTypeRaise } from './storage.js';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
+import { adjustsInputScale } from '@keel-system/keel-core/gen/constraints';
 import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
 import { finderNote } from '@keel-system/keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
@@ -1254,18 +1255,18 @@ function naturalKeyConflict(model, operation) {
 }
 
 /**
- * El constructor compacto que REDONDEA los decimales escalares de entrada con
- * `scalePolicy: round` (DSL 2.14). Un decimal escalar se aplana a `BigDecimal` y no tiene
- * clase propia donde vivir la normalización —la de un value object compuesto la pone su
- * constructor (`value-types.js`)—, así que va en el mensaje, que es el primer punto por el
- * que pasa. Sin él, el redondeo lo haría la columna al escribir, en silencio y solo en el
- * camino que persiste: la respuesta del mismo comando devolvería el valor sin redondear.
- * `reject` no necesita nada aquí: lo dice el `@Digits` del componente.
+ * El constructor compacto que pone a su ESCALA los decimales escalares de entrada (DSL 2.14,
+ * `adjustsInputScale` de keel-core): con `round` los redondea; con `reject` solo los rellena,
+ * porque el `@Digits` del componente ya rechazó los decimales de más. Un decimal escalar se
+ * aplana a `BigDecimal` y no tiene clase propia donde vivir la normalización —la de un value
+ * object compuesto la pone su constructor (`value-types.js`)—, así que va en el mensaje, que es
+ * el primer punto por el que pasa. Sin él, lo haría la columna al escribir, en silencio y solo
+ * en el camino que persiste.
  */
 /**
  * El constructor compacto del mensaje: lo que la entrada fija antes de que nadie lo lea.
  *
- *   · `constraints.scalePolicy: round` — el importe se redondea a su escala al entrar;
+ *   · `constraints.scale` con `scalePolicy` — el importe se pone a su escala al entrar;
  *   · una LISTA no informada se lee como lista vacía, nunca null (contrato del cable, `list-never-null` de
  *     keel-core/gen/wire.js). Es lo que ya hacía el lector de keel-nest; aquí dependía de que el agente lo
  *     recordara al construir el agregado (corrida notification-mailer-mongo, 2026-10-08). En un PATCH la lista
@@ -1278,7 +1279,7 @@ function compactConstructor(operation, components, fromPath, imports) {
   const rounding = scaleRoundingLines(components, imports);
   if (lists.length === 0 && rounding.length === 0) return '';
   const header = [
-    ...(rounding.length > 0 ? ['    // constraints.scalePolicy: round — el importe se redondea a su escala al entrar.'] : []),
+    ...(rounding.length > 0 ? ['    // constraints.scale — el importe se pone a su escala al entrar (con round se redondea; con reject solo se rellena).'] : []),
     ...(lists.length > 0 ? ['    // Una lista no informada es una lista vacía, nunca null (contrato del cable).'] : [])
   ];
   const lines = [...rounding, ...lists.map((component) => `        ${component.name} = ${component.name} == null ? List.of() : ${component.name};`)];
@@ -1294,7 +1295,7 @@ ${lines.join('\n')}
 function scaleRoundingLines(components, imports) {
   const rounded = components.filter(
     (component) =>
-      component.kind !== 'composite' && component.numeric?.decimal && component.numeric.scalePolicy === 'round'
+      component.kind !== 'composite' && adjustsInputScale(component.numeric)
   );
   if (rounded.length > 0) imports.add('java.math.RoundingMode');
   return rounded.map(

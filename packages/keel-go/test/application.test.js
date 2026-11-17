@@ -242,12 +242,14 @@ test('la URL de un bucket público la compone el puerto de almacenamiento, que e
   assert.match(app(plans.get('product-catalog').files, 'product_mapper'), /func ToGetProductResponseDto\(entity \*domain\.Product\) GetProductResponseDto \{/);
 });
 
-test('scalePolicy: round en un decimal escalar de entrada se redondea al leer el mensaje (ninguna fixture lo declara)', () => {
+test('un decimal escalar de entrada se pone a su escala al leer el mensaje: round redondea (ninguna fixture lo declara) y reject rellena', () => {
   const operation = { route: { method: 'POST' } };
   const required = { name: 'amount', kind: 'base', base: 'decimal', goType: 'wire.Decimal', required: true, numeric: { decimal: true, scale: 2, scalePolicy: 'round' } };
   assert.equal(scaleRounding(operation, required), '\tm.Amount = m.Amount.Rescale(2, wire.RoundHalfUp)');
   assert.match(scaleRounding(operation, { ...required, required: false }), /if m\.Amount != nil \{\n\t\trounded := \(\*m\.Amount\)\.Rescale\(2, wire\.RoundHalfUp\)\n\t\tm\.Amount = &rounded/);
-  assert.equal(scaleRounding(operation, { ...required, numeric: { ...required.numeric, scalePolicy: 'reject' } }), null);
+  // Con reject el borde ya rechazó los decimales de más: la misma línea solo rellena (un 30 sale 30.00, shop-api).
+  assert.equal(scaleRounding(operation, { ...required, numeric: { ...required.numeric, scalePolicy: 'reject' } }), '	m.Amount = m.Amount.Rescale(2, wire.RoundHalfUp)');
+  assert.equal(scaleRounding(operation, { ...required, numeric: { ...required.numeric, scalePolicy: null } }), null, 'sin política no se toca');
   assert.equal(scaleRounding({ route: { method: 'PATCH' } }, { ...required, required: false }), null, 'un opcional de PATCH lo redondea el handler');
 });
 

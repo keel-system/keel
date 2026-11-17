@@ -142,6 +142,18 @@ export function validationRules(field, resolved, { input = false, honourDefault 
 }
 
 /**
+ * ¿Ajusta el mensaje la escala de este decimal al ENTRAR? Con `scalePolicy: round` lo redondea a su escala (HALF_UP).
+ * Con `reject`, el borde ya rechazó lo que trae decimales DE MÁS, así que la misma operación solo rellena con ceros lo
+ * que trae de menos: un `30` sale `30.00`, como dice la escala del diseño, sin depender de que el adaptador relea la
+ * columna (keel-spring y keel-go releen la fila; keel-nest y keel-dotnet devuelven la entidad en memoria, y su agente
+ * escalaba a mano: corridas de shop-api de la 2.27 y la 2.31). Sin política, nada: es una obligación aceptada. `numeric`
+ * es el de `numericConstraints`.
+ */
+export function adjustsInputScale(numeric) {
+  return Boolean(numeric?.decimal) && numeric.scale != null && (numeric.scalePolicy === 'round' || numeric.scalePolicy === 'reject');
+}
+
+/**
  * Las reglas de CADA ELEMENTO de un campo colección: la longitud, el formato y las cotas que el diseño
  * declara junto a `maxItems` (`labels: { list: true, constraints: { maxItems: 20, maxLength: 40 } }`
  * dice que cada etiqueta tiene como mucho 40). `validationRules` da las del contenedor y estas faltaban
