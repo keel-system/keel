@@ -55,6 +55,8 @@ import { usesUnmapped } from './repositories.js';
 import { KEEL_TIMER_ROW, timerSchemaNames, usesTimer } from './timer.js';
 import { historyRows, historySchemaNames } from './history.js';
 import { batchJobRows, batchJobSchemaNames } from './batch-jobs.js';
+import { orderedTextColumns } from '@keel-system/keel-core/gen/pagination';
+import { binaryCollationFor } from '@keel-system/keel-core/gen/infra-catalog';
 import { MYSQL_GUID_FORMAT, placeholderConnection, relationalEngine, useProvider, usesMySql } from './relational-engine.js';
 import { usesRelational, usesDocument, usesPersistence } from '@keel-system/keel-core/gen/features';
 export { usesRelational, usesDocument, usesPersistence };
@@ -74,6 +76,17 @@ export function rowsNamespace(model) {
 
 export function persistenceNamespace(model) {
   return namespaceOf(model, 'persistence');
+}
+
+/**
+ * Las columnas de texto por las que se ordena (el `sort` o el `sortable` de una query) y la collation binaria del motor
+ * (DSL 2.32, U7 y D17): propiedad → collation, para que el texto se ordene por punto de código en los tres motores. La
+ * de PostgreSQL va sin comillas: EF las pone al escribir el COLLATE.
+ */
+export function orderCollations(model, entity) {
+  const collation = binaryCollationFor(relationalEngine(model))?.replace(/^"(.*)"$/, '$1');
+  if (!collation) return new Map();
+  return new Map(orderedTextColumns(model, entity.name).map((column) => [column.property, collation]));
 }
 
 export function persistedEntities(model) {
@@ -206,6 +219,9 @@ function renderRowFile(model, entity) {
   const elements = [];
   const props = columnProperties(model, entity, members);
   const useEnum = (name) => usings.push(...typeUsings(model, [name]));
+  // La collation binaria del orden (DSL 2.32, U7): la de la unicidad, si ya la lleva, es la misma en MySQL.
+  const ordered = orderCollations(model, entity);
+  const withOrder = (spec, propertyName, enumName = null) => (ordered.has(propertyName) && !spec.collation && !enumName ? { ...spec, collation: ordered.get(propertyName) } : spec);
 
   const idName = entity.idField ? csMember(entity.idField.name) : 'Id';
   // La clave con el nombre que le da PostgreSQL por defecto, que es el que deja Hibernate: el mismo esquema.
@@ -219,12 +235,12 @@ function renderRowFile(model, entity) {
       if (enumName) useEnum(enumName);
       const concurrency = entity.declaresLockVersion && field.name === LOCK_VERSION.field;
       properties.push(rowProperty(csMember(field.name), rowType(field.csType, spec), field.description));
-      config.push(columnChain(csMember(field.name), spec, { enumName, key: field.isId, concurrency }));
+      config.push(columnChain(csMember(field.name), withOrder(spec, member.name, enumName), { enumName, key: field.isId, concurrency }));
       if (member.folded) {
         const shadow = member.folded;
         const shadowSpec = { name: shadow.column, base: 'string', textual: true, length: shadow.maxLength ?? 255, nullable: !shadow.required };
         properties.push(rowProperty(csMember(shadow.name), shadow.required ? 'string' : 'string?', `${field.name} plegado (compare: ${field.compare}): lo estampa el adaptador con TextFold al guardar.`));
-        config.push(columnChain(csMember(shadow.name), shadowSpec));
+        config.push(columnChain(csMember(shadow.name), withOrder(shadowSpec, shadow.name)));
       }
       if (member.ranked) {
         const rankSpec = { name: member.ranked.column, base: 'int', nullable: !member.ranked.required };
@@ -243,7 +259,7 @@ function renderRowFile(model, entity) {
         const enumName = enumOf(sub.sub);
         if (enumName) useEnum(enumName);
         properties.push(rowProperty(csMember(sub.name), rowType(sub.sub.csType, spec), `${member.field.namedType}.${sub.voAccessor} aplanado.`));
-        config.push(columnChain(csMember(sub.name), spec, { enumName }));
+        config.push(columnChain(csMember(sub.name), withOrder(spec, sub.name, enumName), { enumName }));
       }
     } else if (member.kind === 'externalRef') {
       // Otro agregado: solo su id, sin navegación (una navegable rompería la frontera del agregado). Su FK sí va

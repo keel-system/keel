@@ -111,7 +111,8 @@ function jsonElementReader(field) {
 
 /** La expresión que lee un valor de TEXTO (`source`, un StringValues). */
 function textRead(field, source) {
-  if (field.list) return `TextValues.List<${field.elementCsType}>(${source}, item => ${present(field, textElement(field, 'item'))})`;
+  // La lista lleva su nombre: es el detalle del 400 de una lista vacía (DSL 2.32, D10).
+  if (field.list) return `TextValues.List<${field.elementCsType}>(${source}, ${csString(field.name)}, item => ${present(field, textElement(field, 'item'))})`;
   return textElement(field, source);
 }
 
@@ -460,7 +461,10 @@ function renderReader(model, operation, usings) {
     const { defaultSize, maxSize, defaultSort } = pageableDefaults(model, operation);
     usings.push(repositoriesNamespace(model));
     const sort = defaultSort.map((criterion) => `new SortOrder(${csString(criterion.property)}, SortDirection.${criterion.direction === 'desc' ? 'Desc' : 'Asc'})`);
-    queryLines.push(`        var pageable = PageableReading.Read(httpRequest.Query, defaultSize: ${defaultSize}, maxSize: ${maxSize}, defaultSort: [${sort.join(', ')}]);`);
+    // Lo que el cliente puede pedir en ?sort= (DSL 2.32): ruta del contrato → propiedad del adaptador. Sin sortable, nada.
+    const sortable = (operation.sortable ?? []).map((entry) => `[${csString(entry.path)}] = ${csString(entry.property)}`);
+    const sortableArg = sortable.length > 0 ? `, sortable: new Dictionary<string, string> { ${sortable.join(', ')} }` : '';
+    queryLines.push(`        var pageable = PageableReading.Read(httpRequest.Query, defaultSize: ${defaultSize}, maxSize: ${maxSize}, defaultSort: [${sort.join(', ')}]${sortableArg});`);
   } else if (operation.paginated) {
     // La paginación sin persistencia: dos enteros de la query con sus defaults (también con cuerpo).
     queryLines.push('        var page = TextValues.Int(httpRequest.Query["page"]) ?? 0;');
@@ -606,8 +610,8 @@ export function routeRow(model, operation) {
     : messageComponents(operation, model)
         // El binario de una subida es una PARTE (el @RequestPart de keel-spring), no un parámetro.
         .filter((c) => !fromPath.has(c.name) && !c.resolvedIdentity && !c.file)
-        // El Pageable viaja como los tres parámetros de Spring Data.
-        .flatMap((c) => (c.pageable ? ['page', 'size', 'sort'] : [c.name]));
+        // El Pageable viaja como los parámetros de Spring Data; `sort`, solo con sortable (DSL 2.32, U3).
+        .flatMap((c) => (c.pageable ? ((operation.sortable ?? []).length > 0 ? ['page', 'size', 'sort'] : ['page', 'size']) : [c.name]));
   return {
     operation: operation.name,
     method: operation.route.method,

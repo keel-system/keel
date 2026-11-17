@@ -81,6 +81,7 @@ import { BATCH_SABOTAGE_SPECS, BATCH_SUBJECTS, batchProbePatch, batchSabotageVer
 import { BATCH_JOB_SABOTAGE_SPECS, BATCH_JOB_SUBJECTS, batchJobSabotageVerdict, isBatchJobSabotage } from './lib/batch-job-probes.js';
 import { BATCH_KEY_SABOTAGE_SPECS, BATCH_KEY_SUBJECTS, batchKeySabotageVerdict, isBatchKeySabotage } from './lib/batch-key-probes.js';
 import { INVARIANT_SABOTAGE_SPECS, invariantCases, invariantSabotageVerdict, isInvariantSabotage } from './lib/invariant-probes.js';
+import { SEARCH_SABOTAGE_SPECS, isSearchSabotage, searchCases, searchSabotageVerdict } from './lib/search-probes.js';
 import { resolveRuntime, startMongo, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const args = process.argv.slice(2);
@@ -121,7 +122,7 @@ const SUBJECTS = [
     }
   },
   // `optimisticLocking: declared` sobre documentos: la versión que declara el dominio (el MISMO parche que compila cs-check).
-  ...UNCOVERED_BRANCHES.filter((branch) => ['mailer-mongo-lock', 'jobs-mongo-finder', 'mailer-mongo-author', 'catalog-conditional-mongo', ...READ_SCOPE_SUBJECTS.document, ...LIFECYCLE_SUBJECTS.document, ...HISTORY_SUBJECTS.document, ...BATCH_SUBJECTS.document, ...BATCH_JOB_SUBJECTS.document, ...BATCH_KEY_SUBJECTS.document, 'catalog-invariants-mongo'].includes(branch.name)).map((branch) => ({
+  ...UNCOVERED_BRANCHES.filter((branch) => ['mailer-mongo-lock', 'jobs-mongo-finder', 'mailer-mongo-author', 'catalog-conditional-mongo', ...READ_SCOPE_SUBJECTS.document, ...LIFECYCLE_SUBJECTS.document, ...HISTORY_SUBJECTS.document, ...BATCH_SUBJECTS.document, ...BATCH_JOB_SUBJECTS.document, ...BATCH_KEY_SUBJECTS.document, 'catalog-invariants-mongo', 'catalog-search-mongo'].includes(branch.name)).map((branch) => ({
     name: branch.name,
     from: branch.from,
     mutate: (manifest, layers) => branch.mutate(manifest, layers, branch.name),
@@ -147,6 +148,8 @@ const SUBJECTS = [
       ? BATCH_KEY_SUBJECTS.document.includes(subject.name)
     : isInvariantSabotage(sabotage)
       ? subject.name === 'catalog-invariants-mongo'
+    : isSearchSabotage(sabotage)
+      ? subject.name === 'catalog-search-mongo'
     : isHistorySabotage(sabotage)
       ? HISTORY_SUBJECTS.document.includes(subject.name)
       : isLifecycleSabotage(sabotage)
@@ -252,7 +255,9 @@ const SABOTAGES = {
   // BK. bk-keep-failed no: el todo o nada con clave solo tiene sujeto relacional (BATCH_KEY_DESIGNS).
   ...Object.fromEntries(Object.entries(BATCH_KEY_SABOTAGE_SPECS).filter(([id]) => id !== 'bk-keep-failed').map(([id, spec]) => [id, spec.document])),
   // La guarda del agregado (DSL 2.31): sobre catalog-invariants-mongo, cada uno cae en exactamente sus casos IC y CP.
-  ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document]))
+  ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document])),
+  // La búsqueda de 2.32: sobre catalog-search-mongo, cada uno cae en exactamente sus casos FS y SO.
+  ...Object.fromEntries(Object.entries(SEARCH_SABOTAGE_SPECS).filter(([, spec]) => spec.document).map(([id, spec]) => [id, spec.document]))
 };
 // El sabotaje del uuid tiene que cambiar las DOS direcciones (si no, la ida y vuelta lo cazaría sola): también al escribir.
 // Y el del clasificador, sus DOS vías: la etiqueta y el código 112 dicen lo mismo, así que quitar una sola es una mutación
@@ -358,6 +363,12 @@ try {
     if (isInvariantSabotage(sabotage) && invariantCases(subject.model).length > 0) {
       const verdict = invariantSabotageVerdict(mine, sabotage, subject.model, { document: true });
       step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]${verdict.masked.length > 0 ? `; enmascarados: ${verdict.masked.join(', ')} (Save transaccional, Decimal128)` : ''}`);
+      continue;
+    }
+    // La búsqueda de 2.32: verde si caen EXACTAMENTE sus casos FS/SO.
+    if (isSearchSabotage(sabotage) && searchCases(subject.model).length > 0) {
+      const verdict = searchSabotageVerdict(mine, sabotage, subject.model, { engine: 'mongodb' });
+      step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
       continue;
     }
     if (isBatchKeySabotage(sabotage)) {

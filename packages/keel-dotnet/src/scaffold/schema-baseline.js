@@ -18,7 +18,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
+import { DATABASES, binaryCollationFor } from '@keel-system/keel-core/gen/infra-catalog';
+import { orderCollationWork } from '@keel-system/keel-core/gen/pagination';
 import { GENERATOR_TABLES, STEP_MARK, createdTablesInSql, isGeneratorStep, schemaStepFiles } from '@keel-system/keel-core/gen/schema-steps';
 import { MIGRATIONS_TABLE } from './persistence-runtime.js';
 import { dbContextClass, persistenceNamespace, usesRelational } from './persistence.js';
@@ -205,7 +206,26 @@ export function schemaSteps(model, files, projectDir) {
     createdTables: createdTablesInMigration
   });
   const gaps = snapshotGaps(projectDir, dir, steps.files);
-  return { ...steps, work: [...steps.work, ...gaps.map((gap) => snapshotNote(model, gap))] };
+  // La collation del orden (DSL 2.32, U7) no llega sola a una base desplegada: lo dicen las migraciones que escribió el agente.
+  const absolute = projectDir ? path.join(projectDir, dir) : null;
+  const baselines = absolute && fs.existsSync(absolute) ? fs.readdirSync(absolute).filter((name) => isMigration(name) && !isGeneratorStep(fs.readFileSync(path.join(absolute, name), 'utf8'))) : [];
+  const baseline = baselines.length > 0 ? baselineColumns(baselines.map((name) => fs.readFileSync(path.join(absolute, name), 'utf8')).join('\n')) : null;
+  const collation = orderCollationWork(model, baseline, binaryCollationFor(relationalEngine(model)));
+  return { ...steps, work: [...steps.work, ...gaps.map((gap) => snapshotNote(model, gap)), ...collation] };
+}
+
+/**
+ * Las columnas de las migraciones de EF, una por línea y con el nombre de la COLUMNA delante: EF las escribe como
+ * `Propiedad = table.Column<T>(name: "columna", …)` (sin `name:` si coinciden), y orderCollationWork (keel-core) lee el
+ * esquema columna a columna. Lo que no es una columna se queda fuera.
+ */
+export function baselineColumns(content) {
+  return String(content)
+    .split('\n')
+    .map((line) => /^\s*(\w+)\s*=\s*table\.Column<[^(]*\((.*)$/.exec(line))
+    .filter(Boolean)
+    .map(([, property, rest]) => `${/name:\s*"([^"]+)"/.exec(rest)?.[1] ?? property} ${rest}`)
+    .join('\n');
 }
 
 function exportSchemaScript(model) {

@@ -8,7 +8,7 @@
 // una parte (@RequestPart), no un parámetro; ninguna de las dos lleva cuerpo JSON.
 //
 // La query de un listado paginado se compara entera: con persistencia, los dos leen el Pageable de Spring Data (page,
-// size y sort); sin ella, page y size.
+// size y, con sortable, sort); sin ella, page y size.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -64,6 +64,9 @@ for (const name of fixtureNames()) {
       assert.ok(fromSpring, `keel-spring no expone ${operation.name}`);
       const expected = { ...fromSpring };
       delete expected.multipart;
+      // `sort` solo se ofrece con `sortable` (DSL 2.32, U3): sin él, keel-spring lo recibe en su Pageable pero
+      // QueryParameters lo rechaza con un 400.
+      if ((operation.sortable ?? []).length === 0) expected.query = expected.query.filter((name) => name !== 'sort');
       const { handler, ...actual } = table.get(operation.name);
       assert.deepEqual(actual, expected, operation.name);
       if (operation.responseDto) {

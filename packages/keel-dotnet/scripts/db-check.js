@@ -109,6 +109,9 @@ import { BATCH_SABOTAGE_SPECS, BATCH_SUBJECTS, batchProbePatch, batchSabotageVer
 import { BATCH_JOB_SABOTAGE_SPECS, BATCH_JOB_SUBJECTS, batchJobSabotageVerdict, isBatchJobSabotage } from './lib/batch-job-probes.js';
 import { BATCH_KEY_SABOTAGE_SPECS, BATCH_KEY_SUBJECTS, batchKeySabotageVerdict, isBatchKeySabotage } from './lib/batch-key-probes.js';
 import { INVARIANT_SABOTAGE_SPECS, invariantCases, invariantSabotageVerdict, isInvariantSabotage } from './lib/invariant-probes.js';
+import { SEARCH_SABOTAGE_SPECS, isSearchSabotage, searchCases, searchSabotageVerdict } from './lib/search-probes.js';
+import { orderedTextColumns } from '@keel-system/keel-core/gen/pagination';
+import { binaryCollationFor } from '@keel-system/keel-core/gen/infra-catalog';
 import { resolveRuntime, startDatabase, stopDatabase, run } from '../../keel-nest/scripts/lib/database-container.js';
 
 const args = process.argv.slice(2);
@@ -223,7 +226,9 @@ const SABOTAGES = {
   // exactamente sus casos BK.
   ...Object.fromEntries(Object.entries(BATCH_KEY_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational])),
   // La guarda del agregado (DSL 2.31): sobre catalog-invariants, cada uno cae en exactamente sus casos IC y CP.
-  ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
+  ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational])),
+  // La búsqueda de 2.32: sobre catalog-search, cada uno cae en exactamente sus casos FS y SO (order-collation, solo en MySQL).
+  ...Object.fromEntries(Object.entries(SEARCH_SABOTAGE_SPECS).filter(([, spec]) => spec.relational).map(([id, spec]) => [id, spec.relational]))
 };
 
 /** El sabotaje para un motor: [sufijo, texto, sustituto], o null si no aplica a ese motor. */
@@ -286,7 +291,9 @@ const DERIVED = {
   // Los lotes síncronos con clave (DSL 2.30, D15): BK-1 a BK-5 (scripts/lib/batch-key-probes.js).
   ...Object.assign({}, ...BATCH_KEY_SUBJECTS.relational.map((name) => uncoveredBranch(name))),
   // La guarda del agregado (DSL 2.31): IC-1 a IC-11 y CP-1 a CP-5 (scripts/lib/invariant-probes.js).
-  ...uncoveredBranch('catalog-invariants')
+  ...uncoveredBranch('catalog-invariants'),
+  // La búsqueda de 2.32: FS-* y SO-* (scripts/lib/search-probes.js).
+  ...uncoveredBranch('catalog-search')
 };
 
 function uncoveredBranch(name) {
@@ -304,6 +311,8 @@ const SUBJECTS = only
     ? [sabotage === 'bk-keep-failed' ? 'catalog-batch-atomic-keyed' : 'catalog-batch-keyed']
   : isInvariantSabotage(sabotage)
     ? ['catalog-invariants']
+  : isSearchSabotage(sabotage)
+    ? ['catalog-search']
   : isHistorySabotage(sabotage)
     ? HISTORY_SUBJECTS.relational
     : isLifecycleSabotage(sabotage)
@@ -419,6 +428,11 @@ async function checkEngine(engine) {
       if (isInvariantSabotage(sabotage) && invariantCases(subject.model).length > 0) {
         const verdict = invariantSabotageVerdict(mine, sabotage, subject.model, { document: false });
         step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]${verdict.masked.length > 0 ? `; enmascarados: ${verdict.masked.join(', ')} (Save transaccional)` : ''}`);
+        continue;
+      }
+      if (isSearchSabotage(sabotage) && searchCases(subject.model).length > 0) {
+        const verdict = searchSabotageVerdict(mine, sabotage, subject.model, { engine });
+        step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
         continue;
       }
       if (isBatchKeySabotage(sabotage)) {
@@ -563,6 +577,26 @@ function postgresqlSchemaCheck(database, { model, files }) {
   }
   const live = new Map(columns.map(([table, column, nullable, length, scale]) => [`${table}.${column}`, { nullable: nullable === 'YES', length: length === '' ? null : Number(length), scale: scale === '' ? null : Number(scale) }]));
   const problems = columnProblems(files, live);
+  // La collation binaria del orden (DSL 2.32, U7), contra el DISEÑO: cada columna de texto ordenable va en "C".
+  let collations;
+  try {
+    collations = new Map(psql(database, db, "SELECT table_name || '.' || column_name, coalesce(collation_name, '') FROM information_schema.columns WHERE table_schema = 'public'").map(([key, collation]) => [key, collation]));
+  } catch (error) {
+    return [false, `no se pudo leer el catálogo: ${error.message.split('\n')[0]}`];
+  }
+  for (const entity of model.entities.filter((candidate) => candidate.persisted)) {
+    const ordered = new Set(orderedTextColumns(model, entity.name).map((column) => column.property));
+    for (const member of persistedMembers(model, entity)) {
+      const columns = [];
+      if (member.kind === 'scalar' && member.field.kind !== 'enum' && ordered.has(member.name)) columns.push(member.field.columns.name);
+      if (member.kind === 'scalar' && member.folded && ordered.has(member.folded.name)) columns.push(member.folded.column);
+      if (member.kind === 'vo') for (const sub of member.subs) if (ordered.has(sub.name) && sub.sub.columns) columns.push(sub.column);
+      for (const column of columns) {
+        const have = collations.get(`${entity.tableName}.${column}`);
+        if (have !== undefined && have !== 'C') problems.push(`${entity.tableName}.${column}: collation ${have || 'la de la base'}, no "C" (se ordena por ella)`);
+      }
+    }
+  }
   // El predicado de cada índice único condicionado, contra el DISEÑO (keel-core), no contra lo emitido: comparado con el
   // mapeo, un predicado mal emitido se daba la razón a sí mismo.
   for (const spec of partialIndexSpecs(model, 'postgresql')) {
@@ -639,14 +673,27 @@ function mysqlSchemaCheck(database, { model, files }) {
   return [problems.length === 0, problems.slice(0, 8).join('; ')];
 }
 
-/** Las columnas a las que el diseño pone collation (las únicas de texto en un motor que pliega mayúsculas). */
+/**
+ * Las columnas a las que el diseño pone collation: las únicas de texto en un motor que pliega mayúsculas, y las de texto
+ * por las que se ordena (DSL 2.32, U7: `orderedTextColumns` con la collation binaria del motor).
+ */
 function designCollations(model) {
   const columns = [];
+  const binary = binaryCollationFor('mysql');
   for (const entity of model.entities.filter((candidate) => candidate.persisted)) {
+    const ordered = new Set(orderedTextColumns(model, entity.name).map((column) => column.property));
+    const collationOf = (spec, property) => spec?.collation ?? (ordered.has(property) && !spec?.enum ? binary : null);
     for (const member of persistedMembers(model, entity)) {
-      if (member.kind === 'scalar' && member.field.columns?.collation) columns.push({ table: entity.tableName, column: member.field.columns.name, collation: member.field.columns.collation });
+      if (member.kind === 'scalar') {
+        const collation = collationOf(member.field.columns, member.name);
+        if (collation && member.field.kind !== 'enum') columns.push({ table: entity.tableName, column: member.field.columns.name, collation });
+        if (member.folded && ordered.has(member.folded.name)) columns.push({ table: entity.tableName, column: member.folded.column, collation: binary });
+      }
       if (member.kind === 'vo') {
-        for (const sub of member.subs) if (sub.sub.columns?.collation) columns.push({ table: entity.tableName, column: sub.column, collation: sub.sub.columns.collation });
+        for (const sub of member.subs) {
+          const collation = collationOf(sub.sub.columns, sub.name);
+          if (collation && sub.sub.kind !== 'enum') columns.push({ table: entity.tableName, column: sub.column, collation });
+        }
       }
     }
   }

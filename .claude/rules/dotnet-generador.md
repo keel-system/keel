@@ -368,3 +368,28 @@ las sondas BJ con `CrashAt = 1`, que ahora se emite para todo sujeto con almacé
 `src/scaffold/entity-checks.js` emite en la entidad `EnsureInvariants()` (hijas, derivados, cotas y checks: el orden de D23), el derivado como propiedad que calcula sobre el `decimal` de .NET (`Compute<Campo>()` suma exacto y devuelve null si desborda el `decimal`; la propiedad redondea con `MidpointRounding.AwayFromZero`, que es el HALF_UP de D5, y suma `0.00m` para quedarse con la escala del campo) y las ayudas como miembros estáticos privados (`IsAbsent`, `ExceedsDecimal`, y los patrones con `[GeneratedRegex]`, que hacen la clase `partial`). El constructor de rehidratación no asigna el derivado: el valor que llega en el estado se ignora. Los checks leen las PROPIEDADES (la de un derivado calcula; la de una colección es la vista de solo lectura) y comparan con los operadores de C#, que sobre `int`, `long` y `decimal` comparan por cantidad; los nulos solo se comprueban en los operandos que admiten null (`x is null` sobre un tipo valor no anulable no compila). `saveGuardLines` son las primeras líneas DENTRO de la transacción del `Save` (relacional y documental), y `Apply`/`ToDocument<Raíz>` marcan la línea del derivado con `DERIVED_MARK`, que es lo que busca `cp-stale`.
 
 Lo miden `test/entity-checks.test.js` (la forma, el orden, las notas y los mensajes contra keel-spring, y que cada sabotaje se aplique a lo emitido) y `db-check`/`doc-check` sobre `catalog-invariants`/`-mongo` con `scripts/lib/invariant-probes.js`: un `[Fact]` por vector (`Invariants_IC3_2_…`), y ese sujeto solo ejecuta sus vectores (las clases de ayuda del cronómetro se quedan: las nombra el registro de la fixture). El sujeto es también un parche de `UNCOVERED_BRANCHES`, así que lo recorren `cs-syntax` y `cs-check`.
+
+## Búsqueda (DSL 2.32, incremento B5 de `PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md`)
+
+El finder relacional (`src/scaffold/finders.js`) escribe `in` como `lista.Contains(r.Prop)` (cada elemento plegado antes si
+el input pliega), `ne` como `r.Prop == null || r.Prop != v` (EF ya compensa los nulos de SQL, pero se escribe para que el
+sabotaje `finder-ne-null` tenga forma) y la búsqueda como UN `Where` con un OR de `Contains`/`StartsWith` sobre la sombra de
+cada campo de `over`, con el texto plegado una vez (EF escapa el patrón). El documental (`document-repositories.js`): `$in`
+escrito con el mismo `BsonValues` con que se guarda, `$ne` y un `$or` de `BsonRegularExpression(Regex.Escape(...))`.
+
+El borde: `PageableReading.Read(…, sortable)` cumple `readClientSort` y lanza `InvalidSortException` (Application/Support,
+400 `VALIDATION_ERROR` con `invalidSort` en `ApiErrorMiddleware`); el endpoint le pasa el diccionario ruta del contrato →
+propiedad del adaptador, y sin `sortable` todo `?sort=` es 400 (también en el historial y en los resultados de un trabajo).
+`TextValues.List` recibe el nombre de la lista: parte por comas también un valor repetido (U8) y la vacía o con un elemento
+vacío es `RequestValidationException([nombre], Params)` (D10). La tabla de rutas solo anuncia `sort` con `sortable`.
+
+La collation del orden (U7): `orderCollations` de `persistence.js` lleva `binaryCollationFor` (sin comillas: `"C"` en
+PostgreSQL, `utf8mb4_bin` en MySQL) al `UseCollation` de cada columna de `orderedTextColumns`, sin doblar la de la unicidad;
+`schemaSteps` pasa las migraciones del agente a `orderCollationWork` con `baselineColumns` (una columna de EF por línea, con
+su `name:`). db-check compara la collation contra el DISEÑO en los dos motores. La clave de la caché suma
+`message.Pageable.Page`, `Size` y el orden (D18).
+
+Lo miden `test/search.test.js` (la forma y que cada sabotaje se aplique) y `db-check --only=catalog-search` /
+`doc-check --only=catalog-search-mongo` con `scripts/lib/search-probes.js`: un `[Fact]` por caso (`Search_FS3_…`), las
+filas sembradas una vez por el adaptador emitido, y los SO-* llamando al `PageableReading.Read` emitido (el proyecto de
+sondas referencia la API). El sujeto solo ejecuta sus casos. La sonda de finders de 2.22 se salta los criterios de 2.32.

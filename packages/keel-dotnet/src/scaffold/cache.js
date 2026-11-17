@@ -16,7 +16,7 @@
 // Las claves en el store son las de RedisCacheManager de keel-spring (`<servicio>:<operación>::<clave>`): el mismo
 // `infra/reset-db.sh` y el mismo `ClearCache()` del arnés las borran en los tres servidores.
 
-import { cachedOperations, cacheInvalidations, CACHE_ENTRY_SEPARATOR, CACHE_KEY_PART_SEPARATOR } from '@keel-system/keel-core/gen/cache-plan';
+import { cachedOperations, cacheInvalidations, cacheKeyExtras, CACHE_ENTRY_SEPARATOR, CACHE_KEY_PART_SEPARATOR } from '@keel-system/keel-core/gen/cache-plan';
 import { cacheYaml } from '@keel-system/keel-core/gen/cache-config';
 import { CACHES, devtoolsContainer } from '@keel-system/keel-core/gen/infra-catalog';
 import { cacheFlushCmd } from '@keel-system/keel-core/gen/infra-scripts';
@@ -185,7 +185,17 @@ function cachedOperationsFile(model) {
     }
     // Con una lectura acotada (DSL 2.27, D6) el scope del llamante es parte de la clave, con la forma de keel-spring: si
     // no, la caché sirve a uno la fila de otro. Dos exentos comparten entrada (`all`).
-    const parts = [...cache.keyFields.map((field) => `message.${csMember(field)}`), ...(operation.readScope ? [`message.${READ_SCOPE_PROPERTY}.CacheKey()`] : [])];
+    // Un listado paginado (DSL 2.32, D18): la página, su tamaño y, con sortable, el orden pedido; si no, dos páginas o dos
+    // órdenes compartirían la entrada.
+    const pageable = components.has('pageable');
+    const EXTRA = {
+      page: pageable ? 'message.Pageable.Page' : 'message.Page',
+      size: pageable ? 'message.Pageable.Size' : 'message.Size',
+      sort: 'string.Join(";", message.Pageable.Sort.Select(order => $"{order.Property},{(order.Direction == SortDirection.Desc ? "desc" : "asc")}"))'
+    };
+    const extras = cacheKeyExtras(operation).filter((extra) => extra !== 'sort' || pageable).map((extra) => EXTRA[extra]);
+    const parts = [...cache.keyFields.map((field) => `message.${csMember(field)}`), ...extras, ...(operation.readScope ? [`message.${READ_SCOPE_PROPERTY}.CacheKey()`] : [])];
+    if (extras.length > 0 && pageable) usings.push(namespaceOf(model, 'repositories'));
     if (operation.readScope) usings.push(namespaceOf(model, 'repositories'));
     const key = parts.length > 0 ? `CacheKey.Of(${parts.join(', ')})` : 'CacheKey.Of("all")';
     const by = invalidators.get(cache.cacheName) ?? [];

@@ -43,8 +43,15 @@ export function filterRecordFiles(model, entity) {
 const OPERATOR_DOC = { eq: 'igual a', gt: 'mayor que', gte: 'mayor o igual que', lt: 'menor que', lte: 'menor o igual que' };
 
 function criterionDoc(criterion) {
-  const subject = criterion.target.kind === 'relation' ? `el id de ${criterion.target.path}` : criterion.target.path;
   const folding = criterion.compare === 'ignore-case-accents' ? ', sin mayúsculas ni acentos' : criterion.compare === 'ignore-case' ? ', sin mayúsculas' : '';
+  // La búsqueda libre (DSL 2.32, D13): un OR sobre los campos de over.
+  if (criterion.op === 'search') {
+    const over = criterion.targets.map((entry) => entry.target.path).join(' o ');
+    return criterion.match === 'contains' ? `${over} lo contiene${folding}` : criterion.match === 'prefix' ? `${over} empieza por él${folding}` : `${over} es igual a él${folding}`;
+  }
+  const subject = criterion.target.kind === 'relation' ? `el id de ${criterion.target.path}` : criterion.target.path;
+  if (criterion.op === 'in') return `${subject} es uno de ellos${folding} (la lista vacía es 400 en el borde)`;
+  if (criterion.op === 'ne') return `${subject} distinto de él, también sin valor`;
   if (criterion.match === 'contains') return `${subject} lo contiene${folding}`;
   if (criterion.match === 'prefix') return `${subject} empieza por él${folding}`;
   return `${subject} ${OPERATOR_DOC[criterion.op]} él${folding}`;
@@ -99,17 +106,50 @@ function rowProperty(model, entity, criterion) {
 const COMPARISON = { eq: '==', gt: '>', gte: '>=', lt: '<', lte: '<=' };
 const TIMESTAMP = (criterion) => (criterion.target.kind === 'vo' ? criterion.target.sub : criterion.target.field)?.base === 'timestamp';
 
+/** La condición de texto sobre una propiedad de la fila: Contains, StartsWith (EF escapa el patrón) o la igualdad. */
+function textPredicate(property, match, value, nullable) {
+  const call = match === 'contains' ? `r.${property}.Contains(${value})` : match === 'prefix' ? `r.${property}.StartsWith(${value})` : `r.${property} == ${value}`;
+  return nullable && match !== 'exact' ? `(r.${property} != null && ${call})` : call;
+}
+
+const foldCall = (shadow) => `TextFold.${shadow.accents ? 'FoldCaseAndAccents' : 'FoldCase'}`;
+
 /** El cuerpo de las condiciones de un criterio: el valor ya preparado (plegado, en UTC) y su Where. */
 function relationalCondition(model, entity, criterion) {
-  const property = rowProperty(model, entity, criterion);
   const local = csLocal(criterion.name).replace(/^@/, '');
   const prepared = [];
+  // La búsqueda libre (DSL 2.32, D13): un OR del texto, plegado una vez, sobre la sombra de cada campo de over.
+  if (criterion.op === 'search') {
+    const shadow = criterion.targets[0]?.shadow;
+    let value = local;
+    if (shadow) {
+      prepared.push(`var ${local}Folded = ${foldCall(shadow)}(${local});`);
+      value = `${local}Folded`;
+    }
+    const branches = criterion.targets.map((entry) => {
+      const property = rowProperty(model, entity, { target: entry.target, shadow: entry.shadow });
+      const nullable = entry.shadow ? !entry.shadow.required : entry.target.field?.columns?.nullable !== false;
+      return textPredicate(property, criterion.match, value, nullable);
+    });
+    return { local, prepared, predicate: branches.join(' || ') };
+  }
+  const property = rowProperty(model, entity, criterion);
   let value = local;
+  // `in` (D12): la lista, con cada elemento plegado con la función de la sombra.
+  if (criterion.op === 'in') {
+    if (criterion.shadow) {
+      prepared.push(`var ${local}Folded = ${local}.Select(item => ${foldCall(criterion.shadow)}(item)).ToList();`);
+      value = `${local}Folded`;
+    }
+    return { local, prepared, predicate: `${value}.Contains(r.${property})` };
+  }
   // El valor plegado se calcula fuera de la expresión: EF traduce la comparación, no la llamada.
   if (criterion.shadow) {
-    prepared.push(`var ${local}Folded = TextFold.${criterion.shadow.accents ? 'FoldCaseAndAccents' : 'FoldCase'}(${local});`);
+    prepared.push(`var ${local}Folded = ${foldCall(criterion.shadow)}(${local});`);
     value = `${local}Folded`;
   }
+  // Distinto, y la fila sin valor también lo es (D11): se escribe el nulo aunque EF ya compense la semántica de SQL.
+  if (criterion.op === 'ne') return { local, prepared, predicate: `r.${property} == null || r.${property} != ${value}` };
   // timestamptz solo admite instantes en UTC: uno con otro desfase lo rechaza Npgsql al escribir el parámetro.
   if (TIMESTAMP(criterion)) {
     prepared.push(`var ${local}Utc = ${local}.ToUniversalTime();`);

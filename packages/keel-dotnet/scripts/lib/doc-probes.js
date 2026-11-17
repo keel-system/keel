@@ -41,6 +41,7 @@ import { batchFixtureRegistration, batchProbeBlock, batchProbeUsings, batchProje
 import { batchJobFixtureRegistration, batchJobProbeBlock, batchJobProbeClasses, batchJobProbeUsings } from './batch-job-probes.js';
 import { batchKeyFixtureRegistration, batchKeyProbeBlock, batchKeyProbeUsings } from './batch-key-probes.js';
 import { derivedColumn, derivedKey, invariantProbeBlock } from './invariant-probes.js';
+import { searchProbeBlock, searchProjectReference } from './search-probes.js';
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
 import { parametersNamespace, parametersTestInstance, usesServiceParameters } from '../../src/scaffold/service-parameters.js';
@@ -75,7 +76,7 @@ export function docProbeProject(model) {
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\\..\\${sln.infrastructure.csproj.replaceAll('/', '\\')}" />${batchProjectReference(model)}
+    <ProjectReference Include="..\\..\\${sln.infrastructure.csproj.replaceAll('/', '\\')}" />${batchProjectReference(model)}${searchProjectReference(model, { already: Boolean(batchProjectReference(model)) })}
   </ItemGroup>
 
   <ItemGroup>
@@ -255,7 +256,10 @@ function probesCs(model, namespace) {
     rawDerived: (id, field) =>
       `(await Raw(other, ${csString(invariantRoot?.collectionName ?? '')}, BsonValues.Of(${id}))).GetValue(${csString(derivedKey(model, invariantRoot, field))}, BsonNull.Value).ToString()`
   });
-  for (const root of invariant ? [] : roots) {
+  // La búsqueda de 2.32: el sujeto catalog-search solo ejecuta sus casos FS-* y SO-* (FS-9 cuenta las filas de la tabla).
+  const search = invariant ? null : searchProbeBlock(model, ctx, { sampleState });
+  const exclusive = invariant ?? search;
+  for (const root of exclusive ? [] : roots) {
     const refsBefore = new Set(ctx.refs);
     ctx.refs.clear();
     const states = [];
@@ -538,7 +542,7 @@ function probesCs(model, namespace) {
   // Los lotes síncronos con clave (DSL 2.30, D15): BK-1 a BK-5 en ESTA clase, con el endpoint y KeyedBatches emitidos.
   const batchKeys = batchKeyProbeBlock(model);
   if (batchKeys) blocks.push(batchKeys.methods);
-  if (invariant) blocks.splice(0, blocks.length, invariant.methods);
+  if (exclusive) blocks.splice(0, blocks.length, exclusive.methods);
 
   // Las raíces a las que apunta una referencia: se guarda UNA de cada, y su id vale para todas las sondas.
   const ensures = [];
@@ -572,10 +576,10 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
 
   // El cronómetro y los plazos (DSL 2.26): sus casos van en ESTA clase, que comparte la base con ellos.
   const timer = timerProbeBlock(model, ctx);
-  if (timer && !invariant) blocks.push(timer.methods);
+  if (timer && !exclusive) blocks.push(timer.methods);
   // Las purgas en modo clúster (DSL 2.26, inc. 7): dos réplicas sobre la misma base, en ESTA clase.
   const purgeTimer = purgeTimerProbeBlock(model);
-  if (purgeTimer && !invariant) blocks.push(purgeTimer.methods);
+  if (purgeTimer && !exclusive) blocks.push(purgeTimer.methods);
   const usings = [
     ...timerProbeUsings(model),
     ...purgeTimerProbeUsings(model),

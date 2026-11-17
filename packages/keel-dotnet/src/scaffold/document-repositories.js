@@ -506,7 +506,7 @@ export function renderDocumentAdapter(model, entity) {
 
   // Los finders de las búsquedas (DSL 2.22): los filtros del diseño sobre el documento, y solo esos.
   methods.push(...documentFinderMethods(model, entity));
-  if (entityFinders(model, entity).some((finder) => finder.criteria.some((criterion) => criterion.match !== 'exact'))) usings.push('System.Text.RegularExpressions');
+  if (entityFinders(model, entity).some((finder) => finder.criteria.some((criterion) => criterion.match !== 'exact' && (criterion.op !== 'in')))) usings.push('System.Text.RegularExpressions');
   // La lectura acotada (DSL 2.27): las cargas y el predicado que los finders acotados suman a su filtro.
   if (scopedLoadsOf(model, entity).length > 0) usings.push(namespaceOf(model, 'errors'));
   methods.push(...readScopeDocumentMethods(model, entity, { idWrite: (expr) => (idField ? writeScalar(idField, expr) : `BsonValues.Of(${expr})`) }));
@@ -607,24 +607,52 @@ function documentTarget(model, entity, criterion) {
   return { key: keyOf(model, entity, target.field.name), write: (expr) => writeScalar(target.field, expr) };
 }
 
+const foldCall = (shadow) => `TextFold.${shadow.accents ? 'FoldCaseAndAccents' : 'FoldCase'}`;
+
+/** La condición de texto sobre una clave: la expresión regular CITADA (literal) o la igualdad. */
+function textCondition(key, match, value, write) {
+  // El texto buscado es LITERAL: se escapa antes de componer la expresión, o un punto casaría con cualquier carácter.
+  if (match === 'contains') return `new BsonDocument(${csString(key)}, new BsonRegularExpression(Regex.Escape(${value})))`;
+  if (match === 'prefix') return `new BsonDocument(${csString(key)}, new BsonRegularExpression("^" + Regex.Escape(${value})))`;
+  return `new BsonDocument(${csString(key)}, ${write(value)})`;
+}
+
 function documentCondition(model, entity, criterion) {
   const local = csLocal(criterion.name).replace(/^@/, '');
-  const { key, write } = documentTarget(model, entity, criterion);
   const prepared = [];
+  // La búsqueda libre (DSL 2.32, D13): un $or de expresiones citadas sobre la sombra de cada campo de over.
+  if (criterion.op === 'search') {
+    const shadow = criterion.targets[0]?.shadow;
+    let value = local;
+    if (shadow) {
+      prepared.push(`var ${local}Folded = ${foldCall(shadow)}(${local});`);
+      value = `${local}Folded`;
+    }
+    const branches = criterion.targets.map((entry) => {
+      const { key, write } = documentTarget(model, entity, { target: entry.target, shadow: entry.shadow });
+      return textCondition(key, criterion.match, value, write);
+    });
+    return { local, prepared, condition: `new BsonDocument("$or", new BsonArray { ${branches.join(', ')} })` };
+  }
+  const { key, write } = documentTarget(model, entity, criterion);
+  // `in` (D12): uno de la lista, cada elemento plegado y escrito como se guarda.
+  if (criterion.op === 'in') {
+    const item = criterion.shadow ? `${foldCall(criterion.shadow)}(item)` : 'item';
+    return { local, prepared, condition: `new BsonDocument(${csString(key)}, new BsonDocument("$in", new BsonArray(${local}.Select(item => ${write(item)}))))` };
+  }
   let value = local;
   if (criterion.shadow) {
-    prepared.push(`var ${local}Folded = TextFold.${criterion.shadow.accents ? 'FoldCaseAndAccents' : 'FoldCase'}(${local});`);
+    prepared.push(`var ${local}Folded = ${foldCall(criterion.shadow)}(${local});`);
     value = `${local}Folded`;
   }
-  // El texto buscado es LITERAL: se escapa antes de componer la expresión, o un punto casaría con cualquier carácter.
+  // Distinto (D11): $ne ya deja pasar el documento sin el campo o con null.
+  if (criterion.op === 'ne') return { local, prepared, condition: `new BsonDocument(${csString(key)}, new BsonDocument("$ne", ${write(value)}))` };
   const condition =
-    criterion.match === 'contains'
-      ? `new BsonDocument(${csString(key)}, new BsonRegularExpression(Regex.Escape(${value})))`
-      : criterion.match === 'prefix'
-        ? `new BsonDocument(${csString(key)}, new BsonRegularExpression("^" + Regex.Escape(${value})))`
-        : RANGE_OPERATORS.has(criterion.op)
-          ? `new BsonDocument(${csString(key)}, new BsonDocument(${csString(MONGO_OPERATOR[criterion.op])}, ${write(value)}))`
-          : `new BsonDocument(${csString(key)}, ${write(value)})`;
+    criterion.match !== 'exact'
+      ? textCondition(key, criterion.match, value, write)
+      : RANGE_OPERATORS.has(criterion.op)
+        ? `new BsonDocument(${csString(key)}, new BsonDocument(${csString(MONGO_OPERATOR[criterion.op])}, ${write(value)}))`
+        : `new BsonDocument(${csString(key)}, ${write(value)})`;
   return { local, prepared, condition };
 }
 

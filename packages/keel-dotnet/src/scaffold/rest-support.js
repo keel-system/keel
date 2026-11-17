@@ -105,7 +105,7 @@ export function generate(model) {
       apiErrorMiddlewareBody(usesPersistence(model), usesMultipart(model), usesPersonalData(model), usesBatch(model))
     ),
     ...(usesPageable(model)
-      ? [rest('PageableReading', ['System.Globalization', 'System.Text.RegularExpressions', 'Microsoft.AspNetCore.Http', 'Microsoft.Extensions.Primitives', namespaceOf(model, 'repositories')], pageableReadingBody())]
+      ? [rest('PageableReading', ['System.Globalization', 'System.Text.RegularExpressions', 'Microsoft.AspNetCore.Http', 'Microsoft.Extensions.Primitives', namespaceOf(model, 'repositories'), namespaceOf(model, 'appSupport')], pageableReadingBody())]
       : [])
   ];
 }
@@ -123,10 +123,14 @@ export function usesPageable(model) {
  * una página negativa es la 0 y un tamaño por encima del tope es el tope. La misma que keel-nest.
  */
 function pageableReadingBody() {
-  return String.raw`/// <summary><c>?page=&amp;size=&amp;sort=prop,dir</c> → Pageable, como lo lee Spring Data.</summary>
+  return String.raw`/// <summary>
+/// <c>?page=&amp;size=&amp;sort=campo,dir</c> → Pageable. La página y el tamaño, como los lee Spring Data (indulgente); el
+/// orden, contra <c>sortable</c> (DSL 2.32, D16), y lo que no ofrece es 400.
+/// </summary>
 public static partial class PageableReading
 {
-    public static Pageable Read(IQueryCollection query, int defaultSize, int maxSize, IReadOnlyList<SortOrder> defaultSort)
+    /// <param name="sortable">Por qué puede ordenar el cliente (output.sortable): ruta del contrato → propiedad del adaptador. Sin él, ninguna.</param>
+    public static Pageable Read(IQueryCollection query, int defaultSize, int maxSize, IReadOnlyList<SortOrder> defaultSort, IReadOnlyDictionary<string, string>? sortable = null)
     {
         ArgumentNullException.ThrowIfNull(query);
         var page = Bounded(First(query["page"]), int.MaxValue) ?? 0;
@@ -139,9 +143,11 @@ public static partial class PageableReading
         {
             size = maxSize;
         }
-        var sort = ReadSort(query["sort"]);
-        return new Pageable(page, size, sort.Count > 0 ? sort : defaultSort);
+        var sort = ReadSort(query["sort"], sortable ?? EmptySortable);
+        return new Pageable(page, size, sort ?? defaultSort);
     }
+
+    private static readonly IReadOnlyDictionary<string, string> EmptySortable = new Dictionary<string, string>();
 
     private static string? First(StringValues values) => values.Count == 0 ? null : values[0];
 
@@ -163,28 +169,30 @@ public static partial class PageableReading
     }
 
     /// <summary>
-    /// <c>sort</c> repetido o con varias propiedades: <c>name,desc</c>, <c>status,name</c>. La última pieza es la
-    /// dirección si lo es (sin distinguir mayúsculas) y vale para todas las propiedades de ese valor.
+    /// Lee <c>?sort=</c> (la referencia es readClientSort de keel-core): cada valor es <c>campo</c> o <c>campo,asc|desc</c>,
+    /// con el campo en <c>sortable</c> y la dirección en minúsculas; uno vacío, con más de una coma o con el mismo campo dos
+    /// veces es 400. El orden del cliente SUSTITUYE al del diseño (null: no pidió ninguno); el desempate por id lo añade el
+    /// adaptador.
     /// </summary>
-    private static List<SortOrder> ReadSort(StringValues values)
+    private static List<SortOrder>? ReadSort(StringValues values, IReadOnlyDictionary<string, string> sortable)
     {
-        var orders = new List<SortOrder>();
-        foreach (var value in values)
+        if (values.Count == 0)
         {
-            var parts = (value ?? string.Empty).Split(',').Where(part => part.Trim().Length > 0).ToList();
-            if (parts.Count == 0)
+            return null;
+        }
+        var orders = new List<SortOrder>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var raw in values)
+        {
+            var value = raw ?? string.Empty;
+            var parts = value.Split(',');
+            var path = parts[0];
+            var direction = parts.Length > 1 ? parts[1] : "asc";
+            if (parts.Length > 2 || !sortable.TryGetValue(path, out var property) || direction is not ("asc" or "desc") || !seen.Add(path))
             {
-                continue;
+                throw new InvalidSortException(value);
             }
-            var last = parts[^1].Trim().ToLowerInvariant();
-            SortDirection? direction = last switch
-            {
-                "asc" => SortDirection.Asc,
-                "desc" => SortDirection.Desc,
-                _ => null
-            };
-            var properties = direction is null ? parts : parts[..^1];
-            orders.AddRange(properties.Select(property => new SortOrder(property, direction ?? SortDirection.Asc)));
+            orders.Add(new SortOrder(property, direction == "desc" ? SortDirection.Desc : SortDirection.Asc));
         }
         return orders;
     }
@@ -305,6 +313,7 @@ ${properties.join('\n\n')}
 
 function requestErrorsBody() {
   const [before, after] = FW.missingParameter.message.split('{name}');
+  const [sortBefore, sortAfter] = FW.invalidSort.message.split('{sort}');
   return `// Los fallos de LECTURA de una petición, antes de que llegue a ningún caso de uso. Los traduce
 // ApiErrorMiddleware; no son errores de dominio.
 
@@ -315,6 +324,15 @@ public sealed class MalformedRequestException(Exception? cause = null) : Excepti
 public sealed class MissingParameterException(string parameter) : Exception(${csString(before)} + parameter + ${csString(after)})
 {
     public string Parameter { get; } = parameter;
+}
+
+/// <summary>
+/// Un <c>?sort=</c> que el listado no ofrece (DSL 2.32, D16): un campo fuera de <c>sortable</c>, una dirección que no es asc
+/// o desc, más de una coma, el mismo campo dos veces o un valor vacío. Sin <c>sortable</c>, cualquiera.
+/// </summary>
+public sealed class InvalidSortException(string value) : Exception(${csString(sortBefore)} + value + ${csString(sortAfter)})
+{
+    public string Value { get; } = value;
 }
 
 /// <summary>De dónde sale lo que no supera la validación: en keel-spring, el cuerpo y los parámetros sueltos responden con mensajes distintos.</summary>
@@ -480,15 +498,23 @@ public static partial class TextValues
     public static T? Unreadable<T>(StringValues values)
         where T : class => First(values) is null ? null : throw new MalformedRequestException();
 
-    /// <summary>Una lista en la query: el parámetro repetido o separado por comas.</summary>
-    public static IReadOnlyList<T>? List<T>(StringValues values, Func<string, T> element)
+    /// <summary>
+    /// Una lista en la query (DSL 2.32, U8 y D10): el parámetro repetido, y cada valor partido por comas (un elemento con
+    /// coma solo viaja repitiendo el parámetro). Ausente no filtra; vacía, o con un elemento vacío, es 400 con el nombre del
+    /// parámetro (<paramref name="name"/>) en los detalles. La referencia es readQueryList de keel-core.
+    /// </summary>
+    public static IReadOnlyList<T>? List<T>(StringValues values, string name, Func<string, T> element)
     {
         ArgumentNullException.ThrowIfNull(element);
         if (values.Count == 0)
         {
             return null;
         }
-        IEnumerable<string> items = values.Count > 1 ? values.Select(value => value ?? "") : (values[0] ?? "").Split(',');
+        var items = values.SelectMany(value => (value ?? "").Split(',')).ToList();
+        if (items.Exists(item => item.Length == 0))
+        {
+            throw new RequestValidationException([name], ViolationSource.Params);
+        }
         return [.. items.Select(element)];
     }
 
@@ -915,6 +941,8 @@ ${batch ? batchTranslation(persistence) : ''}    private static Task Write(HttpC
             // ── Errores de framework
             case MissingParameterException missing:
                 return ${response('missingParameter', 'ValidationCode', 'missing.Message')};
+            case InvalidSortException invalidSort:
+                return ${response('invalidSort', 'ValidationCode', 'invalidSort.Message')};
             case MalformedRequestException:
             case BadHttpRequestException { StatusCode: StatusCodes.Status400BadRequest }:
                 return ${response('malformed', 'ValidationCode')};

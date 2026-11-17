@@ -55,6 +55,7 @@ import { batchFixtureRegistration, batchProbeBlock, batchProbeUsings, batchProje
 import { batchJobFixtureRegistration, batchJobProbeBlock, batchJobProbeClasses, batchJobProbeUsings } from './batch-job-probes.js';
 import { batchKeyFixtureRegistration, batchKeyProbeBlock, batchKeyProbeUsings } from './batch-key-probes.js';
 import { derivedColumn, derivedKey, invariantProbeBlock } from './invariant-probes.js';
+import { searchProbeBlock, searchProjectReference } from './search-probes.js';
 import { claimOrderField, claimsForEntity, rescueProbes, screamingSnake, snakeCase, sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
 import { guardClaimsFor, storedState, usesSweepClaims } from '../../src/scaffold/claim.js';
 import { usesReconciliationClaims, usesReconciliationSettings } from '../../src/scaffold/reconciliation-claim.js';
@@ -176,7 +177,7 @@ export function probeProject(model, { files = [] } = {}) {
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\\..\\${sln.infrastructure.csproj.replaceAll('/', '\\')}" />${batchProjectReference(model)}
+    <ProjectReference Include="..\\..\\${sln.infrastructure.csproj.replaceAll('/', '\\')}" />${batchProjectReference(model)}${searchProjectReference(model, { already: Boolean(batchProjectReference(model)) })}
   </ItemGroup>
 
   <ItemGroup>
@@ -406,7 +407,10 @@ function probesCs(model, namespace, harness = null) {
     rawDerived: (id, field) =>
       `await other.GetRequiredService<${dbContext(model)}>().Database.SqlQuery<string>($"SELECT ${sqlDialect(model).text(derivedColumn(field))} ${sqlDialect(model).alias} FROM ${roots.find((root) => root.name === 'Product').tableName} WHERE ${roots.find((root) => root.name === 'Product').idField?.columns?.name ?? 'id'} = {${id}}").SingleAsync(Cancel)`
   });
-  for (const root of invariant ? [] : roots) {
+  // La búsqueda de 2.32: el sujeto catalog-search solo ejecuta sus casos FS-* y SO-* (FS-9 cuenta las filas de la tabla).
+  const search = invariant ? null : searchProbeBlock(model, ctx, { sampleState });
+  const exclusive = invariant ?? search;
+  for (const root of exclusive ? [] : roots) {
     const refsBefore = new Set(ctx.refs);
     ctx.refs.clear();
     const states = [];
@@ -676,7 +680,7 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
   // Los lotes síncronos con clave (DSL 2.30, D15): BK-1 a BK-5 en ESTA clase, con el endpoint y KeyedBatches emitidos.
   const batchKeys = batchKeyProbeBlock(model);
   if (batchKeys) blocks.push(batchKeys.methods);
-  if (invariant) blocks.splice(0, blocks.length, invariant.methods);
+  if (exclusive) blocks.splice(0, blocks.length, exclusive.methods);
 
   // Las raíces a las que apunta una referencia obligatoria: se guarda UNA de cada, y su id vale para todas las sondas.
   const ensures = [];
@@ -710,10 +714,10 @@ ${lets ? `${lets}\n` : ''}        var sample = new ${name}(${stateText});
 
   // El cronómetro y los plazos (DSL 2.26): sus casos van en ESTA clase, que comparte la base con ellos.
   const timer = timerProbeBlock(model, ctx);
-  if (timer && !invariant) blocks.push(timer.methods);
+  if (timer && !exclusive) blocks.push(timer.methods);
   // Las purgas en modo clúster (DSL 2.26, inc. 7): dos réplicas sobre la misma base, en ESTA clase.
   const purgeTimer = purgeTimerProbeBlock(model);
-  if (purgeTimer && !invariant) blocks.push(purgeTimer.methods);
+  if (purgeTimer && !exclusive) blocks.push(purgeTimer.methods);
   const usings = [
     ...timerProbeUsings(model),
     ...purgeTimerProbeUsings(model),
@@ -1022,7 +1026,9 @@ export function finderProbes(model, root, { state, first, port, members, id, usi
   if (finders.length > 0) usings.push(repositoriesNamespace(model));
   return finders.map((finder, index) => {
     const [a, b] = [first + index * 2, first + index * 2 + 1];
-    const textCriteria = finder.criteria.filter((criterion) => criterion.match !== 'exact' && (criterion.target.field.textMaxLength ?? Infinity) > FINDER_TEXT.length);
+    // Los criterios de 2.32 (in, ne, search) los miden los casos FS-* de su sujeto (search-probes.js), no esta sonda.
+    const classic = (criterion) => !['in', 'ne', 'search'].includes(criterion.op);
+    const textCriteria = finder.criteria.filter((criterion) => classic(criterion) && criterion.match !== 'exact' && (criterion.target.field.textMaxLength ?? Infinity) > FINDER_TEXT.length);
     const enumOf = (field) => model.enums.find((candidate) => candidate.name === field.namedType);
     const fixedLiteral = (entry) =>
       entry.field.kind === 'enum' ? `${enumOf(entry.field).name}.${enumMember(entry.value)}` : typeof entry.value === 'string' ? csString(entry.value) : String(entry.value);
@@ -1051,6 +1057,7 @@ export function finderProbes(model, root, { state, first, port, members, id, usi
     const locals = [];
     const cases = finder.criteria.map((criterion, position) => {
       const local = `v${position}`;
+      if (!classic(criterion)) return null;
       if (criterion.match !== 'exact') {
         if (!textCriteria.includes(criterion)) return null;
         const { hit, misses } = finderTextProbes(criterion);
@@ -1078,7 +1085,7 @@ export function finderProbes(model, root, { state, first, port, members, id, usi
 
     const filterOf = (probed, value) =>
       `new ${finder.filterType}(${finder.criteria
-        .map((criterion, position) => (criterion === probed ? value : criterion.required ? `v${position}` : 'null'))
+        .map((criterion, position) => (criterion === probed ? value : criterion.required && classic(criterion) ? `v${position}` : 'null'))
         .join(', ')})`;
     // Un finder acotado (DSL 2.27) lleva su scope; aquí se miden los filtros, así que sin alcance (lo miden las sondas RS).
     const unscoped = finder.scope ? 'ReadScope.Unrestricted(), ' : '';

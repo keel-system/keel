@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './tmp.js';
-import { FINDER_DESIGNS } from '../../../keel-core/test/helpers/finder-designs.js';
+import { FINDER_DESIGNS, SEARCH_DESIGNS } from '../../../keel-core/test/helpers/finder-designs.js';
 import { CONDITIONAL_WRITE_DESIGNS } from '../../../keel-core/test/helpers/conditional-write-designs.js';
 import { READ_SCOPE_DESIGNS } from '../../../keel-core/test/helpers/read-scope-designs.js';
 import { IDENTITY_DESIGNS } from '../../../keel-core/test/helpers/identity-designs.js';
@@ -230,6 +230,16 @@ export const UNCOVERED_BRANCHES = [
   // keel-core/test/helpers/entity-check-designs.js, el MISMO que miden keel-spring y keel-nest. Ninguna fixture lo declara
   // hasta el incremento A8.
   ...ENTITY_CHECK_DESIGNS.map((design) => ({
+    name: design.name,
+    from: design.from,
+    mutate(manifest, layers, name) {
+      manifest.service.name = name;
+      design.mutate(layers);
+    }
+  })),
+  // La búsqueda de 2.32 (in, ne, search y sortable): catalog-search y su gemelo documental, los MISMOS que miden
+  // keel-spring y keel-nest. Los ejecutan db-check y doc-check (FS-* y SO-*).
+  ...SEARCH_DESIGNS.map((design) => ({
     name: design.name,
     from: design.from,
     mutate(manifest, layers, name) {

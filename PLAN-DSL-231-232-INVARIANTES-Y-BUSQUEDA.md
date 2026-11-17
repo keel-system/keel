@@ -21,13 +21,15 @@
 | B2 | Lo neutral: los criterios del finder con su referencia (`FS-*`), `readClientSort` (`SO-*`), la lista en la query, el contrato, la clave de la caché y la collation del orden | hecho (2026-11-17, § Medidas de B2) |
 | B3 | keel-spring: el finder (`in`, `ne`, `search`), `QueryParameters` (`?sort=` y la lista de la query), la collation del orden, la clave de la caché y `finder-check` con FS-*/SO-* | hecho (2026-11-17, § Medidas de B3) |
 | B4 | keel-nest: el finder (`In`, `ne` con la fila nula, la búsqueda como ramas OR), `readPageable` contra `sortable`, la lista de la query, la collation del orden, la clave de la caché y las sondas FS-*/SO-* de db-check y doc-check | hecho (2026-11-17, § Medidas de B4) |
-| B5-B9 | Fase B: DSL 2.32 (R8) | pendiente |
+| B5 | keel-dotnet: el finder (`Contains` sobre la lista, `ne` con el nulo, la búsqueda como un OR de LINQ o un `$or` citado), `PageableReading.Read` contra `sortable`, la lista de la query, la collation del orden, la clave de la caché y las sondas FS-*/SO-* de db-check y doc-check | hecho (2026-11-17, § Medidas de B5) |
+| B6-B9 | Fase B: DSL 2.32 (R8) | pendiente |
 
 **Para retomar.** La fase A (DSL 2.31) está cerrada (A9: cinco corridas de `shop-api` en 92/92). Pendiente de ella:
 `go-check --fixtures` de keel-go (§ Arreglo de la escala), que se pasa en B6. Fase B: B0 medido (U7 y U8 decididas) y B1
 hecho: el DSL es 2.32 y los cuatro generadores rechazan `in`/`ne`/`search`/`sortable` con `searchPendingErrors` hasta su
-incremento. B2 hecho (lo neutral, § Medidas de B2). B3 hecho (keel-spring, § Medidas de B3). B4 hecho (keel-nest, § Medidas de B4).
-Siguiente: B5, keel-dotnet; las sondas de keel-nest (`keel-nest/scripts/lib/search-probes.js`) son el molde más cercano.
+incremento. B2 hecho (lo neutral, § Medidas de B2). B3 hecho (keel-spring, § Medidas de B3). B4 hecho (keel-nest, § Medidas de B4). B5 hecho (keel-dotnet, § Medidas de B5).
+Siguiente: B6, keel-go (y su `go-check --fixtures` pendiente); los moldes son `keel-nest/scripts/lib/search-probes.js` y
+`keel-dotnet/scripts/lib/search-probes.js`.
 Lo que cada generador recoge en su incremento, todo de keel-core:
 - el finder: `criterion.op` `in`/`ne`/`search`, y `search` con `targets[]` en vez de `target`;
 - el lector de `?sort=` contra `operation.sortable` (`readClientSort`, `invalidSortMessage`);
@@ -43,6 +45,37 @@ Lo que cada generador recoge en su incremento, todo de keel-core:
 
 Ventana conocida, como la de A2: desde B2 el contrato ya no anuncia `sort` en un listado sin `sortable`, y los
 servidores lo siguen aceptando hasta su incremento.
+
+## Medidas de B5 (2026-11-17)
+
+keel-dotnet, con `db-check --only=catalog-search` (PostgreSQL y MySQL) y `doc-check --only=catalog-search-mongo`: 21/21
+casos (FS-1 a FS-10 y SO-1 a SO-11, un `[Fact]` por caso) y el esquema o los índices vivos en verde en los tres motores.
+Cada sabotaje cae en exactamente sus casos: `finder-in`, `finder-ne-null` y los cuatro `so-*` en los tres motores,
+`finder-search-literal` en los dos relacionales, `finder-search-regex` en MongoDB y `order-collation` solo en MySQL (FS-3 y
+FS-9). Aquí, a diferencia de keel-nest, `order-collation` lo ve además la comprobación del esquema en los DOS motores: db-check
+compara ahora la collation de cada columna ordenable contra el diseño (`"C"` en PostgreSQL, `utf8mb4_bin` en MySQL), así que
+en PostgreSQL, donde ningún FS cae, el sabotaje tampoco pasa. Las dos redes ENTERAS, en verde: db-check 143/143 pasos (1161 sondas en PostgreSQL y 1209 en MySQL, con la collation nueva en el esquema de todos los sujetos) y doc-check 50/50 (806 sondas). `cs-check` 17/17: las 19 fixtures y 75 variantes (con los dos sujetos de búsqueda) compilan sin warnings y pasan sus 14533 pruebas emitidas.
+
+- **Finder relacional** (`src/scaffold/finders.js`). `in` es `lista.Contains(r.Prop)`, con la lista plegada antes si el
+  input pliega; `ne` es `r.Prop == null || r.Prop != v` (EF ya compensa los nulos de SQL con su semántica de C#: se escribe
+  igualmente, para que el contrato se lea en lo emitido y el sabotaje tenga forma); la búsqueda es UN `Where` con un OR de
+  `Contains`/`StartsWith` sobre la sombra de cada campo de `over` (EF escapa el patrón), con `!= null` delante en la sombra
+  opcional. No hace falta repartir ramas como en TypeORM: LINQ admite el OR entre propiedades.
+- **Finder documental** (`document-repositories.js`). `$in` con cada elemento escrito con el mismo `BsonValues` con que se
+  guarda, `$ne` y un `$or` de `BsonRegularExpression(Regex.Escape(…))`.
+- **El borde.** `PageableReading.Read` recibe `sortable` (ruta del contrato → propiedad del adaptador) del endpoint y lanza
+  `InvalidSortException` (400 `VALIDATION_ERROR` con `invalidSort`); sin `sortable`, todo `?sort=` es 400, también en el
+  historial y en los resultados de un trabajo de lote. `TextValues.List` recibe el nombre de la lista (U8 y D10:
+  `RequestValidationException([nombre], Params)`). La tabla de rutas solo anuncia `sort` con `sortable`, y
+  `contract-parity.test.js` lo compara con keel-spring como en keel-nest.
+- **Collation** (U7). `orderCollations` (`persistence.js`) lleva la de `binaryCollationFor` al `UseCollation` de cada columna
+  de `orderedTextColumns`. `schemaSteps` pasa las migraciones del agente a `orderCollationWork` con `baselineColumns` (EF
+  escribe `Propiedad = table.Column<T>(name: "columna", …)`: una columna por línea con su nombre delante).
+- **Caché** (D18). La clave suma `message.Pageable.Page`, `Size` y, con `sortable`, el orden.
+- **Las sondas** (`scripts/lib/search-probes.js`). Los FS-* siembran las cuatro filas una vez por el adaptador emitido; los
+  SO-* llaman al `PageableReading.Read` emitido, así que el proyecto de sondas del sujeto referencia la API. El sujeto solo
+  ejecuta sus casos, y la sonda de 2.22 se salta los criterios de 2.32. `test/search.test.js` fija la forma de lo emitido y
+  que cada sabotaje se aplique.
 
 ## Medidas de B4 (2026-11-17)
 
