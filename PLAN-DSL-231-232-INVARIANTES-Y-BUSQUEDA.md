@@ -1,6 +1,6 @@
 # DSL 2.31 (R7: invariantes y derivados) y DSL 2.32 (R8: búsqueda)
 
-**Estado: aprobado el 2026-11-16, en curso (A0-A8 hechos).** Origen: R7 y R8 de `docs/evaluacion-dsl-2.24.md` (§ 9, puestos 1.º y 2.º).
+**Estado: aprobado el 2026-11-16, en curso (fase A cerrada; fase B pendiente).** Origen: R7 y R8 de `docs/evaluacion-dsl-2.24.md` (§ 9, puestos 1.º y 2.º).
 
 ## Estado
 
@@ -15,16 +15,34 @@
 | A6 | keel-go: `EnsureInvariants() error` y el derivado como accesor que calcula sobre el `wire.Decimal` del proyecto, su llamada al principio del Save de los dos adaptadores y las sondas de db-check/doc-check | hecho (2026-11-16, § Medidas de A6) |
 | A7 | Contrato y método: las filas `entity-checks` y `computed` de las cuatro matrices, el contrato en los cuatro, `wire-contract.md`, `/keel-design`, `/keel-recover` y los agentes | hecho (2026-11-16, § Medidas de A7) |
 | A8 | Fixtures: las invariantes en prosa que caben pasan a `checks`, `shop-api` según U5 y U6, y un `count` real | hecho (2026-11-16, § Medidas de A8) |
-| A9 | Corridas de control de `shop-api` | pendiente |
+| A9 | Corridas de control de `shop-api`: los cuatro generadores en PostgreSQL y keel-nest en MySQL | hecho (2026-11-16, § Medidas de A9) |
 | B0-B9 | Fase B: DSL 2.32 (R8) | pendiente |
 
-**Para retomar.** A8 hecho: las fixtures declaran `checks` (todas las formas: `requires`/`forbids` con `when`/`unless`
-por `in` y por `equals`, campo contra campo, contra literal y `exactlyOne`), `inspection-reports` un `count` real
-(`sectionCount`), y `shop-api` cierra `cart-line-sum-over-max` (la cota de `count` es de la línea: 422 en
-`addToCart`/`mergeCart`) con el `exactlyOne` de la línea y U6 aplicado (`createProduct` con `input.fields`,
-`ProductInfo.productStock` sin máximo). Las filas `CHECKS_PENDIENTES` de las cuatro `capability-coverage` ya no existen.
-Las redes en vivo de los tres generadores con db-check/doc-check pasan todos sus sujetos. Siguiente: A9, las corridas de
-control de `shop-api` en los cuatro generadores (PostgreSQL) y una en MySQL.
+**Para retomar.** La fase A (DSL 2.31) está cerrada: A9 dio cinco corridas de control de `shop-api` en 92/92, sin
+`cart-line-sum-over-max` ni ningún otro `designGap`, sin que el agente tocara la guarda y con la huella igual o menor
+que en la 2.27. Queda abierto, fuera del plan, el hueco de la escala de keel-nest y keel-dotnet (§ Medidas de A9).
+Siguiente: B0, medir lo de la fase B (DSL 2.32, búsqueda).
+
+## Medidas de A9 (2026-11-16)
+
+| Corrida | Matriz | Primera pasada | Reescritos (2.27 → 2.31) | Clasificación | designGaps |
+|---|---|---|---|---|---|
+| keel-spring · PostgreSQL | 92/92 | 92/92 | 32 → 27 | 27 TODO | 0 |
+| keel-nest · PostgreSQL | 92/92 | 82/92 | 30 → 30 | 25 TODO · 4 consulta | 0 |
+| keel-dotnet · PostgreSQL | 92/92 | no consta | 28 → 26 | 25 TODO | 0 |
+| keel-go · PostgreSQL | 92/92 | no consta | 28 → 25 | 24 TODO | 0 |
+| keel-nest · MySQL | 92/92 | 84/92 | — (primera en MySQL) | 25 TODO · 4 consulta | 0 |
+
+- `cart-line-sum-over-max`, que salió en las cuatro corridas de la 2.27, no sale en ninguna (`corrida-metrics.js
+  series`). En las cinco, el agente escribió la suma de la línea sin comprobación y dejó la cota a la guarda.
+- El `ensureInvariants()` de las cinco raíces es byte a byte el que emite `build` en las cinco, y ningún adaptador perdió
+  su llamada.
+- **Hueco del generador, fuera de la 2.31: la escala de un decimal de entrada con `scalePolicy: reject`.** Un
+  `productPrice` de `30` tiene que salir `30.00`. keel-spring y keel-go pasan porque su `save` relee la fila; keel-nest y
+  keel-dotnet devuelven la entidad en memoria con la escala que llegó, y su agente escala a mano en `ProductInfo` (en la
+  2.27 ya pasaba). Arreglo propuesto: rellenar la escala al leer la entrada también con `reject`, en los cuatro.
+- Hueco del arnés, fuera de la 2.31 (corrida de keel-spring): `tokenAs` no puede dar un email sin verificar
+  (FL-ACC-016).
 
 ## Medidas de A8 (2026-11-16)
 
