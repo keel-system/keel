@@ -67,7 +67,9 @@ test('ningún TODO del agente queda en un archivo con la cabecera de código gen
   }
   const behavior = byPath.get('internal/domain/product_behavior.go');
   assert.match(behavior, /TODO \(agente\): constructor `NewProduct\(\.\.\.\) \(\*Product, error\)`/);
-  assert.match(behavior, /TODO invariante/);
+  // Su invariante es un check (DSL 2.31): la guarda la escribe build en product.go, sin TODO del agente.
+  assert.doesNotMatch(behavior, /TODO invariante/);
+  assert.match(byPath.get('internal/domain/product.go'), /func \(p \*Product\) EnsureInvariants\(\) error/);
   assert.match(behavior, /SKUFormat\.Validate\(p\.sku\)/);
   assert.match(behavior, /método semántico DRAFT → ACTIVE \(lo ejecuta activateProduct\)/);
   assert.match(byPath.get('internal/domain/product.go'), /los TODO de product_behavior\.go/);

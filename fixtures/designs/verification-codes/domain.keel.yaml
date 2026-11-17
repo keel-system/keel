@@ -52,5 +52,5 @@ entities:
           to: expired
           by: expireCode
           lateAction: { error: CODE_EXPIRED }
-    invariants:
-      - Un código en verified tiene siempre verifiedAt estampado.
+    checks:
+      - { requires: verifiedAt, when: { field: status, equals: verified } }

@@ -223,12 +223,15 @@ try {
     const historyProbe = historyProbeFile(plan.model);
     // Las purgas en modo clúster (DSL 2.26, inc. 7): dos réplicas sobre la misma base.
     const purgeTimerProbe = purgeTimerProbeFile(plan.model);
-    // Los lotes (DSL 2.30): por el http.Handler emitido, también en el paquete del almacén.
-    const batchProbe = batchProbeFile(plan.model);
+    // Los lotes (DSL 2.30) solo en sus sujetos: las sondas van por el http.Handler entero, y las de un sujeto con seguridad
+    // (product-catalog, que declara los dos modos) necesitarían un token que no llevan.
+    const ofBatch = (subjects) => subjects.relational.includes(name);
+    // Los lotes: por el http.Handler emitido, también en el paquete del almacén.
+    const batchProbe = ofBatch(BATCH_SUBJECTS) ? batchProbeFile(plan.model) : null;
     // Los lotes asíncronos (DSL 2.30, fase B): el alta, las rutas y el procesador emitidos.
-    const batchJobProbe = batchJobProbeFile(plan.model);
+    const batchJobProbe = ofBatch(BATCH_JOB_SUBJECTS) ? batchJobProbeFile(plan.model) : null;
     // Los lotes síncronos con clave (DSL 2.30, D15): por el http.Handler emitido, también en el paquete del almacén.
-    const batchKeyProbe = batchKeyProbeFile(plan.model);
+    const batchKeyProbe = ofBatch(BATCH_KEY_SUBJECTS) ? batchKeyProbeFile(plan.model) : null;
     // La guarda del agregado (DSL 2.31): su archivo aparte, también en el paquete del almacén.
     const invariantProbe = invariantProbeFile(plan.model);
     const dir = path.join(root, name);
@@ -652,7 +655,10 @@ function applyAndCompare(db, sql, expected) {
       const literal = /'([^']*)'/.exec(predicate)?.[1];
       const column = /^"?(\w+)"?/.exec(predicate)?.[1];
       const definition = got.predicates.get(index) ?? '';
-      if (!definition.includes(`'${literal}'`) || !definition.includes(column)) differences.push(`${table}: ${index} con el predicado «${definition}», se esperaba «${predicate}»`);
+      // Sin literal (la vida de la fila del borrado lógico, `deleted_at IS NULL`, DSL 2.28): el texto sin paréntesis ni comillas.
+      const bare = (text) => text.replace(/[()"]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const same = literal === undefined ? bare(definition) === bare(predicate) : definition.includes(`'${literal}'`) && definition.includes(column);
+      if (!same) differences.push(`${table}: ${index} con el predicado «${definition}», se esperaba «${predicate}»`);
     }
     if (engine === 'mysql') differences.push(...mysqlDifferences(table, want, got));
   }
@@ -694,7 +700,10 @@ function mysqlDifferences(table, want, got) {
     // El motor normaliza la expresión (`(case when (\`status\` = _utf8mb4'ACTIVE') then 1 end)`): su literal y su columna.
     const literal = /'([^']*)'/.exec(expression)?.[1];
     const column = /WHEN `?(\w+)/.exec(expression)?.[1];
-    if (!live.includes(`'${literal}'`) || !live.includes(column)) differences.push(`${table}.${flag}: la expresión del motor es «${live}», se emitió «${expression}»`);
+    // Sin literal (la vida de la fila del borrado lógico, DSL 2.28): el texto sin paréntesis ni comillas invertidas.
+    const bare = (text) => text.replace(/[()`]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const same = literal === undefined ? bare(live) === bare(expression) : live.includes(`'${literal}'`) && live.includes(column);
+    if (!same) differences.push(`${table}.${flag}: la expresión del motor es «${live}», se emitió «${expression}»`);
     const index = flag.replace(/_flag$/, '');
     const columns = got.indexColumns.get(index);
     if (!columns?.unique || columns.columns.at(-1) !== flag) differences.push(`${index}: no es único con ${flag} al final (${columns ? columns.columns.join(', ') : 'no existe'})`);

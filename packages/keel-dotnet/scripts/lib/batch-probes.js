@@ -104,8 +104,10 @@ function namespaceIn(files, suffix) {
 
 /** El handler de la sonda en el lugar del stub de `importProducts`; el resto de archivos, tal cual. */
 export function batchProbePatch(model, file, files) {
-  const operation = allBatchOperations(model)[0];
-  if (!operation || typeof file.content !== 'string' || !file.path.endsWith(`/UseCases/${operation.handlerClass}.cs`)) return file;
+  // Cada operación por lotes: product-catalog declara la síncrona y la asíncrona, y la sonda de los trabajos lee el
+  // gancho del handler de la suya.
+  const operation = typeof file.content === 'string' ? allBatchOperations(model).find((candidate) => file.path.endsWith(`/UseCases/${candidate.handlerClass}.cs`)) : null;
+  if (!operation) return file;
   const result = operation.batch.resultFields.length > 0;
   const aggregate = namespaceIn(files, '/Product.cs');
   const enums = namespaceIn(files, '/ProductStatus.cs');

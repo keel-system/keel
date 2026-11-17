@@ -90,8 +90,10 @@ export function batchSabotageVerdict(checks, id, model, engine) {
 
 /** El handler de la sonda en el lugar del stub de `importProducts`; el resto de archivos, tal cual. */
 export function batchProbePatch(model, file) {
-  const operation = allBatchOperations(model)[0];
-  if (!operation || file.path !== handlerPath(operation)) return file.content;
+  // Cada operación por lotes: product-catalog declara la síncrona y la asíncrona, y la sonda de los trabajos importa el
+  // gancho del handler de la suya.
+  const operation = allBatchOperations(model).find((candidate) => handlerPath(candidate) === file.path);
+  if (!operation) return file.content;
   const result = operation.batch.resultFields.length > 0;
   const returnType = result ? operation.responseDto.name : 'void';
   const dto = result ? `import { ${returnType} } from '../dtos/${fileOf(returnType)}.js';\n` : '';

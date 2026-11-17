@@ -57,5 +57,6 @@ entities:
         retrying: [sending, failed]
         settled: []
         failed: []
-    invariants:
-      - Una orden en sending tiene siempre sendingSince estampado, y una en retrying, retryingSince.
+    checks:
+      - { requires: sendingSince, when: { field: status, in: [sending] } }
+      - { requires: retryingSince, when: { field: status, in: [retrying] } }

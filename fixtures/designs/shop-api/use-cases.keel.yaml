@@ -121,6 +121,7 @@ operations:
       - De cada línea solo se usan productId y count; el nombre, la descripción, el icono, la categoría, el precio y el stock de la línea son los del producto del catálogo, copiados tal cual - si el producto no tiene descripción o categoría, la línea guarda null (fix-cart-line-nullable-fields).
       - Si el carrito ya tiene una línea con ese productId, suma las cantidades; si no, añade la línea. Si items trae varias líneas del mismo productId, también se suman - el carrito nunca tiene dos líneas del mismo producto.
       - Al sumar a una línea existente solo cambia su cantidad; el resto de sus datos se conserva como estaba.
+      - Una suma de cantidades que deja una línea por encima de 1.000.000 (el máximo de count, invariante de la línea) rechaza la operación entera con 422 INVARIANT_VIOLATED, sin escribir nada; lo comprueba la guarda de la entidad al guardar, no el handler.
       - Un productId que no existe en el catálogo rechaza la operación entera.
       - Un productId de un producto fuera de venta (DOWN) rechaza la operación entera (fix-product-not-available).
       - Las líneas (products) salen ordenadas por id ascendente.
@@ -145,6 +146,7 @@ operations:
       - Orden de las guardas - primero CART_NOT_FOUND, sin mirar el producto (ni siquiera para responder added false); después el producto, que si no existe responde added false y si está fuera de venta es PRODUCT_NOT_AVAILABLE; y CONCURRENT_MODIFICATION el último.
       - Copia a la línea del carrito los datos y el precio vigentes del producto, tal cual - si el producto no tiene descripción o categoría, la línea guarda null (fix-cart-line-nullable-fields); si ya hay una línea de ese producto solo suma la cantidad y el resto de sus datos se conserva como estaba.
       - Responde added false solo si el producto no existe.
+      - Una suma de cantidades que deja una línea por encima de 1.000.000 (el máximo de count, invariante de la línea) rechaza la operación entera con 422 INVARIANT_VIOLATED, sin escribir nada; lo comprueba la guarda de la entidad al guardar, no el handler.
       - Un producto fuera de venta (DOWN) se rechaza (fix-product-not-available).
       - No comprueba el stock disponible - el stock se decide en el checkout.
     errors:
@@ -285,7 +287,16 @@ operations:
   createProduct:
     description: Da de alta un producto en el catálogo con el código que manda el solicitante.
     kind: command
-    input: { entity: ProductInfo }
+    input:
+      fields:
+        productId:          { type: string, required: true, compare: exact, constraints: { minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9_-]+$" } }
+        productName:        { type: string, required: true, constraints: { maxLength: 255 } }
+        productPrice:       { type: decimal, required: true, constraints: { scale: 2, scalePolicy: reject, max: 1000000 } }
+        productStock:       { type: int, required: true, constraints: { min: 0, max: 1000000 } }
+        productDescription: { type: string, constraints: { maxLength: 255 } }
+        productIcon:        { type: string, constraints: { maxLength: 255 } }
+        productStatus:      { type: ProductStatus }
+        categoryType:       { type: int, required: true }
     output: { entity: ProductInfo }
     preconditions:
       - Existe una categoría con el categoryType indicado.

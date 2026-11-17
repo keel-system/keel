@@ -99,6 +99,7 @@ test('sin checks, cotas ni derivados no se emite la guarda ni su excepción', ()
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'job-dispatch'));
   for (const entity of Object.values(layers.domain.entities)) {
     for (const field of Object.values(entity.fields ?? {})) delete field.constraints;
+    delete entity.checks;
   }
   for (const type of Object.values(layers.domain.types ?? {})) delete type.constraints;
   const { files } = planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { database: 'postgresql' } });

@@ -13,7 +13,7 @@
 // trabajo (BJ-5) es el gancho del handler, que mueve el cursor FUERA de la transacción del elemento, tras el efecto.
 
 import { BATCH_JOB_CASES, BATCH_JOB_SABOTAGES, BATCH_KEY_RACE_ROUNDS } from '@keel-system/keel-core/gen/batch';
-import { BATCH_JOB, BATCH_ITEM_RESULT, batchKind } from '@keel-system/keel-core/gen/batch-store';
+import { BATCH_JOB, BATCH_ITEM_RESULT, BATCH_SYNC_STALE, batchKind } from '@keel-system/keel-core/gen/batch-store';
 import { KEEL_TIMER } from '@keel-system/keel-core/gen/timer-store';
 import { csMember, csString, namespaceOf } from '../../src/scaffold/render.js';
 import { endpointsClass } from '../../src/scaffold/endpoints.js';
@@ -419,7 +419,7 @@ ${code}
 
   const helpers = `    private const string JobKind = ${csString(batchKind(operation.name))};
 
-    private static readonly BatchSettings JobSettings = new(${PROBE_CHUNK_SIZE}, 7, "0 0 0 * * *");
+    private static readonly BatchSettings JobSettings = new(${PROBE_CHUNK_SIZE}, 7, "0 0 0 * * *"${usesKeyedBatches(model) ? `, ${BATCH_SYNC_STALE.default}` : ''});
 
     /// <summary>El llamante: su sujeto es el dueño de lo que crea (el actor de autoría).</summary>
     private static IDisposable JobOwner(string subject) =>

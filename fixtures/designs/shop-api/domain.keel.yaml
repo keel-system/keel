@@ -54,10 +54,12 @@ entities:
       categoryType:       { type: int, description: "Copia del tipo de categoría del producto, tal cual: si el producto no lo tiene, la línea guarda null." }
       productPrice:       { type: decimal, required: true, constraints: { scale: 2, scalePolicy: reject, max: 1000000 } }
       productStock:       { type: int, required: true, constraints: { min: 0 }, description: "Stock del producto cuando se copió la línea; dato derivado, sin máximo de entrada: la devolución de cancelOrder puede dejar el producto por encima de 1000000 y la copia no se rechaza." }
-      count:              { type: int, required: true, constraints: { min: 1, max: 1000000 } }
+      count:              { type: int, required: true, constraints: { min: 1, max: 1000000 }, description: "La cota es de la línea, no solo de la entrada: addToCart y mergeCart suman cantidades, y una suma que la pase se rechaza con 422 INVARIANT_VIOLATED sin escribir nada." }
     relations:
       cart:  { entity: Cart, cardinality: many-to-one, description: "El carrito al que pertenece la línea; vacío cuando la línea ya está en un pedido." }
       order: { entity: OrderMain, cardinality: many-to-one, description: "El pedido al que pertenece la línea; vacío mientras la línea está en un carrito." }
+    checks:
+      - { exactlyOne: [cart, order] }
 
   OrderMain:
     description: Pedido de un cliente; guarda una copia de sus datos de contacto y las líneas compradas.
@@ -88,7 +90,7 @@ entities:
       productId:          { type: string, id: true, compare: exact, constraints: { minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9_-]+$" }, description: Código del producto; distingue mayúsculas (B0001 y b0001 son dos códigos distintos). }
       productName:        { type: string, required: true, constraints: { maxLength: 255 } }
       productPrice:       { type: decimal, required: true, constraints: { scale: 2, scalePolicy: reject, max: 1000000 } }
-      productStock:       { type: int, required: true, constraints: { min: 0, max: 1000000 }, description: "El máximo acota lo que manda quien crea o edita el producto; la devolución de stock de cancelOrder no lo limita y puede dejar el stock por encima." }
+      productStock:       { type: int, required: true, constraints: { min: 0 }, description: "Sin máximo en la entidad: el de 1.000.000 acota solo lo que manda quien crea o edita el producto (input de createProduct y updateProduct), y la devolución de stock de cancelOrder puede dejar el stock por encima." }
       productDescription: { type: string, constraints: { maxLength: 255 } }
       productIcon:        { type: string, constraints: { maxLength: 255 } }
       productStatus:      { type: ProductStatus, required: true, default: UP, description: "Un producto nuevo, o editado sin mandar el estado, queda a la venta (UP); uno DOWN o borrado no se compra (fix-product-not-available)." }

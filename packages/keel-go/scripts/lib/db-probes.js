@@ -27,6 +27,7 @@
 // sondas de keel-nest y keel-dotnet), y cada número de muestra da valores distintos: dos muestras no comparten clave.
 
 import { declaredAuthorship } from '../../src/scaffold/audit-actor.js';
+import { sampleBlanks } from '@keel-system/keel-core/gen/entity-checks';
 import { usesCorrelation } from '../../src/scaffold/correlation.js';
 import { usesHttpSecurity } from '../../src/scaffold/security.js';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
@@ -345,7 +346,9 @@ function sampleExpr(model, field, ctx, n) {
     });
     return `must(domain.New${vo.name}(${args.join(', ')}))`;
   }
-  const text = field.text ?? {};
+  // El elemento de una lista no trae `text`: su formato es el heredado de su value type, y desde la guarda del agregado
+  // (DSL 2.31) la entidad lo hace cumplir al guardar (el mismo hueco que cerró keel-nest en A4).
+  const text = field.text ?? (field.inheritedPattern ? { pattern: field.inheritedPattern } : {});
   const numeric = field.numeric ?? {};
   switch (field.goType) {
     case 'uuid.UUID':
@@ -417,10 +420,15 @@ function idExpr(field) {
 /** `sample<E>(t, n)`: el estado de muestra n de una entidad, con sus hijas y apuntando a raíces guardadas. */
 export function sampleFunction(model, entity, ctx) {
   const lines = [];
+  // Lo que la guarda rechazaría con todo relleno (un exactlyOne, un forbids, DSL 2.31): su valor cero, la misma regla en
+  // los cuatro.
+  const blanks = sampleBlanks(entity.checks ?? []);
   for (const member of domainMembers(model, entity)) {
     const method = goExported(member.name);
     let value;
-    if (member.kind === 'externalRef') {
+    if (blanks.has(member.relation?.name ?? member.name)) {
+      continue;
+    } else if (member.kind === 'externalRef') {
       // Toda referencia a OTRA raíz apunta a una guardada de verdad (su FK existe). La autorreferencia, a nil.
       const target = member.relation.entity;
       if (target === entity.name) {
@@ -701,9 +709,15 @@ ${expect('state', 'read')}	if want, got := dump${name}(domain.Rehydrate${name}(s
 	state := sample${name}(t, 9)
 	state.${method} = ${isOptionalField(bounded) ? `ptr(${over})` : over}
 	_, err := ${repo}.Save(t.Context(), domain.Rehydrate${name}(state))
-	if code := engineCode(err); code != "22001" {
+${(root.invariantPlan?.bounds ?? []).some((bound) => bound.field === bounded.name && !bound.element)
+  // La entidad hace cumplir la cota (DSL 2.31, D25): el Save la rechaza antes de escribir nada y el texto no llega al
+  // motor; la longitud de la columna la mide la comparación con el catálogo.
+  ? `	if !errors.Is(err, domain.ErrInvariantViolated) {
+		t.Errorf("un ${bounded.name} de ${bounded.columns.length + 1} caracteres sale %v, no ErrInvariantViolated", err)
+	}`
+  : `	if code := engineCode(err); code != "22001" {
 		t.Errorf("un ${bounded.name} de ${bounded.columns.length + 1} caracteres sale %v (SQLSTATE %q), no 22001", err, code)
-	}
+	}`}
 }`);
   }
 
@@ -1056,13 +1070,19 @@ function inverseProbes(model, root, { repo }) {
     const method = goExported(`${inverse.relation}Id`);
     const member = domainMembers(model, root).find((m) => m.kind === 'externalRef' && m.relation.name === inverse.relation);
     const owner = member.optional ? 'ptr(owner)' : 'owner';
+    // La FK que fija la sonda se queda; la otra de su exactlyOne (DSL 2.31: una línea de carrito o de pedido), a nil.
+    const others = [...sampleBlanks(root.checks ?? [], { keep: [inverse.relation] })]
+      .filter((head) => head !== inverse.relation && domainMembers(model, root).some((m) => m.kind === 'externalRef' && m.relation.name === head))
+      .map((head) => `
+			state.${goExported(`${head}Id`)} = nil`)
+      .join('');
     return `func Test${name}_${goExported(inverse.finder)}(t *testing.T) {
 	ctx := t.Context()
 	owner := ensure${inverse.owner}(t)
 	for n := 70; n <= 72; n++ {
 		state := sample${name}(t, n)
 		if n < 72 {
-			state.${method} = ${owner}
+			state.${method} = ${owner}${others}
 		}
 		if _, err := ${repo}.Save(ctx, domain.Rehydrate${name}(state)); err != nil {
 			t.Fatalf("Save: %v", err)

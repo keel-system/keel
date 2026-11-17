@@ -72,12 +72,21 @@ entities:
         type: string
         list: true
         description: Etiquetas libres del informe; array plano, sin tabla de elementos.
+      confidential:
+        type: boolean
+        required: true
+        default: false
+        description: Si el informe es confidencial; lo elige quien lo abre, y sin decirlo no lo es.
       createdAt:
         type: timestamp
         generated: true
       updatedAt:
         type: timestamp
         generated: true
+      sectionCount:
+        type: int
+        computed: { count: sections }
+        description: Cuántas secciones tiene el informe; lo calcula la entidad en cada escritura.
     relations:
       inspector:
         entity: Inspector

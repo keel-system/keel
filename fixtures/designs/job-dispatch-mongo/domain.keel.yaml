@@ -52,5 +52,5 @@ entities:
         queued: [running]
         running: [done]
         done: []
-    invariants:
-      - Un trabajo en running tiene siempre runningSince estampado.
+    checks:
+      - { requires: runningSince, when: { field: status, in: [running] } }

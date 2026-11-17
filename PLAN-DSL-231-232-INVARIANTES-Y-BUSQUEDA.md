@@ -1,6 +1,6 @@
 # DSL 2.31 (R7: invariantes y derivados) y DSL 2.32 (R8: búsqueda)
 
-**Estado: aprobado el 2026-11-16, en curso (A0-A7 hechos).** Origen: R7 y R8 de `docs/evaluacion-dsl-2.24.md` (§ 9, puestos 1.º y 2.º).
+**Estado: aprobado el 2026-11-16, en curso (A0-A8 hechos).** Origen: R7 y R8 de `docs/evaluacion-dsl-2.24.md` (§ 9, puestos 1.º y 2.º).
 
 ## Estado
 
@@ -14,16 +14,51 @@
 | A5 | keel-dotnet: `EnsureInvariants()` y el derivado como propiedad sobre el `decimal` de .NET, su llamada en el Save de los dos adaptadores y las sondas de db-check/doc-check | hecho (2026-11-16, § Medidas de A5) |
 | A6 | keel-go: `EnsureInvariants() error` y el derivado como accesor que calcula sobre el `wire.Decimal` del proyecto, su llamada al principio del Save de los dos adaptadores y las sondas de db-check/doc-check | hecho (2026-11-16, § Medidas de A6) |
 | A7 | Contrato y método: las filas `entity-checks` y `computed` de las cuatro matrices, el contrato en los cuatro, `wire-contract.md`, `/keel-design`, `/keel-recover` y los agentes | hecho (2026-11-16, § Medidas de A7) |
-| A8-A9 | Fase A: DSL 2.31 (R7) | pendiente |
+| A8 | Fixtures: las invariantes en prosa que caben pasan a `checks`, `shop-api` según U5 y U6, y un `count` real | hecho (2026-11-16, § Medidas de A8) |
+| A9 | Corridas de control de `shop-api` | pendiente |
 | B0-B9 | Fase B: DSL 2.32 (R8) | pendiente |
 
-**Para retomar.** A7 hecho: el catálogo neutral (`gen/mechanisms.js`) tiene las filas `entity-checks` y `computed` y la
-red `invariant-check`, y las cuatro matrices las declaran verificadas y falsadas con los sabotajes que midieron A3-A6
-(`npm run matrix` sin nada sin ejecutar ni sin falsar). `keel-nest/test/openapi.test.js` compara el contrato de los dos
-sujetos en los cuatro: el 422 en toda escritura de una raíz guardada y en ninguna otra, el error del check junto a él y el
-derivado `readOnly` solo en las respuestas. `wire-contract.md` § Invariantes del agregado, la clase 3 de `gap-analysis.md`
-(`/keel-design`), tres filas de `evidence-to-dsl.md` (`/keel-recover`) y los agentes de código y de calidad de los cuatro
-dicen lo mismo. `/keel-validate` ya lo tenía desde A1. Siguiente: A8, las fixtures.
+**Para retomar.** A8 hecho: las fixtures declaran `checks` (todas las formas: `requires`/`forbids` con `when`/`unless`
+por `in` y por `equals`, campo contra campo, contra literal y `exactlyOne`), `inspection-reports` un `count` real
+(`sectionCount`), y `shop-api` cierra `cart-line-sum-over-max` (la cota de `count` es de la línea: 422 en
+`addToCart`/`mergeCart`) con el `exactlyOne` de la línea y U6 aplicado (`createProduct` con `input.fields`,
+`ProductInfo.productStock` sin máximo). Las filas `CHECKS_PENDIENTES` de las cuatro `capability-coverage` ya no existen.
+Las redes en vivo de los tres generadores con db-check/doc-check pasan todos sus sujetos. Siguiente: A9, las corridas de
+control de `shop-api` en los cuatro generadores (PostgreSQL) y una en MySQL.
+
+## Medidas de A8 (2026-11-16)
+
+- `--ready` igual que antes en todas las fixtures tocadas: las listas (`product-catalog`, `payment-checkout`,
+  `job-dispatch-cycles`) siguen listas y las demás no empeoran; `shop-api` mejora un criterio (el aviso
+  `CHK-USECASES-INPUT-DEFAULT-OVERRIDABLE` de `createProduct` queda decidido por el input explícito).
+- Dos checks llevan el `error` que la operación ya declaraba para esa misma regla: `price.amount > 0` en `active` es
+  `PRODUCT_PRICE_NOT_POSITIVE` (`activateProduct`) y `refundedAmount ≤ amount` es `REFUND_EXCEEDS_CAPTURED`
+  (`refundPayment`). Sin él, la guarda respondería otro code que el handler.
+- La invariante del `payerId` del medio guardado de `payment-checkout` cruza agregados (D8) y sigue en prosa.
+- La familia «campo con default en la entrada derivada» de `design-generation-delta` solo la disparaba `createProduct`
+  de `shop-api`; ahora la dispara `inspection-reports` (`confidential`, con default y elegible por el cliente).
+- Las muestras de las sondas en vivo rellenan cada campo y cada relación, y la guarda las rechazaba (`exactlyOne` de la
+  línea de `shop-api`). La regla es neutral: `sampleBlanks` de `gen/entity-checks.js` (de un `exactlyOne` queda una, un
+  `forbids` va a nulo; con `keep`, la FK que fija la sonda del finder inverso), probada contra todas las fixtures en
+  cualquier estado y usada por keel-nest, keel-dotnet y keel-go.
+- Destapó cinco defectos previos de las redes, ninguno de lo emitido (A4-A6 solo pasaron el sujeto de la guarda):
+  - keel-nest y keel-dotnet parcheaban solo el handler del PRIMER lote, y `product-catalog` declara dos (la sonda de los
+    trabajos no compilaba o no encontraba su gancho); keel-dotnet además construía `BatchSettings` sin `SyncStaleMs`.
+  - keel-dotnet y keel-go esperaban que el MOTOR rechazara un texto por encima de su cota; desde A5/A6 lo rechaza antes la
+    guarda (D25). Con la cota guardada, la sonda espera `INVARIANT_VIOLATED`; la longitud de la columna ya la mide la
+    comparación con el catálogo.
+  - keel-dotnet y keel-go muestreaban el elemento de una lista sin su formato heredado (el hueco que A4 cerró en
+    keel-nest): `notification-mailer-mongo` no guardaba su muestra.
+  - keel-go comparaba el predicado de un índice parcial por su literal, y el de la vida de la fila (`deleted_at IS NULL`)
+    no tiene: `profile-directory` salía en rojo.
+  - keel-go corría las sondas de lotes, que van por el `http.Handler` sin token, también sobre `product-catalog`, que tiene
+    seguridad: ahora solo sobre sus sujetos (`catalog-batch*`).
+  - keel-spring: la sonda DL-8 de `timer-check` construía la entidad con todo opcional a nulo y la llevaba a `verified`;
+    con el `requires` de `verifiedAt`, sus argumentos rellenan lo que un `requires` exige. `claim-check` (`job-dispatch`,
+    `-mongo`) y `finder-check` (`product-catalog-finder`) siguen en verde.
+- Redes pasadas: `db-check` (PostgreSQL y MySQL) y `doc-check` enteros en keel-nest, keel-dotnet y keel-go; en
+  keel-spring, las que usan fixtures tocadas. El `DR-1` de keel-nest sobre `notification-mailer` salió una vez en rojo
+  con la máquina cargada y en verde al repetirlo solo (es de tiempos; A8 no toca esa fixture).
 
 ## Medidas de A7 (2026-11-16)
 

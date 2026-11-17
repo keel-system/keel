@@ -90,13 +90,12 @@ entities:
         refunded: []
         failed: []
         canceled: []
+    checks:
+      - { field: refundedAmount, op: lte, than: amount, error: REFUND_EXCEEDS_CAPTURED }
+      - { forbids: customerAction, unless: { field: status, equals: actionRequired } }
+      - { forbids: awaitingSince, unless: { field: status, in: [pending, actionRequired, capturing, canceling, refunding] } }
     invariants:
-      - refundedAmount, cuando lo hay, no supera amount.
       - Si hay savedPaymentMethodId, el payerId de ese medio es el payerId del cobro.
-      - customerAction solo tiene valor en actionRequired.
-      - >-
-        awaitingSince solo tiene valor mientras el cobro espera un desenlace: en pending,
-        actionRequired, capturing, canceling y refunding.
 
   SavedPaymentMethod:
     description: >-

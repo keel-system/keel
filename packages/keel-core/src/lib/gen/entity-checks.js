@@ -443,6 +443,29 @@ export function collectPlans(plan) {
 
 // ─── Lo que se mide ──────────────────────────────────────────────────────────
 
+/**
+ * Lo que una muestra de las redes en vivo deja vacío para que el save la acepte: esas muestras rellenan cada campo y cada
+ * relación, y desde la guarda (DSL 2.31) un `exactlyOne` o un `forbids` las rechazaría. Devuelve las cabezas (el campo o la
+ * relación del diseño) que van a nulo: de un `exactlyOne`, todas menos la primera; de un `forbids`, su campo, salvo que un
+ * `requires` lo pida (entonces la muestra cumple el `requires` y el estado de la muestra decide). Un `requires` y una
+ * comparación ya los cumple una muestra completa con valores iguales. Con `keep`, las cabezas que la sonda fija a mano (la
+ * FK de un finder inverso): de su `exactlyOne` se queda esa. La misma regla en los cuatro generadores.
+ */
+export function sampleBlanks(checks = [], { keep = [] } = {}) {
+  const required = new Set(checks.filter((check) => check.kind === 'requires').map((check) => check.paths[0].head));
+  const blanks = new Set();
+  for (const check of checks) {
+    if (check.kind === 'exactlyOne') {
+      // La que la sonda fija (`keep`: la FK de un finder inverso) se queda, y las demás del grupo van a nulo.
+      const kept = check.paths.find((path) => keep.includes(path.head)) ?? check.paths[0];
+      check.paths.filter((path) => path !== kept).forEach((path) => blanks.add(path.head));
+    }
+    if (check.kind === 'forbids' && !required.has(check.paths[0].head)) blanks.add(check.paths[0].head);
+  }
+  return blanks;
+}
+
+
 /** Los casos de la guarda. Los vectores concretos, sobre el sujeto de entity-check-designs.js, los comparten las redes. */
 export const INVARIANT_CASES = Object.freeze([
   { id: 'IC-1', what: 'requires + when: en el estado nombrado, el campo ausente es INVARIANT_VIOLATED; fuera de él, no' },

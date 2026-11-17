@@ -55,6 +55,7 @@ entities:
         running: [done, abandoned]
         done: []
         abandoned: []
-    invariants:
-      - Un trabajo en running tiene siempre runningSince estampado.
-      - Un trabajo en done tiene completedAt, y uno en abandoned tiene abandonedAt.
+    checks:
+      - { requires: runningSince, when: { field: status, in: [running] } }
+      - { requires: completedAt, when: { field: status, in: [done] } }
+      - { requires: abandonedAt, when: { field: status, in: [abandoned] } }

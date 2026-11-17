@@ -19,6 +19,7 @@ export function freshIdLiteral(field) {
   return `'${randomUUID()}'`;
 }
 import { LOCK_VERSION } from '@keel-system/keel-core/gen';
+import { sampleBlanks } from '@keel-system/keel-core/gen/entity-checks';
 import { domainMembers } from '../../src/scaffold/entities.js';
 import { classPath, entityDir, DIRS } from '../../src/scaffold/render.js';
 
@@ -205,9 +206,12 @@ export function sampleValue(model, field, ctx, salt) {
 export function sampleEntity(model, entity, ctx, salt, depth = 0) {
   ctx.imports.add(`${entity.name}|${classPath(entityDir(entity), entity.name)}`);
   const state = [];
+  // Lo que la guarda rechazaría con todo relleno (un exactlyOne, un forbids): a nulo.
+  const blanks = sampleBlanks(entity.invariantPlan?.checks ?? entity.checks ?? []);
   for (const member of domainMembers(model, entity)) {
     let value;
-    if (member.kind === 'externalRef') value = freshIdLiteral(idFieldOf(model, member.relation.entity));
+    if (blanks.has(member.relation?.name ?? member.name)) value = member.kind === 'relationMany' || member.field?.list ? '[]' : 'null';
+    else if (member.kind === 'externalRef') value = freshIdLiteral(idFieldOf(model, member.relation.entity));
     else if (member.kind === 'relationMany') {
       const child = model.entities.find((candidate) => candidate.name === member.relation.entity);
       value = depth > 2 || !child ? '[]' : `[${[1, 2].map((n) => sampleEntity(model, child, ctx, `${salt}${n}`, depth + 1)).join(', ')}]`;

@@ -49,7 +49,7 @@ findings:
     what: "La restitución suma a productStock la cantidad de cada línea, pero ProductInfo.productStock tiene máximo 1000000: un producto con stock alto al que se devuelven unidades puede superar la cota. Ninguna guarda ni error dice qué ve quien cancela (rechazo, tope o stock por encima de la cota)."
     severity: gap
     state: decided
-    reason: "El máximo de 1.000.000 acota lo que manda quien crea o edita el producto y no limita la devolución de stock de cancelOrder: el stock puede quedar por encima y no se rechaza ni se recorta (rules de cancelOrder, description de ProductInfo.productStock; FL-ORD-026). Decidido por el humano el 2026-10-23 (segunda vuelta del cierre). Deja abierto el hallazgo nuevo sobre la copia del stock a la línea."
+    reason: "El máximo de 1.000.000 acota lo que manda quien crea o edita el producto y no limita la devolución de stock de cancelOrder: el stock puede quedar por encima y no se rechaza ni se recorta (rules de cancelOrder, description de ProductInfo.productStock; FL-ORD-026). Decidido por el humano el 2026-10-23 (segunda vuelta del cierre). Deja abierto el hallazgo nuevo sobre la copia del stock a la línea. Desde la DSL 2.31 (U6 del plan) una cota de la entidad es siempre verdad, así que el máximo sale de ProductInfo.productStock y vive solo en el input de createProduct y updateProduct."
   - class: 2
     unit: cancelOrder
     what: "Un cliente que cancela el pedido de otro y que además no está en NEW dispara a la vez ORDER_NOT_OWNED (403) e INVALID_STATE_TRANSITION (409): no se dice qué se evalúa antes. Fija si el estado de un pedido ajeno se filtra a quien no es su dueño."

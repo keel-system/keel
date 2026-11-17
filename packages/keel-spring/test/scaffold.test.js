@@ -69,7 +69,9 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(!product.includes('@Entity'));
   assert.ok(!product.includes('@Column'));
   assert.ok(product.includes('private void transitionTo(ProductStatus target)')); // guard interno, no API
-  assert.ok(product.includes('// TODO invariante'));
+  // Su invariante es un check (DSL 2.31): la guarda la escribe build, sin TODO del agente.
+  assert.ok(product.includes('public void ensureInvariants()'));
+  assert.ok(!product.includes('// TODO invariante'));
   assert.ok(product.includes('// Rehidratación desde persistencia'));
   // Modelo encapsulado (conventions/domain-modeling.md): ni setters ni constructor vacío.
   assert.ok(!product.includes('public void set'));

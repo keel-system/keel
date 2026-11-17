@@ -5,6 +5,7 @@
 
 import { persistedMembers } from '@keel-system/keel-core/gen';
 import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections';
+import { sampleBlanks } from '@keel-system/keel-core/gen/entity-checks';
 import { classPath, DIRS } from '../../src/scaffold/render.js';
 import { freshIdLiteral } from './samples.js';
 
@@ -45,7 +46,12 @@ export function inverseBlock(model, root, index, ctx, { sampleEntity, adapterOf 
   return inverseFindersOf(model, root.name).map((inverse, k) => {
     const owner = model.entities.find((entity) => entity.name === inverse.owner);
     const ownerId = owner.idField?.name ?? 'id';
-    const row = (salt) => `new ${root.name}({ ...stateOf(${sampleEntity(model, root, ctx, `${index}i${k}${salt}`)}), ${inverse.relation}Id: owner.${ownerId} })`;
+    // La FK que fija la sonda se queda; la otra de su exactlyOne (DSL 2.31: una línea de carrito o de pedido), a nulo.
+    const others = [...sampleBlanks(root.checks ?? [], { keep: [inverse.relation] })]
+      .filter((head) => head !== inverse.relation && (root.relations ?? []).some((relation) => relation.name === head))
+      .map((head) => `, ${head}Id: null`)
+      .join('');
+    const row = (salt) => `new ${root.name}({ ...stateOf(${sampleEntity(model, root, ctx, `${index}i${k}${salt}`)}), ${inverse.relation}Id: owner.${ownerId}${others} })`;
     return `  {
     const owner = ${sampleEntity(model, owner, ctx, `${index}o${k}`)};
     await ${adapterOf(owner)}.save(owner);

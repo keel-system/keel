@@ -12,11 +12,12 @@ import { checkCrossRefs } from '../src/lib/crossrefs.js';
 import {
   declaredChecks, declaredComputed, checkKind, checkCondition, checkErrorCode, resolveCheckPath,
   INVARIANT_VIOLATED, invariantPlan, evaluateInvariants, guardsAggregate, boundGuards, isAbsentValue, invariantsHandlerNote,
-  INVARIANT_CASES, INVARIANT_SABOTAGES
+  INVARIANT_CASES, INVARIANT_SABOTAGES, sampleBlanks
 } from '../src/lib/gen/entity-checks.js';
 import { COMPUTED_CASES, COMPUTED_SABOTAGES } from '../src/lib/gen/computed.js';
 import { ENTITY_CHECK_DESIGNS, INVARIANT_VECTORS } from './helpers/entity-check-designs.js';
 import { evaluate } from './design-mutations/runner.js';
+import fs from 'node:fs';
 import { buildModel } from '../src/lib/gen/model.js';
 import { STACK_DEFAULTS, defaultDatabaseFor } from '../src/lib/gen/infra-catalog.js';
 import { PROBE } from './helpers/probe-projection.js';
@@ -258,4 +259,32 @@ test('el contrato: el 422 de la guarda en las escrituras del agregado guardado, 
   const plain = loadService(path.join(FIXTURES, 'catalog-extended'));
   const plainDoc = openapiDocument(buildModel({ manifest: plain.manifest, layers: plain.layers, stack, projection: PROBE }));
   assert.equal(JSON.stringify(plainDoc).includes('INVARIANT_VIOLATED'), invariantPlan(plain.layers, 'Product').bounds.length > 0);
+});
+
+// Las redes en vivo de los cuatro rellenan cada campo y cada relación de su muestra. Con lo que sampleBlanks deja a nulo,
+// una muestra completa con valores iguales cumple los checks de toda fixture, sea cual sea el estado que elija la red.
+test('sampleBlanks: una muestra completa con sus vacíos cumple los checks de cada fixture en cualquier estado', () => {
+  let seen = 0;
+  for (const name of fs.readdirSync(FIXTURES).filter((entry) => fs.existsSync(path.join(FIXTURES, entry, 'service.keel.yaml')))) {
+    const { layers } = loadService(path.join(FIXTURES, name));
+    for (const entityName of Object.keys(layers.domain?.entities ?? {})) {
+      const plan = invariantPlan(layers, entityName);
+      if (plan.checks.length === 0) continue;
+      seen += 1;
+      const blanks = sampleBlanks(plan.checks);
+      const heads = new Set(plan.checks.flatMap((check) => check.paths.map((p) => p.head)));
+      const conditions = [...new Set(plan.checks.map((check) => check.condition?.field).filter(Boolean))];
+      const valuesOf = (field) => {
+        const def = layers.domain.entities[entityName].fields[field];
+        return layers.domain.types?.[def.type]?.values ?? Object.keys(layers.domain.entities[entityName].lifecycle?.transitions ?? {});
+      };
+      const states = conditions.length === 0 ? [{}] : valuesOf(conditions[0]).map((value) => ({ [conditions[0]]: value }));
+      for (const extra of states) {
+        const state = { ...Object.fromEntries([...heads].map((head) => [head, blanks.has(head) ? null : 1])), ...extra };
+        const { violation } = evaluateInvariants({ ...plan, bounds: [], computed: [], children: [] }, state);
+        assert.ok(!violation, `${name}.${entityName} con ${JSON.stringify(extra)}: ${JSON.stringify(violation)}`);
+      }
+    }
+  }
+  assert.ok(seen >= 8, 'las fixtures declaran checks');
 });

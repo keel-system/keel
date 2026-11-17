@@ -37,11 +37,14 @@ export function timerSubject(model) {
 /** Los argumentos del constructor de rehidratación, en su orden: lo que deja construir la entidad en un estado dado. */
 function rehydrationArgs(subject) {
   const { entity, deadline, enumType, statusField } = subject;
+  // Un opcional que un `requires` exige en algún estado (DSL 2.31: el `verifiedAt` de un código en verified) va relleno,
+  // o la guarda rechazaría la entidad que la sonda lleva a ese estado.
+  const requiredByCheck = new Set((entity.checks ?? []).filter((check) => check.kind === 'requires').map((check) => check.paths[0].head));
   const args = entity.fields.map((field) => {
     if (field.isId) return 'id';
     if (field.name === statusField) return 'status';
     if (field.name === deadline.since) return 'since';
-    if (!field.required) return 'null';
+    if (!field.required && !requiredByCheck.has(field.name)) return 'null';
     if (field.javaType === 'String') return `"${'1'.repeat(Math.min(field.constraints?.maxLength ?? 6, 6))}"`;
     if (field.javaType === 'Instant') return 'since';
     // Uno por fila: un uuid obligatorio suele ser clave natural (el `orderId` de stock-reservation), y repetirlo haría

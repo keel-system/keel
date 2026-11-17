@@ -26,6 +26,7 @@
 // sondas de keel-nest), y cada una es distinta: dos muestras no comparten clave natural.
 
 import { randomInt, randomUUID } from 'node:crypto';
+import { sampleBlanks } from '@keel-system/keel-core/gen/entity-checks';
 
 /**
  * El tipo C# del id de una raíz (Guid salvo que el diseño diga otro: un legacy trae ids long o int, shop-api) y un id
@@ -239,7 +240,9 @@ export function sampleValue(model, field, ctx, salt) {
     });
     return args.some((arg) => arg == null) ? null : `new ${vo.name}(${args.join(', ')})`;
   }
-  const text = field.text ?? {};
+  // El elemento de una lista no trae `text`: su formato es el heredado de su value type, y desde la guarda del agregado
+  // (DSL 2.31) la entidad lo hace cumplir al guardar (el mismo hueco que cerró keel-nest en A4).
+  const text = field.text ?? (field.inheritedPattern ? { pattern: field.inheritedPattern } : {});
   const numeric = field.numeric ?? {};
   switch (field.base) {
     case 'uuid':
@@ -315,9 +318,13 @@ export function listOf(model, field, ctx, salt) {
 export function sampleState(model, entity, ctx, salt, depth = 0) {
   ctx.usings.push(namespaceOf(model, entityPlace(entity)));
   const lines = [];
+  // Lo que la guarda rechazaría con todo relleno (un exactlyOne, un forbids, DSL 2.31): a null, la misma regla en los cuatro.
+  const blanks = sampleBlanks(entity.checks ?? []);
   for (const member of domainMembers(model, entity)) {
     let value;
-    if (member.kind === 'externalRef') {
+    if (blanks.has(member.relation?.name ?? member.name)) {
+      value = member.kind === 'relationMany' || member.field?.list ? '[]' : 'null';
+    } else if (member.kind === 'externalRef') {
       // Toda referencia a OTRA raíz apunta a una guardada de verdad (su FK existe), también la opcional: una clave
       // natural que la incluye con null no choca nunca (en PostgreSQL dos NULL no son iguales en un índice único).
       // La autorreferencia, a null: guardarla exigiría la raíz antes que ella misma.
@@ -354,6 +361,14 @@ export function sampleState(model, entity, ctx, salt, depth = 0) {
 // ─── Las sondas ──────────────────────────────────────────────────────────────────────────────────
 
 /** El campo de texto acotado con el que se prueba la cota del motor: sin patrón, fuera de la clave natural. */
+/**
+ * ¿Hace cumplir la entidad la cota de ese campo (DSL 2.31, D25)? Entonces el Save la rechaza con INVARIANT_VIOLATED antes
+ * de escribir nada y el texto largo no llega al motor; la longitud de la columna la mide la comparación con el catálogo.
+ */
+function guardedBound(entity, field) {
+  return (entity.invariantPlan?.bounds ?? []).some((bound) => bound.field === field.name && !bound.element);
+}
+
 function boundedText(entity) {
   return entity.fields.find(
     (field) =>
@@ -572,7 +587,7 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
                   .join('\n                ')}
             };
             var error = await Assert.ThrowsAnyAsync<Exception>(() => ${repo}.Save(new ${root.name}(tooLong), Cancel));
-            ${sqlDialect(model).tooLong}
+            ${guardedBound(root, bounded) ? 'Assert.IsType<InvariantViolatedException>(error);' : sqlDialect(model).tooLong}
         });`);
     }
 
@@ -1163,6 +1178,8 @@ export function inverseFinderProbes(model, root, { state, first, port, id, membe
     const [a, b] = [first + index * 2, first + index * 2 + 1];
     const keyName = `${inverse.relation}Id`;
     const key = csMember(keyName);
+    // La FK que fija la sonda se queda; la otra de su exactlyOne (DSL 2.31: una línea de carrito o de pedido), a null.
+    const others = new Set([...sampleBlanks(root.checks ?? [], { keep: [inverse.relation] })].filter((head) => head !== inverse.relation).map((head) => `${head}Id`));
     const owner = model.entities.find((entity) => entity.name === inverse.owner);
     const ownerId = idCsType(model, inverse.owner);
     const missing = ownerId === 'Guid' ? 'Guid.CreateVersion7()' : `${ownerId}.MaxValue`;
@@ -1176,7 +1193,7 @@ export function inverseFinderProbes(model, root, { state, first, port, id, membe
     const row = (n, local) => `            var raw${local} = ${state(n)};
             var ${local} = new ${root.name}(new ${root.name}State
             {
-                ${members.map((name) => `${csMember(name)} = ${name === keyName ? `owner.${csMember(owner.idField?.name ?? 'id')}` : `raw${local}.${csMember(name)}`},`).join('\n                ')}
+                ${members.map((name) => `${csMember(name)} = ${name === keyName ? `owner.${csMember(owner.idField?.name ?? 'id')}` : others.has(name) ? 'null' : `raw${local}.${csMember(name)}`},`).join('\n                ')}
             });
             await InScope(other => other.GetRequiredService<${port}>().Save(${local}, Cancel));`;
     return `    [Fact]
