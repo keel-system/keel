@@ -471,6 +471,8 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
     match: field.match ?? 'exact',
     // Qué restringe este input de una query cuando no se llama como el campo (DSL 2.22): lo lee query-filters.js.
     filter: field.filter ? { field: field.filter.field, op: field.filter.op } : null,
+    // La búsqueda libre de este input (DSL 2.32, D13): un OR de `match` sobre los campos de `over`, con un solo `compare`.
+    search: Array.isArray(field.search?.over) ? { over: [...field.search.over], match: field.search.match ?? 'contains', compare: field.search.compare ?? 'exact' } : null,
     ...P.elementType(resolved),
     kind: resolved.kind,
     base: resolved.base ?? null,
@@ -528,16 +530,23 @@ function deriveFilterFolds(services, entities, warnings) {
     for (const operation of group.operations) {
       if (operation.kind !== 'query') continue;
       for (const input of operation.bodyFields ?? []) {
-        if ((input.compare ?? 'exact') === 'exact') continue;
+        // La búsqueda libre (2.32, D13) pliega con su `compare` CADA campo de `over`; un subcampo de value object no
+        // tiene sombra (como el `filter` sobre uno), y el finder lo dice.
+        const compare = input.search?.compare ?? input.compare ?? 'exact';
+        if (compare === 'exact') continue;
         // El campo que el filtro restringe: el que nombra `filter` (2.22) o, sin él, el que se llama como el input.
-        const target = input.filter && !input.filter.field.includes('.') ? input.filter.field : input.name;
-        const field = entity.fields.find((candidate) => candidate.name === target);
-        if (!field || field.fold || field.list || !isTextual(field)) continue;
-        const key = `${entity.name}.${field.name}`;
-        const entry = wanted.get(key) ?? { field, accents: new Set(), operations: [] };
-        entry.accents.add(input.compare === 'ignore-case-accents');
-        entry.operations.push(operation.name);
-        wanted.set(key, entry);
+        const targets = input.search
+          ? input.search.over.filter((path) => !path.includes('.'))
+          : [input.filter && !input.filter.field.includes('.') ? input.filter.field : input.name];
+        for (const target of targets) {
+          const field = entity.fields.find((candidate) => candidate.name === target);
+          if (!field || field.fold || field.list || !isTextual(field)) continue;
+          const key = `${entity.name}.${field.name}`;
+          const entry = wanted.get(key) ?? { field, accents: new Set(), operations: [] };
+          entry.accents.add(compare === 'ignore-case-accents');
+          if (!entry.operations.includes(operation.name)) entry.operations.push(operation.name);
+          wanted.set(key, entry);
+        }
       }
     }
   }
@@ -1059,38 +1068,54 @@ function resolveSort(opName, op, domainEntities, entities, warnings, persistence
       return { path, direction, embedded: true, relation: head, field: nested, property: null };
     }
 
-    // En el modelo documental el dot-path es literal: un value object es un
-    // subdocumento y una entidad hija va anidada DENTRO del documento raíz, así que
-    // `price.amount` y `sections.status` son las dos rutas reales del documento.
-    // En el relacional un VO se aplana a columna con prefijo, y la property path de
-    // JPA es el nombre compuesto.
-    const property = !nested
-      ? head
-      : persistenceKind === 'document'
-        ? `${head}.${nested}`
-        : `${head}${nested[0].toUpperCase()}${nested.slice(1)}`;
-
-    // `compare` (DSL 2.14): si el campo por el que se ordena tiene columna SOMBRA, se ordena
-    // por ella y no por el valor crudo. No es cosmética — ordenar por el crudo ordena por
-    // bytes, así que 'Ácme' cae detrás de 'Zeta', y el mismo listado FILTRA por la sombra: el
-    // orden y el filtro discrepan, y el escenario falla en un elemento del medio de la página,
-    // que es el fallo más caro de diagnosticar. La corrida `catalog` lo pagó en tres
-    // controllers, y la convención se lo pedía al agente en vez de emitirlo.
-    const folded = nested ? null : entities?.find((e) => e.name === entityName)?.fields?.find((f) => f.name === head)?.fold;
-    // Un ENUM se ordena por la posición en que el diseño declara sus valores (NEW, FINISHED, CANCELED), no por su nombre,
-    // que es lo que guarda la columna: ordenar por ella es alfabético. Se ordena por una sombra de RANGO (la posición) que el
-    // adaptador escribe al guardar, como la sombra plegada de un texto. Hasta la corrida de control de shop-api los tres
-    // generadores ordenaban listOrders alfabéticamente, y el agente de keel-dotnet lo cambió a mano por un CASE.
-    const enumField = nested ? null : entities?.find((e) => e.name === entityName)?.fields?.find((f) => f.name === head && f.kind === 'enum' && !f.list);
-    if (enumField) {
-      enumField.rank ??= { shadow: `${head}Rank` };
-      return { path, direction, embedded: false, relation: null, field: head, property: enumField.rank.shadow, folded: false, ranked: true };
-    }
-    if (folded) {
-      return { path, direction, embedded: false, relation: null, field: head, property: folded.shadow, folded: true };
-    }
-    return { path, direction, embedded: false, relation: null, field: nested ?? head, property, folded: false };
+    return { path, direction, ...sortTarget(entityName, path, entities, persistenceKind) };
   });
+}
+
+// La columna (o sombra) por la que se ordena una ruta de la entidad, sin agregados embebidos: la comparten el orden por
+// defecto (`sort`) y el que pide el cliente (`sortable`, DSL 2.32), que tienen que ordenar por la MISMA fuente.
+function sortTarget(entityName, path, entities, persistenceKind) {
+  const [head, nested] = path.split('.');
+  // En el modelo documental el dot-path es literal: un value object es un
+  // subdocumento y una entidad hija va anidada DENTRO del documento raíz, así que
+  // `price.amount` y `sections.status` son las dos rutas reales del documento.
+  // En el relacional un VO se aplana a columna con prefijo, y la property path de
+  // JPA es el nombre compuesto.
+  const property = !nested
+    ? head
+    : persistenceKind === 'document'
+      ? `${head}.${nested}`
+      : `${head}${nested[0].toUpperCase()}${nested.slice(1)}`;
+
+  // `compare` (DSL 2.14): si el campo por el que se ordena tiene columna SOMBRA, se ordena
+  // por ella y no por el valor crudo. No es cosmética — ordenar por el crudo ordena por
+  // bytes, así que 'Ácme' cae detrás de 'Zeta', y el mismo listado FILTRA por la sombra: el
+  // orden y el filtro discrepan, y el escenario falla en un elemento del medio de la página,
+  // que es el fallo más caro de diagnosticar. La corrida `catalog` lo pagó en tres
+  // controllers, y la convención se lo pedía al agente en vez de emitirlo.
+  const folded = nested ? null : entities?.find((e) => e.name === entityName)?.fields?.find((f) => f.name === head)?.fold;
+  // Un ENUM se ordena por la posición en que el diseño declara sus valores (NEW, FINISHED, CANCELED), no por su nombre,
+  // que es lo que guarda la columna: ordenar por ella es alfabético. Se ordena por una sombra de RANGO (la posición) que el
+  // adaptador escribe al guardar, como la sombra plegada de un texto. Hasta la corrida de control de shop-api los tres
+  // generadores ordenaban listOrders alfabéticamente, y el agente de keel-dotnet lo cambió a mano por un CASE.
+  const enumField = nested ? null : entities?.find((e) => e.name === entityName)?.fields?.find((f) => f.name === head && f.kind === 'enum' && !f.list);
+  if (enumField) {
+    enumField.rank ??= { shadow: `${head}Rank` };
+    return { embedded: false, relation: null, field: head, property: enumField.rank.shadow, folded: false, ranked: true };
+  }
+  if (folded) {
+    return { embedded: false, relation: null, field: head, property: folded.shadow, folded: true };
+  }
+  return { embedded: false, relation: null, field: nested ?? head, property, folded: false };
+}
+
+// Los campos por los que el CLIENTE puede ordenar (`output.sortable`, DSL 2.32, D15), con la columna de cada uno:
+// la misma que usaría el orden por defecto. crossrefs ya prohíbe lo sensible, lo personal, las relaciones y las listas.
+function resolveSortable(op, entities, persistenceKind) {
+  const output = typeof op.output === 'object' ? op.output : null;
+  if (!output?.sortable) return null;
+  const entityName = payloadEntity(op.output);
+  return output.sortable.map((path) => ({ path, ...sortTarget(entityName, path, entities, persistenceKind) }));
 }
 
 function collectOperations(layers, domainTypes, inlineEnumName, service, warnings, persistenceKind, entities = []) {
@@ -1214,6 +1239,8 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
       returnsList: Boolean(typeof op.output === 'object' && op.output?.list),
       paginated: Boolean(typeof op.output === 'object' && op.output?.paginated),
       sort: resolveSort(opName, op, domainEntities, entities, warnings, persistenceKind),
+      // Los campos por los que el cliente puede ordenar con `?sort=` (DSL 2.32), o null: sin ellos todo `?sort=` es 400.
+      sortable: resolveSortable(op, entities, persistenceKind),
       preconditions: op.preconditions ?? [],
       rules: op.rules ?? [],
       errors: (op.errors ?? []).map((e) => e.code),

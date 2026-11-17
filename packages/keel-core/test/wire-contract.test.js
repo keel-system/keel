@@ -7,8 +7,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WIRE_RULES, WIRE_OUTPUT_CASES, WIRE_INPUT_CASES, WIRE_REJECTED_INPUTS, WIRE_SHAPES, WIRE_ETAG_CASES, WIRE_IF_MATCH_CASES, WIRE_BATCH_CASES, WIRE_BATCH_JOB_CASES } from '../src/lib/gen/wire.js';
+import { WIRE_RULES, WIRE_OUTPUT_CASES, WIRE_INPUT_CASES, WIRE_REJECTED_INPUTS, WIRE_SHAPES, WIRE_ETAG_CASES, WIRE_IF_MATCH_CASES, WIRE_BATCH_CASES, WIRE_BATCH_JOB_CASES, WIRE_QUERY_LIST_CASES } from '../src/lib/gen/wire.js';
 import { etagOf, expectedVersionsFrom, ifMatchAbsent, versionMatches } from '../src/lib/gen/conditional-writes.js';
+import { SO_CASES } from '../src/lib/gen/pagination.js';
 import { BASE_TYPES } from '../src/lib/gen/types.js';
 
 const doc = fs.readFileSync(
@@ -31,7 +32,9 @@ test('cada caso cita una regla que existe, de un tipo que existe, y los ids no s
 
 test('toda regla tiene al menos un caso, salvo las que son de forma y no de valor', () => {
   const structural = new Set(['nulls-include', 'nulls-omit', 'unknown-ignored', 'list-never-null']);
-  const cited = new Set([...allCases, ...WIRE_ETAG_CASES, ...WIRE_IF_MATCH_CASES, ...WIRE_BATCH_CASES, ...WIRE_BATCH_JOB_CASES].map((entry) => entry.rule));
+  const cited = new Set([...allCases, ...WIRE_ETAG_CASES, ...WIRE_IF_MATCH_CASES, ...WIRE_BATCH_CASES, ...WIRE_BATCH_JOB_CASES, ...WIRE_QUERY_LIST_CASES].map((entry) => entry.rule));
+  // El orden del cliente lo ejecutan los casos SO-* de gen/pagination.js, con su referencia readClientSort.
+  if (SO_CASES.length > 0) cited.add('client-sort');
   for (const rule of Object.keys(WIRE_RULES)) {
     if (!structural.has(rule)) assert.ok(cited.has(rule), `la regla ${rule} no tiene ningún caso que la ejecute`);
   }

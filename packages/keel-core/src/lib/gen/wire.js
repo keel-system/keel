@@ -37,6 +37,8 @@ export const WIRE_RULES = {
   'batch-stop': 'En un lote `per-item`, un fallo fuera de `itemErrors` (y que no es de forma del elemento) detiene el lote: ese elemento sale `failed` con su `code`, o con `BATCH_ABORTED` si no tiene, y los siguientes `notAttempted`.',
   'batch-job-accepted': 'Un lote asíncrono (DSL 2.30) responde 202 con el trabajo y su URL en `Location` (`…/jobs/{jobId}`), sin procesar nada en la petición; con idempotency, repetir la clave responde el mismo 202, con el mismo `Location` y el trabajo en el estado en que esté.',
   'batch-job-summary': 'El trabajo lleva `id`, `status` (`queued`, `running`, `completed`, `aborted`), `summary`, `createdAt` y `finishedAt` (null mientras no termina); `notAttempted` solo cuenta en un trabajo `aborted`, y sus resultados son los de los elementos intentados, paginados en orden de índice con la forma de cada elemento del 207.',
+  'query-list': 'Una lista en la query (DSL 2.32) viaja repitiendo el parámetro (`?statuses=active&statuses=draft`); un valor con comas también se parte (`?statuses=active,draft`), así que un elemento que contenga una coma solo viaja repitiéndolo. Ausente no filtra; vacía, o con un elemento vacío, es 400.',
+  'client-sort': 'El orden del cliente (DSL 2.32) es `?sort=campo` o `?sort=campo,asc|desc`, repetido para varios; solo sobre los campos de `sortable`, la dirección en minúsculas, y sustituye al orden del diseño. Cualquier otro valor, o un `?sort=` en un listado sin `sortable`, es 400.',
   'list-never-null': 'Una lista (`list: true`) nunca viaja como null: sin elementos sale `[]`, también con `conventions.nulls: omit`, y una lista que la entrada no informa se lee como `[]` (salvo la opcional de un PATCH, que ausente significa «no tocar»).'
 };
 
@@ -257,3 +259,26 @@ export const WIRE_BATCH_CASES = [
     response: { status: 'error', committed: false, index: 1, code: 'SKU_ALREADY_EXISTS', details: ['items[1]'] }
   }
 ];
+
+/**
+ * La LISTA EN LA QUERY (DSL 2.32, D10, D14 y U8): los valores del parámetro tal como llegan (uno por repetición; `null`
+ * si no vino) y la lista que el borde lee, o `400`. Partir por comas es lo que hace Spring y lo que ya hacían los
+ * cuatro (B0, M12); la lista vacía se rechaza porque «ninguno» nunca es lo que se quiere pedir. Leer el TIPO de cada
+ * elemento (un enum, un uuid) es del lector de cada plataforma, con el 400 de siempre.
+ */
+export const WIRE_QUERY_LIST_CASES = [
+  { id: 'query-list-absent', rule: 'query-list', values: null, read: null },
+  { id: 'query-list-repeated', rule: 'query-list', values: ['active', 'draft'], read: ['active', 'draft'] },
+  { id: 'query-list-comma', rule: 'query-list', values: ['active,draft'], read: ['active', 'draft'] },
+  { id: 'query-list-mixed', rule: 'query-list', values: ['active,draft', 'retired'], read: ['active', 'draft', 'retired'] },
+  { id: 'query-list-empty', rule: 'query-list', values: [''], read: 400 },
+  { id: 'query-list-blank-element', rule: 'query-list', values: ['active,'], read: 400 },
+  { id: 'query-list-blank-repeated', rule: 'query-list', values: ['active', ''], read: 400 }
+];
+
+/** Lo que el borde lee de una lista en la query: la referencia de WIRE_QUERY_LIST_CASES. `null` es «no filtra». */
+export function readQueryList(values) {
+  if (values === null || values === undefined || values.length === 0) return null;
+  const read = values.flatMap((value) => String(value).split(','));
+  return read.some((element) => element === '') ? 400 : read;
+}

@@ -87,6 +87,10 @@ export const DATABASES = {
     // (holdFromReconciliation). 2037 y no 9999: el TIMESTAMP de MySQL acaba en enero de 2038.
     staleTimestamp: "TIMESTAMP '1970-01-01 00:00:00'",
     heldTimestamp: "TIMESTAMP '2037-12-31 00:00:00'",
+    // El ORDEN del texto (U7 de PLAN-DSL-231-232, D17): la collation de la base (`en_US.utf8`) ordena lingüístico con
+    // glibc y por bytes con musl (la imagen alpine), así que el mismo listado salía distinto en un PostgreSQL gestionado.
+    // `"C"` compara por bytes de UTF-8, que es el orden por punto de código: el de MongoDB. Medido en B0.
+    binaryCollation: '"C"',
     kind: 'relational',
     image: 'postgres:16-alpine',
     port: 5432,
@@ -173,6 +177,8 @@ export const DATABASES = {
     // Su collation por defecto (`utf8mb4_0900_ai_ci`) PLIEGA mayúsculas: medido, un índice
     // único rechaza 'acme-1' como duplicado de 'ACME-1'. Ver § Collation de las columnas únicas.
     caseSensitiveCollation: 'utf8mb4_bin',
+    // Y el ORDEN de un texto (D17): con la de por defecto, 'a', 'A' y 'á' empatan (medido en B0). La misma binaria.
+    binaryCollation: 'utf8mb4_bin',
     composeService: (db) => ({
       image: 'mysql:8.0',
       environment: {
@@ -206,6 +212,7 @@ export const DATABASES = {
     // ha arrancado MariaDB en este repo—. Se elige `utf8mb4_bin` y no una `uca1400_..._cs` porque
     // aquella existe en las dos familias y estas solo desde 10.10.
     caseSensitiveCollation: 'utf8mb4_bin',
+    binaryCollation: 'utf8mb4_bin',
     kind: 'relational',
     image: 'mariadb:11',
     port: 3306,
@@ -259,6 +266,8 @@ export const DATABASES = {
     // `CI` es literalmente «case-insensitive»—. RAZONADO, no medido: nadie ha arrancado SQL Server
     // en este repo. `_CS_AS` es su forma de decir sensible a caja y a acentos.
     caseSensitiveCollation: 'Latin1_General_100_CS_AS',
+    // RAZONADO, no medido: `_BIN2` es la que ordena por punto de código.
+    binaryCollation: 'Latin1_General_100_BIN2',
     kind: 'relational',
     image: 'mcr.microsoft.com/mssql/server:2022-latest',
     port: 1433,
@@ -1355,6 +1364,14 @@ export const HEALTHCHECKS = {
  */
 export function caseSensitiveCollationFor(database) {
   return DATABASES[database]?.caseSensitiveCollation ?? null;
+}
+
+/**
+ * La collation con la que ESTE motor ordena un texto por punto de código (U7, D17), o `null` si ya lo hace (MongoDB)
+ * o nadie la ha decidido (Oracle). La lleva toda columna de texto ordenable (`orderedTextColumns` de pagination.js).
+ */
+export function binaryCollationFor(database) {
+  return DATABASES[database]?.binaryCollation ?? null;
 }
 
 export function databaseHealthProbe(database, dbName) {

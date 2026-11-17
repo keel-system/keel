@@ -43,6 +43,20 @@ pueden, el tipo correcto es un `string` con formato, no un `long`.
   es ISO-8601, una fecha que no existe (`2026-02-30`).
 - Una propiedad desconocida se ignora.
 
+### La query de un listado (DSL 2.32)
+
+- Una **lista** en la query viaja repitiendo el parámetro: `?statuses=active&statuses=draft`. Un valor con
+  comas también se parte (`?statuses=active,draft`, como hace Spring), así que un elemento que contenga
+  una coma solo viaja repitiendo el parámetro. Ausente, no filtra; vacía (`?statuses=`) o con un elemento
+  vacío (`?statuses=active,`), es **400**.
+- El **orden** que pide el cliente es `?sort=campo` (ascendente) o `?sort=campo,asc|desc`, repetido para
+  ordenar por varios campos en ese orden. Solo valen los campos de `sortable` del listado, y la dirección
+  en minúsculas. Sustituye al orden del diseño, no se le suma; el id desempata siempre. Un campo fuera de
+  `sortable`, una dirección ilegible, más de una coma, el mismo campo dos veces o cualquier `?sort=` en un
+  listado sin `sortable` es **400** (`VALIDATION_ERROR`, «No se puede ordenar por '…'»).
+- El texto se ordena por punto de código en los tres motores: `Z` antes que `a`, y `z` antes que `á`.
+- Lo que no se puede leer de `page` y `size` no es un 400: vale su default.
+
 ## Nulos
 
 Por defecto un campo sin valor viaja como `null`. Con `conventions.nulls: omit` en el manifiesto, no

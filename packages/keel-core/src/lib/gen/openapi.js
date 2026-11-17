@@ -31,6 +31,7 @@ import { HISTORY_CHANGES, HISTORY_CHANGE_FIELDS, HISTORY_ENTRY_FIELDS, historyCo
 import { guardedRootsWrittenBy, isStructuredComputed, INVARIANT_CONTRACT_CLAUSE } from './entity-checks.js';
 import { BATCH_ITEM_STATUSES, BATCH_JOB_PARAM, batchContractClause, batchJobPaths, batchSuccessStatus } from './batch.js';
 import { BATCH_JOB_STATUSES } from './batch-store.js';
+import { sortParameterValues } from './pagination.js';
 
 const API_KEY_HEADER = 'X-API-Key';
 const OPENAPI_VERSION = '3.1.0';
@@ -113,7 +114,7 @@ function operationObject(context, operation) {
   }
   if (!shape.asBody && !operation.multipart) {
     for (const field of inputs) {
-      parameters.push({ name: field.name, in: 'query', required: Boolean(field.required), schema: personalMark(fieldSchema(context, field, { input: true }), field), description: field.description ?? undefined });
+      parameters.push({ name: field.name, in: 'query', required: Boolean(field.required), ...queryListStyle(field), schema: personalMark(queryListBound(fieldSchema(context, field, { input: true }), field), field), description: field.description ?? undefined });
     }
   }
   if (operation.paginated) {
@@ -122,9 +123,18 @@ function operationObject(context, operation) {
       { name: 'page', in: 'query', required: false, schema: { type: 'integer', minimum: 0, default: 0 } },
       { name: 'size', in: 'query', required: false, schema: { type: 'integer', minimum: 1, ...(pagination.maxSize ? { maximum: pagination.maxSize } : {}), ...(pagination.defaultSize ? { default: pagination.defaultSize } : {}) } }
     );
-    // El historial (DSL 2.29, D10) tiene un orden fijo: el cliente no lo elige, así que no se le ofrece `sort`.
-    if (!operation.historyOf) {
-      parameters.push({ name: 'sort', in: 'query', required: false, schema: { type: 'array', items: { type: 'string' } }, description: '`campo,asc|desc`; sin él, el orden que declara el diseño.' });
+    // `sort` solo con `sortable` (DSL 2.32, U3): sin él todo `?sort=` es 400 y el contrato no lo ofrece. El historial
+    // (DSL 2.29, D10) tiene un orden fijo y no lo declara nunca.
+    if (!operation.historyOf && sortParameterValues(operation).length > 0) {
+      parameters.push({
+        name: 'sort',
+        in: 'query',
+        required: false,
+        style: 'form',
+        explode: true,
+        schema: { type: 'array', items: { type: 'string', enum: sortParameterValues(operation) } },
+        description: '`campo` o `campo,asc|desc`, repetido para ordenar por varios; sustituye al orden del diseño, y cualquier otro valor es 400.'
+      });
     }
   }
   // La escritura condicional (api.concurrency, DSL 2.25): el ETag de la última lectura, obligatorio con `required`.
@@ -154,6 +164,16 @@ function operationObject(context, operation) {
     security: operationSecurity(model, operation)
   };
   return result;
+}
+
+/** Una lista en la query viaja repitiendo el parámetro (DSL 2.32, D14; wire-contract.md § Entrada). */
+function queryListStyle(field) {
+  return field.list ? { style: 'form', explode: true } : {};
+}
+
+/** La lista de un `in` no puede ir vacía (D10): ausente no filtra, y vacía es 400. */
+function queryListBound(schema, field) {
+  return field.list && field.filter?.op === 'in' && schema?.type === 'array' && schema.minItems === undefined ? { ...schema, minItems: 1 } : schema;
 }
 
 function tagOf(model, operation) {

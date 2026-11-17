@@ -45,6 +45,11 @@ export const FRAMEWORK_RESPONSES = {
   malformed: { status: 400, error: 'Bad Request', message: 'Petición malformada' },
   /** Falta un parámetro obligatorio de la query. */
   missingParameter: { status: 400, error: 'Bad Request', message: "Falta el parámetro '{name}' en la petición" },
+  /**
+   * `?sort=` sobre un campo que el listado no ofrece en `sortable`, con una dirección que no es asc/desc, o en un listado
+   * sin `sortable` (DSL 2.32, D16; code VALIDATION_ERROR). `{sort}` es el valor recibido, tal cual.
+   */
+  invalidSort: { status: 400, error: 'Validation Error', message: "No se puede ordenar por '{sort}'" },
   /** El camino existe, con otro método. */
   methodNotAllowed: { status: 405, error: 'Method Not Allowed', message: 'Método HTTP no soportado' },
   /** Ninguna ruta casa con el camino. */
@@ -89,4 +94,9 @@ export function missingPartMessage(name) {
 /** El mensaje de un parámetro obligatorio ausente, con el nombre ya puesto. */
 export function missingParameterMessage(name) {
   return FRAMEWORK_RESPONSES.missingParameter.message.replace('{name}', name);
+}
+
+/** El mensaje del 400 de un `?sort=` no admitido, con el valor recibido. */
+export function invalidSortMessage(value) {
+  return FRAMEWORK_RESPONSES.invalidSort.message.replace('{sort}', value);
 }

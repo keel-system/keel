@@ -10,6 +10,7 @@
 // se escribe en su idioma; sus reglas las fija el PageableHandlerMethodArgumentResolver de Spring Data.
 
 import { operationTargetEntity, resolveRoute } from './model.js';
+import { isTextual } from './types.js';
 
 /**
  * Los defaults del Pageable de keel-spring: `@PageableDefault` sin tamaño es 10 (la anotación gana a
@@ -57,4 +58,98 @@ export function undecidedClientSorts(layers) {
     out.push({ operation: name, entity: output.entity, audience: route.audience });
   }
   return out;
+}
+
+// ─── El orden que pide el cliente (`?sort=`, DSL 2.32, U3 y D16) ───────────────────────────────────────────────
+
+/** Las rutas por las que el cliente puede ordenar una operación (`output.sortable`), o [] si no ofrece `sort`. */
+export function sortableOf(operation) {
+  return (operation?.sortable ?? []).map((entry) => entry.path);
+}
+
+/** Los valores del parámetro `sort` que anuncia el contrato: `campo`, `campo,asc` y `campo,desc` de cada ordenable. */
+export function sortParameterValues(operation) {
+  return sortableOf(operation).flatMap((path) => [path, `${path},asc`, `${path},desc`]);
+}
+
+/**
+ * Cómo se lee `?sort=`, la REFERENCIA EJECUTABLE de D16 que los cuatro lectores cumplen. `values` son los valores
+ * del parámetro tal como llegaron (uno por cada `sort=` repetido; null o [] si no vino). Cada valor es `campo` o
+ * `campo,dir`, con `dir` exactamente `asc` o `desc` (sin mayúsculas ni espacios: es contrato, no indulgencia). Un
+ * valor vacío, uno que no está en `sortable`, una dirección ilegible, más de una coma o el mismo campo dos veces es
+ * 400 con `invalidSortMessage(valor)`; sin `sortable`, CUALQUIER `?sort=` lo es. El orden del cliente SUSTITUYE al
+ * del diseño, no se le suma; el desempate por id lo añade el adaptador en los dos casos, como siempre.
+ *
+ * Devuelve `{ sort: [{ path, direction }], client }` o `{ rejected: <valor> }`. `sabotage` deja falsar la referencia
+ * (SO_SABOTAGES).
+ */
+export function readClientSort(values, { sortable = [], defaultSort = [] } = {}, { sabotage = null } = {}) {
+  const received = values ?? [];
+  if (received.length === 0) return { sort: defaultSort.map(({ path, direction }) => ({ path, direction })), client: false };
+  const allowed = new Set(sortable);
+  const seen = new Set();
+  const sort = [];
+  for (const value of received) {
+    const parts = String(value).split(',');
+    const [path, raw] = parts;
+    const direction = sabotage === 'so-case' && raw ? raw.toLowerCase() : (raw ?? 'asc');
+    const known = sabotage === 'so-open' ? path !== '' : allowed.has(path);
+    if (parts.length > 2 || !known || !['asc', 'desc'].includes(direction)) return { rejected: value };
+    if (seen.has(path) && sabotage !== 'so-duplicate') return { rejected: value };
+    seen.add(path);
+    sort.push({ path, direction });
+  }
+  if (sabotage === 'so-append') sort.unshift(...defaultSort.filter(({ path }) => !seen.has(path)).map(({ path, direction }) => ({ path, direction })));
+  return { sort, client: true };
+}
+
+/**
+ * Los casos del orden del cliente, con el mismo id en las cuatro redes. `sortable` y `defaultSort` son los del
+ * sujeto (`catalog-search` de finder-designs.js: `sortable: [name, sku, price.amount]`, `sort: [name:asc]`);
+ * `expect` es el orden leído o `400`.
+ */
+export const SO_CASES = Object.freeze([
+  { id: 'SO-1', values: null, expect: [['name', 'asc']], what: 'sin ?sort=, el orden del diseño' },
+  { id: 'SO-2', values: ['price.amount'], expect: [['price.amount', 'asc']], what: 'un campo solo ordena ascendente' },
+  { id: 'SO-3', values: ['sku,desc'], expect: [['sku', 'desc']], what: 'con su dirección' },
+  { id: 'SO-4', values: ['price.amount,desc', 'name'], expect: [['price.amount', 'desc'], ['name', 'asc']], what: 'varios, en el orden en que llegan, y sustituyen al del diseño' },
+  { id: 'SO-5', values: ['apiToken'], expect: 400, what: 'un campo fuera de sortable (aquí, uno sensitive) es 400' },
+  { id: 'SO-6', values: ['nombre'], expect: 400, what: 'un campo que no existe es 400, no 500' },
+  { id: 'SO-7', values: ['name,DESC'], expect: 400, what: 'la dirección es asc o desc, en minúsculas' },
+  { id: 'SO-8', values: ['name,asc,price.amount'], expect: 400, what: 'más de una coma en un valor es 400' },
+  { id: 'SO-9', values: ['name', 'name,desc'], expect: 400, what: 'el mismo campo dos veces es 400' },
+  { id: 'SO-10', values: [''], expect: 400, what: 'un ?sort= vacío es 400' },
+  { id: 'SO-11', values: ['name'], sortable: [], expect: 400, what: 'sin sortable, cualquier ?sort= es 400' }
+]);
+
+/** Los sabotajes del orden del cliente: verde es que cada uno cae en exactamente sus casos (la referencia, y la red de cada generador). */
+export const SO_SABOTAGES = Object.freeze({
+  'so-open': { breaks: ['SO-5', 'SO-6', 'SO-11'], what: 'el lector acepta cualquier propiedad (lo de antes de 2.32)' },
+  'so-case': { breaks: ['SO-7'], what: 'la dirección se lee sin distinguir mayúsculas' },
+  'so-duplicate': { breaks: ['SO-9'], what: 'el mismo campo dos veces se acepta' },
+  'so-append': { breaks: ['SO-2', 'SO-3'], what: 'el orden del cliente se suma al del diseño en vez de sustituirlo' }
+});
+
+/**
+ * Las columnas de TEXTO de una raíz por las que se ordena (el `sort` de una query o su `sortable`): U7 les da la
+ * collation binaria del motor (`binaryCollationFor`), para que el texto se ordene por punto de código en los tres
+ * motores (D17). Una sombra plegada cuenta por su columna; un enum se ordena por su rango, que es un número.
+ * Devuelve `[{ path, property, folded }]` en el orden en que aparecen, sin repetir columna.
+ */
+export function orderedTextColumns(model, entityName) {
+  const entity = (model.entities ?? []).find((candidate) => candidate.name === entityName);
+  if (!entity?.persisted) return [];
+  const out = new Map();
+  for (const operation of (model.services ?? []).flatMap((group) => group.operations)) {
+    if (operation.responseDto?.entity !== entityName) continue;
+    for (const target of [...(operation.sort ?? []), ...(operation.sortable ?? [])]) {
+      if (target.embedded || target.ranked || out.has(target.property)) continue;
+      const [head, nested] = target.path.split('.');
+      const field = entity.fields.find((candidate) => candidate.name === head);
+      const leaf = nested ? (model.valueObjects ?? []).find((vo) => vo.name === field?.namedType)?.fields.find((sub) => sub.name === nested) : field;
+      if (!leaf || !(target.folded || isTextual(leaf))) continue;
+      out.set(target.property, { path: target.path, property: target.property, folded: Boolean(target.folded) });
+    }
+  }
+  return [...out.values()];
 }

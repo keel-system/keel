@@ -18,15 +18,59 @@
 | A9 | Corridas de control de `shop-api`: los cuatro generadores en PostgreSQL y keel-nest en MySQL | hecho (2026-11-16, § Medidas de A9) |
 | B0 | Medir lo de la fase B | hecho (2026-11-17, § Medidas de B0; U7 y U8 decididas) |
 | B1 | keel-core: schema, reglas con sus mutaciones, docs, DSL a 2.32 y la frontera de los cuatro | hecho (2026-11-17, § Medidas de B1) |
-| B2-B9 | Fase B: DSL 2.32 (R8) | pendiente |
+| B2 | Lo neutral: los criterios del finder con su referencia (`FS-*`), `readClientSort` (`SO-*`), la lista en la query, el contrato, la clave de la caché y la collation del orden | hecho (2026-11-17, § Medidas de B2) |
+| B3-B9 | Fase B: DSL 2.32 (R8) | pendiente |
 
 **Para retomar.** La fase A (DSL 2.31) está cerrada (A9: cinco corridas de `shop-api` en 92/92). Pendiente de ella:
 `go-check --fixtures` de keel-go (§ Arreglo de la escala), que se pasa en B6. Fase B: B0 medido (U7 y U8 decididas) y B1
 hecho: el DSL es 2.32 y los cuatro generadores rechazan `in`/`ne`/`search`/`sortable` con `searchPendingErrors` hasta su
-incremento. Siguiente: B2, lo neutral (`query-filters.js`, `pagination.js` con `readClientSort` y los casos `SO-*`,
-`openapi.js`, `wire.js` y `wire-contract.md` § Entrada con la lista repetida y la coma de U8, y los sujetos de
-`finder-designs.js`). Ojo en B2: un input con `search` no puede quedar además enlazado por nombre como filtro `eq`
-(`implicitTarget` de `query-filters.js`).
+incremento. B2 hecho (lo neutral, § Medidas de B2). Siguiente: B3, keel-spring. Lo que cada generador recoge en su
+incremento, todo de keel-core:
+- el finder: `criterion.op` `in`/`ne`/`search`, y `search` con `targets[]` en vez de `target`;
+- el lector de `?sort=` contra `operation.sortable` (`readClientSort`, `invalidSortMessage`);
+- el de la lista en la query (`readQueryList`);
+- la collation de `orderedTextColumns` + `binaryCollationFor` en la baseline, con su aviso en `EVOLUTION.md`;
+- `keyExtras` de la caché;
+- los sujetos `SEARCH_DESIGNS` (`catalog-search`, `-mongo`) en sus redes, con los casos `FS-*`/`SO-*` y los sabotajes
+  `FINDER_SABOTAGES`/`SO_SABOTAGES`.
+
+Ventana conocida, como la de A2: desde B2 el contrato ya no anuncia `sort` en un listado sin `sortable`, y los
+servidores lo siguen aceptando hasta su incremento.
+
+## Medidas de B2 (2026-11-17)
+
+Lo neutral, sin red en vivo: `keel-core/test/search.test.js` sobre el sujeto `catalog-search`, más las suites de los
+seis paquetes.
+
+- **Finder** (`query-filters.js`). `in` y `ne` son criterios con su `target`. `search` lleva `targets[]`: cada campo de
+  `over` con su sombra si el `compare` pliega. `deriveFilterFolds` la deriva también para la búsqueda, solo para filtrar.
+  Un subcampo de value object no tiene sombra: la búsqueda plegada sobre él deja la query sin finder, y la nota lo dice.
+  Un input con `search` no se enlaza por nombre.
+- **Referencia del finder.** `matchesFinder` (con `foldText`, el plegado de `TextFold`) y los nueve casos `FS-*` sobre
+  cuatro filas. Tres sabotajes caen en exactamente sus casos: `finder-in`, `finder-ne-null` y `finder-search-literal`.
+- **Orden del cliente** (`pagination.js`). `sortable` se resuelve en el modelo con la misma columna que el orden por
+  defecto: un `sortTarget` compartido, con sombra plegada, rango del enum y ruta documental. `readClientSort` es la
+  referencia de D16, y lo que decide B2:
+  - la dirección es estricta (`asc` o `desc`, en minúsculas);
+  - más de una coma es 400, y el mismo campo dos veces también;
+  - un `?sort=` vacío es 400;
+  - el orden del cliente sustituye al del diseño, no se le suma.
+- **Casos del orden.** Once `SO-*` y cuatro sabotajes exactos: `so-open`, `so-case`, `so-duplicate` y `so-append`.
+- **El 400.** Texto nuevo, `FRAMEWORK_RESPONSES.invalidSort` («No se puede ordenar por '…'»), con code
+  `VALIDATION_ERROR`, sin code nuevo.
+- **Cable.** Reglas `query-list` y `client-sort`. Los casos `WIRE_QUERY_LIST_CASES` y su referencia `readQueryList`: la
+  coma parte (U8), y una lista vacía o con un elemento vacío es 400 (D10). `wire-contract.md` § La query de un listado.
+- **Contrato.** El parámetro `sort` solo aparece con `sortable`, con `style: form, explode: true` y un enum de `campo`,
+  `campo,asc` y `campo,desc`. Una lista en la query va con `explode: true`, y la de un `in` lleva `minItems: 1`.
+- **Caché** (D18). `cacheKeyExtras` suma `page` y `size` a la clave de todo listado paginado, y `sort` si ofrece
+  `sortable`. Destapó un hueco previo: la clave de un listado paginado cacheado ya ignoraba la página. Ninguna fixture lo
+  declara.
+- **Collation** (U7). `binaryCollation` del catálogo: `"C"` en PostgreSQL, `utf8mb4_bin` en MySQL y MariaDB, `_BIN2`
+  (razonado) en SQL Server, ninguna en MongoDB. `orderedTextColumns` dice qué columnas de texto (o sombras) se ordenan.
+  Va **aparte** de `collation` del campo para no cambiar el esquema de los cuatro a la vez: cada generador la lleva a su
+  baseline en su incremento.
+- **Sujetos.** `SEARCH_DESIGNS` (`catalog-search`, `-mongo`, sobre `product-catalog`) va aparte de `FINDER_DESIGNS`,
+  porque las redes de los cuatro recorren `FINDER_DESIGNS` y su frontera rechaza la 2.32 hasta su incremento.
 
 ## Medidas de B1 (2026-11-17)
 

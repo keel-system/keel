@@ -34,7 +34,7 @@ function sources(pkg) {
 test('ningún generador escribe a mano un texto de la respuesta de error', () => {
   const texts = [
     ...Object.values(DOMAIN_ERROR_RESPONSES).map((entry) => entry.fallback),
-    ...Object.values(FRAMEWORK_RESPONSES).map((entry) => entry.message.split('{name}')[0])
+    ...Object.values(FRAMEWORK_RESPONSES).map((entry) => entry.message.split(/\{\w+\}/)[0])
   ];
   const found = [];
   for (const pkg of ['keel-spring', 'keel-nest', 'keel-dotnet', 'keel-go']) {

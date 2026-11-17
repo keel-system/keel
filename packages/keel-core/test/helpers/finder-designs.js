@@ -4,6 +4,25 @@
 // que sus db-check y doc-check midan los MISMOS diseños: keel-dotnet los recorre como variantes (UNCOVERED_BRANCHES)
 // y keel-nest como sujetos derivados.
 
+// La búsqueda de 2.32 (`in`, `ne`, `search` y `sortable`) sobre el Product de product-catalog, en los dos modelos: la
+// query `searchCatalog` es la de los casos FS-* (gen/query-filters.js) y SO-* (gen/pagination.js).
+function withSearch(layers, model) {
+  layers.persistence.default = { ...layers.persistence.default, model };
+  layers['use-cases'].operations.searchCatalog = {
+    description: 'Busca productos por estados, por notas distintas de un texto y por un texto libre en el nombre o las notas.',
+    kind: 'query',
+    input: {
+      fields: {
+        statuses: { type: 'ProductStatus', list: true, filter: { field: 'status', op: 'in' } },
+        notNotes: { type: 'text', filter: { field: 'notes', op: 'ne' } },
+        q: { type: 'string', constraints: { maxLength: 120 }, search: { over: ['name', 'notes'], match: 'contains', compare: 'ignore-case-accents' } }
+      }
+    },
+    output: { entity: 'Product', paginated: true, sort: ['name:asc'], sortable: ['name', 'sku', 'price.amount'], exclude: ['apiToken'] }
+  };
+  layers.api.endpoints.searchCatalog = { method: 'GET', path: '/products/search' };
+}
+
 export const FINDER_DESIGNS = [
   {
     name: 'product-catalog-finder',
@@ -63,4 +82,13 @@ export const FINDER_DESIGNS = [
       });
     }
   }
+];
+
+/**
+ * Los sujetos de la búsqueda de 2.32, aparte de FINDER_DESIGNS porque la frontera de cada generador los rechaza hasta
+ * su incremento (B3-B6 de PLAN-DSL-231-232): cada uno los suma a sus redes al quitarla.
+ */
+export const SEARCH_DESIGNS = [
+  { name: 'catalog-search', from: 'product-catalog', mutate: (layers) => withSearch(layers, 'relational') },
+  { name: 'catalog-search-mongo', from: 'product-catalog', mutate: (layers) => withSearch(layers, 'document') }
 ];

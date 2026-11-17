@@ -34,6 +34,8 @@ export function cachedOperations(model) {
         cacheName: `${slug}:${kebabCase(operation.name)}`,
         ttlSeconds: operation.cache.ttlSeconds,
         keyFields: operation.cache.keyFields ?? [],
+        // Lo que la clave suma a los keyFields del diseño (D18 de PLAN-DSL-231-232): la página y el orden pedidos.
+        keyExtras: cacheKeyExtras(operation),
         invalidatedBy: operation.cache.invalidatedBy ?? [],
         responseDto: operation.responseDto,
         returnsList: operation.returnsList,
@@ -42,6 +44,17 @@ export function cachedOperations(model) {
     }
   }
   return entries;
+}
+
+/**
+ * Lo que la clave de una caché suma a sus `keyFields`, en este orden y detrás de ellos (D18, DSL 2.32): en un listado
+ * paginado, la página y su tamaño, y el orden que pidió el cliente si la operación ofrece `sortable`. Sin esto, dos
+ * páginas o dos órdenes compartirían la misma entrada y el segundo leería lo que guardó el primero. Ninguna fixture
+ * cachea un listado paginado; cada generador lo aplica en su incremento (B3-B6).
+ */
+export function cacheKeyExtras(operation) {
+  if (!operation?.paginated) return [];
+  return ['page', 'size', ...((operation.sortable ?? []).length > 0 ? ['sort'] : [])];
 }
 
 /**
