@@ -284,6 +284,15 @@ function likeMatches(stored, wanted, compare) {
   return new RegExp(pattern, 'u').test(foldText(String(stored), compare));
 }
 
+/**
+ * El sabotaje de la rama documental: el buscado como expresión regular sin citar. Ahí `%` y `_` no son comodines (FS-7
+ * no lo ve) pero `.` sí, y casa con cualquier carácter.
+ */
+function regexMatches(stored, wanted, compare) {
+  if (absent(stored)) return false;
+  return new RegExp(foldText(String(wanted), compare), 'u').test(foldText(String(stored), compare));
+}
+
 const compareOrder = (a, b) => (typeof a === 'number' && typeof b === 'number' ? a - b : String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0);
 
 /**
@@ -302,7 +311,9 @@ export function matchesFinder(finder, row, inputs, { sabotage = null } = {}) {
       const hit = paths.some((path) =>
         sabotage === 'finder-search-literal'
           ? likeMatches(valueAt(row, path), wanted, criterion.compare)
-          : textMatches(valueAt(row, path), wanted, criterion.match, criterion.compare)
+          : sabotage === 'finder-search-regex'
+            ? regexMatches(valueAt(row, path), wanted, criterion.compare)
+            : textMatches(valueAt(row, path), wanted, criterion.match, criterion.compare)
       );
       if (!hit) return false;
       continue;
@@ -355,12 +366,15 @@ export const FINDER_SEARCH_CASES = Object.freeze([
   { id: 'FS-6', inputs: { q: '50%_' }, expect: ['AAA-0001'], what: 'search: el texto buscado es literal (sus comodines casan consigo mismos)' },
   { id: 'FS-7', inputs: { q: '5_%' }, expect: [], what: 'search: un comodín no casa con otro carácter' },
   { id: 'FS-8', inputs: { statuses: ['active'], q: 'mesa' }, expect: ['AAA-0004'], what: 'los criterios se suman (AND); la búsqueda es un OR solo dentro de over' },
-  { id: 'FS-9', inputs: {}, expect: ['AAA-0004', 'AAA-0002', 'AAA-0003', 'AAA-0001'], what: 'sin inputs, el listado entero' }
+  { id: 'FS-9', inputs: {}, expect: ['AAA-0004', 'AAA-0002', 'AAA-0003', 'AAA-0001'], what: 'sin inputs, el listado entero' },
+  { id: 'FS-10', inputs: { q: 'r.ble' }, expect: [], what: 'search: un punto es un punto, no cualquier carácter (el comodín de una expresión regular)' }
 ]);
 
 /** Los sabotajes de los finders de 2.32, con los casos que tumban; los nombra la red de cada generador. */
 export const FINDER_SABOTAGES = Object.freeze({
   'finder-in': { breaks: ['FS-1'], what: 'in compara solo con el primer elemento de la lista' },
   'finder-ne-null': { breaks: ['FS-3'], what: 'ne deja fuera la fila sin valor (el `<>` de SQL a pelo)' },
-  'finder-search-literal': { breaks: ['FS-7'], what: 'el texto de la búsqueda se usa como patrón, sin escapar' }
+  // Uno por familia de patrón, porque cada modelo tiene sus comodines: LIKE (relacional) y la expresión regular (documental).
+  'finder-search-literal': { breaks: ['FS-7'], what: 'el texto de la búsqueda se usa como patrón LIKE, sin escapar (rama relacional)' },
+  'finder-search-regex': { breaks: ['FS-10'], what: 'el texto de la búsqueda se usa como expresión regular, sin citar (rama documental)' }
 });

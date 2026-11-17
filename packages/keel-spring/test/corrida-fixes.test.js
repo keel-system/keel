@@ -2079,12 +2079,14 @@ test('solo las columnas ÚNICAS la reciben, no toda columna de texto', () => {
   assert.match(mysql, /name = "name", nullable = false, length = 120/);
 });
 
-test('y el motor que ya distingue no recibe nada', () => {
-  // PostgreSQL y Oracle son sensibles por defecto: emitirles collation sería ruido, y encima
-  // cambiaría su ordenación sin que nadie lo haya pedido.
+test('y el motor que ya distingue no recibe nada por la UNICIDAD', () => {
+  // PostgreSQL y Oracle son sensibles por defecto: emitirles collation por ser única sería ruido. Lo que sí recibe
+  // PostgreSQL es la del ORDEN (DSL 2.32, U7) en la columna por la que se ordena: `sku` (listProducts, `sort: [sku:asc]`).
   const postgres = project('product-catalog', { ...MYSQL, database: 'postgresql', broker: null }).file('ProductJpa.java');
-  assert.match(postgres, /name = "sku", nullable = false, length = 8/);
-  assert.ok(!postgres.includes('collate'), 'PostgreSQL no necesita collation: ya distingue');
+  assert.match(postgres, /name = "sku", nullable = false, columnDefinition = "varchar\(8\) collate \\"C\\""/);
+  // `name` es único en ningún sitio ni se ordena: sin collation.
+  assert.match(postgres, /name = "name", nullable = false, length = 120\)/);
+  assert.equal(postgres.match(/collate/g).length, 1, 'solo la columna ordenada lleva collation en PostgreSQL');
 });
 
 // ─── El emisor de un evento es la RAÍZ del agregado, no lo que la operación devuelve ─────

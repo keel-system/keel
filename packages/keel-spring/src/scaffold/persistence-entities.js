@@ -32,6 +32,19 @@ import {
 } from '@keel-system/keel-core/gen/relational';
 import { isLogicallyDeleted } from '@keel-system/keel-core/gen/relational';
 import { jpaMarkDeclarations, lifecycleMarks } from './data-lifecycle.js';
+import { orderedTextColumns } from '@keel-system/keel-core/gen/pagination';
+import { binaryCollationFor } from '@keel-system/keel-core/gen/infra-catalog';
+import { withOrderCollation } from '../lib/type-mapper.js';
+
+/**
+ * Las propiedades del espejo de texto por las que se ORDENA (el `sort` de una query o su `sortable`, DSL 2.32) y la
+ * collation binaria que llevan (U7): propiedad → collation. Vacío en un motor que ya ordena por punto de código.
+ */
+export function orderCollations(model, entity) {
+  const collation = binaryCollationFor(model.stack?.database);
+  if (!collation) return new Map();
+  return new Map(orderedTextColumns(model, entity.name).map((column) => [column.property, collation]));
+}
 
 export const JPA_PKG = 'infrastructure.persistence.entities';
 
@@ -132,6 +145,7 @@ ${[...members, ...accessors].join('\n\n')}
 function renderJpaEntity(model, entity) {
   const imports = new Set(['jakarta.persistence.Entity', 'jakarta.persistence.Table']);
   const members = jpaMembers(model, entity);
+  const ordered = orderCollations(model, entity);
   const declarations = [];
   const accessors = [];
 
@@ -172,7 +186,7 @@ function renderJpaEntity(model, entity) {
         imports.add(`org.springframework.data.annotation.${auditAnnotation}`);
         lines.push(`    @${auditAnnotation}`);
       }
-      for (const annotation of field.columns) {
+      for (const annotation of field.columns.map((line) => withOrderCollation(line, ordered.get(member.name)))) {
         if (annotation.startsWith('@Enumerated')) {
           imports.add('jakarta.persistence.Enumerated');
           imports.add('jakarta.persistence.EnumType');
@@ -193,7 +207,7 @@ function renderJpaEntity(model, entity) {
         declarations.push(
           [
             `    // ${field.name} plegado (compare: ${field.compare}): lo estampa el adaptador con TextFold al guardar.`,
-            `    @Column(${attrs.join(', ')})`,
+            `    ${withOrderCollation(`@Column(${attrs.join(', ')})`, ordered.get(shadow.name))}`,
             `    private String ${shadow.name};`
           ].join('\n')
         );
@@ -235,7 +249,7 @@ function renderJpaEntity(model, entity) {
         declarations.push(
           [
             `    // ${member.field.javaType}.${sub.voAccessor} aplanado.`,
-            ...sub.columns.map((annotation) => `    ${annotation}`),
+            ...sub.columns.map((annotation) => `    ${withOrderCollation(annotation, ordered.get(sub.name))}`),
             `    private ${sub.javaType} ${sub.name};`
           ].join(String.fromCharCode(10))
         );

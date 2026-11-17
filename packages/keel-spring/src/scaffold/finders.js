@@ -72,7 +72,7 @@ function fixedValue(model, entry, imports) {
   return typeof entry.value === 'string' ? JSON.stringify(entry.value) : String(entry.value);
 }
 
-/** La propiedad del espejo (JPA o documento) que restringe un criterio. */
+/** La propiedad del espejo (JPA o documento) que restringe un criterio (o una entrada de `targets` de un search). */
 function mirrorProperty(model, entity, criterion, documental) {
   const { target } = criterion;
   if (criterion.shadow) return criterion.shadow.name;
@@ -90,6 +90,22 @@ function prepared(model, criterion, value, imports) {
   if (!criterion.shadow) return value;
   imports.add(textFoldImport(model));
   return `TextFold.${criterion.shadow.accents ? 'foldCaseAndAccents' : 'foldCase'}(${value})`;
+}
+
+/** Cada elemento de la lista de un `in` (DSL 2.32, D12), plegado como su sombra; sin sombra, la lista tal cual. */
+function preparedList(model, criterion, value, imports) {
+  if (!criterion.shadow) return value;
+  imports.add(textFoldImport(model));
+  return `${value}.stream().map(TextFold::${criterion.shadow.accents ? 'foldCaseAndAccents' : 'foldCase'}).toList()`;
+}
+
+/** Las entradas de un `search` (DSL 2.32, D13): la propiedad de cada campo de `over` y el texto buscado ya plegado. */
+function searchTargets(model, entity, criterion, documental, imports) {
+  const value = prepared(model, { shadow: criterion.targets.find((entry) => entry.shadow)?.shadow ?? null }, `filter.${criterion.name}()`, imports);
+  return {
+    value,
+    properties: criterion.targets.map((entry) => mirrorProperty(model, entity, { target: entry.target, shadow: entry.shadow }, documental))
+  };
 }
 
 const JPA_OPERATOR = { eq: 'equal', gt: 'greaterThan', gte: 'greaterThanOrEqualTo', lt: 'lessThan', lte: 'lessThanOrEqualTo' };
@@ -112,10 +128,29 @@ export function jpaFinderMethods(model, entity, imports, jpaField) {
     const lines = [];
     for (const entry of finder.fixed) lines.push(`            where.add(cb.equal(root.get("${entry.name}"), ${fixedValue(model, entry, imports)}));`);
     for (const criterion of finder.criteria) {
-      const property = mirrorProperty(model, entity, criterion, false);
-      const value = prepared(model, criterion, `filter.${criterion.name}()`, imports);
       let predicate;
-      if (criterion.match !== 'exact') {
+      if (criterion.op === 'search') {
+        // La búsqueda libre (DSL 2.32, D13): un OR del patrón sobre la sombra de cada campo de over, el texto LITERAL.
+        const { value, properties } = searchTargets(model, entity, criterion, false, imports);
+        const pattern = `likePattern(${value}, ${criterion.match === 'prefix'})`;
+        const ors = properties.map((property) => `cb.like(root.<String>get("${property}"), ${criterion.name}Pattern, '\\\\')`);
+        lines.push(
+          `            if (filter.${criterion.name}() != null) {`,
+          `                String ${criterion.name}Pattern = ${pattern};`,
+          `                where.add(cb.or(${ors.join(', ')}));`,
+          '            }'
+        );
+        continue;
+      }
+      const property = mirrorProperty(model, entity, criterion, false);
+      const value = criterion.op === 'in' ? preparedList(model, criterion, `filter.${criterion.name}()`, imports) : prepared(model, criterion, `filter.${criterion.name}()`, imports);
+      if (criterion.op === 'in') {
+        // Uno de los valores de la lista (DSL 2.32, D10): la lista vacía no llega, es 400 en el borde.
+        predicate = `root.get("${property}").in(${value})`;
+      } else if (criterion.op === 'ne') {
+        // Distinto, y la fila SIN valor también lo es (D11): el <> de SQL a pelo la dejaría fuera.
+        predicate = `cb.or(cb.isNull(root.get("${property}")), cb.notEqual(root.get("${property}"), ${value}))`;
+      } else if (criterion.match !== 'exact') {
         // El texto buscado es LITERAL: se escapa con la barra, que la consulta declara como carácter de escape.
         predicate = `cb.like(root.<String>get("${property}"), likePattern(${value}, ${criterion.match === 'prefix'}), '\\\\')`;
       } else if (criterion.op === 'eq') {
@@ -167,11 +202,28 @@ export function mongoFinderMethods(model, entity, imports) {
     const lines = [];
     for (const entry of finder.fixed) lines.push(`        where.add(Criteria.where("${entry.name}").is(${fixedValue(model, entry, imports)}));`);
     for (const criterion of finder.criteria) {
+      if (criterion.op === 'search') {
+        // La búsqueda libre (DSL 2.32, D13): un $or de la expresión sobre la sombra de cada campo de over.
+        const { value, properties } = searchTargets(model, entity, criterion, true, imports);
+        const regex = criterion.match === 'prefix' ? `"^" + Pattern.quote(${value})` : `Pattern.quote(${value})`;
+        lines.push(
+          `        if (filter.${criterion.name}() != null) {`,
+          `            String ${criterion.name}Regex = ${regex};`,
+          `            where.add(new Criteria().orOperator(${properties.map((property) => `Criteria.where("${property}").regex(${criterion.name}Regex)`).join(', ')}));`,
+          '        }'
+        );
+        continue;
+      }
       const property = mirrorProperty(model, entity, criterion, true);
-      const value = prepared(model, criterion, `filter.${criterion.name}()`, imports);
-      // El texto buscado es LITERAL: Pattern.quote lo encierra en \Q…\E, que MongoDB entiende igual.
+      const value = criterion.op === 'in' ? preparedList(model, criterion, `filter.${criterion.name}()`, imports) : prepared(model, criterion, `filter.${criterion.name}()`, imports);
+      // El texto buscado es LITERAL: Pattern.quote lo encierra en \Q…\E, que MongoDB entiende igual. $ne ya deja pasar el
+      // documento sin el campo o con null (D11), y $in compara cada elemento como $eq.
       const condition =
-        criterion.match === 'contains'
+        criterion.op === 'in'
+          ? `Criteria.where("${property}").in(${value})`
+          : criterion.op === 'ne'
+            ? `Criteria.where("${property}").ne(${value})`
+            : criterion.match === 'contains'
           ? `Criteria.where("${property}").regex(Pattern.quote(${value}))`
           : criterion.match === 'prefix'
             ? `Criteria.where("${property}").regex("^" + Pattern.quote(${value}))`
@@ -213,7 +265,7 @@ export function finderFields(model, entity) {
 
 /** El escape del patrón LIKE, una vez por adaptador relacional con algún filtro de texto por patrón. */
 export function likePatternHelper(model, entity) {
-  if (!entityFinders(model, entity).some((finder) => finder.criteria.some((criterion) => criterion.match !== 'exact'))) return null;
+  if (!entityFinders(model, entity).some((finder) => finder.criteria.some((criterion) => criterion.match !== 'exact' && criterion.op !== 'in'))) return null;
   return String.raw`    /**
      * El patrón LIKE de un filtro 'match: prefix | contains' del diseño. El texto buscado es LITERAL: un %, un _ o una
      * barra del parámetro casan consigo mismos, así que se escapan con la barra que la consulta declara como escape.

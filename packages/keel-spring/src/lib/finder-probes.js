@@ -6,6 +6,8 @@
 // La escribe scripts/finder-check.js; no forma parte del proyecto generado.
 
 import { findersOf, FINDER_PROBE_TEXT, finderTextProbes } from '@keel-system/keel-core/gen';
+import { FINDER_SEARCH_CASES, FINDER_SEARCH_ROWS } from '@keel-system/keel-core/gen/query-filters';
+import { SO_CASES } from '@keel-system/keel-core/gen/pagination';
 import { screamingSnake } from '@keel-system/keel-core/gen/naming';
 import { LOCK_VERSION } from '@keel-system/keel-core/gen/relational';
 import { domainMembers } from '../scaffold/entities.js';
@@ -148,7 +150,9 @@ export function finderTestClass(model, { packages, document, datasource }) {
     const port = `${entity.name[0].toLowerCase()}${entity.name.slice(1)}Repository`;
     fields.push(`    @Autowired\n    private ${entity.name}Repository ${port};`);
     for (const finder of findersOf(model, entity.name)) {
-      const textCriteria = finder.criteria.filter((criterion) => criterion.match !== 'exact' && (criterion.target.field.textMaxLength ?? Infinity) > FINDER_PROBE_TEXT.length);
+      // Los criterios de 2.32 (in, ne, search) los miden los casos FS-* de su sujeto (searchTests), no esta sonda.
+      const classic = (criterion) => !['in', 'ne', 'search'].includes(criterion.op);
+      const textCriteria = finder.criteria.filter((criterion) => classic(criterion) && criterion.match !== 'exact' && (criterion.target.field.textMaxLength ?? Infinity) > FINDER_PROBE_TEXT.length);
       const fixedLiteral = (entry) => {
         if (entry.field.kind === 'enum') {
           use.enum(entry.field.namedType);
@@ -187,6 +191,7 @@ export function finderTestClass(model, { packages, document, datasource }) {
       const locals = [];
       const cases = finder.criteria
         .map((criterion, at) => {
+          if (!classic(criterion)) return null;
           if (criterion.match !== 'exact') {
             if (!textCriteria.includes(criterion)) return null;
             const { hit, misses } = finderTextProbes(criterion);
@@ -209,7 +214,7 @@ export function finderTestClass(model, { packages, document, datasource }) {
         .filter(Boolean);
       const filterOf = (probed, value) =>
         `new ${entity.name}Repository.${finder.filterType}(${finder.criteria
-          .map((criterion, at) => (criterion === probed ? value : criterion.required ? `v${at}` : 'null'))
+          .map((criterion, at) => (criterion === probed ? value : criterion.required && classic(criterion) ? `v${at}` : 'null'))
           .join(', ')})`;
       const call = (filter) =>
         finder.result === 'page'
@@ -233,6 +238,7 @@ export function finderTestClass(model, { packages, document, datasource }) {
         ${entity.name} s = ${port}.findById(inside.getId()).orElseThrow();
 ${locals.join('\n')}${locals.length > 0 ? '\n' : ''}${checks.join('\n')}
     }`);
+      if (finder.criteria.some((criterion) => !classic(criterion))) tests.push(...searchTests(model, entity, finder, { port, use, imports, packages, seed: () => seed++ }));
       if (finder.result === 'page') {
         imports.add(`${packages.dtos}.PagedResponse`);
         // Su propia fila: la de arriba puede seguir en la base, y dos filas con el mismo seed chocan en la clave natural.
@@ -295,6 +301,76 @@ ${fields.join('\n\n')}
 ${tests.join('\n')}
 }
 `;
+}
+
+/**
+ * Los casos de la búsqueda de 2.32 sobre su sujeto (`catalog-search`): un @Test por caso FS-* (las filas de
+ * FINDER_SEARCH_ROWS, guardadas por el adaptador, y los `sku` que el finder devuelve en el orden del diseño) y uno por
+ * caso SO-* (QueryParameters.sort, el lector de ?sort= que emiten los controllers). El nombre del método ES el id del
+ * caso: finder-check comprueba que cada sabotaje cae en exactamente los suyos.
+ */
+function searchTests(model, entity, finder, { port, use, imports, packages, seed }) {
+  for (const name of ['java.util.Map', 'org.springframework.data.domain.Sort', 'static org.junit.jupiter.api.Assertions.assertEquals', 'static org.junit.jupiter.api.Assertions.assertThrows']) imports.add(name);
+  imports.add(`${packages.rest}.QueryParameters`);
+  const status = entity.fields.find((field) => field.name === 'status');
+  use.enum(status.namedType);
+  const rows = FINDER_SEARCH_ROWS.map((row) => {
+    const forced = {
+      sku: java(row.sku),
+      name: java(row.name),
+      notes: row.notes === null ? 'null' : java(row.notes),
+      status: `${status.namedType}.${screamingSnake(row.status)}`
+    };
+    return `        ${port}.save(new ${entity.name}(${constructorArgs(model, entity, seed(), forced, use).join(', ')}));`;
+  });
+  const order = (sort) => `Sort.by(${sort.map((entry) => `Sort.Order.${entry.direction}("${entry.property}")`).join(', ')})`;
+  const property = new Map((finder.sort ?? []).concat(model.services.flatMap((group) => group.operations).find((operation) => operation.name === finder.operation)?.sortable ?? []).map((entry) => [entry.path, entry.property]));
+  const sortable = `Map.of(${[...property.entries()].filter(([path]) => path !== undefined).map(([path, prop]) => `${java(path)}, ${java(prop)}`).join(', ')})`;
+  const skus = `List.of(${FINDER_SEARCH_ROWS.map((row) => java(row.sku)).join(', ')})`;
+  const valueOf = (criterion, value) => {
+    if (value === undefined) return 'null';
+    if (criterion.op === 'in') return `List.of(${value.map((item) => (criterion.input.kind === 'enum' ? `${criterion.input.namedType}.${screamingSnake(item)}` : java(item))).join(', ')})`;
+    return java(value);
+  };
+  const tests = [
+    `
+    /** Las filas de FINDER_SEARCH_ROWS, una vez por clase (JUnit crea una instancia por caso): los FS-* solo miran sus sku. */
+    private static boolean searchRowsSaved;
+
+    private List<String> searchSkus(${entity.name}Repository.${finder.filterType} filter) {
+        if (!searchRowsSaved) {
+${rows.join('\n')}
+            searchRowsSaved = true;
+        }
+        return ${port}.${finder.method}(filter, PageRequest.of(0, 1000, ${order(finder.sort ?? [])})).getContent().stream()
+                .map(found -> found.getSku().toString()).filter(${skus}::contains).toList();
+    }`
+  ];
+  for (const testCase of FINDER_SEARCH_CASES) {
+    const filter = `new ${entity.name}Repository.${finder.filterType}(${finder.criteria.map((criterion) => valueOf(criterion, testCase.inputs[criterion.name])).join(', ')})`;
+    tests.push(`
+    /** ${testCase.what}. */
+    @Test
+    void ${testCase.id.replace('-', '_')}() {
+        assertEquals(List.of(${testCase.expect.map(java).join(', ')}), searchSkus(${filter}));
+    }`);
+  }
+  for (const testCase of SO_CASES) {
+    const values = testCase.values === null ? 'null' : `new String[] { ${testCase.values.map(java).join(', ')} }`;
+    const allowed = testCase.sortable && testCase.sortable.length === 0 ? 'Map.of()' : sortable;
+    const call = `QueryParameters.sort(${values}, ${allowed}, ${order(finder.sort ?? [])})`;
+    const body =
+      testCase.expect === 400
+        ? `assertThrows(QueryParameters.InvalidQuery.class, () -> ${call});`
+        : `assertEquals(${order(testCase.expect.map(([path, direction]) => ({ property: property.get(path), direction })))}, ${call});`;
+    tests.push(`
+    /** ${testCase.what}. */
+    @Test
+    void ${testCase.id.replace('-', '_')}() {
+        ${body}
+    }`);
+  }
+  return tests;
 }
 
 /** Los tipos que la sonda nombra y cuyo paquete hay que leer del proyecto generado. */

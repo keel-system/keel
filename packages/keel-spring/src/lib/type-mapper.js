@@ -189,6 +189,22 @@ export function columnAnnotations(fieldName, field, resolved, { collation = null
 }
 
 /**
+ * La misma `@Column` con la collation BINARIA del motor (U7 de PLAN-DSL-231-232, DSL 2.32): la lleva toda columna de
+ * texto por la que se ordena (`orderedTextColumns` de keel-core/gen/pagination.js), para que el texto se ordene por
+ * punto de código en los tres motores (D17). Como la de las únicas, va DENTRO del `columnDefinition`, que sustituye al
+ * tipo: la cota del diseño se conserva. Una columna que ya trae su collation (la única de MySQL, que es la misma
+ * `utf8mb4_bin`) no se toca; sin collation que poner (MongoDB) tampoco.
+ */
+export function withOrderCollation(annotation, collation) {
+  if (!collation || !annotation.startsWith('@Column') || /\bcollate\b/.test(annotation)) return annotation;
+  const clause = `collate ${escapeJava(collation)}`;
+  if (annotation.includes('columnDefinition = "text"')) return annotation.replace('columnDefinition = "text"', `columnDefinition = "text ${clause}"`);
+  const length = /length = (\d+)/.exec(annotation);
+  if (length) return annotation.replace(length[0], `columnDefinition = "varchar(${length[1]}) ${clause}"`);
+  return annotation.replace(/\)$/, `, columnDefinition = "varchar(255) ${clause}")`);
+}
+
+/**
  * Anotaciones de campo de documento (Spring Data MongoDB), equivalente documental
  * de columnAnnotations(). Devuelve una lista, igual que aquella.
  *

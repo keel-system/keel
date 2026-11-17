@@ -11,13 +11,16 @@
 //   node packages/keel-spring/scripts/finder-check.js [diseño] [--database=<motor>] [--sabotage=<id>] [--keep]
 //   npm run finder-check --workspace packages/keel-spring
 //
-// Diseños: product-catalog-finder (relacional: lista y página) y jobs-mongo-finder (documental). Necesita podman o
-// docker, y JDK.
+// Diseños: product-catalog-finder (relacional: lista y página) y jobs-mongo-finder (documental), y los de la búsqueda de
+// 2.32, catalog-search y catalog-search-mongo (in, ne, search y el lector de ?sort=, con los casos FS-* y SO-* de
+// keel-core). Necesita podman o docker, y JDK.
 //
 // --sabotage=<id> rompe lo emitido conservando la forma (sigue compilando) y la sonda tiene que salir en rojo:
 //   finder-where    la Specification / el Criteria pierde su filtro fijo
 //   finder-literal  el patrón LIKE (relacional) o la expresión regular (documental) deja de escapar el texto
 //   empty-page      una página fuera de rango lleva los totales reales, y no la forma de la página vacía del contrato
+//   finder-in, finder-ne-null, finder-search-literal (FINDER_SABOTAGES) y so-open, so-case, so-duplicate, so-append
+//   (SO_SABOTAGES), sobre los sujetos de 2.32: verde es que cada uno cae en EXACTAMENTE los casos que dice keel-core.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -31,7 +34,9 @@ import { buildModel } from '../src/lib/model.js';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { databaseHealthProbe } from '../src/lib/stack-catalog.js';
 import { CLASS_NAME, PACKAGE_LEAF, finderTestClass, namedTypes } from '../src/lib/finder-probes.js';
-import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
+import { FINDER_DESIGNS, SEARCH_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
+import { FINDER_SABOTAGES } from '@keel-system/keel-core/gen/query-filters';
+import { SO_SABOTAGES } from '@keel-system/keel-core/gen/pagination';
 
 // La URI del Mongo del perfil `local`, leída del db.yaml GENERADO. En Boot 4 la conexión del cliente
 // es `spring.mongodb.uri` (antes `spring.data.mongodb.uri`). Si no aparece, el runner se para aquí:
@@ -64,7 +69,46 @@ const SABOTAGES = {
   'empty-page': {
     relational: ['PagedResponse.java', 'if (page.getContent().isEmpty())', 'if (page.getContent() == null)'],
     document: ['PagedResponse.java', 'if (page.getContent().isEmpty())', 'if (page.getContent() == null)']
-  }
+  },
+  // DSL 2.32: el finder.
+  'finder-in': both(['RepositoryImpl.java', /\.in\((filter\.\w+\(\))\)/, '.in($1.subList(0, 1))']),
+  'finder-ne-null': {
+    relational: ['RepositoryImpl.java', /cb\.or\(cb\.isNull\(root\.get\("\w+"\)\), (cb\.notEqual\(root\.get\("\w+"\), [^;]*\))\)\);/, '$1);'],
+    document: ['RepositoryImpl.java', /(Criteria\.where\("\w+"\))\.ne\(/, '$1.nin((Object) null, ']
+  },
+  // Uno por modelo: en Mongo `%` y `_` no son comodines (FS-7 no ve nada) y el `.` sí (FS-10).
+  'finder-search-literal': {
+    relational: ['RepositoryImpl.java', '.replace("%", "\\\\%").replace("_", "\\\\_")', '']
+  },
+  'finder-search-regex': {
+    document: ['RepositoryImpl.java', /String (\w+)Regex = Pattern\.quote\(/, 'String $1Regex = (']
+  },
+  // DSL 2.32: el lector de ?sort=.
+  'so-open': both(['QueryParameters.java', 'String property = sortable.get(path);', 'String property = sortable.getOrDefault(path, path.isEmpty() ? null : path);']),
+  'so-case': both(['QueryParameters.java', 'String direction = parts.length > 1 ? parts[1] : "asc";', 'String direction = parts.length > 1 ? parts[1].toLowerCase() : "asc";']),
+  'so-duplicate': both(['QueryParameters.java', ' || !seen.add(path)', '']),
+  'so-append': both([
+    'QueryParameters.java',
+    'return Sort.by(orders);',
+    'return Sort.by(java.util.stream.Stream.concat(defaultOrder.stream().filter(order -> !seen.contains(order.getProperty())), orders.stream()).toList());'
+  ])
+};
+
+function both(entry) {
+  return { relational: entry, document: entry };
+}
+
+// La collation del orden (U7, D17) del sujeto: `name` vuelve a la de por defecto del motor. Solo se ve en MySQL, que
+// ordena 'Ñandú' junto a la N con `utf8mb4_0900_ai_ci`; PostgreSQL alpine compara bytes igualmente (B0, M11).
+SABOTAGES['order-collation'] = {
+  relational: ['ProductJpa.java', /(name = "name", nullable = false, )columnDefinition = "varchar\((\d+)\) collate [^"]+"/, '$1length = $2']
+};
+
+/** Los casos que un sabotaje de 2.32 tiene que tumbar, y solo esos (keel-core); los de 2.22 no lo declaran. */
+const EXACT_BREAKS = {
+  ...FINDER_SABOTAGES,
+  ...SO_SABOTAGES,
+  ...(database === 'mysql' ? { 'order-collation': { breaks: ['FS-3', 'FS-9'] } } : {})
 };
 
 function run(command, commandArgs, options = {}) {
@@ -98,6 +142,14 @@ function packageOf(projectDir, className) {
   return /^package\s+([\w.]+);/m.exec(fs.readFileSync(file, 'utf8'))[1];
 }
 
+function optionalPackageOf(projectDir, className) {
+  try {
+    return packageOf(projectDir, className);
+  } catch {
+    return null;
+  }
+}
+
 function readResults(projectDir) {
   const dir = path.join(projectDir, 'build/test-results/test');
   if (!fs.existsSync(dir)) return [];
@@ -114,9 +166,10 @@ function readResults(projectDir) {
   return cases;
 }
 
-const design = FINDER_DESIGNS.find((candidate) => candidate.name === designName);
+const DESIGNS = [...FINDER_DESIGNS, ...SEARCH_DESIGNS];
+const design = DESIGNS.find((candidate) => candidate.name === designName);
 if (!design) {
-  console.error(`No hay ningún diseño '${designName}'. Los hay: ${FINDER_DESIGNS.map((candidate) => candidate.name).join(', ')}.`);
+  console.error(`No hay ningún diseño '${designName}'. Los hay: ${DESIGNS.map((candidate) => candidate.name).join(', ')}.`);
   process.exit(2);
 }
 const runtime = resolveRuntime();
@@ -141,7 +194,11 @@ const projectDir = path.join(workspace, 'services', fs.readdirSync(path.join(wor
 if (sabotage) {
   const entry = SABOTAGES[sabotage]?.[document ? 'document' : 'relational'];
   if (!entry) {
-    console.error(`No hay ningún sabotaje '${sabotage}'. Los hay: ${Object.keys(SABOTAGES).join(', ')}.`);
+    console.error(
+      SABOTAGES[sabotage]
+        ? `El sabotaje '${sabotage}' no aplica al modelo ${document ? 'documental' : 'relacional'} (su comodín no existe ahí).`
+        : `No hay ningún sabotaje '${sabotage}'. Los hay: ${Object.keys(SABOTAGES).join(', ')}.`
+    );
     process.exit(2);
   }
   const [suffix, from, to] = entry;
@@ -170,6 +227,8 @@ const packages = {
   port: packageOf(projectDir, `${anyRoot}Repository`),
   adapters: packageOf(projectDir, `${anyRoot}RepositoryImpl`),
   dtos: packageOf(projectDir, 'PagedResponse'),
+  // Solo con un listado paginado leído de la query (siempre en los sujetos de 2.32).
+  rest: optionalPackageOf(projectDir, 'QueryParameters'),
   types: Object.fromEntries(namedTypes(model).map((name) => [name, packageOf(projectDir, name)]))
 };
 const testFile = path.join(projectDir, 'src/test/java', ...model.service.basePackage.split('.'), PACKAGE_LEAF, `${CLASS_NAME}.java`);
@@ -204,6 +263,14 @@ try {
       const failed = cases.filter((item) => !item.ok).length;
       console.log(`\n  ${cases.length - failed}/${cases.length} en verde`);
       exitCode = failed > 0 ? 1 : 0;
+      const expected = sabotage ? EXACT_BREAKS[sabotage]?.breaks : null;
+      if (expected) {
+        // Un sabotaje de 2.32 es VERDE si cae en exactamente sus casos (el método se llama como el id: SO_10 es SO-10).
+        const fell = cases.filter((item) => !item.ok).map((item) => item.name.replace('_', '-')).sort();
+        const exact = JSON.stringify(fell) === JSON.stringify([...expected].sort());
+        console.log(`  sabotaje ${sabotage}: caen ${fell.join(', ') || 'ninguno'}; se esperaban ${expected.join(', ')} → ${exact ? 'EXACTO' : 'NO EXACTO'}`);
+        exitCode = exact ? 0 : 1;
+      }
     }
   }
 } finally {

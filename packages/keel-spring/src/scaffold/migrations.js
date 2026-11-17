@@ -19,6 +19,10 @@ import { crossAggregateForeignKeys } from './persistence-members.js';
 import { sqlContract } from './conditional-uniqueness.js';
 import { partialIndexSpecs, sqlLiteral, discriminatorColumn } from '@keel-system/keel-core/gen/relational';
 import { GENERATOR_TABLES, STEP_PREFIX, schemaStepFiles } from '@keel-system/keel-core/gen/schema-steps';
+import { orderCollationWork } from '@keel-system/keel-core/gen/pagination';
+import { binaryCollationFor } from '@keel-system/keel-core/gen/infra-catalog';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const MIGRATIONS_DIR = 'src/main/resources/db/migration';
 const BASELINE_SQL = 'build/schema/baseline.sql';
@@ -65,7 +69,7 @@ export function generatorTables(files) {
  */
 export function schemaSteps(model, files, projectDir) {
   if (!model.layersPresent.persistence || model.persistenceKind === 'document') return { files: [], added: [], work: [] };
-  return schemaStepFiles({
+  const steps = schemaStepFiles({
     projectDir,
     dir: MIGRATIONS_DIR,
     tables: generatorTables(files),
@@ -78,6 +82,10 @@ export function schemaSteps(model, files, projectDir) {
       content: `${header.map((line) => `-- ${line}`).join('\n')}\n\n${sql}`
     })
   });
+  // La collation del orden (DSL 2.32, U7) no llega sola a una base desplegada: lo dice el baseline que exportó el agente.
+  const baselineFile = projectDir ? path.join(projectDir, MIGRATIONS_DIR, BASELINE_MIGRATION) : null;
+  const baseline = baselineFile && fs.existsSync(baselineFile) ? fs.readFileSync(baselineFile, 'utf8') : null;
+  return { ...steps, work: [...steps.work, ...orderCollationWork(model, baseline, binaryCollationFor(model.stack.database))] };
 }
 
 // ─── Índices únicos condicionados ────────────────────────────────────────────

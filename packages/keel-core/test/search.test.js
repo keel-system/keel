@@ -20,7 +20,7 @@ import {
   foldText,
   matchesFinder
 } from '../src/lib/gen/query-filters.js';
-import { SO_CASES, SO_SABOTAGES, orderedTextColumns, readClientSort, sortParameterValues, sortableOf } from '../src/lib/gen/pagination.js';
+import { SO_CASES, SO_SABOTAGES, orderCollationWork, orderedTextColumns, readClientSort, sortParameterValues, sortableOf } from '../src/lib/gen/pagination.js';
 import { WIRE_QUERY_LIST_CASES, WIRE_RULES, readQueryList } from '../src/lib/gen/wire.js';
 import { openapiDocument } from '../src/lib/gen/openapi.js';
 import { cacheKeyExtras } from '../src/lib/gen/cache-plan.js';
@@ -181,4 +181,18 @@ test('las columnas de texto que se ordenan llevan la collation binaria del motor
   // name y sku son texto (sku por su value type SKU); price.amount es un número.
   assert.deepEqual(orderedTextColumns(model, 'Product').map((entry) => entry.property), ['sku', 'name']);
   assert.deepEqual(['postgresql', 'mysql', 'mariadb', 'mongodb'].map(binaryCollationFor), ['"C"', 'utf8mb4_bin', 'utf8mb4_bin', null]);
+});
+
+test('una base desplegada sin la collation del orden es trabajo de esquema pendiente, y una con ella no', () => {
+  const model = modelOf('catalog-search');
+  const before = ['CREATE TABLE products (', '    id uuid NOT NULL,', '    sku character varying(8) NOT NULL,', '    name character varying(120) NOT NULL,', '    notes text', ');'].join('\n');
+  const work = orderCollationWork(model, before, '"C"');
+  assert.equal(work.length, 2);
+  assert.match(work[0], /`products\.sku`/);
+  assert.match(work[1], /`products\.name`.*"C"/);
+  const after = before.replace(/\) NOT NULL,/g, ') COLLATE pg_catalog."C" NOT NULL,');
+  assert.deepEqual(orderCollationWork(model, after, '"C"'), []);
+  // Sin baseline (todavía no se exportó) o en un motor que ya ordena por punto de código, nada.
+  assert.deepEqual(orderCollationWork(model, null, '"C"'), []);
+  assert.deepEqual(orderCollationWork(model, before, null), []);
 });

@@ -19,23 +19,68 @@
 | B0 | Medir lo de la fase B | hecho (2026-11-17, § Medidas de B0; U7 y U8 decididas) |
 | B1 | keel-core: schema, reglas con sus mutaciones, docs, DSL a 2.32 y la frontera de los cuatro | hecho (2026-11-17, § Medidas de B1) |
 | B2 | Lo neutral: los criterios del finder con su referencia (`FS-*`), `readClientSort` (`SO-*`), la lista en la query, el contrato, la clave de la caché y la collation del orden | hecho (2026-11-17, § Medidas de B2) |
-| B3-B9 | Fase B: DSL 2.32 (R8) | pendiente |
+| B3 | keel-spring: el finder (`in`, `ne`, `search`), `QueryParameters` (`?sort=` y la lista de la query), la collation del orden, la clave de la caché y `finder-check` con FS-*/SO-* | hecho (2026-11-17, § Medidas de B3) |
+| B4-B9 | Fase B: DSL 2.32 (R8) | pendiente |
 
 **Para retomar.** La fase A (DSL 2.31) está cerrada (A9: cinco corridas de `shop-api` en 92/92). Pendiente de ella:
 `go-check --fixtures` de keel-go (§ Arreglo de la escala), que se pasa en B6. Fase B: B0 medido (U7 y U8 decididas) y B1
 hecho: el DSL es 2.32 y los cuatro generadores rechazan `in`/`ne`/`search`/`sortable` con `searchPendingErrors` hasta su
-incremento. B2 hecho (lo neutral, § Medidas de B2). Siguiente: B3, keel-spring. Lo que cada generador recoge en su
-incremento, todo de keel-core:
+incremento. B2 hecho (lo neutral, § Medidas de B2). B3 hecho (keel-spring, § Medidas de B3). Siguiente: B4, keel-nest. Lo que cada
+generador recoge en su incremento, todo de keel-core:
 - el finder: `criterion.op` `in`/`ne`/`search`, y `search` con `targets[]` en vez de `target`;
 - el lector de `?sort=` contra `operation.sortable` (`readClientSort`, `invalidSortMessage`);
 - el de la lista en la query (`readQueryList`);
 - la collation de `orderedTextColumns` + `binaryCollationFor` en la baseline, con su aviso en `EVOLUTION.md`;
 - `keyExtras` de la caché;
 - los sujetos `SEARCH_DESIGNS` (`catalog-search`, `-mongo`) en sus redes, con los casos `FS-*`/`SO-*` y los sabotajes
-  `FINDER_SABOTAGES`/`SO_SABOTAGES`.
+  `FINDER_SABOTAGES`/`SO_SABOTAGES`: `finder-search-literal` solo en la rama relacional y `finder-search-regex` (FS-10,
+  de B3) solo en la documental;
+- el aviso de la collation en una base desplegada: `orderCollationWork` (gen/pagination.js, de B3) al trabajo de esquema
+  de `EVOLUTION.md`;
+- y el sabotaje de la collation del generador (`order-collation` en keel-spring): solo cae en MySQL, en FS-3 y FS-9.
 
 Ventana conocida, como la de A2: desde B2 el contrato ya no anuncia `sort` en un listado sin `sortable`, y los
 servidores lo siguen aceptando hasta su incremento.
+
+## Medidas de B3 (2026-11-17)
+
+keel-spring, con `finder-check` sobre `catalog-search` (PostgreSQL y MySQL) y `catalog-search-mongo`: 23/23 en los tres
+motores (FS-1 a FS-10, SO-1 a SO-11 y las dos sondas de 2.22), compilando el `main` entero en cada pasada. Los sujetos de
+2.22 (`product-catalog-finder`, `jobs-mongo-finder`) siguen 3/3.
+
+- **Finder** (`src/scaffold/finders.js`). `in` es `root.get(p).in(lista)` / `Criteria.in`, con cada elemento plegado si
+  el input pliega. `ne` es `cb.or(cb.isNull(p), cb.notEqual(p, v))` en JPA; en Mongo, `$ne` ya deja pasar el documento
+  sin el campo. `search` es un OR del patrón sobre la sombra de cada campo de `over`: LIKE escapado con `likePattern` y
+  expresión regular con `Pattern.quote`.
+- **El borde** (`src/scaffold/query-parameters.js`, nuevo). `QueryParameters` (infrastructure/rest) lee los valores CRUDOS
+  de la petición (`getParameterValues`): el binding de Spring parte por comas un valor único y no varios, y el resolver
+  del Pageable acepta cualquier propiedad (M9, M12). `sorted(...)` sustituye a `withDefaultOrder`: cada listado paginado
+  leído de la query lleva su `<OP>_ORDER` (`Sort.unsorted()` si no declara orden) y su `<OP>_SORTABLE` (ruta del
+  contrato → propiedad del espejo; `Map.of()` sin `sortable`, y entonces todo `?sort=` es 400). `list(...)` lee una lista
+  de la query con U8 y D10, con el elemento leído por el mismo conversor de enums que un `@RequestParam`. El 400 es
+  `InvalidQuery`, con VALIDATION_ERROR y los textos de keel-core (`invalidSort`, `invalidParams` para la lista vacía,
+  `malformed` para un elemento ilegible).
+- **Destapó una regresión, cerrada en el incremento.** Una lista de la query con cotas propias (`required`, `minItems`,
+  `maxItems` o por elemento) perdía su Bean Validation al pasar por `QueryParameters`, y lo vio `scaffold.test.js`. Esas
+  listas siguen con `@RequestParam`. Es una excepción a U8, y ninguna fixture la tiene.
+- **Collation** (U7). `withOrderCollation` (`src/lib/type-mapper.js`) lleva la collation binaria del motor al
+  `columnDefinition` de cada columna de `orderedTextColumns`: escalar, sombra plegada y subcampo aplanado. Conserva la
+  cota y no la dobla donde ya la puso la unicidad (en MySQL es la misma `utf8mb4_bin`). Efecto en las fixtures: en
+  PostgreSQL, toda columna de texto ordenada gana `collate "C"` (en `product-catalog`, `sku`), un cambio de esquema
+  deliberado. Para una base desplegada, `orderCollationWork` (nuevo, gen/pagination.js, neutral) compara el baseline
+  exportado con el mapeo y deja en `EVOLUTION.md` § Esquema pendiente cada columna ordenada que no tiene la collation.
+  Lo llama `schemaSteps` de `migrations.js`.
+- **Caché** (D18). La clave de `CachedOperations` suma `pageable().getPageNumber()`, `getPageSize()` y, con `sortable`,
+  `getSort()`.
+- **Sabotajes, todos exactos.**
+  - `finder-in`, `finder-ne-null` y los cuatro `so-*`: en PostgreSQL y en MongoDB, y los del finder también en MySQL.
+  - `finder-search-literal`: en PostgreSQL y MySQL.
+  - `order-collation` (sabotaje del generador): solo en MySQL, en FS-3 y FS-9. En PostgreSQL alpine no se ve, porque
+    musl ya compara bytes (M11).
+- **Lo que destapó la red, cerrado en keel-core.** Quitar `Pattern.quote` en la rama documental no tumbaba FS-7: en una
+  expresión regular `%` y `_` no son comodines. El texto «no literal» de Mongo lo destapa un `.`, y ningún caso lo medía.
+  Ahora el caso FS-10 (`q: 'r.ble'`) y el sabotaje `finder-search-regex` lo cubren, y la referencia de keel-core los
+  ejecuta. `finder-search-literal` queda como el de la rama relacional.
 
 ## Medidas de B2 (2026-11-17)
 

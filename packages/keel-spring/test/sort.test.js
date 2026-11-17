@@ -46,8 +46,8 @@ test('sin sort declarado, el adaptador ordena igualmente por id: la paginación 
   // El desempate no se salta si el cliente ya ordenó por id.
   assert.ok(adapter.includes('sort.getOrderFor("id") != null'));
 
-  // Y sin sort declarado no hay constante de orden para esa operación (listDraftProducts sí declara el suyo).
-  assert.ok(!read(CONTROLLER).includes('LIST_PRODUCTS_ORDER'));
+  // Y sin sort declarado el orden de esa operación es ninguno (listDraftProducts sí declara el suyo).
+  assert.ok(read(CONTROLLER).includes('private static final Sort LIST_PRODUCTS_ORDER = Sort.unsorted();'));
 });
 
 test('sort declarado: constante por operación en el controller, aplicada solo si el cliente no pide orden', () => {
@@ -61,9 +61,10 @@ test('sort declarado: constante por operación en el controller, aplicada solo s
       'private static final Sort LIST_PRODUCTS_ORDER = Sort.by(Sort.Order.asc("name"), Sort.Order.desc("createdAt"));'
     )
   );
-  assert.ok(controller.includes('new ListProductsQuery(name, withDefaultOrder(pageable, LIST_PRODUCTS_ORDER))'));
-  // El orden del cliente manda sobre el del diseño; el desempate del adaptador, sobre ambos.
-  assert.ok(controller.includes('if (pageable.getSort().isSorted()) {'));
+  // QueryParameters lee ?sort= de la petición (DSL 2.32): sin sortable, cualquier ?sort= es 400 y, sin ?sort=, el orden
+  // del diseño. El desempate del adaptador va detrás de los dos.
+  assert.ok(controller.includes('new ListProductsQuery(name, QueryParameters.sorted(pageable, request, LIST_PRODUCTS_SORTABLE, LIST_PRODUCTS_ORDER))'));
+  assert.ok(controller.includes('private static final Map<String, String> LIST_PRODUCTS_SORTABLE = Map.of();'));
   // @PageableDefault sigue llevando solo el tamaño: un único `direction` no puede
   // expresar un orden mixto, y no alcanza al ?sort= del cliente.
   assert.ok(controller.includes('@PageableDefault(size = 20) Pageable pageable'));
@@ -88,9 +89,10 @@ test('sort sobre un agregado embebido no se traduce: build avisa y lo deja al ag
       (w) => w.includes("ordena por 'category.name'") && w.includes('join proyectado')
     )
   );
-  // Sin constante: 'category.name' no es una property path de Spring Data, y
+  // Sin orden traducido: 'category.name' no es una property path de Spring Data, y
   // generarla haría fallar la consulta en tiempo de ejecución.
-  assert.ok(!read(CONTROLLER).includes('LIST_PRODUCTS_ORDER'));
+  assert.ok(read(CONTROLLER).includes('private static final Sort LIST_PRODUCTS_ORDER = Sort.unsorted();'));
+  assert.ok(!read(CONTROLLER).includes('category.name'));
   // La señal llega al sitio donde el agente decide.
   const handler = read(`${JAVA}/application/usecases/ListProductsQueryHandler.java`);
   assert.ok(handler.includes('campo del agregado embebido'));

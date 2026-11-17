@@ -11,6 +11,8 @@
 
 import { operationTargetEntity, resolveRoute } from './model.js';
 import { isTextual } from './types.js';
+import { tableOf } from './relational.js';
+import { snakeCase } from './naming.js';
 
 /**
  * Los defaults del Pageable de keel-spring: `@PageableDefault` sin tamaño es 10 (la anotación gana a
@@ -152,4 +154,29 @@ export function orderedTextColumns(model, entityName) {
     }
   }
   return [...out.values()];
+}
+
+/**
+ * Lo que la collation del orden (U7, D17) deja PENDIENTE en una base ya desplegada: build cambia el mapeo de cada
+ * columna de texto ordenable, y eso llega a una base nueva con su baseline, pero no altera una columna que ya existe.
+ * `baseline` es el texto del esquema exportado del proyecto (el de la base desplegada) o null si no lo hay todavía;
+ * una columna ordenable que aparece en él sin collation es trabajo de esquema: un ALTER que nadie más va a escribir.
+ * Devuelve los textos para `EVOLUTION.md` (§ Esquema pendiente), uno por columna.
+ */
+export function orderCollationWork(model, baseline, collation) {
+  if (!baseline || !collation) return [];
+  const lines = baseline.split('\n');
+  const work = [];
+  for (const entity of (model.entities ?? []).filter((candidate) => candidate.persisted)) {
+    const table = tableOf(model, entity.name);
+    for (const column of orderedTextColumns(model, entity.name)) {
+      const name = snakeCase(column.property);
+      const declared = lines.find((line) => new RegExp(`^\\s*[\`"]?${name}[\`"]?\\s`, 'i').test(line));
+      if (!declared || /collat/i.test(declared)) continue;
+      work.push(
+        `La columna \`${table}.${name}\` se ordena (${column.path}) y desde DSL 2.32 lleva la collation binaria \`${collation}\` para ordenar igual en los tres motores (D17); la base desplegada no la tiene: añade un paso que la altere con la collation y el tipo que declara el mapeo.`
+      );
+    }
+  }
+  return work;
 }
