@@ -4,6 +4,13 @@
 # importCatalog, asíncrono), la capa security y el orden del listado. Las tomó quien preparaba la fixture por
 # delegación del diseñador.
 decisions:
+  - id: OBL-QUERY-SORT-UNDECIDED
+    scope: use-cases.listProducts.output.sortable
+    reason: >
+      Provisional (DSL 2.32, incremento B1 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md): el listado se queda con
+      su orden por SKU y sin orden del cliente mientras los generadores no generan `sortable`. B8 la sustituye
+      declarando sortable, que es lo que cierra el designGap list-order-in-prose.
+    since: 1.2.0
   - id: OBL-IDEM-RACE-CODE
     scope: use-cases
     reason: >

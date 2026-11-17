@@ -1,4 +1,16 @@
 decisions:
+  - id: OBL-QUERY-SORT-UNDECIDED
+    scope: use-cases.listArticles.output.sortable
+    reason: >
+      Provisional (DSL 2.32, incremento B1 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md): listArticles se queda con su
+      orden por defecto y sin orden del cliente mientras los generadores no generan `sortable`. Se revisa en B8.
+    since: 0.1.2
+  - id: OBL-QUERY-SORT-UNDECIDED
+    scope: use-cases.listFeed.output.sortable
+    reason: >
+      Provisional (DSL 2.32, incremento B1 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md): listFeed se queda con su
+      orden por defecto y sin orden del cliente mientras los generadores no generan `sortable`. Se revisa en B8.
+    since: 0.1.2
   - id: CHK-API-CREATED-NO-READ
     scope: api.endpoints.registerProfile
     reason: >

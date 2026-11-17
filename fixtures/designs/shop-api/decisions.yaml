@@ -34,6 +34,24 @@
 #   - updateProfile y el bloqueo optimista: la edición concurrente del mismo perfil la frena el bloqueo optimista de la raíz
 #     (409 CONCURRENT_MODIFICATION); el cliente reintenta. El perfil no lleva versión en el input.
 decisions:
+  - id: OBL-QUERY-SORT-UNDECIDED
+    scope: use-cases.listProducts.output.sortable
+    reason: >
+      Provisional (DSL 2.32, incremento B1 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md): listProducts se queda con su
+      orden por defecto y sin orden del cliente mientras los generadores no generan `sortable`. Se revisa en B8.
+    since: 0.1.1
+  - id: OBL-QUERY-SORT-UNDECIDED
+    scope: use-cases.listProductsByCategory.output.sortable
+    reason: >
+      Provisional (DSL 2.32, incremento B1 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md): listProductsByCategory se queda con su
+      orden por defecto y sin orden del cliente mientras los generadores no generan `sortable`. Se revisa en B8.
+    since: 0.1.1
+  - id: OBL-QUERY-SORT-UNDECIDED
+    scope: use-cases.listOrders.output.sortable
+    reason: >
+      Provisional (DSL 2.32, incremento B1 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md): listOrders se queda con su
+      orden por defecto y sin orden del cliente mientras los generadores no generan `sortable`. Se revisa en B8.
+    since: 0.1.1
   - { id: OBL-IDEM-KEY-REQUIRED, scope: use-cases, since: 0.1.0, reason: "La cabecera Idempotency-Key del checkout es opcional (structural-3-2): el legacy acepta un checkout sin ella y exigirla rompería a todo cliente actual. Sin cabecera el checkout se ejecuta sin deduplicar, igual que hoy." }
   - { id: OBL-IDEM-RACE-CODE, scope: use-cases, since: 0.1.0, reason: "Se acepta IDEMPOTENCY_KEY_IN_PROGRESS (409) como contrato público de dos checkouts simultáneos con la misma clave; el legacy no tenía idempotencia y no hay un code propio que conservar." }
   - { id: OBL-API-CONCURRENCY-UNDECIDED, scope: api.concurrency.updateProduct, since: 0.1.0, reason: "Diseño recuperado: el legacy no responde ETag ni lee If-Match, y la paridad compara contra él; la edición del vendedor la arbitra el bloqueo optimista de la raíz (409). Pedir If-Match rompería a todo cliente actual." }

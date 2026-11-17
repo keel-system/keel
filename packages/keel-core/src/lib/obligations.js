@@ -174,6 +174,16 @@ export const OBLIGATIONS = {
     doc: 'dsl/security.md'
   },
 
+  'OBL-QUERY-SORT-UNDECIDED': {
+    gapClass: 5,
+    when: 'use-cases: una query paginada sobre una entidad, con endpoint para personas (audience users o both), sin `sortable`',
+    kind: 'decision',
+    waivable: true,
+    title: 'no está decidido por qué columnas puede ordenar una pantalla',
+    closes: '`output.sortable` con los campos que el cliente puede pedir en `?sort=`, o exención razonada por operación',
+    doc: 'dsl/use-cases.md'
+  },
+
   'OBL-API-CONCURRENCY-UNDECIDED': {
     gapClass: 4,
     when: 'api: un PUT o PATCH sobre una raíz con versión que recibe su id, en un diseño sin `concurrency`',

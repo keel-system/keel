@@ -2,6 +2,12 @@
 # storage, autoría, idempotencia de petición y de consumo, compensación con llamada de vuelta,
 # reconciliación y clúster sobre Mongo) y está CERRADA: `keel validate --ready` sale en verde.
 decisions:
+  - id: OBL-QUERY-SORT-UNDECIDED
+    scope: use-cases.listAssets.output.sortable
+    reason: >
+      Provisional (DSL 2.32, incremento B1 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md): listAssets se queda con su
+      orden por defecto y sin orden del cliente mientras los generadores no generan `sortable`. Se revisa en B8.
+    since: 1.1.3
   - id: CHK-MSG-RETRY-AFTER-CLAIM
     scope: messaging.subscriptions.ThumbnailDelivered
     reason: >-

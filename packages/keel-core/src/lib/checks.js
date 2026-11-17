@@ -724,6 +724,34 @@ export const CHECKS = {
     title: 'un filtro cuyo operador o valor no casa con el tipo de lo que restringe',
     closes: 'el mismo tipo a los dos lados, los operadores de orden solo sobre números e instantes, y en `where` un valor del campo'
   },
+  'CHK-USECASES-FILTER-IN-NOT-LIST': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'un filtro `in` sobre un input que no es una lista',
+    closes: "declarar el input 'list: true' del tipo del campo, o usar op: eq"
+  },
+  'CHK-USECASES-SEARCH-FIELD': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una búsqueda libre que no es un texto o que busca en algo que no es texto',
+    closes: 'un input de texto (no una lista) y, en `over`, campos de texto de la entidad o subcampos de texto de sus value objects'
+  },
+  'CHK-USECASES-SORTABLE-FIELD': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: '`sortable` nombra algo por lo que el cliente no puede ordenar',
+    closes: 'campos escalares de la entidad de la salida o subcampos de sus value objects, ni sensitive ni personal, ni de otro agregado, ni listas'
+  },
+  'CHK-USECASES-SORT-NOT-SORTABLE': {
+    layer: 'use-cases',
+    severity: 'warning',
+    nature: 'undecided',
+    title: 'el orden por defecto de un listado no está entre los que el cliente puede pedir',
+    closes: "añadir el campo a 'sortable', o aceptarlo en decisions.yaml si es deliberado"
+  },
   'CHK-DOMAIN-SCALE-POLICY-WITHOUT-SCALE': {
     layer: 'domain',
     severity: 'error',

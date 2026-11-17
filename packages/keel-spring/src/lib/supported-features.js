@@ -13,6 +13,7 @@ import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/me
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
 import { optionalAuthFrontierErrors } from '@keel-system/keel-core/gen/read-scope';
 import { batchFrontierErrors, batchPendingErrors } from '@keel-system/keel-core/gen/batch';
+import { searchPendingErrors } from '@keel-system/keel-core/gen/query-filters';
 import { declaredDeadlines } from '@keel-system/keel-core/gen/deadlines';
 
 /**
@@ -33,19 +34,6 @@ export function checkSupportedFeatures(manifest, layers) {
   if (model && model !== 'relational' && model !== 'document') {
     errors.push(
       `persistence.default.model: ${model} no soportado por keel-spring, que genera el modelo relacional (JPA + Flyway) y el documental (Spring Data MongoDB). Ajusta el diseño o usa un generador que cubra ese modelo.`
-    );
-  }
-
-  // Estilo de paginación. El sobre canónico del método (`items`/`page`/`size`/
-  // `totalElements`/`totalPages`) es el de offset, y es el único que keel-spring
-  // materializa: `cursor` no cambia nada del código generado. Sin esta entrada, un
-  // diseño que lo declara recibe paginación por offset y nadie se lo desmiente — y el
-  // hueco no aflora hasta que un integrador pide la página siguiente con un cursor que
-  // el servidor no emite.
-  const paginationStyle = layers?.api?.pagination?.style;
-  if (paginationStyle && paginationStyle !== 'offset') {
-    warnings.push(
-      `api.pagination.style: ${paginationStyle} no se aplica: keel-spring genera paginación por offset con el sobre canónico { items, page, size, totalElements, totalPages } y los query params 'page'/'size'. Escribe los escenarios contra ese sobre, o cambia el estilo a 'offset' para que el diseño diga lo que se genera.`
     );
   }
 
@@ -233,6 +221,9 @@ export function checkSupportedFeatures(manifest, layers) {
   // (scaffold/batch-jobs.js) se generan enteros, también la idempotencia del lote síncrono (D15, KeyedBatches); lo que
   // depende del stack lo rechaza planService (batchJobStackErrors).
   errors.push(...batchPendingErrors(layers, 'keel-spring', { syncIncrement: null, asyncIncrement: null }));
+  // La búsqueda de 2.32 (op in/ne, search y sortable) llega en el incremento B3 de
+  // PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md: hasta entonces se rechaza entera, con el mismo mensaje en los cuatro.
+  errors.push(...searchPendingErrors(layers, 'keel-spring', 'B3'));
   // Las invariantes que se hacen cumplir y los derivados estructurados (DSL 2.31: checks, las cotas de la entidad y
   // computed { sum, count }) se generan enteros (scaffold/entity-checks.js): ensureInvariants() y su llamada en el save.
   errors.push(...batchFrontierErrors(layers, 'keel-spring', { syncIdempotency: true }));

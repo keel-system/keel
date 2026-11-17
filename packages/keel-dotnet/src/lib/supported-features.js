@@ -15,6 +15,7 @@ import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/me
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
 import { optionalAuthFrontierErrors } from '@keel-system/keel-core/gen/read-scope';
 import { batchFrontierErrors, batchPendingErrors } from '@keel-system/keel-core/gen/batch';
+import { searchPendingErrors } from '@keel-system/keel-core/gen/query-filters';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {};
@@ -74,6 +75,9 @@ export function checkSupportedFeatures(manifest, layers) {
   // (scaffold/batch-jobs.js) se generan enteros, también la idempotencia del lote síncrono (D15, KeyedBatches); lo que
   // depende del stack lo rechaza planService (batchJobStackErrors).
   errors.push(...batchPendingErrors(layers, 'keel-dotnet', { syncIncrement: null, asyncIncrement: null }));
+  // La búsqueda de 2.32 (op in/ne, search y sortable) llega en el incremento B5 de
+  // PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md: hasta entonces se rechaza entera, con el mismo mensaje en los cuatro.
+  errors.push(...searchPendingErrors(layers, 'keel-dotnet', 'B5'));
   // Las invariantes que se hacen cumplir y los derivados estructurados (DSL 2.31: checks, las cotas de la entidad y
   // computed { sum, count }) se generan enteros (scaffold/entity-checks.js): EnsureInvariants() y su llamada en el Save.
   errors.push(...batchFrontierErrors(layers, 'keel-dotnet', { syncIdempotency: true }));

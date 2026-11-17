@@ -1,5 +1,17 @@
 # Obligaciones de diseño que este servicio deja abiertas a sabiendas.
 decisions:
+  - id: OBL-QUERY-SORT-UNDECIDED
+    scope: use-cases.listProducts.output.sortable
+    reason: >
+      Provisional (DSL 2.32, incremento B1 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md): listProducts se queda con su
+      orden por defecto y sin orden del cliente mientras los generadores no generan `sortable`. Se revisa en B8.
+    since: 1.1.1
+  - id: OBL-QUERY-SORT-UNDECIDED
+    scope: use-cases.listDraftProducts.output.sortable
+    reason: >
+      Provisional (DSL 2.32, incremento B1 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md): listDraftProducts se queda con su
+      orden por defecto y sin orden del cliente mientras los generadores no generan `sortable`. Se revisa en B8.
+    since: 1.1.1
   - id: CHK-USECASES-SINGLE-NOT-IDENTIFIED
     scope: use-cases.operations.getProductBySlug
     reason: >

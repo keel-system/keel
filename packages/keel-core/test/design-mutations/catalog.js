@@ -656,6 +656,25 @@ function withConcurrency(d) {
 }
 
 /**
+ * La búsqueda de 2.32: el listado de tickets paginado, con el orden que el cliente puede pedir (`sortable`), un filtro
+ * `in` sobre el estado, uno `ne` sobre el asunto y una búsqueda libre sobre el asunto y el correo.
+ */
+function withSearch(d) {
+  d.layers.api.pagination = { style: 'offset', defaultSize: 20, maxSize: 100 };
+  const list = ops(d).listTickets;
+  delete list.output.list;
+  list.output.paginated = true;
+  list.output.sortable = ['subject', 'status'];
+  list.input = {
+    fields: {
+      statuses: { type: 'TicketStatus', list: true, filter: { field: 'status', op: 'in' } },
+      otherThan: { type: 'string', constraints: { maxLength: 120 }, filter: { field: 'subject', op: 'ne' } },
+      q: { type: 'string', constraints: { maxLength: 120 }, search: { over: ['subject', 'requesterEmail'], match: 'contains', compare: 'ignore-case' } }
+    }
+  };
+}
+
+/**
  * Un plazo de negocio (DSL 2.26): un ticket abierto caduca a las 72 horas desde que se abrió, lo caduca `expireTicket`
  * (internal, sin schedule: la despacha el cronómetro por cada ticket vencido) y cerrarlo tarde es TICKET_EXPIRED.
  */
@@ -850,6 +869,7 @@ export const EXTENSIONS = {
   deadline: withDeadline,
   checks: withChecks,
   concurrency: withConcurrency,
+  search: withSearch,
   payments: withPayments,
   m2m: withM2m,
   scoping: withScoping,
@@ -1745,6 +1765,8 @@ export const MUTATIONS = [
       const output = ops(d).listTickets.output;
       delete output.list;
       output.paginated = true;
+      // Con 'sortable' para que no abra también OBL-QUERY-SORT-UNDECIDED (2.32): aquí se mide solo la política.
+      output.sortable = ['subject'];
     },
     expect: ['CHK-USECASES-PAGINATED-NO-POLICY']
   },
@@ -2362,6 +2384,69 @@ export const MUTATIONS = [
     },
     // El escenario sigue nombrando TICKET_EXPIRED, que ya no declara nadie: lo dice también la matriz de errores.
     expect: ['CHK-DOMAIN-DEADLINE-ERROR-UNDECLARED']
+  },
+  {
+    id: 'M-USECASES-FILTER-IN-NOT-LIST',
+    title: 'un filtro in sobre un input que no es una lista',
+    extends: 'search',
+    mutate: (d) => {
+      delete ops(d).listTickets.input.fields.statuses.list;
+    },
+    expect: ['CHK-USECASES-FILTER-IN-NOT-LIST']
+  },
+  {
+    id: 'M-USECASES-FILTER-LIST-NOT-IN',
+    title: 'una lista que filtra con otro operador que in',
+    extends: 'search',
+    mutate: (d) => {
+      ops(d).listTickets.input.fields.statuses.filter.op = 'eq';
+    },
+    expect: ['CHK-USECASES-FILTER-TYPE']
+  },
+  {
+    id: 'M-USECASES-FILTER-NE-COMPARE',
+    title: 'un filtro ne que dice cómo plegar el texto',
+    extends: 'search',
+    mutate: (d) => {
+      ops(d).listTickets.input.fields.otherThan.compare = 'ignore-case';
+    },
+    expect: ['CHK-USECASES-FILTER-TYPE']
+  },
+  {
+    id: 'M-USECASES-SEARCH-FIELD',
+    title: 'una búsqueda libre sobre un campo que no es texto',
+    extends: 'search',
+    mutate: (d) => {
+      ops(d).listTickets.input.fields.q.search.over.push('escalationLevel');
+    },
+    expect: ['CHK-USECASES-SEARCH-FIELD']
+  },
+  {
+    id: 'M-USECASES-SORTABLE-FIELD',
+    title: 'sortable nombra una relación',
+    extends: 'search',
+    mutate: (d) => {
+      ops(d).listTickets.output.sortable.push('notes');
+    },
+    expect: ['CHK-USECASES-SORTABLE-FIELD']
+  },
+  {
+    id: 'M-USECASES-SORT-NOT-SORTABLE',
+    title: 'el orden por defecto no está entre los que el cliente puede pedir',
+    extends: 'search',
+    mutate: (d) => {
+      ops(d).listTickets.output.sortable = ['status'];
+    },
+    expect: ['CHK-USECASES-SORT-NOT-SORTABLE']
+  },
+  {
+    id: 'M-QUERY-SORT-UNDECIDED',
+    title: 'un listado paginado para personas sin sortable',
+    extends: 'search',
+    mutate: (d) => {
+      delete ops(d).listTickets.output.sortable;
+    },
+    expect: ['OBL-QUERY-SORT-UNDECIDED']
   },
   {
     id: 'M-API-CONCURRENCY-OP-UNKNOWN',

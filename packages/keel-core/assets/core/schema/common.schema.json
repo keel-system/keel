@@ -202,14 +202,44 @@
             },
             "op": {
               "type": "string",
-              "enum": ["eq", "gt", "gte", "lt", "lte"],
-              "description": "eq: igual (con match/compare si es texto). gt/gte/lt/lte: el valor guardado comparado con el del input, extremos incluidos en gte y lte. Los de orden solo sobre números e instantes."
+              "enum": ["eq", "ne", "in", "gt", "gte", "lt", "lte"],
+              "description": "eq: igual (con match/compare si es texto). ne (2.32): distinto, y una fila con el campo nulo o ausente también es distinta; sin match ni compare. in (2.32): igual a uno de los valores de una lista (el input es `list: true` del tipo del campo; sobre texto pliega cada uno con su `compare` y solo admite `match: exact`). gt/gte/lt/lte: el valor guardado comparado con el del input, extremos incluidos en gte y lte. Los de orden solo sobre números e instantes."
+            }
+          }
+        },
+        "search": {
+          "type": "object",
+          "required": ["over"],
+          "additionalProperties": false,
+          "description": "Búsqueda libre de un input de TEXTO de una query (2.32): casa si casa con alguno de los campos de `over`, todos con el mismo `match` y el mismo `compare`. `q: { type: string, search: { over: [name, description], match: contains, compare: ignore-case-accents } }`. Sin índice de texto completo ni relevancia: es un OR de comparaciones de texto, determinista en los tres motores.",
+          "properties": {
+            "over": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "Los campos de texto de la entidad de la salida, o subcampos de texto de sus value objects (`address.city`), en los que se busca.",
+              "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*(\\.[a-z][A-Za-z0-9]*)?$" }
+            },
+            "match": {
+              "type": "string",
+              "enum": ["exact", "contains", "prefix"],
+              "default": "contains",
+              "description": "Cómo casa con cada campo: el valor entero, una parte o el principio. Por defecto contains."
+            },
+            "compare": {
+              "type": "string",
+              "enum": ["exact", "ignore-case", "ignore-case-accents"],
+              "description": "Cómo se comparan los textos, el mismo para todos los campos de `over`. Por defecto exact."
             }
           }
         },
         "constraints": { "$ref": "#/$defs/constraints" }
       },
       "allOf": [
+        {
+          "if": { "required": ["search"] },
+          "then": { "not": { "anyOf": [{ "required": ["filter"] }, { "required": ["match"] }, { "required": ["compare"] }] } }
+        },
         {
           "if": { "properties": { "type": { "const": "enum" } }, "required": ["type"] },
           "then": { "required": ["values"] }
@@ -275,8 +305,17 @@
               "type": "array",
               "description": "Orden POR DEFECTO de un payload de salida con 'list' o 'paginated', como '<campo>[:asc|desc]' (default 'asc'). Es contrato: es lo que recibe quien no pide un orden concreto. El id del agregado se añade siempre como último criterio de desempate, aunque no se declare 'sort': sin él, dos páginas consecutivas pueden repetir u omitir filas. Un dot-path ('brand.name') ordena por un campo de otro agregado y exige que esa relación esté en 'embed' del mismo payload; la profundidad se corta en 1, igual que 'embed'.",
               "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*(\\.[a-z][A-Za-z0-9]*)?(:(asc|desc))?$" }
+            },
+            "sortable": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "Los campos por los que el CLIENTE puede ordenar un listado paginado con `?sort=campo,asc|desc` (2.32). Es contrato: cualquier otro campo, o una dirección que no sea asc/desc, es 400. Sin `sortable`, el listado no ofrece `sort` y todo `?sort=` es 400. Campos escalares de la entidad o subcampos de sus value objects (`price.amount`), nunca `sensitive` ni `personal` (ordenar es un oráculo de su valor), ni de otro agregado, ni listas. El id se añade siempre como desempate.",
+              "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*(\\.[a-z][A-Za-z0-9]*)?$" }
             }
-          }
+          },
+          "if": { "required": ["sortable"] },
+          "then": { "required": ["paginated"], "properties": { "paginated": { "const": true } } }
         },
         {
           "type": "object",

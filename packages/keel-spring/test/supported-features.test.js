@@ -110,21 +110,7 @@ test('una dependencia sin compensación ni reconciliación no dice nada', () => 
   assert.deepEqual(warnings, []);
 });
 
-test('pagination.style: cursor avisa — keel-spring solo genera el sobre de offset', () => {
-  const { errors, warnings } = checkSupportedFeatures(manifest, {
-    api: { pagination: { style: 'cursor', defaultSize: 20, maxSize: 100 } }
-  });
-
-  assert.deepEqual(errors, []);
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /api\.pagination\.style/);
-  assert.match(warnings[0], /cursor/);
-  // El aviso tiene que decir QUÉ se genera en su lugar, no solo que no se aplica: es lo
-  // que permite escribir los escenarios contra el sobre real en vez de descubrirlo al
-  // ejecutarlos.
-  assert.match(warnings[0], /totalPages/);
-});
-
+// `pagination.style: cursor` ya no valida (2.32, U2): el schema lo rechaza y keel-spring no tiene nada que avisar.
 test('pagination.style: offset (y su ausencia) no avisan de nada', () => {
   for (const pagination of [{ style: 'offset', defaultSize: 20 }, { defaultSize: 20 }]) {
     const { errors, warnings } = checkSupportedFeatures(manifest, { api: { pagination } });

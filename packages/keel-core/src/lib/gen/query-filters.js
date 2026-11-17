@@ -197,3 +197,26 @@ export function finderNote(operation, { call }) {
   }
   return null;
 }
+
+/**
+ * La frontera mientras un generador no genera la búsqueda de 2.32 (`op: in`/`ne`, `search` y `sortable`): se rechaza
+ * entera, con el mismo mensaje en los cuatro, porque a medias fallaría en silencio —un finder que ignora un filtro
+ * devuelve filas de más, y un `sortable` ignorado deja ordenar por cualquier campo—. Cada generador la quita en su
+ * incremento de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md (B3-B6).
+ */
+export function searchPendingErrors(layers, generator, increment) {
+  const pending = (what, fix) =>
+    `${what} (DSL 2.32): ${generator} todavía no lo genera — llega en el incremento ${increment} de ` +
+    `PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md, y a medias fallaría en silencio. ${fix} para generar este diseño.`;
+  const errors = [];
+  for (const [name, op] of Object.entries(layers?.['use-cases']?.operations ?? {})) {
+    for (const [field, input] of Object.entries(op?.input?.fields ?? {})) {
+      if (['in', 'ne'].includes(input?.filter?.op)) {
+        errors.push(pending(`use-cases: ${name}.input.fields.${field}.filter op: ${input.filter.op}`, 'Quita el filtro'));
+      }
+      if (input?.search) errors.push(pending(`use-cases: ${name}.input.fields.${field}.search`, 'Quita la búsqueda libre'));
+    }
+    if (op?.output?.sortable) errors.push(pending(`use-cases: ${name}.output.sortable`, 'Quita sortable'));
+  }
+  return errors;
+}

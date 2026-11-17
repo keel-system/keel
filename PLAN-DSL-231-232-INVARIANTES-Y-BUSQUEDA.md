@@ -17,14 +17,31 @@
 | A8 | Fixtures: las invariantes en prosa que caben pasan a `checks`, `shop-api` según U5 y U6, y un `count` real | hecho (2026-11-16, § Medidas de A8) |
 | A9 | Corridas de control de `shop-api`: los cuatro generadores en PostgreSQL y keel-nest en MySQL | hecho (2026-11-16, § Medidas de A9) |
 | B0 | Medir lo de la fase B | hecho (2026-11-17, § Medidas de B0; U7 y U8 decididas) |
-| B1-B9 | Fase B: DSL 2.32 (R8) | pendiente |
+| B1 | keel-core: schema, reglas con sus mutaciones, docs, DSL a 2.32 y la frontera de los cuatro | hecho (2026-11-17, § Medidas de B1) |
+| B2-B9 | Fase B: DSL 2.32 (R8) | pendiente |
 
-**Para retomar.** La fase A (DSL 2.31) está cerrada: A9 dio cinco corridas de control de `shop-api` en 92/92, sin
-`cart-line-sum-over-max` ni ningún otro `designGap`, sin que el agente tocara la guarda y con la huella igual o menor
-que en la 2.27. El hueco de la escala que destapó A9 está arreglado (§ Arreglo de la escala), con un pendiente: `go-check --fixtures`,
-que se pasa en B6. B0 está medido (§ Medidas de B0): `?sort=` desconocido es 500 en los cuatro (200 en keel-spring
-documental), `?sort=apiToken` responde 200, y MySQL no ordena el texto como PostgreSQL y MongoDB. U7 (collation binaria en todo
-texto ordenable, también `"C"` en PostgreSQL) y U8 (se conserva la coma) decididas. Siguiente: B1.
+**Para retomar.** La fase A (DSL 2.31) está cerrada (A9: cinco corridas de `shop-api` en 92/92). Pendiente de ella:
+`go-check --fixtures` de keel-go (§ Arreglo de la escala), que se pasa en B6. Fase B: B0 medido (U7 y U8 decididas) y B1
+hecho: el DSL es 2.32 y los cuatro generadores rechazan `in`/`ne`/`search`/`sortable` con `searchPendingErrors` hasta su
+incremento. Siguiente: B2, lo neutral (`query-filters.js`, `pagination.js` con `readClientSort` y los casos `SO-*`,
+`openapi.js`, `wire.js` y `wire-contract.md` § Entrada con la lista repetida y la coma de U8, y los sujetos de
+`finder-designs.js`). Ojo en B2: un input con `search` no puede quedar además enlazado por nombre como filtro `eq`
+(`implicitTarget` de `query-filters.js`).
+
+## Medidas de B1 (2026-11-17)
+
+- Schema: `filter.op` gana `in` y `ne`; `search` (`over`, `match` con default `contains`, `compare`) excluye `filter`,
+  `match` y `compare` en el mismo input; `output.sortable` exige `paginated: true`; `pagination.style` solo `offset`.
+- Reglas: `CHK-USECASES-FILTER-IN-NOT-LIST`, `CHK-USECASES-SEARCH-FIELD`, `CHK-USECASES-SORTABLE-FIELD`,
+  `CHK-USECASES-SORT-NOT-SORTABLE` (aviso `undecided`, aceptable) y `OBL-QUERY-SORT-UNDECIDED` (clase 5, aceptable);
+  `CHK-USECASES-FILTER-TYPE` amplía a `ne` (sin `match` ni `compare`: la desigualdad exacta, decisión de B1), `in` con un
+  `match` que no es `exact` y una lista con otro operador. Siete mutaciones sobre la extensión `search` del corpus;
+  `design-matrix` sin `sin-mutacion` y con los mismos cinco co-disparados que antes.
+- `OBL-QUERY-SORT-UNDECIDED` es una obligación y bloquea `ok`: abre diez listados en seis fixtures (`asset-vault`,
+  `catalog-extended` ×2, `conduit` ×2, `inspection-reports`, `product-catalog`, `shop-api` ×3), aceptados en su
+  `decisions.yaml` como provisionales hasta B8, que los revisa (`product-catalog` declarará `sortable`). Ninguna fixture
+  cambia su `--ready`.
+- keel-spring pierde el aviso de `cursor` y su test. Las suites de los seis paquetes, en verde.
 
 ## Medidas de B0 (2026-11-17)
 

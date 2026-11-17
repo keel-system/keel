@@ -9,6 +9,8 @@
 // Cómo se LEE la query (indulgente: lo ilegible es el default, no un 400) es comportamiento de cada plataforma y
 // se escribe en su idioma; sus reglas las fija el PageableHandlerMethodArgumentResolver de Spring Data.
 
+import { operationTargetEntity, resolveRoute } from './model.js';
+
 /**
  * Los defaults del Pageable de keel-spring: `@PageableDefault` sin tamaño es 10 (la anotación gana a
  * `spring.data.web.pageable.default-page-size`), y el tope de Spring Data sin `max-page-size` es 2000.
@@ -34,4 +36,25 @@ export function pageableDefaults(model, operation) {
     maxSize: model.pagination?.maxSize ?? PAGEABLE_MAX_SIZE,
     defaultSort: translatableSort(operation)
   };
+}
+
+/**
+ * Los listados paginados para personas que no declaran `sortable` (U3 de PLAN-DSL-231-232, DSL 2.32): desde 2.32 todo
+ * `?sort=` de un listado sin `sortable` es 400, y para una pantalla quitarle el orden de las columnas es una decisión
+ * que alguien tiene que tomar. Un consumidor máquina (`audience: services`) pide el orden del diseño y no pierde nada.
+ * Lo lee `OBL-QUERY-SORT-UNDECIDED`.
+ */
+export function undecidedClientSorts(layers) {
+  const api = layers?.api;
+  if (!api) return [];
+  const entities = layers?.domain?.entities ?? {};
+  const out = [];
+  for (const [name, op] of Object.entries(layers?.['use-cases']?.operations ?? {})) {
+    const output = op?.output;
+    if (op?.kind !== 'query' || typeof output !== 'object' || !output?.entity || output.paginated !== true || output.sortable) continue;
+    const route = resolveRoute(name, op, api, operationTargetEntity(name, op, entities), []);
+    if (!route || route.audience === 'services') continue;
+    out.push({ operation: name, entity: output.entity, audience: route.audience });
+  }
+  return out;
 }

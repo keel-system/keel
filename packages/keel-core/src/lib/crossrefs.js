@@ -8,6 +8,7 @@ import { versionedRouteBase, operationTargetEntity } from './gen/model.js';
 import { screamingSnake } from './gen/naming.js';
 import { guardedByNaturalKey } from './gen/natural-key-guard.js';
 import { conditionalWritesOfLayers, undecidedConditionalWrites } from './gen/conditional-writes.js';
+import { undecidedClientSorts } from './gen/pagination.js';
 import { domainGuardKind } from './gen/domain-guard.js';
 import { declaredDeadlines } from './gen/deadlines.js';
 import { declaredChecks, declaredComputed, checkPaths, checkCondition, resolveCheckPath, resolveFieldType, sameAggregate, operationsWriting } from './gen/entity-checks.js';
@@ -1053,6 +1054,49 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     }
   };
 
+  // Los campos por los que el CLIENTE puede ordenar (2.32, D15). Ordenar por un campo que la respuesta no enseña es un
+  // oráculo de su valor: con `?sort=apiToken` y páginas de uno, la posición de cada fila acota su token. Lo de otro
+  // agregado necesitaría un join que el finder no tiene, y una lista o un compuesto no tienen orden por columna.
+  const checkSortable = (payload, where) => {
+    const entity = domain.entities[payload.entity] ?? {};
+    const sortable = new Set(payload.sortable);
+    for (const path of payload.sortable) {
+      const bad = (why) => error('CHK-USECASES-SORTABLE-FIELD', `${where}.sortable '${path}': ${why}`);
+      const [head, nested] = path.split('.');
+      if (entity.relations?.[head]) {
+        bad(`'${head}' es una relación: el cliente no ordena por otro agregado ni por una entidad hija`);
+        continue;
+      }
+      const field = entity.fields?.[head];
+      if (!field) {
+        bad(`el campo '${head}' no existe en la entidad '${payload.entity}'`);
+        continue;
+      }
+      const composite = typeof field.type === 'string' ? domain.types?.[field.type]?.fields : null;
+      const leaf = nested ? composite?.[nested] : field;
+      if (field.list === true || (nested && !composite)) {
+        bad(`'${head}' ${field.list === true ? 'es una colección y no define un orden' : 'no es un value object compuesto'}`);
+      } else if (!nested && composite) {
+        bad(`'${head}' es un value object compuesto; ordena por uno de sus subcampos ('${head}.<subcampo>')`);
+      } else if (!leaf) {
+        bad(`el value object '${field.type}' no tiene el campo '${nested}'`);
+      } else if (leaf.list === true || (typeof leaf.type === 'string' && domain.types?.[leaf.type]?.fields)) {
+        bad(`'${path}' no es un campo escalar`);
+      } else if (field.sensitive === true || field.personal === true || leaf.sensitive === true || leaf.personal === true) {
+        bad(`'${path}' es ${field.sensitive === true || leaf.sensitive === true ? 'sensitive' : 'personal'}: ordenar por él revela su valor fila a fila`);
+      }
+    }
+    for (const criterion of payload.sort ?? []) {
+      const [path] = String(criterion).split(':');
+      if (sortable.has(path)) continue;
+      warnIn(
+        `${scopeOf(where)}.sortable`,
+        'CHK-USECASES-SORT-NOT-SORTABLE',
+        `${where}.sort '${criterion}': el orden por defecto no está en 'sortable', así que el cliente recibe ese orden pero no puede volver a pedirlo con '?sort=' — añade '${path}' a sortable, o acéptalo en decisions.yaml si es deliberado`
+      );
+    }
+  };
+
   const checkPayload = (payload, where, { direction = 'output' } = {}) => {
     if (!payload || payload === 'void') return;
     if (payload.entity && !entities.has(payload.entity)) {
@@ -1091,6 +1135,13 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
             'CHK-MODEL-SENSITIVE-PROJECTED',
             `${where}: proyecta '${fieldName}', que domain marca 'sensitive: true' — sale del servicio en la respuesta y en cualquier log que la registre. Sácalo con 'exclude', o di en la descripción por qué este consumidor sí debe verlo`
           );
+        }
+      }
+      if (payload.sortable) {
+        if (direction === 'input') {
+          error('CHK-USECASES-SORTABLE-FIELD', `${where}.sortable: el orden que el cliente puede pedir es de la salida; en la entrada no tiene efecto`);
+        } else {
+          checkSortable(payload, where);
         }
       }
       if ((payload.sort ?? []).length > 0) {
@@ -1417,14 +1468,18 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
   };
   for (const [opName, op] of Object.entries(operations)) {
     const filtered = Object.entries(op?.input?.fields ?? {}).filter(([, field]) => field?.filter);
+    const searched = Object.entries(op?.input?.fields ?? {}).filter(([, field]) => field?.search);
     if (op?.kind !== 'query') {
       for (const [name] of filtered) {
         error('CHK-USECASES-FILTER-OUTSIDE-QUERY', `use-cases: ${opName}.input.fields.${name}.filter: un filtro restringe lo que devuelve una búsqueda, y ${opName} no es una query (kind: query)`);
       }
+      for (const [name] of searched) {
+        error('CHK-USECASES-FILTER-OUTSIDE-QUERY', `use-cases: ${opName}.input.fields.${name}.search: una búsqueda libre restringe lo que devuelve una búsqueda, y ${opName} no es una query (kind: query)`);
+      }
       if (op?.where) error('CHK-USECASES-FILTER-OUTSIDE-QUERY', `use-cases: ${opName}.where: el filtro fijo de una búsqueda, y ${opName} no es una query (kind: query)`);
       continue;
     }
-    if (filtered.length === 0 && !op.where) continue;
+    if (filtered.length === 0 && searched.length === 0 && !op.where) continue;
     const entityName = typeof op.output === 'object' ? op.output?.entity : null;
     const entity = entityName ? domain.entities?.[entityName] : null;
     if (!entity) {
@@ -1439,14 +1494,41 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         continue;
       }
       const op_ = input.filter.op;
-      if (op_ !== 'eq' && (input.match !== undefined || input.compare !== undefined)) {
+      const ranged = !['eq', 'ne', 'in'].includes(op_);
+      if (ranged && (input.match !== undefined || input.compare !== undefined)) {
         error('CHK-USECASES-FILTER-TYPE', `${where}: '${op_}' compara por orden, y match/compare dicen cómo casa una IGUALDAD de texto — quítalos o usa op: eq`);
       }
-      if (op_ !== 'eq' && !FILTER_NUMERIC.has(target.base) && !FILTER_TEMPORAL.has(target.base)) {
+      // ne (2.32) es la negación EXACTA: «distinto de ACME ignorando mayúsculas» no lo ha pedido ningún diseño, y su
+      // sombra plegada con nulos es otra pregunta por motor. in pliega cada elemento (D12), pero un `contains` sobre
+      // una lista es una búsqueda libre: para eso está `search`.
+      if (op_ === 'ne' && (input.match !== undefined || input.compare !== undefined)) {
+        error('CHK-USECASES-FILTER-TYPE', `${where}: 'ne' es la desigualdad exacta y no admite match ni compare — quítalos`);
+      }
+      if (op_ === 'in' && input.match !== undefined && input.match !== 'exact') {
+        error('CHK-USECASES-FILTER-TYPE', `${where}: 'in' casa cada valor ENTERO (match: exact); '${input.match}' sobre una lista es una búsqueda libre — usa search`);
+      }
+      if (ranged && !FILTER_NUMERIC.has(target.base) && !FILTER_TEMPORAL.has(target.base)) {
         error('CHK-USECASES-FILTER-TYPE', `${where}: '${op_}' ordena, y '${input.filter.field}' es ${target.base}: los operadores de orden solo valen sobre números e instantes`);
       }
-      if (input.list || filterFamilyOf(baseOf(input)) !== filterFamilyOf(target.base)) {
-        error('CHK-USECASES-FILTER-TYPE', `${where}: el input es ${input.list ? 'una lista' : baseOf(input)} y '${input.filter.field}' es ${target.base} — un filtro compara un valor con otro del mismo tipo`);
+      // D10: in pide una lista del tipo del campo; cualquier otro operador, un valor solo.
+      if (op_ === 'in' && !input.list) {
+        error('CHK-USECASES-FILTER-IN-NOT-LIST', `${where}: 'in' casa con uno de VARIOS valores, y '${name}' no es una lista — decláralo 'list: true' del tipo de '${input.filter.field}', o usa op: eq`);
+      } else if ((input.list && op_ !== 'in') || filterFamilyOf(baseOf(input)) !== filterFamilyOf(target.base)) {
+        error('CHK-USECASES-FILTER-TYPE', `${where}: el input es ${input.list && op_ !== 'in' ? 'una lista' : baseOf(input)} y '${input.filter.field}' es ${target.base} — un filtro compara un valor con otro del mismo tipo${input.list && op_ !== 'in' ? " (una lista solo filtra con op: in)" : ''}`);
+      }
+    }
+    // La búsqueda libre (2.32, D13): un OR de comparaciones de texto sobre los campos de `over`. Un campo que no es
+    // texto no tiene sombra que plegar ni LIKE que escapar: se para aquí.
+    for (const [name, input] of searched) {
+      const where = `use-cases: ${opName}.input.fields.${name}.search`;
+      if (input.list || filterFamilyOf(baseOf(input)) !== 'text') {
+        error('CHK-USECASES-SEARCH-FIELD', `${where}: la búsqueda libre recibe UN texto, y '${name}' es ${input.list ? 'una lista' : baseOf(input)}`);
+      }
+      for (const path of input.search.over ?? []) {
+        const target = filterTarget(entity, path);
+        if (!target || target.relation || filterFamilyOf(target.base) !== 'text') {
+          error('CHK-USECASES-SEARCH-FIELD', `${where}.over: '${path}' no es un campo de texto de ${entityName} ni el subcampo de texto de uno de sus value objects`);
+        }
       }
     }
     for (const [name, value] of Object.entries(op.where ?? {})) {
@@ -4565,6 +4647,17 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
   // condicional. Con optimisticLocking la carrera DENTRO del servidor ya está arbitrada; la de dos peticiones separadas en
   // el tiempo no, y perderla no rompe ningún escenario. Por operación: «el cliente es una máquina que no edita
   // formularios» se acepta de una en una.
+  // U3 de PLAN-DSL-231-232: desde 2.32 un listado sin `sortable` no admite `?sort=`. Para un consumidor máquina es lo
+  // de siempre (pide el orden del diseño); para una pantalla, quitarle el orden de las columnas es una decisión.
+  for (const candidate of undecidedClientSorts(layers)) {
+    obligation(
+      'OBL-QUERY-SORT-UNDECIDED',
+      `use-cases.${candidate.operation}.output.sortable`,
+      `use-cases: ${candidate.operation} pagina '${candidate.entity}' para personas (audience ${candidate.audience}) y no declara sortable — ` +
+        "desde 2.32 todo '?sort=' de ese listado es 400 y el cliente solo recibe el orden por defecto. Declara en output.sortable " +
+        'los campos por los que una pantalla puede ordenar, o acéptalo en decisions.yaml con su motivo — ver docs/dsl/use-cases.md § sortable'
+    );
+  }
   for (const candidate of undecidedConditionalWrites(layers)) {
     obligation(
       'OBL-API-CONCURRENCY-UNDECIDED',

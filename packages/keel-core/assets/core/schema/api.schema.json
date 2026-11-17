@@ -71,7 +71,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "style": { "type": "string", "enum": ["offset", "cursor"] },
+        "style": { "type": "string", "enum": ["offset"], "description": "Solo offset: `page`/`size` y el sobre { items, page, size, totalElements, totalPages }. `cursor` salió en 2.32: validaba y ningún generador lo servía; vuelve con su contrato cuando un diseño lo pida." },
         "defaultSize": { "type": "integer", "minimum": 1 },
         "maxSize": { "type": "integer", "minimum": 1 }
       }

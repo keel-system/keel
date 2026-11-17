@@ -46,10 +46,12 @@ pagination: { style: offset, defaultSize: 20, maxSize: 100 }
   Mientras el valor no estuvo escrito aquí, el escenario se exigía y nadie sabía qué asertar: la
   corrida `catalog` lo reportó como hueco del diseño cuando era un hueco de este documento.
 
-  Ese sobre es el de `style: offset`, que es el default y el único que hoy materializa algún generador.
-  `style: cursor` existe en el schema pero **ningún generador lo implementa**: quien lo declare recibirá
-  paginación por offset, y el generador debe decirlo en su build en vez de ignorarlo en silencio
-  (keel-spring lo avisa). Mientras no haya uno que lo sirva, declararlo es intención, no contrato.
+  Ese sobre es el de `style: offset`, el único estilo. `style: cursor` salió del schema en 2.32: validaba y
+  ningún generador lo servía, y quien lo declaraba recibía paginación por offset. Vuelve con su contrato
+  cuando un diseño lo pida.
+
+  El ORDEN que el cliente puede pedir con `?sort=` no es de esta capa sino de cada listado: `output.sortable`
+  en `use-cases` (2.32). Sin él, `?sort=` es 400.
 - Paths con `{param}` van entre comillas en YAML.
 
 ## `concurrency` — la escritura condicional (DSL 2.25)
