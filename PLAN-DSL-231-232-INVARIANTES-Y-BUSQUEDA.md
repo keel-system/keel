@@ -16,12 +16,37 @@
 | A7 | Contrato y método: las filas `entity-checks` y `computed` de las cuatro matrices, el contrato en los cuatro, `wire-contract.md`, `/keel-design`, `/keel-recover` y los agentes | hecho (2026-11-16, § Medidas de A7) |
 | A8 | Fixtures: las invariantes en prosa que caben pasan a `checks`, `shop-api` según U5 y U6, y un `count` real | hecho (2026-11-16, § Medidas de A8) |
 | A9 | Corridas de control de `shop-api`: los cuatro generadores en PostgreSQL y keel-nest en MySQL | hecho (2026-11-16, § Medidas de A9) |
-| B0-B9 | Fase B: DSL 2.32 (R8) | pendiente |
+| B0 | Medir lo de la fase B | hecho (2026-11-17, § Medidas de B0; U7 y U8 decididas) |
+| B1-B9 | Fase B: DSL 2.32 (R8) | pendiente |
 
 **Para retomar.** La fase A (DSL 2.31) está cerrada: A9 dio cinco corridas de control de `shop-api` en 92/92, sin
 `cart-line-sum-over-max` ni ningún otro `designGap`, sin que el agente tocara la guarda y con la huella igual o menor
 que en la 2.27. El hueco de la escala que destapó A9 está arreglado (§ Arreglo de la escala), con un pendiente: `go-check --fixtures`,
-que se pasa en B6. Siguiente: B0, medir lo de la fase B (DSL 2.32, búsqueda).
+que se pasa en B6. B0 está medido (§ Medidas de B0): `?sort=` desconocido es 500 en los cuatro (200 en keel-spring
+documental), `?sort=apiToken` responde 200, y MySQL no ordena el texto como PostgreSQL y MongoDB. U7 (collation binaria en todo
+texto ordenable, también `"C"` en PostgreSQL) y U8 (se conserva la coma) decididas. Siguiente: B1.
+
+## Medidas de B0 (2026-11-17)
+
+Medido leyendo los lectores y adaptadores de los cuatro (lo que dice «leído» se ejecuta en B3-B6 con su sabotaje) y, para
+D17, ordenando los mismos 16 textos en contenedores con las imágenes del catálogo (`postgres:16-alpine`, `mysql:8.0`,
+`mongo:7`).
+
+| | Medida | Qué cambia en el plan |
+|---|---|---|
+| M9 | **`?sort=` sobre una propiedad desconocida.** keel-nest (`withStableOrder`), keel-dotnet (`Ordered`, `InvalidOperationException`) y keel-go (`orderBy`, `fmt.Errorf`) la rechazan en el adaptador con un error sin `code`, que el catch-all de la API responde **500**. Lo mismo en las dos ramas documentales (`sortablePaths`). keel-spring relacional: `PropertyReferenceException` de Spring Data, que `ApiExceptionHandler` no traduce: **500** (leído). keel-spring documental: Spring Data MongoDB no valida la ruta y ordena por un campo que no existe: **200** con el orden del id (leído) | U3 corrige un 500 en los cuatro y un 200 silencioso en keel-spring documental. La comprobación va en el BORDE (el lector de `?sort=`), no en el adaptador: el mapa de cada adaptador sigue siendo la lista blanca de columnas, pero ya nunca ve una propiedad que el borde no admitió |
+| M10 | **`?sort=` sobre un campo `sensitive` o `personal`.** Las listas blancas de los cuatro son TODOS los miembros persistidos (`sortableProperties`/`sortable`/`sortablePaths`), las sombras plegadas (`<campo>Folded`) y `ranked` incluidos. `product-catalog` pagina `Product`, que lleva `apiToken` (`sensitive`): hoy `?sort=apiToken` responde 200 en los cuatro y sirve de oráculo. También se puede ordenar por una sombra, que no es del contrato | Confirma D15. `sortable` del diseño sustituye a esas listas en el borde |
+| M11 | **El orden por defecto sobre texto NO coincide (D17).** Con los mismos 16 textos: PostgreSQL 16-alpine y MongoDB 7 dan el orden por punto de código (`1 A B Z _x a b e f n o z Á á é ñ`). MySQL 8.0 con la collation por defecto de una columna NO única (`utf8mb4_0900_ai_ci`) da `_x 1 a A á Á b B é e f ñ n o z Z`, con `a`/`A`/`á` empatados (los ordena el id). Con `utf8mb4_bin` (la de las columnas únicas, `caseSensitiveCollation`) sale igual que los otros dos. Ojo: PostgreSQL declara `en_US.utf8`, pero la imagen alpine usa musl, que no implementa collation y compara bytes; un PostgreSQL con glibc (Debian, un gestionado) ordenaría lingüístico | D17 no se cumple hoy. Pide **U7**: cómo se fija el orden del texto ordenable en los tres motores |
+| M12 | **Una lista en la query** se lee igual en los cuatro: el parámetro repetido, o uno solo partido por comas (`listOf` de keel-nest, `List<T>` de keel-dotnet, `listParam` de keel-go y la conversión `String → List` de Spring). Ninguna fixture lleva hoy una lista en la query de un GET (`getProductsByIds` de `catalog-extended` es un POST con cuerpo). Un `?statuses=` vacío no es 400 en ninguno: keel-nest lo lee como `[null]` | D14 dice «parámetro repetido», pero los cuatro aceptan también la coma, y entonces un `in` sobre texto no puede pedir un valor con coma como único elemento. Pide **U8**. D10 (lista vacía → 400) es nuevo en los cuatro |
+
+### Decisiones del usuario tras B0 (2026-11-17)
+
+Las dos propuestas, aceptadas tal cual.
+
+| | Pregunta | Decisión |
+|---|---|---|
+| U7 | Cómo se cumple D17 | Toda columna de texto **ordenable** (en `sortable` o en el `sort` de una query) lleva la collation binaria de su motor, como ya la llevan las únicas: `utf8mb4_bin` en MySQL y `"C"` en PostgreSQL (que deja de depender de la imagen). Es un cambio de esquema: va en la baseline y, para una base desplegada, en `EVOLUTION.md` (no un paso de `schema-steps.js`, que solo crea tablas del generador). MongoDB ya compara por punto de código |
+| U8 | La coma en una lista de la query | Se conserva la coma (es lo que hace Spring y lo que ya hacen los cuatro), y `wire-contract.md` § Entrada lo dice: un valor con coma solo viaja repitiendo el parámetro. El OpenAPI declara `style: form, explode: true`, que es compatible |
 
 ## Arreglo de la escala (2026-11-17, tras A9)
 
@@ -393,7 +418,7 @@ searchProducts:
 | D14 | Una lista en la query viaja como **parámetro repetido** (`?statuses=active&statuses=draft`). Se escribe en `wire-contract.md` § Entrada, y el OpenAPI usa `style: form, explode: true` | El cable tiene que decirlo una sola vez para los cuatro |
 | D15 | `sortable[]` son campos o subcampos de value object de la entidad de la salida. No admiten campos `sensitive` ni `personal`, ni rutas de otro agregado. El id se añade siempre como desempate (como hoy) | Cierra el oráculo por orden. La ruta embebida necesitaría un join que el finder no tiene |
 | D16 | U3: sin `sortable`, `?sort=` es 400 y el OpenAPI no lo ofrece. Con `sortable`, es 400 una propiedad fuera de la lista o una dirección que no sea `asc`/`desc`. Lo que **no se puede leer** de `page`/`size` sigue siendo indulgente | Ahora es contrato. La indulgencia de la página es de Spring Data y no cambia |
-| D17 | El orden sobre texto usa la misma collation que la unicidad (`caseSensitiveCollation`, binaria). El A0 de esta fase mide que el orden por defecto ya lo cumpla en PostgreSQL, MySQL y MongoDB | Sin esto, dos motores ordenan distinto la misma página |
+| D17 | El orden sobre texto usa la misma collation que la unicidad, binaria (U7): `utf8mb4_bin` en MySQL y `"C"` en PostgreSQL en toda columna de texto ordenable. B0 midió que hoy MySQL no lo cumple (M11) | Sin esto, dos motores ordenan distinto la misma página |
 | D18 | La clave de la caché (`cache-plan.js`) incluye el orden pedido. El alcance (2.27) y la vida de la fila (2.28) se componen como hoy en `implicitPredicates` | Si no, dos órdenes compartirían la misma entrada |
 
 ### Reglas mecánicas
