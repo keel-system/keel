@@ -3,8 +3,8 @@ decisions:
   - id: OBL-QUERY-SORT-UNDECIDED
     scope: use-cases.listReports.output.sortable
     reason: >
-      Provisional (DSL 2.32, incremento B1 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md): listReports se queda con su
-      orden por defecto y sin orden del cliente mientras los generadores no generan `sortable`. Se revisa en B8.
+      listReports se queda con el orden del diseño (por ubicación y, dentro, los más recientes primero) y sin orden
+      del cliente (DSL 2.32): es el orden en que se recorre una inspección, y ningún flujo pide otro.
     since: 1.0.0
   - id: OBL-ENTITY-UNREACHABLE
     scope: domain

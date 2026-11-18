@@ -61,8 +61,8 @@ test('el controller lee ?sort= y la lista de la query con QueryParameters, de lo
   assert.match(controller, /QueryParameters\.sorted\(pageable, request, SEARCH_CATALOG_SORTABLE, SEARCH_CATALOG_ORDER\)/);
   // La lista ya no es un @RequestParam: Spring la partiría por comas con un valor y no con varios.
   assert.doesNotMatch(controller, /@RequestParam[^,]*List<ProductStatus> statuses/);
-  // Un listado sin sortable: cualquier ?sort= es 400 (U3).
-  assert.match(controller, /_SORTABLE = Map\.of\(\);/);
+  // El listado de product-catalog declara su sortable desde B8; sin él, cualquier ?sort= es 400 (U3, SO-11).
+  assert.match(controller, /LIST_PRODUCTS_SORTABLE = Map\.of\("sku", "sku", "name", "name", "price\.amount", "priceAmount"\);/);
   const reader = fileOf(files, '/QueryParameters.java');
   assert.match(reader, /request\.getParameterValues\("sort"\)/);
   assert.match(reader, /value\.split\(",", -1\)/);

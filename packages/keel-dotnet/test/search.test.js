@@ -46,8 +46,10 @@ test('el borde: ?sort= contra sortable (400 InvalidSortException) y la lista de 
   const endpoints = files.filter((entry) => entry.path.includes('/Endpoints/')).map((entry) => entry.content).join('\n');
   assert.match(endpoints, /sortable: new Dictionary<string, string> \{ \["name"\] = "name", \["sku"\] = "sku", \["price\.amount"\] = "priceAmount" \}/);
   assert.match(endpoints, /TextValues\.List<ProductStatus>\(httpRequest\.Query\["statuses"\], "statuses", /);
-  // Sin sortable (el listado de product-catalog), ningún orden del cliente: el lector no recibe el diccionario.
-  assert.ok(!/ListProducts[\s\S]*?sortable: new Dictionary/.test(endpoints.split('SearchCatalog')[0]));
+  // El listado de product-catalog declara su sortable desde B8.
+  assert.match(endpoints, /defaultSort: \[new SortOrder\("sku", SortDirection\.Asc\)\], sortable: new Dictionary<string, string> \{ \["sku"\] = "sku", \["name"\] = "name", \["price\.amount"\] = "priceAmount" \}/);
+  // Sin sortable (los resultados de un trabajo de lote), ningún orden del cliente: el lector no recibe el diccionario.
+  assert.match(endpoints, /PageableReading\.Read\(http\.Request\.Query, defaultSize: \d+, maxSize: \d+, defaultSort: \[\]\);/);
   const middleware = file(files, 'Rest/ApiErrorMiddleware.cs');
   assert.match(middleware, /case InvalidSortException invalidSort:/);
 });

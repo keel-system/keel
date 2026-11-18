@@ -373,7 +373,8 @@ Lo miden `test/entity-checks.test.js` (la forma, el orden, las notas y los mensa
 
 El finder relacional (`src/scaffold/finders.js`) escribe `in` como `lista.Contains(r.Prop)` (cada elemento plegado antes si
 el input pliega), `ne` como `r.Prop == null || r.Prop != v` (EF ya compensa los nulos de SQL, pero se escribe para que el
-sabotaje `finder-ne-null` tenga forma) y la búsqueda como UN `Where` con un OR de `Contains`/`StartsWith` sobre la sombra de
+sabotaje `finder-ne-null` tenga forma; sobre una columna que no admite nulo, sin esa rama, que en un `Guid` es CS8073:
+`criterionNullable` de keel-core) y la búsqueda como UN `Where` con un OR de `Contains`/`StartsWith` sobre la sombra de
 cada campo de `over`, con el texto plegado una vez (EF escapa el patrón). El documental (`document-repositories.js`): `$in`
 escrito con el mismo `BsonValues` con que se guarda, `$ne` y un `$or` de `BsonRegularExpression(Regex.Escape(...))`.
 

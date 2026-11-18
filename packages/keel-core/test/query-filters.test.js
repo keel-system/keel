@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { loadService } from '../src/index.js';
 import { buildModel } from '../src/lib/gen/model.js';
 import { STACK_DEFAULTS } from '../src/lib/gen/infra-catalog.js';
-import { criterionText, finderNote, findersOf } from '../src/lib/gen/query-filters.js';
+import { criterionNullable, criterionText, finderNote, findersOf } from '../src/lib/gen/query-filters.js';
 import { PROBE } from './helpers/probe-projection.js';
 
 const FIXTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'fixtures', 'designs');
@@ -33,9 +33,12 @@ test('listDraftProducts: la relación por nombre, el rango con filter y el where
     [
       ['categoryId', 'eq', 'relation', 'category'],
       ['createdFrom', 'gte', 'field', 'createdAt'],
-      ['createdTo', 'lte', 'field', 'createdAt']
+      ['createdTo', 'lte', 'field', 'createdAt'],
+      ['notCategoryId', 'ne', 'relation', 'category']
     ]
   );
+  // category es obligatoria: su columna no admite filas sin valor; createdAt no es required, y la suya sí (relational.js).
+  assert.deepEqual(finder.criteria.map(criterionNullable), [false, true, true, false]);
   assert.deepEqual(finder.fixed.map((entry) => [entry.name, entry.value]), [['status', 'draft']]);
   assert.deepEqual(finder.sort.map((criterion) => `${criterion.path}:${criterion.direction}`), ['createdAt:desc']);
   assert.deepEqual(findersOf(model, 'Product').map((each) => each.method), ['listProducts', 'listDraftProducts']);
@@ -53,11 +56,11 @@ test('un texto plegado se compara contra su sombra: la que pide el filtro de lis
 test('filter nombra el campo que pliega aunque el input se llame de otra forma, y su sombra se deriva igual', () => {
   const model = modelOf('catalog-extended', (layers) => {
     const fields = layers['use-cases'].operations.listProducts.input.fields;
-    fields.q = { ...fields.name, filter: { field: 'name', op: 'eq' } };
+    fields.title = { ...fields.name, filter: { field: 'name', op: 'eq' } };
     delete fields.name;
   });
-  const [criterion] = operationOf(model, 'listProducts').finder.criteria;
-  assert.equal(criterion.name, 'q');
+  const criterion = operationOf(model, 'listProducts').finder.criteria.find((each) => each.name === 'title');
+  assert.equal(criterion.op, 'eq');
   assert.equal(criterion.shadow?.name, 'nameNormalized', 'la sombra del filtro no siguió a filter.field');
 });
 
@@ -82,7 +85,7 @@ test('la nota del handler enumera los filtros que aplica el finder, y solo esos'
   const operation = operationOf(modelOf('catalog-extended'), 'listDraftProducts');
   const note = finderNote(operation, { call: 'productRepository.listDraftProducts(filter, pageable)' });
   assert.ok(note.includes('productRepository.listDraftProducts(filter, pageable)'));
-  assert.ok(note.includes('category (su id) = categoryId si viene; createdAt ≥ createdFrom si viene; createdAt ≤ createdTo si viene; status = draft'));
+  assert.ok(note.includes('category (su id) = categoryId si viene; createdAt ≥ createdFrom si viene; createdAt ≤ createdTo si viene; category (su id) ≠ notCategoryId (también sin valor) si viene; status = draft'));
   assert.match(note, /designGap/);
 });
 

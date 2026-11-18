@@ -2074,19 +2074,22 @@ test('y la cota del diseño viaja DENTRO del columnDefinition, que sustituye al 
 
 test('solo las columnas ÚNICAS la reciben, no toda columna de texto', () => {
   // Forzar collation binaria en un campo descriptivo no cambia ninguna garantía y ensancharía el
-  // diff sin motivo. `name` no participa en ninguna constraint única.
+  // diff sin motivo. La moneda del precio no participa en ninguna constraint única ni se ordena (`name` sí se ordena
+  // desde la B8 de DSL 2.32, y lleva la collation del orden, U7).
   const mysql = project('product-catalog', { ...MYSQL, broker: null }).file('ProductJpa.java');
-  assert.match(mysql, /name = "name", nullable = false, length = 120/);
+  assert.match(mysql, /name = "price_currency", nullable = false, length = 3\)/);
 });
 
 test('y el motor que ya distingue no recibe nada por la UNICIDAD', () => {
   // PostgreSQL y Oracle son sensibles por defecto: emitirles collation por ser única sería ruido. Lo que sí recibe
-  // PostgreSQL es la del ORDEN (DSL 2.32, U7) en la columna por la que se ordena: `sku` (listProducts, `sort: [sku:asc]`).
+  // PostgreSQL es la del ORDEN (DSL 2.32, U7) en las columnas por las que se ordena: `sku` y `name` (listProducts, `sort`
+  // y `sortable`).
   const postgres = project('product-catalog', { ...MYSQL, database: 'postgresql', broker: null }).file('ProductJpa.java');
   assert.match(postgres, /name = "sku", nullable = false, columnDefinition = "varchar\(8\) collate \\"C\\""/);
-  // `name` es único en ningún sitio ni se ordena: sin collation.
-  assert.match(postgres, /name = "name", nullable = false, length = 120\)/);
-  assert.equal(postgres.match(/collate/g).length, 1, 'solo la columna ordenada lleva collation en PostgreSQL');
+  assert.match(postgres, /name = "name", nullable = false, columnDefinition = "varchar\(120\) collate \\"C\\""/);
+  // La moneda no es única en ningún sitio ni se ordena: sin collation.
+  assert.match(postgres, /name = "price_currency", nullable = false, length = 3\)/);
+  assert.equal(postgres.match(/collate/g).length, 2, 'solo las columnas ordenadas llevan collation en PostgreSQL');
 });
 
 // ─── El emisor de un evento es la RAÍZ del agregado, no lo que la operación devuelve ─────

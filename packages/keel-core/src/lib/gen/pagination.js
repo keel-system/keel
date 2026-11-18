@@ -171,7 +171,9 @@ export function orderCollationWork(model, baseline, collation) {
     const table = tableOf(model, entity.name);
     for (const column of orderedTextColumns(model, entity.name)) {
       const name = snakeCase(column.property);
-      const declared = lines.find((line) => new RegExp(`^\\s*[\`"]?${name}[\`"]?\\s`, 'i').test(line));
+      // El nombre de la columna seguido de su tipo, no de un `=`: la clase de una migración de TypeORM lleva la propiedad
+      // `name = '<Migración>'`, y una columna ordenable que se llame `name` la tomaba por ella.
+      const declared = lines.find((line) => new RegExp(`^\\s*[\`"]?${name}[\`"]?\\s+[^=\\s]`, 'i').test(line));
       if (!declared || /collat/i.test(declared)) continue;
       work.push(
         `La columna \`${table}.${name}\` se ordena (${column.path}) y desde DSL 2.32 lleva la collation binaria \`${collation}\` para ordenar igual en los tres motores (D17); la base desplegada no la tiene: añade un paso que la altere con la collation y el tipo que declara el mapeo.`

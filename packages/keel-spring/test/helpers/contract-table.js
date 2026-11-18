@@ -55,6 +55,8 @@ export function springRoutes(files) {
         ? 207
         :STATUS_BY_CONSTANT[/@ResponseStatus\(HttpStatus\.(\w+)\)/.exec(block)?.[1]] ?? Number(/HttpStatus\.valueOf\((\d+)\)/.exec(block)?.[1] ?? 200);
       const query = [...params.matchAll(REQUEST_PARAM)].map((m) => m[1]);
+      // Una lista de la query sin cotas propias (DSL 2.32) no es un @RequestParam: la lee QueryParameters de los valores crudos.
+      query.push(...[...block.matchAll(/QueryParameters\.list\(request, "(\w+)"/g)].map((m) => m[1]));
       // El Pageable de Spring Data lee tres parámetros: página, tamaño y orden.
       if (/Pageable pageable/.test(params)) query.push('page', 'size', 'sort');
       const body = /@RequestBody\(required = false\)/.test(params) ? 'optional' : /@RequestBody/.test(params) ? 'required' : null;

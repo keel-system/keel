@@ -59,8 +59,10 @@ test('el borde: ?sort= contra sortable (400 invalidSortError) y la lista de la q
   assert.match(reading, /return nil, &validationError\{params: true, details: \[\]string\{name\}\}/);
   const endpoints = file(files, /httpapi\/product_endpoints\.go$/);
   assert.match(endpoints, /map\[string\]string\{"name": "name", "sku": "sku", "price\.amount": "priceAmount"\}\); err != nil/);
-  // Sin sortable (el listado de product-catalog), ningún orden del cliente: el lector recibe nil.
-  assert.match(endpoints, /pageableParam\(r, \d+, \d+, \[\]domain\.SortOrder\{\{Property: "sku", Direction: domain\.SortAsc\}\}, nil\)/);
+  // El listado de product-catalog declara su sortable desde B8.
+  assert.match(endpoints, /pageableParam\(r, \d+, \d+, \[\]domain\.SortOrder\{\{Property: "sku", Direction: domain\.SortAsc\}\}, map\[string\]string\{"sku": "sku", "name": "name", "price\.amount": "priceAmount"\}\)/);
+  // Sin sortable (los resultados de un trabajo de lote), ningún orden del cliente: el lector recibe nil.
+  assert.match(file(files, /httpapi\/batch_jobs\.go$/), /pageableParam\(r, defaultSize, maxSize, nil, nil\)/);
   const errors = file(files, /httpapi\/errors\.go$/);
   assert.match(errors, /case errors\.As\(err, &invalidSort\):/);
   // La tabla de rutas anuncia `sort` solo en el listado con sortable (U3).

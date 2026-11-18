@@ -40,6 +40,17 @@ function targetOf(entity, valueObjects, path) {
   return relation ? { kind: 'relation', path, relation } : null;
 }
 
+/**
+ * Si la columna de un criterio admite filas sin valor: una relación o un campo obligatorios no. `ne` (D11) incluye esas
+ * filas, y un lenguaje que tipa la columna sin nulo (el `Guid` de C#) no deja escribir la comparación con el nulo.
+ */
+export function criterionNullable(criterion) {
+  const { target } = criterion;
+  if (target.kind === 'relation') return !target.relation.required;
+  if (target.field.required || target.field.id) return target.kind === 'vo' ? !target.sub.required : false;
+  return true;
+}
+
 /** El enlace por nombre: el campo que se llama como el input, o la relación `<nombre>Id`. */
 function implicitTarget(entity, valueObjects, name) {
   const field = targetOf(entity, valueObjects, name);

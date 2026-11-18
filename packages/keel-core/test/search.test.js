@@ -164,9 +164,14 @@ test('el contrato: sort solo con sortable, con su enum; la lista del in repetida
   assert.equal(sort.schema.items.enum.length, 9);
   const statuses = search.find((parameter) => parameter.name === 'statuses');
   assert.deepEqual([statuses.style, statuses.explode, statuses.schema.minItems], ['form', true, 1]);
-  // listProducts no declara sortable: desde 2.32 no ofrece sort.
-  assert.equal(parameters('/api/v1/products').some((parameter) => parameter.name === 'sort'), false);
-  assert.ok(parameters('/api/v1/products').some((parameter) => parameter.name === 'page'));
+  // listProducts declara su sortable desde B8; la página de resultados de un trabajo de lote no, y no ofrece sort.
+  assert.equal(parameters('/api/v1/products').find((parameter) => parameter.name === 'sort').schema.items.enum.length, 9);
+  const results = Object.keys(document.paths).filter((route) => route.endsWith('/results'));
+  assert.ok(results.length > 0, 'el sujeto tiene la página de resultados de un trabajo');
+  for (const route of results) {
+    assert.ok(parameters(route).some((parameter) => parameter.name === 'page'));
+    assert.equal(parameters(route).some((parameter) => parameter.name === 'sort'), false, `${route}: sin sortable, sin sort`);
+  }
 });
 
 test('la clave de la caché de un listado paginado suma la página y, con sortable, el orden (D18)', () => {
@@ -192,6 +197,8 @@ test('una base desplegada sin la collation del orden es trabajo de esquema pendi
   assert.match(work[1], /`products\.name`.*"C"/);
   const after = before.replace(/\) NOT NULL,/g, ') COLLATE pg_catalog."C" NOT NULL,');
   assert.deepEqual(orderCollationWork(model, after, '"C"'), []);
+  // La propiedad `name = '…'` de la clase de una migración de TypeORM no es la columna `name` (lo destapó B8).
+  assert.deepEqual(orderCollationWork(model, `  name = 'BaselineSchema1000000000000';\n${after}`, '"C"'), []);
   // Sin baseline (todavía no se exportó) o en un motor que ya ordena por punto de código, nada.
   assert.deepEqual(orderCollationWork(model, null, '"C"'), []);
   assert.deepEqual(orderCollationWork(model, before, null), []);

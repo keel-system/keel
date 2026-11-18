@@ -63,8 +63,8 @@ test('sort declarado: constante por operación en el controller, aplicada solo s
   );
   // QueryParameters lee ?sort= de la petición (DSL 2.32): sin sortable, cualquier ?sort= es 400 y, sin ?sort=, el orden
   // del diseño. El desempate del adaptador va detrás de los dos.
-  assert.ok(controller.includes('new ListProductsQuery(name, QueryParameters.sorted(pageable, request, LIST_PRODUCTS_SORTABLE, LIST_PRODUCTS_ORDER))'));
-  assert.ok(controller.includes('private static final Map<String, String> LIST_PRODUCTS_SORTABLE = Map.of();'));
+  assert.ok(controller.includes('QueryParameters.sorted(pageable, request, LIST_PRODUCTS_SORTABLE, LIST_PRODUCTS_ORDER))'));
+  assert.ok(controller.includes('private static final Map<String, String> LIST_PRODUCTS_SORTABLE = Map.of("createdAt", "createdAt", "sku", "sku", "name", "name");'));
   // @PageableDefault sigue llevando solo el tamaño: un único `direction` no puede
   // expresar un orden mixto, y no alcanza al ?sort= del cliente.
   assert.ok(controller.includes('@PageableDefault(size = 20) Pageable pageable'));

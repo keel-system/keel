@@ -24,14 +24,15 @@
 | B5 | keel-dotnet: el finder (`Contains` sobre la lista, `ne` con el nulo, la búsqueda como un OR de LINQ o un `$or` citado), `PageableReading.Read` contra `sortable`, la lista de la query, la collation del orden, la clave de la caché y las sondas FS-*/SO-* de db-check y doc-check | hecho (2026-11-17, § Medidas de B5) |
 | B6 | keel-go: el finder (`f.oneOf`, `f.distinct` con la fila nula, la búsqueda como `f.anyLike`, o `$in`/`$ne`/`$or` citado), `pageableParam` contra `sortable`, la lista de la query, la collation del orden, la clave de la caché y las sondas FS-*/SO-* de db-check y doc-check | hecho (2026-11-17, § Medidas de B6) |
 | B7 | Contrato y método: las filas `finder-in-ne`, `search` y `sortable` de las cuatro matrices, el contrato de `catalog-search` en los cuatro, la guía Postman de `/keel-docs`, la clase 5 de `/keel-design`, `/keel-recover` y los agentes | hecho (2026-11-17, § Medidas de B7) |
-| B8-B9 | Fase B: fixtures y corridas de control | pendiente |
+| B8 | Fixtures: `catalog-extended` declara `in`, `ne`, `search` y `sortable`; `product-catalog`, `sortable`; las demás aceptan `OBL-QUERY-SORT-UNDECIDED` con su motivo | hecho (2026-11-17, § Medidas de B8) |
+| B9 | Corridas de control | pendiente |
 
 **Para retomar.** La fase A (DSL 2.31) está cerrada (A9: cinco corridas de `shop-api` en 92/92). Fase B: B0 medido (U7 y U8 decididas) y B1
 hecho: el DSL es 2.32 y los cuatro generadores rechazan `in`/`ne`/`search`/`sortable` con `searchPendingErrors` hasta su
 incremento. B2 hecho (lo neutral, § Medidas de B2). B3 hecho (keel-spring, § Medidas de B3). B4 hecho (keel-nest, § Medidas de B4). B5 hecho (keel-dotnet, § Medidas de B5). B6 hecho (keel-go, § Medidas de B6; con él, el
 `go-check --fixtures` pendiente del arreglo de la escala). Los cuatro generadores generan ya la búsqueda de 2.32.
-Siguiente: B7, el contrato y el método (`openapi.test.js` en los cuatro, la guía Postman de `/keel-docs`, la pregunta de
-`/keel-design`, `/keel-recover`, los agentes y el aviso de `cursor` en los README).
+B7 hecho (contrato y método, § Medidas de B7). B8 hecho (fixtures, § Medidas de B8).
+Siguiente: B9, las corridas de control de `catalog-extended` (o `product-catalog`) en los cuatro generadores y una en MySQL.
 Lo que cada generador recoge en su incremento, todo de keel-core:
 - el finder: `criterion.op` `in`/`ne`/`search`, y `search` con `targets[]` en vez de `target`;
 - el lector de `?sort=` contra `operation.sortable` (`readClientSort`, `invalidSortMessage`);
@@ -47,6 +48,35 @@ Lo que cada generador recoge en su incremento, todo de keel-core:
 
 Ventana conocida, como la de A2: desde B2 el contrato ya no anuncia `sort` en un listado sin `sortable`, y los
 servidores lo siguen aceptando hasta su incremento.
+
+## Medidas de B8 (2026-11-17)
+
+- **Las fixtures.** `catalog-extended`: `listProducts` gana `statuses` (`in` sobre `status`), `q` (`search` sobre `name` y `sku`,
+  `contains`, `ignore-case-accents`) y `sortable: [createdAt, sku, name]`; `listDraftProducts`, `notCategoryId` (`ne` sobre la
+  relación `category`) y `sortable: [createdAt, name]`. `product-catalog`: `sortable: [sku, name, price.amount]` en `listProducts`
+  (cierra `list-order-in-prose`) y sigue en `--ready` (salvo `DESIGN.md`, que pide workspace, como antes). Los dos quitan su
+  aceptación provisional de `OBL-QUERY-SORT-UNDECIDED`; `asset-vault`, `conduit`, `shop-api` e `inspection-reports` la cambian
+  por un motivo definitivo (ningún flujo del legacy, ni de los escenarios, pide otro orden). Sin subir versiones (precedente
+  de A8).
+- **Tres defectos que destapó tocar las fixtures**, cada uno con su prueba:
+  - `orderCollationWork` (keel-core) tomaba la propiedad `name = '<Migración>'` de la clase de TypeORM por la columna
+    `name`: keel-nest pedía en `EVOLUTION.md` un ALTER que no hacía falta. La columna tiene que ir seguida de su tipo, no de
+    un `=`.
+  - El lector del contrato de keel-spring (`test/helpers/contract-table.js`, que usan las paridades de los otros tres) no
+    veía las listas de la query que lee `QueryParameters.list`.
+  - keel-dotnet escribía `ne` como `r.X == null || r.X != v` también sobre una relación obligatoria: sobre un `Guid` es
+    CS8073, error con `TreatWarningsAsErrors`, y `db-check` no compilaba ningún sujeto. `criterionNullable` (neutral, en
+    `query-filters.js`, la regla de `relational.js`) decide si la columna admite nulo.
+  - Y una sonda: la de la sombra de un filtro de keel-nest (`filterFoldBlock`) escribía «Ñandú Ærø Portátil» en el `sku`, que
+    la búsqueda pliega ahora y cuyo tipo `SKU` tiene patrón. Se limita a campos de tipo base, como la de keel-dotnet.
+- **Las redes, todos los sujetos** (las fixtures son relacionales y `catalog-search-mongo` deriva de `product-catalog`):
+  keel-nest `db-check` (PostgreSQL y MySQL) y `doc-check`; keel-dotnet `db-check` (los dos motores) y `doc-check`; keel-go
+  `db-check` en PostgreSQL y en MySQL y `doc-check`; keel-spring `finder-check` entero y `compile-check` de `catalog-extended` (solo el arnés: el main queda fuera por la
+  réplica, así que javac no ve el finder nuevo de `catalog-extended`; sus ramas las ejecuta `finder-check` sobre `catalog-search`).
+  `npm test` entero en verde.
+  Primera pasada: tres rojos (los dos últimos defectos y un `mysql.test.exe` que Windows no encontró en keel-go, de entorno);
+  repetidos tras los arreglos, en verde (keel-nest sobre los dos sujetos afectados, keel-dotnet entero, keel-go
+  `notification-mailer` en MySQL).
 
 ## Medidas de B7 (2026-11-17)
 

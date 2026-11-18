@@ -2,7 +2,7 @@
 // el del adaptador, relacional (LINQ sobre la fila de EF Core) y documental (el filtro BSON del driver). Qué restringe
 // cada input lo decide keel-core/gen/query-filters.js, el mismo para los tres generadores: aquí solo se escribe.
 
-import { findersOf, RANGE_OPERATORS } from '@keel-system/keel-core/gen';
+import { criterionNullable, findersOf, RANGE_OPERATORS } from '@keel-system/keel-core/gen';
 import { persistedMembers } from '@keel-system/keel-core/gen/relational';
 import { memberOf } from './enums.js';
 import { csFile, csLocal, csMember, csString, fieldUsings, located, namespaceOf, xmlDoc } from './render.js';
@@ -148,8 +148,9 @@ function relationalCondition(model, entity, criterion) {
     prepared.push(`var ${local}Folded = ${foldCall(criterion.shadow)}(${local});`);
     value = `${local}Folded`;
   }
-  // Distinto, y la fila sin valor también lo es (D11): se escribe el nulo aunque EF ya compense la semántica de SQL.
-  if (criterion.op === 'ne') return { local, prepared, predicate: `r.${property} == null || r.${property} != ${value}` };
+  // Distinto, y la fila sin valor también lo es (D11): se escribe el nulo aunque EF ya compense la semántica de SQL. Una
+  // columna que no lo admite (una relación obligatoria) no lo lleva: comparar un Guid con null es CS8073.
+  if (criterion.op === 'ne') return { local, prepared, predicate: criterionNullable(criterion) ? `r.${property} == null || r.${property} != ${value}` : `r.${property} != ${value}` };
   // timestamptz solo admite instantes en UTC: uno con otro desfase lo rechaza Npgsql al escribir el parámetro.
   if (TIMESTAMP(criterion)) {
     prepared.push(`var ${local}Utc = ${local}.ToUniversalTime();`);

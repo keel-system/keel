@@ -1389,7 +1389,9 @@ function filterFoldBlock(model, root, index, ctx) {
   const idName = root.idField?.name ?? 'id';
   const idRow = `'${root.idField?.columns?.name ?? 'id'}', ${(root.idField?.base ?? 'uuid') === 'uuid'}`;
   const blocks = [];
-  for (const field of root.fields.filter((candidate) => candidate.filterFold)) {
+  // Solo un campo de tipo base, como en keel-dotnet: un value type con patrón (el SKU de catalog-extended, que pliega una
+  // búsqueda de 2.32) no admite el texto de la sonda, y su sombra la miden los casos FS-* de su sujeto.
+  for (const field of root.fields.filter((candidate) => candidate.filterFold && !candidate.fold && candidate.kind === 'base')) {
     const { column, accents } = foldedShadow(field);
     // NFD descompone la Ñ y las vocales acentuadas (la marca se quita); Æ y Ø no se descomponen: solo bajan.
     const expected = accents ? "'nandu ærø portatil'" : "'ñandú ærø portátil'";

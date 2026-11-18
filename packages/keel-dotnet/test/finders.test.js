@@ -15,7 +15,7 @@ async function branchFiles(name) {
 
 test('relacional, página: el record, la firma del puerto y el where, la relación y el rango sobre la fila', async () => {
   const { files } = await planFixture('catalog-extended');
-  assert.ok(fileOf(files, 'Repository/ListDraftProductsFilter.cs').content.includes('public sealed record ListDraftProductsFilter(Guid? CategoryId, DateTimeOffset? CreatedFrom, DateTimeOffset? CreatedTo);'));
+  assert.ok(fileOf(files, 'Repository/ListDraftProductsFilter.cs').content.includes('public sealed record ListDraftProductsFilter(Guid? CategoryId, DateTimeOffset? CreatedFrom, DateTimeOffset? CreatedTo, Guid? NotCategoryId);'));
   assert.ok(fileOf(files, 'Repository/IProductRepository.cs').content.includes('Task<Page<Product>> ListDraftProducts(ListDraftProductsFilter filter, Pageable pageable, CancellationToken cancellationToken = default);'));
   const adapter = fileOf(files, 'Repositories/ProductRepository.cs').content;
   assert.ok(adapter.includes('var query = Graph().AsNoTracking().Where(r => r.Status == ProductStatus.Draft);'));
@@ -24,6 +24,8 @@ test('relacional, página: el record, la firma del puerto y el where, la relaci�
   assert.ok(adapter.includes('var createdFromUtc = createdFrom.ToUniversalTime();'));
   assert.ok(adapter.includes('query = query.Where(r => r.CreatedAt >= createdFromUtc);'));
   assert.ok(adapter.includes('query = query.Where(r => r.CreatedAt <= createdToUtc);'));
+  // ne sobre una relación obligatoria: sin la rama del nulo, que sobre un Guid es CS8073 (lo destapó db-check en B8).
+  assert.ok(adapter.includes('query = query.Where(r => r.CategoryId != notCategoryId);'));
 });
 
 test('relacional, lista: el subcampo aplanado, el prefijo plegado y el orden fijo del diseño', async () => {

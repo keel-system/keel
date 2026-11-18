@@ -44,6 +44,9 @@ operations:
       paginated: true
       # v1.2.0: por sku, que es único; antes no había orden declarado y la página dependía del id.
       sort: [sku:asc]
+      # DSL 2.32: el cliente puede pedir otro orden (?sort=), solo por estos campos; el id desempata siempre.
+      # Cierra el designGap list-order-in-prose: el orden que los escenarios piden ya es contrato.
+      sortable: [sku, name, price.amount]
   activateProduct:
     description: Publica un producto en borrador; solo con un precio mayor que cero.
     kind: command

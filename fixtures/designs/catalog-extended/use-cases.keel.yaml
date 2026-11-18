@@ -99,12 +99,18 @@ operations:
       fields:
         # Coincidencia parcial ignorando mayúsculas y acentos: `portatil` encuentra `Portátil Pro`.
         name: { type: string, constraints: { maxLength: 120 }, match: contains, compare: ignore-case-accents }
+        # La búsqueda de DSL 2.32 que 2.22 dejó fuera: cualquiera de varios estados (la lista vacía es 400)
+        # y un texto libre que se busca a la vez en el nombre y en el SKU, como literal.
+        statuses: { type: ProductStatus, list: true, filter: { field: status, op: in } }
+        q: { type: string, constraints: { maxLength: 120 }, search: { over: [name, sku], match: contains, compare: ignore-case-accents } }
     output:
       entity: Product
       paginated: true
       # El orden que afirman FL-PRD-003-B y -C (v1.1.1: antes solo lo decía la prosa de los
       # escenarios, y el contrato era el orden por id).
       sort: [createdAt:desc, sku:asc]
+      # El cliente puede pedir otro orden (?sort=), solo por estos campos; el id desempata siempre.
+      sortable: [createdAt, sku, name]
       # Marcador operativo del barrido, no algo que el cliente necesite.
       exclude: [recordWithdrawalAwaitingSince]
 
@@ -120,11 +126,14 @@ operations:
         categoryId: { type: uuid }
         createdFrom: { type: timestamp, filter: { field: createdAt, op: gte } }
         createdTo: { type: timestamp, filter: { field: createdAt, op: lte } }
+        # «Fuera de esta categoría» (DSL 2.32): la relación es obligatoria, así que no hay filas sin valor que incluir.
+        notCategoryId: { type: uuid, filter: { field: category, op: ne } }
     where: { status: draft }
     output:
       entity: Product
       paginated: true
       sort: [createdAt:desc]
+      sortable: [createdAt, name]
       # Marcador operativo del barrido, no algo que el cliente necesite.
       exclude: [recordWithdrawalAwaitingSince]
 

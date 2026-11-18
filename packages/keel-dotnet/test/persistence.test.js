@@ -108,7 +108,7 @@ test('el historial de migraciones lleva nombre propio en ejecución y en tiempo 
 
 test('un listado paginado con persistencia lee el Pageable de Spring Data, con el tope y el orden del diseño', () => {
   const endpoints = plans.get('product-catalog').files.find((file) => /\/Endpoints\/\w+\.cs$/.test(file.path) && file.content.includes('PageableReading.Read')).content;
-  assert.match(endpoints, /PageableReading\.Read\(httpRequest\.Query, defaultSize: 20, maxSize: 100, defaultSort: \[[^\]]*\]\)/);
+  assert.match(endpoints, /PageableReading\.Read\(httpRequest\.Query, defaultSize: 20, maxSize: 100, defaultSort: \[[^\]]*\], sortable: new Dictionary<string, string> \{[^}]*\}\)/);
   const query = plans.get('product-catalog').files.find((file) => file.path.endsWith('/Queries/ListProductsQuery.cs')).content;
   assert.match(query, /public required Pageable Pageable \{ get; init; \}/);
 });
@@ -141,7 +141,7 @@ test('con finder (DSL 2.22), el plegado lo hace el adaptador y la nota del handl
   assert.doesNotMatch(handler.content, /pliega el parámetro/);
   // La nota va partida en líneas de comentario: se compara sin los saltos.
   const note = handler.content.replace(/\n\s*\/\/\s*/g, ' ');
-  assert.ok(note.includes('await productRepository.ListProducts(new ListProductsFilter(query.Name), query.Pageable, cancellationToken)'));
+  assert.ok(note.includes('await productRepository.ListProducts(new ListProductsFilter(query.Name, query.Statuses, query.Q), query.Pageable, cancellationToken)'));
   const adapter = files.find((file) => file.path.endsWith('Repositories/ProductRepository.cs'));
   assert.ok(adapter.content.includes('var nameFolded = TextFold.FoldCaseAndAccents(name);'));
   assert.ok(adapter.content.includes('query = query.Where(r => r.NameNormalized.Contains(nameFolded));'));

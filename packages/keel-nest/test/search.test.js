@@ -61,11 +61,14 @@ test('el controlador pasa el sortable de la operación y lee la lista con su nom
   const controller = files.filter((file) => file.path.includes('/controllers/')).map((file) => file.content).join('\n');
   assert.match(controller, /sortable: \{ 'name': 'name', 'sku': 'sku', 'price\.amount': 'priceAmount' \}/);
   assert.match(controller, /text\.listOf\(text\.enumOf\(ProductStatus\), 'statuses'\)\(query\['statuses'\]\)/);
-  // El listado de product-catalog sin sortable: readPageable sin él, y todo ?sort= es 400 (U3).
-  assert.match(controller, /readPageable\(query, \{ defaultSize: \d+, maxSize: \d+, defaultSort: \[\{ property: 'sku', direction: 'asc' \}\] \}\)/);
+  // El listado de product-catalog declara su sortable desde B8.
+  assert.match(controller, /defaultSort: \[\{ property: 'sku', direction: 'asc' \}\], sortable: \{ 'sku': 'sku', 'name': 'name', 'price\.amount': 'priceAmount' \}/);
+  // Sin sortable (los resultados de un trabajo de lote): readPageable sin él, y todo ?sort= es 400 (U3).
+  assert.match(controller, /readPageable\(query, \{ defaultSize: \d+, maxSize: \d+ \}\)/);
   const routes = fileOf(files, 'src/infrastructure/rest/routes.ts');
   assert.match(routes, /operation: 'searchCatalog'.*query: \['statuses', 'notNotes', 'q', 'page', 'size', 'sort'\]/);
-  assert.doesNotMatch(routes, /operation: 'listProducts'.*'sort'/);
+  assert.match(routes, /operation: 'listProducts'.*'sort'/);
+  assert.doesNotMatch(routes, /operation: 'importCatalogJobResults'.*'sort'/);
   const errors = fileOf(files, 'src/infrastructure/rest/request-errors.ts');
   assert.ok(errors.includes(FRAMEWORK_RESPONSES.invalidSort.message.split('{sort}')[0]));
 });
