@@ -6,8 +6,8 @@ ejecución ni incrementos, y ninguna propuesta está lista para entrar tal cual.
 
 ## 0. Estado (2026-11-16)
 
-Diez días después de escribirse, las cuatro recomendaciones de prioridad alta, la del historial y la de los lotes ya
-están en el DSL. Cada una entró con su plan, se implementó en los cuatro generadores con red en vivo y sabotaje, y
+Diez días después de escribirse, las cuatro recomendaciones de prioridad alta, la del historial, la de los lotes, la de los
+invariantes y la de la búsqueda ya están en el DSL. Cada una entró con su plan, se implementó en los cuatro generadores con red en vivo y sabotaje, y
 cerró con corridas de control. El texto de §§ 1-8 se conserva como se escribió, con una nota de estado en cada
 recomendación. **El orden de lo que queda, por el valor que añade a Keel, está en § 9.**
 
@@ -20,11 +20,13 @@ recomendación. **El orden de lo que queda, por el valor que añade a Keel, est�
 | R4 | DSL 2.28 (`personal`, `deletion: logical`, `restorableFor`, `retention`) | `PLAN-DSL-228-CICLO-DE-VIDA.md` | 2026-11-12, 5 corridas 24/24 | La operación de supresión del interesado (RGPD art. 17) y la red en vivo de PD-3 en keel-spring |
 | R12 | DSL 2.29 (`audit.history`, `output: { history }`) | `PLAN-DSL-229-HISTORIAL.md` | 2026-11-13, 5 corridas 37/37 | La reconstrucción `asOf`, el historial de entidades que no son raíz y la caché de la query de historial |
 | R5 | DSL 2.30 (`use-cases.<op>.batch`, `sync` y `async`) | `PLAN-DSL-230-LOTES.md` | 2026-11-15, 6 corridas 36/36 | Nada del DSL. **Corrige § 7**: `execution: async` sí entró como primitivo (el trabajo es del método, tabla `batch_job`) |
+| R7 | DSL 2.31 (`entities.<E>.checks`, cotas de la entidad, `computed: { sum, count }`) | `PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md` (fase A) | 2026-11-16, 5 corridas 92/92 de `shop-api`, sin `cart-line-sum-over-max` | Los derivados por llamante y los que cruzan agregados (D8), y las expresiones arbitrarias |
+| R8 | DSL 2.32 (`filter.op: in`/`ne`, `search`, `sortable`; `cursor` retirado) | ídem (fase B) | 2026-11-18, 5 corridas 67/67 de `catalog-extended`, sin `list-order-in-prose` | El cursor (se reabre con un diseño que lo pida), facetas, relevancia y el índice de texto completo |
 
 Se cumplió también la predicción de § 8: `gen/read-scope.js` se diseñó como **el** predicado implícito y el borrado
 lógico de 2.28 se le compuso, y los plazos (R2) y la retención (R4) salen del mismo cronómetro.
 
-**Pendientes: R6, R7, R8, R9, R10, R11, R13, R14, R15, R16 y R17**, más los dos restos de R3a y R4.
+**Pendientes: R6, R9, R10, R11, R13, R14, R15, R16 y R17**, más los dos restos de R3a y R4.
 
 ## 1. Cómo leer este documento
 
@@ -92,8 +94,8 @@ está en § 9.
 | R4 | Ciclo de vida del dato | Borrado lógico, retención, RGPD | Inexpresable | **Alta** | L | Hecha (2.28), salvo la supresión del interesado |
 | R5 | Lotes con resultado por elemento | Importar 500 filas y que fallen 3 | Inexpresable | Media | M | Hecha (2.30), con `async` |
 | R6 | Tipos suma (variantes discriminadas) | Medio de pago tarjeta \| transferencia | Prosa o `json` opaco | Media | M | Pendiente (§ 9: 4.º) |
-| R7 | Invariantes entre campos y derivados, con vocabulario cerrado | `endDate > startDate`, `total = Σ líneas` | Prosa | Media | M | Pendiente (§ 9: 1.º) |
-| R8 | Búsqueda: `in`/`ne`, texto libre, orden elegido por el cliente, cursor | Listados de back-office | Parcial; `cursor` sin significado | Media | M | Pendiente (§ 9: 2.º) |
+| R7 | Invariantes entre campos y derivados, con vocabulario cerrado | `endDate > startDate`, `total = Σ líneas` | Prosa | Media | M | Hecha (2.31) |
+| R8 | Búsqueda: `in`/`ne`, texto libre, orden elegido por el cliente, cursor | Listados de back-office | Parcial; `cursor` sin significado | Media | M | Hecha (2.32), con `cursor` retirado |
 | R9 | Evolución del contrato: deprecación y versión de eventos | Retirar un endpoint o el campo de un evento | Inexpresable | Media | M | Pendiente (§ 9: 3.º) |
 | R10 | Orden de eventos por clave | Los eventos de un pedido llegan en orden | Implícito | Media-baja | S | Pendiente (§ 9: 3.º, con R9) |
 | R11 | Webhooks salientes | Notificar por HTTP a sistemas de clientes | Inexpresable | Media | L | Pendiente (§ 9: 5.º) |
@@ -742,7 +744,7 @@ diseño que lo pida):
 | R3b, R3c | `shop-api` y `conduit`: las fronteras ya están registradas y la paridad las mediría | Cerradas (2.27); falta la paridad en vivo de keel-recover |
 | R3a | `asset-vault`, que ya usa `scoping` | `scoping` en lectura cerrado (2.27); `tenancy` sin diseño |
 | R4 | `profile-directory`, el más cercano a datos personales | Cerrada (2.28) |
-| R8 | `catalog-extended`, la búsqueda que 2.22 dejó fuera | Pendiente |
+| R8 | `catalog-extended`, la búsqueda que 2.22 dejó fuera | Cerrada (2.32) |
 
 Con eso, cada recomendación pasaría de hipótesis de industria a hueco medido, que es la única forma en que el DSL ha
 crecido hasta ahora.
@@ -762,8 +764,8 @@ que queda se mide con lo que más pesa en Keel, por este orden:
 
 | Orden | # | Qué | Valor para Keel | Evidencia propia | Coste |
 |---|---|---|---|---|---|
-| 1 | R7 | Invariantes entre campos y derivados (`checks`, `computed: { sum, count }`) | Corrección + equivalencia + huella | `cart-line-sum-over-max` (4 corridas, keel-go rechaza y keel-dotnet acepta); «guarda solo donde hay escenario»; derivados por llamante dejados por la 2.27 | M |
-| 2 | R8 | Búsqueda: retirar o definir `cursor`, `sortable`, `in`/`ne`, texto libre | Regla escrita incumplida + huella + contrato con la interfaz | `cursor` valida sin significar nada; `list-order-in-prose` (3 corridas); 2.22 y 2.29 lo dejaron fuera por escrito | S (cursor, `in`/`ne`) → M (texto libre, `sortable`) |
+| 1 | R7 | **Hecha (2.31).** Invariantes entre campos y derivados (`checks`, `computed: { sum, count }`) | Corrección + equivalencia + huella | `cart-line-sum-over-max` (4 corridas, keel-go rechaza y keel-dotnet acepta); «guarda solo donde hay escenario»; derivados por llamante dejados por la 2.27 | M |
+| 2 | R8 | **Hecha (2.32).** Búsqueda: retirar o definir `cursor`, `sortable`, `in`/`ne`, texto libre | Regla escrita incumplida + huella + contrato con la interfaz | `cursor` valida sin significar nada; `list-order-in-prose` (3 corridas); 2.22 y 2.29 lo dejaron fuera por escrito | S (cursor, `in`/`ne`) → M (texto libre, `sortable`) |
 | 3 | R9 + R10 | Contrato de eventos en el tiempo: deprecación, `version`/`alsoPublish` y orden por clave | Primer primitivo de flota; regla nueva para `keel system check` | Ninguna corrida; `eventVersion` de la envoltura no tiene dónde declararse | M + S |
 | 4 | R6 | Tipos suma (`discriminator` + `variants`) | Validación en el borde, `oneOf` en el OpenAPI derivado | Ninguna; hipótesis de industria | M |
 | 5 | R11 | Webhooks salientes | Abre una clase de servicio nueva (plataforma B2B); reutiliza outbox, reintentos y anti-SSRF | Ninguna | L |

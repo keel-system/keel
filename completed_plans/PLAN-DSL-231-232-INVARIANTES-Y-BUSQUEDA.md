@@ -25,16 +25,13 @@
 | B6 | keel-go: el finder (`f.oneOf`, `f.distinct` con la fila nula, la búsqueda como `f.anyLike`, o `$in`/`$ne`/`$or` citado), `pageableParam` contra `sortable`, la lista de la query, la collation del orden, la clave de la caché y las sondas FS-*/SO-* de db-check y doc-check | hecho (2026-11-17, § Medidas de B6) |
 | B7 | Contrato y método: las filas `finder-in-ne`, `search` y `sortable` de las cuatro matrices, el contrato de `catalog-search` en los cuatro, la guía Postman de `/keel-docs`, la clase 5 de `/keel-design`, `/keel-recover` y los agentes | hecho (2026-11-17, § Medidas de B7) |
 | B8 | Fixtures: `catalog-extended` declara `in`, `ne`, `search` y `sortable`; `product-catalog`, `sortable`; las demás aceptan `OBL-QUERY-SORT-UNDECIDED` con su motivo | hecho (2026-11-17, § Medidas de B8) |
-| B9 | Corridas de control | en curso (2026-11-18: escenarios FL-PRD-005-E y FL-PRD-007 y cinco proyectos generados, § Preparación de B9) |
+| B9 | Corridas de control | hecho (2026-11-18, § Medidas de B9) |
 
-**Para retomar.** La fase A (DSL 2.31) está cerrada (A9: cinco corridas de `shop-api` en 92/92). Fase B: B0 medido (U7 y U8 decididas) y B1
-hecho: el DSL es 2.32 y los cuatro generadores rechazan `in`/`ne`/`search`/`sortable` con `searchPendingErrors` hasta su
-incremento. B2 hecho (lo neutral, § Medidas de B2). B3 hecho (keel-spring, § Medidas de B3). B4 hecho (keel-nest, § Medidas de B4). B5 hecho (keel-dotnet, § Medidas de B5). B6 hecho (keel-go, § Medidas de B6; con él, el
-`go-check --fixtures` pendiente del arreglo de la escala). Los cuatro generadores generan ya la búsqueda de 2.32.
-B7 hecho (contrato y método, § Medidas de B7). B8 hecho (fixtures, § Medidas de B8).
-B9 en curso: escenarios de la búsqueda en `catalog-extended` y los cinco proyectos generados en `D:\keel-example\catalog-232-*`
-(§ Preparación de B9). keel-spring, keel-nest, keel-dotnet y keel-go registradas (67/67 las cuatro; falta la de MySQL); sus defectos, arreglados sin medir en vivo (§ Arreglos tras B9). Siguiente: el usuario lanza `/keel-generate-<tech>` en cada uno; después, contrastar cada informe
-contra su proyecto y registrar `docs/corridas/2026-11-1x-catalog-232-*`.
+**Para retomar.** **PLAN CERRADO (2026-11-18).** Fase A (DSL 2.31): A9, cinco corridas de `shop-api` en 92/92.
+Fase B (DSL 2.32): B9, cinco corridas de `catalog-extended` en 67/67 (§ Medidas de B9). Los dos defectos que
+destaparon están arreglados y medidos en vivo (§ Arreglos tras B9). La verificación de punta a punta está hecha, y
+`docs/evaluacion-dsl-2.24.md` marca R7 y R8 como hechas. Queda fuera, anotado: `size` anuncia `maximum` en el contrato
+derivado (§ Arreglos tras B9).
 Lo que cada generador recoge en su incremento, todo de keel-core:
 - el finder: `criterion.op` `in`/`ne`/`search`, y `search` con `targets[]` en vez de `target`;
 - el lector de `?sort=` contra `operation.sortable` (`readClientSort`, `invalidSortMessage`);
@@ -51,6 +48,30 @@ Lo que cada generador recoge en su incremento, todo de keel-core:
 Ventana conocida, como la de A2: desde B2 el contrato ya no anuncia `sort` en un listado sin `sortable`, y los
 servidores lo siguen aceptando hasta su incremento.
 
+## Medidas de B9 (2026-11-18)
+
+| Corrida | Matriz | Primera pasada | Huella (2.26 → 2.32) | designGaps | Defectos del generador rodeados por el agente |
+|---|---|---|---|---|---|
+| keel-spring · PostgreSQL | 67/67 | 67/67 | 22 → 21 | 7 | la lista ausente del `in` |
+| keel-nest · PostgreSQL | 67/67 | 67/67 | 24 → 24 | 6 | la lista ausente del `in` |
+| keel-dotnet · PostgreSQL | 67/67 | 65/67 (`culprit: test`) | 23 → 23 | 1 | la lista ausente del `in`, `Decimals.cs` |
+| keel-go · PostgreSQL | 67/67 | 65/67 (`culprit: test`) | 23 → 23 | 2 | ninguno |
+| keel-dotnet · MySQL | 67/67 | 67/67 | — → 23 | 3 | la lista ausente del `in`, `Decimals.cs` (con un `Amounts.cs` propio) |
+
+- **La búsqueda de 2.32 por el contrato.** FL-PRD-005-E y FL-PRD-007-A a I salen en verde en las cinco, y nunca entre
+  los fallos de una primera pasada:
+  - `in`, repetido o con comas, y la vacía como 400;
+  - `search` literal por nombre y sku;
+  - `?sort=` sustituyendo al orden del diseño, y cuatro inválidos como 400.
+
+  En MySQL, la baseline de EF lleva `utf8mb4_bin` en el texto ordenable.
+- **Lo que escribe `build` de la búsqueda no lo toca ningún agente:** ni el finder, ni el lector de `?sort=`, ni el de
+  la lista. Ninguna huella crece respecto a la 2.26.
+- **`list-order-in-prose` no sale en ninguna, ni `cart-line-sum-over-max`** (`corrida-metrics.js series`).
+- **Lo que las corridas no midieron por sí solas.** Los dos defectos del generador los rodearon los agentes en silencio,
+  y ningún informe los cuenta. La huella tampoco los ve: el arreglo cae en un archivo con TODO, o en un archivo nuevo
+  que `build` no registra. Salieron al comparar cada handler con lo que emite `build`.
+
 ## Arreglos tras B9 (2026-11-18)
 
 - **La lista ausente de un `in` vaciaba el listado (keel-spring, keel-nest y keel-dotnet).** Lo destapó la corrida de
@@ -66,9 +87,16 @@ servidores lo siguen aceptando hasta su incremento.
     - en los cuatro generadores, el emisor relacional y el documental;
     - las cuatro redes conocen FS-11 y `finder-in-empty`, y en MySQL `order-collation` tumba también FS-11, que lee
       la tabla entera en el orden del diseño, como FS-9.
-  - **Medido.** `npm test` está en verde. FALTAN las redes en vivo con FS-11 y `finder-in-empty`, porque las corridas
-    ocupan los contenedores. Hay que pasar `finder-check catalog-search` (PostgreSQL, MySQL y `-mongo`) en keel-spring,
-    y `db-check`/`doc-check` sobre `catalog-search(-mongo)` y `catalog-extended` en los otros tres.
+  - **Medido (2026-11-18), con `npm test` en verde y las redes en vivo:**
+    - **keel-spring:** `finder-check` 24/24 en PostgreSQL, MySQL y MongoDB.
+    - **keel-nest:** `db-check` en `catalog-search` (8/8) y `catalog-extended` (16/16), los dos motores; `doc-check`
+      `catalog-search-mongo` (5/5).
+    - **keel-dotnet:** `db-check` `catalog-search,catalog-extended` (8/8 en PostgreSQL y en MySQL); `doc-check` (6/6).
+      Compila también el `Decimals.cs` nuevo.
+    - **keel-go:** `db-check` (7/7 en cada motor); `doc-check` (5/5).
+    - **Sabotajes, cada uno en exactamente sus casos:** `finder-in-empty` en FS-11 en las cuatro redes y los tres
+      motores; `order-collation` en MySQL en FS-3, FS-9 y FS-11. En keel-dotnet, la comprobación del esquema también
+      ve `order-collation`, como desde B5.
 - **La nota de un `ne` sobre una columna sin nulo** (la relación obligatoria de `listDraftProducts`) decía «también sin
   valor». Ahora la nota del handler y la del puerto lo dicen solo cuando `criterionNullable`.
 - **keel-dotnet no emitía `Decimals.cs` en un diseño con decimales sin value objects** (lo destapó su corrida). Las
