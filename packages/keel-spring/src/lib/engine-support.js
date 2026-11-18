@@ -970,6 +970,78 @@ const SPRING_MECHANISMS = {
         why: 'catalog-invariants-mongo contra Spring Data MongoDB en un replica set real, con los MISMOS vectores: CP-1 a CP-5, con el valor leído del documento crudo (CP-4 lo ve la guarda: el resultado no cabe en la escala y la precisión del campo aunque Decimal128 lo admita). Falsado: cp-round-each y cp-half-even en CP-2, cp-no-overflow en CP-4 y cp-stale en CP-5 (el documento no lleva el campo)'
       }
     }
+  },
+  'finder-in-ne': {
+    emitter: 'src/scaffold/finders.js · src/scaffold/document-repositories.js',
+    why: 'Un in que compara con el primer elemento, que no pliega la lista o un ne que deja fuera la fila sin valor (el <> de SQL a pelo) compilan igual de bien y devuelven una página plausible: falta una fila y ningún escenario feliz lo ve.',
+    parity: {
+      skip: 'ninguna fixture declara in, ne, search ni sortable hasta el incremento B8 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md: los sujetos son los diseños derivados de keel-core/test/helpers/finder-designs.js (SEARCH_DESIGNS: catalog-search y catalog-search-mongo, el mismo diseño salvo el modelo) con los casos FS-* y SO-* de keel-core, los MISMOS en los cuatro generadores; test/search.test.js fija la forma de lo emitido y que cada sabotaje se aplique',
+      test: 'test/search.test.js'
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'finder-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'catalog-search contra el adaptador JPA, compilando el main entero en cada pasada: FS-1 a FS-6 en PostgreSQL y MySQL. Falsado: finder-in en FS-1 y finder-ne-null en FS-3, en los dos motores'
+      },
+      document: {
+        state: 'verificado',
+        net: 'finder-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'catalog-search-mongo contra Spring Data MongoDB en un replica set real, con los MISMOS casos: $ne ya deja pasar el documento sin el campo. Falsado: finder-in en FS-1 y finder-ne-null en FS-3'
+      }
+    }
+  },
+  search: {
+    emitter: 'src/scaffold/finders.js · src/scaffold/document-repositories.js',
+    why: 'Una búsqueda que usa el texto como patrón (LIKE sin escapar, expresión regular sin citar) o que no busca en todos los campos de over responde 200 con filas de más o de menos, y nadie distingue eso de un catálogo distinto.',
+    parity: {
+      skip: 'ninguna fixture declara in, ne, search ni sortable hasta el incremento B8 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md: los sujetos son los diseños derivados de keel-core/test/helpers/finder-designs.js (SEARCH_DESIGNS: catalog-search y catalog-search-mongo, el mismo diseño salvo el modelo) con los casos FS-* y SO-* de keel-core, los MISMOS en los cuatro generadores; test/search.test.js fija la forma de lo emitido y que cada sabotaje se aplique',
+      test: 'test/search.test.js'
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'finder-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'catalog-search contra el adaptador JPA: FS-7 a FS-10 en PostgreSQL y MySQL. Falsado: finder-search-literal en FS-7, en los dos motores (finder-search-regex es de la rama documental)'
+      },
+      document: {
+        state: 'verificado',
+        net: 'finder-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'catalog-search-mongo: FS-7 a FS-10 con la expresión regular citada sobre la sombra. Falsado: finder-search-regex en FS-10 (en una expresión regular % y _ no son comodines, así que finder-search-literal no tiene nada que tumbar: lo destapó esta red, B3)'
+      }
+    }
+  },
+  sortable: {
+    emitter: 'src/scaffold/query-parameters.js · src/lib/type-mapper.js · src/scaffold/migrations.js · src/scaffold/cache.js',
+    why: 'Un lector de ?sort= que acepta cualquier propiedad (lo de antes de 2.32: un 500 o un orden por un campo sensitive), que suma el orden del cliente al del diseño o que lee la dirección sin distinguir mayúsculas, y una columna de texto ordenada con la collation por defecto del motor, dan páginas en otro orden en cada motor sin que nada falle.',
+    parity: {
+      skip: 'ninguna fixture declara in, ne, search ni sortable hasta el incremento B8 de PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md: los sujetos son los diseños derivados de keel-core/test/helpers/finder-designs.js (SEARCH_DESIGNS: catalog-search y catalog-search-mongo, el mismo diseño salvo el modelo) con los casos FS-* y SO-* de keel-core, los MISMOS en los cuatro generadores; test/search.test.js fija la forma de lo emitido y que cada sabotaje se aplique',
+      test: 'test/search.test.js'
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'finder-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'catalog-search: SO-1 a SO-11 contra QueryParameters emitido y el orden de FS-* contra el motor, en PostgreSQL y MySQL. Falsado: so-open en SO-5, SO-6 y SO-11, so-case en SO-7, so-duplicate en SO-9 y so-append en SO-2 y SO-3 (medidos en PostgreSQL), y order-collation en FS-3 y FS-9 solo en MySQL: en PostgreSQL alpine musl ya compara bytes (B0, M11)'
+      },
+      document: {
+        state: 'verificado',
+        net: 'finder-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why: 'catalog-search-mongo: SO-1 a SO-11 contra QueryParameters emitido. Falsado con los cuatro so-*, cada uno en exactamente sus casos. Sin collation: MongoDB compara el texto por bytes'
+      }
+    }
   }
 };
 

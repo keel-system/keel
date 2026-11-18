@@ -51,6 +51,8 @@ export const NETS = {
     'npm run batch-check — los LOTES (DSL 2.30) contra el motor: el 207 por elemento, la validación de cada elemento, la transacción por elemento o la que abarca el lote, el lote que se detiene (BA-1 a BA-9), y el trabajo asíncrono con su alta idempotente, el chunk sobre el cronómetro, la reanudación desde el cursor, la valla y el dueño (BJ-1 a BJ-9)',
   'invariant-check':
     'npm run invariant-check — la GUARDA DEL AGREGADO (DSL 2.31) contra el motor por el save del puerto: las cotas y los checks del agregado entero, las hijas primero, el 422 o el error del diseño, la fila rechazada sin escribir y el derivado recalculado, redondeado y persistido (IC-1 a IC-11, CP-1 a CP-5)',
+  'finder-check':
+    'npm run finder-check — los FINDERS de las búsquedas (DSL 2.22 y 2.32) contra el motor y en el borde: los filtros del input y el where de la query, in, ne con la fila sin valor, la búsqueda libre como literal (FS-1 a FS-10), ?sort= contra sortable y la lista de la query (SO-1 a SO-11), la collation del orden y la página vacía',
   corrida: 'una corrida en vivo: no es determinista ni repetible en CI, así que nombra cuál',
   ninguna: 'nadie lo ejecuta'
 };
@@ -197,6 +199,18 @@ export const MECHANISM_CATALOG = {
   },
   computed: {
     title: 'Derivado del agregado (DSL 2.31, computed: { sum, count }): calculado desde las hijas con la aritmética de D5 y D24, su desbordamiento como INVARIANT_VIOLATED y el valor recalculado persistido en cada save',
+    axis: 'model'
+  },
+  'finder-in-ne': {
+    title: 'Criterios in y ne del finder (DSL 2.32): in restringe a los valores de una lista, plegados si el input pliega (D10, D12), y ne incluye la fila sin valor (D11)',
+    axis: 'model'
+  },
+  search: {
+    title: 'Búsqueda libre del finder (DSL 2.32, search): un OR de match sobre la sombra de cada campo de over con un solo compare, y el texto del cliente como literal: LIKE escapado o expresión regular citada (D13)',
+    axis: 'model'
+  },
+  sortable: {
+    title: 'Orden del cliente (DSL 2.32, sortable): ?sort= contra la lista blanca de la query con el 400 de readClientSort (D15, D16), la lista en la query (U8, D10), la collation binaria del texto ordenado (U7, D17) y el orden en la clave de la caché (D18)',
     axis: 'model'
   }
 };

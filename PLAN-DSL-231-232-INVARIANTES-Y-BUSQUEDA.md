@@ -23,7 +23,8 @@
 | B4 | keel-nest: el finder (`In`, `ne` con la fila nula, la búsqueda como ramas OR), `readPageable` contra `sortable`, la lista de la query, la collation del orden, la clave de la caché y las sondas FS-*/SO-* de db-check y doc-check | hecho (2026-11-17, § Medidas de B4) |
 | B5 | keel-dotnet: el finder (`Contains` sobre la lista, `ne` con el nulo, la búsqueda como un OR de LINQ o un `$or` citado), `PageableReading.Read` contra `sortable`, la lista de la query, la collation del orden, la clave de la caché y las sondas FS-*/SO-* de db-check y doc-check | hecho (2026-11-17, § Medidas de B5) |
 | B6 | keel-go: el finder (`f.oneOf`, `f.distinct` con la fila nula, la búsqueda como `f.anyLike`, o `$in`/`$ne`/`$or` citado), `pageableParam` contra `sortable`, la lista de la query, la collation del orden, la clave de la caché y las sondas FS-*/SO-* de db-check y doc-check | hecho (2026-11-17, § Medidas de B6) |
-| B7-B9 | Fase B: contrato y método, fixtures y corridas de control | pendiente |
+| B7 | Contrato y método: las filas `finder-in-ne`, `search` y `sortable` de las cuatro matrices, el contrato de `catalog-search` en los cuatro, la guía Postman de `/keel-docs`, la clase 5 de `/keel-design`, `/keel-recover` y los agentes | hecho (2026-11-17, § Medidas de B7) |
+| B8-B9 | Fase B: fixtures y corridas de control | pendiente |
 
 **Para retomar.** La fase A (DSL 2.31) está cerrada (A9: cinco corridas de `shop-api` en 92/92). Fase B: B0 medido (U7 y U8 decididas) y B1
 hecho: el DSL es 2.32 y los cuatro generadores rechazan `in`/`ne`/`search`/`sortable` con `searchPendingErrors` hasta su
@@ -46,6 +47,24 @@ Lo que cada generador recoge en su incremento, todo de keel-core:
 
 Ventana conocida, como la de A2: desde B2 el contrato ya no anuncia `sort` en un listado sin `sortable`, y los
 servidores lo siguen aceptando hasta su incremento.
+
+## Medidas de B7 (2026-11-17)
+
+- **Las matrices.** Tres filas nuevas en el catálogo neutral (`gen/mechanisms.js`) y en las cuatro matrices: `finder-in-ne`,
+  `search` y `sortable`, las seis celdas verificadas y falsadas con lo que midieron B3-B6 (la red `finder-check` entra en
+  `NETS` del catálogo neutral para keel-spring). Sin par byte a byte: `parity.skip` nombra `SEARCH_DESIGNS` y
+  `test/search.test.js`. En keel-go, `FALSIFIED_BY` nombra los sabotajes de cada celda y el test comprueba que existen en
+  `SEARCH_SABOTAGE_SPECS`. `order-collation` solo falsa `sortable/relational`; en documental no hay collation.
+- **El contrato.** `keel-nest/test/openapi.test.js` compara el documento de `catalog-search` y `-mongo` en los cuatro
+  generadores (el mismo byte a byte), el `sort` con su enum y `explode` solo en el listado con `sortable` (los demás listados
+  paginados del sujeto no lo ofrecen), la lista del `in` repetida con `minItems: 1`, la tabla de rutas que ejecuta keel-nest y
+  la ausencia de deriva para `CHK-DOCS-OPENAPI-DRIFT`. `npx @redocly/cli lint` sobre los dos documentos: válidos, con los dos
+  avisos de siempre (`info-license`).
+- **El método.** `wire-contract.md` § La query de un listado ya era de B2. Nuevo: la regla del contrato en `/keel-docs`
+  (`SKILL.md`), la sección «Búsqueda y orden del cliente» de su guía Postman, dos preguntas en la clase 5 de `gap-analysis.md`
+  (quién elige el orden y los criterios `in`/`ne`/`search`), dos filas de evidencia en `/keel-recover`
+  (`evidence-to-dsl.md`) y «La búsqueda» en los agentes de código y de calidad de los cuatro: el handler no filtra, busca ni
+  ordena en memoria. El aviso de `cursor` de los README ya no existía (B1 lo quitó con el schema).
 
 ## Medidas de B6 (2026-11-17)
 

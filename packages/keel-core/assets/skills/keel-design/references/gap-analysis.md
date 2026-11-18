@@ -146,7 +146,8 @@ Por cada operación `kind: query`:
 
 - ¿Devuelve **colección**? Entonces: ¿cuál es el **orden**? Sin orden declarado, dos motores devuelven órdenes distintos y ambos son "correctos". ¿Es orden **total** (el campo de orden puede empatar → desempate por id)? No admite cierre `aceptado`.
 - ¿Está **paginada**? Una colección que puede crecer sin cota y no pagina es un problema de diseño, no de rendimiento.
-- ¿Con qué criterios se **filtra**, y qué pasa con los filtros combinados?
+- ¿Puede el **cliente** elegir el orden? Si sí, ¿por qué campos (`sortable`)? Sin `sortable`, cualquier `?sort=` es `400` (DSL 2.32): en un listado para usuarios la pregunta es obligatoria (`OBL-QUERY-SORT-UNDECIDED`). Nunca por un campo `sensitive` ni `personal`, ni por una ruta de otro agregado. Y el texto se ordena por punto de código (`Z` antes que `a`, `z` antes que `á`): si el negocio espera el orden de un diccionario, es una decisión que el DSL no expresa hoy y se dice.
+- ¿Con qué criterios se **filtra**, y qué pasa con los filtros combinados? ¿Alguno es «cualquiera de estos valores» (`op: in`, con la lista vacía como `400`), «distinto de» (`op: ne`, que **incluye** la fila sin valor) o un texto libre sobre varios campos a la vez (`search`, un literal sin relevancia)?
 - ¿Qué devuelve cuando no hay resultados: colección vacía o `404`?
 - ¿Devuelve campos `sensitive`, directamente o a través de una relación?
 - Si tiene `cache`: ¿`invalidatedBy` cubre **todas** las operaciones y eventos que mutan lo cacheado? Basta una vía de mutación no listada para servir datos rancios indefinidamente.

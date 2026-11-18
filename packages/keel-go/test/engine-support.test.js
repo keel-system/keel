@@ -8,6 +8,7 @@ import { HISTORY_SABOTAGE_SPECS } from '../scripts/lib/history-probes.js';
 import { BATCH_SABOTAGE_SPECS } from '../scripts/lib/batch-probes.js';
 import { BATCH_JOB_SABOTAGE_SPECS } from '../scripts/lib/batch-job-probes.js';
 import { INVARIANT_SABOTAGE_SPECS } from '../scripts/lib/invariant-probes.js';
+import { SEARCH_SABOTAGE_SPECS } from '../scripts/lib/search-probes.js';
 
 // Los sabotajes del ciclo de vida con algo que romper en cada almacén.
 const relationalOf = (specs) => Object.fromEntries(Object.entries(specs).filter(([, spec]) => spec.relational).map(([id, spec]) => [id, spec.relational]));
@@ -107,13 +108,19 @@ const FALSIFIED_BY = {
   'entity-checks/relational': ['ic-boundary', 'ic-null-fails', 'ic-absent-null-only', 'ic-no-bounds', 'ic-children', 'ic-default-code', 'ic-no-call', 'ic-after-write'],
   'entity-checks/document': ['ic-boundary', 'ic-null-fails', 'ic-absent-null-only', 'ic-no-bounds', 'ic-children', 'ic-default-code', 'ic-no-call'],
   'computed/relational': ['cp-round-each', 'cp-half-even', 'cp-no-overflow', 'cp-stale'],
-  'computed/document': ['cp-round-each', 'cp-half-even', 'cp-no-overflow', 'cp-stale']
+  'computed/document': ['cp-round-each', 'cp-half-even', 'cp-no-overflow', 'cp-stale'],
+  'finder-in-ne/relational': ['finder-in', 'finder-ne-null'],
+  'finder-in-ne/document': ['finder-in', 'finder-ne-null'],
+  'search/relational': ['finder-search-literal'],
+  'search/document': ['finder-search-regex'],
+  'sortable/relational': ['so-open', 'so-case', 'so-duplicate', 'so-append', 'order-collation'],
+  'sortable/document': ['so-open', 'so-case', 'so-duplicate', 'so-append']
 };
 
 test('el sabotaje con que se falsa cada celda de db-check o doc-check existe de verdad', () => {
   const known = {
-    'db-check': { ...DB_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES, ...RELAY_WAKE_SABOTAGES, ...READ_SCOPE_SABOTAGE_SPECS, ...relationalOf(LIFECYCLE_SABOTAGE_SPECS), ...relationalOf(HISTORY_SABOTAGE_SPECS), ...relationalOf(BATCH_SABOTAGE_SPECS), ...relationalOf(BATCH_JOB_SABOTAGE_SPECS), ...relationalOf(INVARIANT_SABOTAGE_SPECS) },
-    'doc-check': { ...DOC_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES, ...RELAY_WAKE_SABOTAGES, ...READ_SCOPE_SABOTAGE_SPECS, ...documentOf(LIFECYCLE_SABOTAGE_SPECS), ...documentOf(HISTORY_SABOTAGE_SPECS), ...documentOf(BATCH_SABOTAGE_SPECS), ...documentOf(BATCH_JOB_SABOTAGE_SPECS), ...documentOf(INVARIANT_SABOTAGE_SPECS) }
+    'db-check': { ...DB_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES, ...RELAY_WAKE_SABOTAGES, ...READ_SCOPE_SABOTAGE_SPECS, ...relationalOf(LIFECYCLE_SABOTAGE_SPECS), ...relationalOf(HISTORY_SABOTAGE_SPECS), ...relationalOf(BATCH_SABOTAGE_SPECS), ...relationalOf(BATCH_JOB_SABOTAGE_SPECS), ...relationalOf(INVARIANT_SABOTAGE_SPECS), ...relationalOf(SEARCH_SABOTAGE_SPECS) },
+    'doc-check': { ...DOC_SABOTAGES, ...TIMER_SABOTAGES, ...PURGE_TIMER_SABOTAGES, ...DRAIN_SABOTAGES, ...RELAY_WAKE_SABOTAGES, ...READ_SCOPE_SABOTAGE_SPECS, ...documentOf(LIFECYCLE_SABOTAGE_SPECS), ...documentOf(HISTORY_SABOTAGE_SPECS), ...documentOf(BATCH_SABOTAGE_SPECS), ...documentOf(BATCH_JOB_SABOTAGE_SPECS), ...documentOf(INVARIANT_SABOTAGE_SPECS), ...documentOf(SEARCH_SABOTAGE_SPECS) }
   };
   for (const { id, branch, cell } of cells()) {
     if (!known[cell.net]) continue;

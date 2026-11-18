@@ -117,6 +117,11 @@ corto a romper un escenario que ya estaba en verde.
    save para esquivarlas; si un estado es inválido, la guarda lo rechaza (`INVARIANT_VIOLATED`, 422, o el `error`
    del check) y ese error sube tal cual, sin capturarlo. El derivado es un getter que calcula desde las hijas: no lo asignes ni lo
    leas de la entrada. Lo que el agente decide es el estado al que llega la entidad, no si es válido.
+   **La búsqueda** (DSL 2.32). Los criterios `in`, `ne` y `search` de una query los cumple el finder que build
+   genera, y `?sort=` lo lee el borde contra `sortable` antes de despachar (fuera de la lista, 400): el handler
+   llama al finder con el filtro y el pageable que recibe, tal cual. No filtres, busques ni ordenes en memoria
+   sobre lo que devuelve, no vuelvas a validar el orden ni le sumes el del diseño: el orden del cliente lo
+   sustituye.
    Al crear un servicio de dominio sigue `{{keel:docs}}/conventions/domain-services.md`; antes de
    paralelizar I/O en un handler consulta `{{keel:docs}}/conventions/virtual-threads.md` (solo
    query handlers con 2+ operaciones independientes).

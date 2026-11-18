@@ -415,6 +415,11 @@ del mensaje sin recorrer una lista, sin abrir una transacción y sin capturar un
 el `error` del check) para convertirlo en otra respuesta y no asigna un derivado (duplicarlo compila, y desincroniza el
 code o el valor de los otros generadores) → si lo hay, `remaining`.
 
+**La búsqueda** (DSL 2.32) tampoco tiene script: en cada handler de una query con `in`, `ne`, `search` o
+`sortable`, el handler no filtra, busca ni ordena en memoria lo que devuelve el finder, ni cambia el orden que
+llega en el pageable (compila y pasa el camino feliz, y la página sale distinta en cada generador) → si lo hay,
+`remaining`.
+
 **Ejecuta `bash infra/check-logging.sh`.** Se genera siempre y tiene cuatro reglas, más una quinta si el diseño marca
 campos `personal`:
 

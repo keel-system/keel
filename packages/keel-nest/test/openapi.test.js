@@ -27,6 +27,7 @@ import { BATCH_ACCEPTED_STATUS, BATCH_ITEM_STATUSES, BATCH_MULTI_STATUS, batchCo
 import { BATCH_JOB_STATUSES } from '@keel-system/keel-core/gen/batch-store';
 import { INVARIANT_CONTRACT_CLAUSE, INVARIANT_VIOLATED, guardedRootsWrittenBy } from '@keel-system/keel-core/gen/entity-checks';
 import { ENTITY_CHECK_DESIGNS } from '../../keel-core/test/helpers/entity-check-designs.js';
+import { SEARCH_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
 import { WIRE_SHAPES } from '@keel-system/keel-core/gen/wire';
 import { BATCH_DESIGNS, BATCH_JOB_DESIGNS, BATCH_KEY_DESIGNS } from '../../keel-core/test/helpers/batch-designs.js';
 import { planFixture, transpileTree } from './helpers/emitted.js';
@@ -498,6 +499,60 @@ for (const derived of ENTITY_CHECK_DESIGNS) {
     }
 
     const docsDir = tmpDir('keel-openapi-ic-');
+    fs.writeFileSync(path.join(docsDir, 'openapi.yaml'), fromNest);
+    const { findings } = checkDerivedCoherence({ layers: { api: layers.api, 'use-cases': layers['use-cases'], domain: layers.domain }, manifest, docsDir });
+    assert.deepEqual(findings.filter((finding) => finding.id === 'CHK-DOCS-OPENAPI-DRIFT').map((finding) => finding.message), []);
+  });
+}
+
+// La búsqueda (DSL 2.32): sus sujetos son los diseños derivados que miden los cuatro generadores. El mismo documento en
+// los cuatro; `sort` solo en el listado con `sortable` (U3), repetido (explode) y con el enum de `campo` y `campo,dir`
+// (D16); la lista de un `in` repetida y con `minItems: 1` (D10, D14); la búsqueda libre como un texto más; la tabla de
+// rutas que EJECUTA keel-nest dice lo mismo; y sin deriva para CHK-DOCS-OPENAPI-DRIFT.
+for (const derived of SEARCH_DESIGNS) {
+  test(`${derived.name}: el openapi describe la búsqueda y el orden del cliente, el mismo en los cuatro generadores`, async () => {
+    const load = () => {
+      const service = loadService(path.join(FIXTURES_DIR, derived.from));
+      derived.mutate(service.layers);
+      return service;
+    };
+    const { manifest, layers } = load();
+    const database = layers.persistence?.default?.model === 'document' ? 'mongodb' : 'postgresql';
+    const documents = [planSpring, planDotnet, planGo].map((plan) => {
+      const service = load();
+      return plan({ ...service, workspace: FIXTURES_DIR, stack: { database } }).files.find((f) => f.path === DOC)?.content;
+    });
+    const nest = planFixture(derived.from, { mutate: derived.mutate, stack: { database } });
+    const fromNest = nest.files.find((f) => f.path === DOC).content;
+    for (const other of documents) assert.equal(other, fromNest, 'el mismo contrato en los cuatro generadores');
+
+    const document = YAML.parse(fromNest);
+    assert.deepEqual(danglingRefs(document), []);
+    const byId = new Map(Object.values(document.paths).flatMap((methods) => Object.values(methods)).map((op) => [op.operationId, op]));
+    const query = (id) => Object.fromEntries((byId.get(id).parameters ?? []).filter((p) => p.in === 'query').map((p) => [p.name, p]));
+
+    const search = query('searchCatalog');
+    assert.deepEqual(search.sort.schema.items.enum, ['name', 'sku', 'price.amount'].flatMap((field) => [field, `${field},asc`, `${field},desc`]), 'el enum de sortable');
+    assert.equal(search.sort.explode, true, 'sort se repite');
+    assert.equal(search.statuses.explode, true, 'la lista del in se repite (D14)');
+    assert.equal(search.statuses.schema.minItems, 1, 'la lista del in no va vacía (D10)');
+    assert.equal(search.notNotes.schema.type, 'string');
+    assert.equal(search.q.schema.type, 'string', 'la búsqueda libre es un texto');
+
+    const routed = nest.model.services.flatMap((s) => s.operations).filter((op) => op.route && op.paginated);
+    // La página de resultados de un trabajo de lote no tiene sortable: no ofrece sort.
+    const results = Object.keys(document.paths).filter((route) => route.endsWith('/results'));
+    assert.ok(results.length > 0, 'el sujeto tiene la página de resultados de un trabajo');
+    for (const route of results) assert.ok(!(document.paths[route].get.parameters ?? []).some((p) => p.name === 'sort'), `${route}: sin sort`);
+    for (const operation of routed) {
+      const offers = Boolean(query(operation.name).sort);
+      assert.equal(offers, (operation.sortable ?? []).length > 0, `${operation.name}: sort solo con sortable (U3)`);
+    }
+    const { ROUTES } = await transpileTree(nest.files).load('src/infrastructure/rest/routes.ts');
+    const route = ROUTES.find((candidate) => candidate.operation === 'searchCatalog');
+    assert.deepEqual([...route.query].sort(), Object.keys(search).sort(), 'la tabla de rutas dice lo mismo');
+
+    const docsDir = tmpDir('keel-openapi-search-');
     fs.writeFileSync(path.join(docsDir, 'openapi.yaml'), fromNest);
     const { findings } = checkDerivedCoherence({ layers: { api: layers.api, 'use-cases': layers['use-cases'], domain: layers.domain }, manifest, docsDir });
     assert.deepEqual(findings.filter((finding) => finding.id === 'CHK-DOCS-OPENAPI-DRIFT').map((finding) => finding.message), []);

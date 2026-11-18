@@ -197,6 +197,13 @@ Si el diseño declara `api.concurrency`, las escrituras listadas comparan la ver
 - Tras borrar la raíz, el historial da el mismo **404** que su ficha, no una página vacía; una raíz ajena, el error de su `readMiss`.
 - Un valor de una ruta de `x-personal-fields` en un ejemplo es **inventado** y reconocible, como el de un campo `x-personal`.
 
+### Búsqueda y orden del cliente (`in`, `ne`, `search`, `sortable`)
+
+- La lista de un `in` se manda **repitiendo** el parámetro (`?statuses=active&statuses=draft`), nunca como un JSON ni con corchetes. Su variante vacía (`?statuses=`) es **400**, y el escenario que la pida la aserta así.
+- `ne` deja pasar la fila **sin valor** en ese campo: el escenario que la siembre la espera en la página.
+- El texto de un `search` se busca como **literal** en todos los campos de `over` a la vez: un `%`, un `_` o un `.` en el texto se buscan tal cual. Se aserta por las filas que casan, no por su número total si el flujo no sembró la colección entera.
+- `?sort=` solo se manda en un listado con `sortable`, con un campo de la lista y la dirección en minúsculas; el escenario que pida otro campo o un listado sin `sortable` espera **400** `VALIDATION_ERROR`. El orden pedido **sustituye** al del diseño: se aserta el orden de `items` por ese campo, y por el id cuando empatan.
+
 ### Lotes (`batch`)
 
 - Un lote `per-item` se asserta con **207** siempre, también si todo salió bien, y por elemento: `items[i].index`, `status` y, en los fallidos, `error` y `message`; `summary` cuadra con los `items` (`succeeded + failed + notAttempted === total`). Nunca se asserta un 200 ni un 4xx del lote por un elemento malo.
