@@ -109,4 +109,5 @@ npm run matrix --workspace packages/keel-nest           # la matriz de paridad (
 
 | Paquete | DSL Keel | Necesita |
 |---------|----------|----------|
-| keel-nest 0.2.x | `keel: "2.32"` | Node.js >= 18 para el generador; Node.js 22.12+ y Docker o Podman para el proyecto generado |
+| keel-nest 0.3.x | `keel: "2.32"` | Node.js >= 18 para el generador; Node.js 22.12+ y Docker o Podman para el proyecto generado |
+| keel-nest 0.2.x | `keel: "2.24"` | Node.js >= 18 para el generador; Node.js 22.12+ y Docker o Podman para el proyecto generado |

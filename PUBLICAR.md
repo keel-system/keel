@@ -98,7 +98,7 @@ npm pack --dry-run --workspace packages/keel-go
 npm pack --dry-run --workspace packages/keel-recover
 ```
 
-Revisar la lista: no debe aparecer `test/`, ni temporales, ni nada fuera de `src/`, `assets/`, `vendor/`, `README.md`, `LICENSE` y `package.json`. Referencia actual: ~230 archivos / ~920 kB para `keel-core`, ~210 archivos / ~1,1 MB para `keel-spring`, ~145 archivos / ~560 kB para `keel-nest`, ~150 archivos / ~650 kB para `keel-dotnet`, ~150 archivos / ~680 kB para `keel-go` y ~90 archivos / ~190 kB para `keel-recover` (sus `fixtures/` de legacy se quedan fuera); un salto grande es señal de que se ha colado algo.
+Revisar la lista: no debe aparecer `test/`, ni temporales, ni nada fuera de `src/`, `assets/`, `vendor/`, `README.md`, `LICENSE` y `package.json`. Referencia actual (tarball, 0.7.0 de `keel-core`): ~250 archivos / ~1,1 MB para `keel-core`, ~235 archivos / ~1,3 MB para `keel-spring`, ~155 archivos / ~690 kB para `keel-nest`, ~160 archivos / ~800 kB para `keel-dotnet`, ~160 archivos / ~830 kB para `keel-go` y ~90 archivos / ~195 kB para `keel-recover` (sus `fixtures/` de legacy se quedan fuera); un salto grande es señal de que se ha colado algo.
 
 ## 5. Prueba de humo con los tarballs (recomendado)
 

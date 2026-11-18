@@ -583,12 +583,12 @@ Monorepo npm workspaces con seis paquetes, publicados en npm con el scope `@keel
 
 | Paquete | CLI | Versión | Qué hace |
 |---|---|---|---|
-| [`@keel-system/keel-core`](packages/keel-core/README.md) | `keel` | 0.6.0 | Siembra workspaces, crea, valida y describe diseños, el mapa del sistema y el registry. Define el DSL (schemas, docs, plantillas) y expone `keel-core/gen`, el núcleo neutral que comparten los generadores. |
-| [`@keel-system/keel-spring`](packages/keel-spring/README.md) | `keel-spring` | 0.3.0 | Generador Spring Boot 4.1.2 / Java 25 / Gradle 9.8.2: `services/<servicio>-spring/`, con el wrapper de Gradle vendorizado. |
-| [`@keel-system/keel-nest`](packages/keel-nest/README.md) | `keel-nest` | 0.2.0 | Generador NestJS 12 sobre Fastify, ESM, TypeScript strict y Vitest: `services/<servicio>-nest/`. |
-| [`@keel-system/keel-dotnet`](packages/keel-dotnet/README.md) | `keel-dotnet` | 0.2.0 | Generador .NET 10, un proyecto por capa, sin librerías de licencia comercial: `services/<servicio>-dotnet/`. |
-| [`@keel-system/keel-go`](packages/keel-go/README.md) | `keel-go` | 0.2.0 | Generador Go 1.27 sobre net/http, sin cgo y solo con licencias permisivas, salvo una excepción escrita: `services/<servicio>-go/`. |
-| [`@keel-system/keel-recover`](packages/keel-recover/README.md) | `keel-recover` | 0.0.2 | Ingeniería inversa de un servicio existente hacia un diseño Keel, con la fidelidad y la paridad medidas. |
+| [`@keel-system/keel-core`](packages/keel-core/README.md) | `keel` | 0.7.0 | Siembra workspaces, crea, valida y describe diseños, el mapa del sistema y el registry. Define el DSL (schemas, docs, plantillas) y expone `keel-core/gen`, el núcleo neutral que comparten los generadores. |
+| [`@keel-system/keel-spring`](packages/keel-spring/README.md) | `keel-spring` | 0.4.0 | Generador Spring Boot 4.1.2 / Java 25 / Gradle 9.8.2: `services/<servicio>-spring/`, con el wrapper de Gradle vendorizado. |
+| [`@keel-system/keel-nest`](packages/keel-nest/README.md) | `keel-nest` | 0.3.0 | Generador NestJS 12 sobre Fastify, ESM, TypeScript strict y Vitest: `services/<servicio>-nest/`. |
+| [`@keel-system/keel-dotnet`](packages/keel-dotnet/README.md) | `keel-dotnet` | 0.3.0 | Generador .NET 10, un proyecto por capa, sin librerías de licencia comercial: `services/<servicio>-dotnet/`. |
+| [`@keel-system/keel-go`](packages/keel-go/README.md) | `keel-go` | 0.3.0 | Generador Go 1.27 sobre net/http, sin cgo y solo con licencias permisivas, salvo una excepción escrita: `services/<servicio>-go/`. |
+| [`@keel-system/keel-recover`](packages/keel-recover/README.md) | `keel-recover` | 0.0.3 | Ingeniería inversa de un servicio existente hacia un diseño Keel, con la fidelidad y la paridad medidas. |
 
 El detalle de cada uno —qué genera `build`, qué deja al agente y su frontera— está en su README.
 
