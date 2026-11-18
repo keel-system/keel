@@ -33,7 +33,7 @@ incremento. B2 hecho (lo neutral, § Medidas de B2). B3 hecho (keel-spring, § M
 `go-check --fixtures` pendiente del arreglo de la escala). Los cuatro generadores generan ya la búsqueda de 2.32.
 B7 hecho (contrato y método, § Medidas de B7). B8 hecho (fixtures, § Medidas de B8).
 B9 en curso: escenarios de la búsqueda en `catalog-extended` y los cinco proyectos generados en `D:\keel-example\catalog-232-*`
-(§ Preparación de B9). Siguiente: el usuario lanza `/keel-generate-<tech>` en cada uno; después, contrastar cada informe
+(§ Preparación de B9). keel-spring registrada (67/67); su defecto, arreglado sin medir en vivo (§ Arreglos tras B9). Siguiente: el usuario lanza `/keel-generate-<tech>` en cada uno; después, contrastar cada informe
 contra su proyecto y registrar `docs/corridas/2026-11-1x-catalog-232-*`.
 Lo que cada generador recoge en su incremento, todo de keel-core:
 - el finder: `criterion.op` `in`/`ne`/`search`, y `search` con `targets[]` en vez de `target`;
@@ -50,6 +50,29 @@ Lo que cada generador recoge en su incremento, todo de keel-core:
 
 Ventana conocida, como la de A2: desde B2 el contrato ya no anuncia `sort` en un listado sin `sortable`, y los
 servidores lo siguen aceptando hasta su incremento.
+
+## Arreglos tras B9 (2026-11-18)
+
+- **La lista ausente de un `in` vaciaba el listado (keel-spring, keel-nest y keel-dotnet).** Lo destapó la corrida de
+  keel-spring, cuyo agente lo rodeó en silencio en el handler.
+  - **El defecto.** El mensaje normaliza la lista no informada a vacía, por el contrato del cable: el record de Java,
+    `statuses ?? []` en el borde de keel-nest y keel-dotnet. El finder solo dejaba de filtrar con nulo, así que sin
+    `statuses` el listado era `IN ()`, la página vacía. keel-go no lo tenía, porque `listParam` deja `nil`.
+  - **Por qué ninguna red lo vio.** Las sondas llaman al adaptador con nulo, y el handler es del agente.
+  - **La decisión.** La lista vacía de un `in` tampoco restringe en el finder. La vacía explícita sigue siendo 400 en el
+    borde (D10), así que el finder solo la recibe cuando la lista no vino.
+  - **Lo cambiado:**
+    - en keel-core, `matchesFinder`, el caso FS-11 y el sabotaje `finder-in-empty`;
+    - en los cuatro generadores, el emisor relacional y el documental;
+    - las cuatro redes conocen FS-11 y `finder-in-empty`, y en MySQL `order-collation` tumba también FS-11, que lee
+      la tabla entera en el orden del diseño, como FS-9.
+  - **Medido.** `npm test` está en verde. FALTAN las redes en vivo con FS-11 y `finder-in-empty`, porque las corridas
+    ocupan los contenedores. Hay que pasar `finder-check catalog-search` (PostgreSQL, MySQL y `-mongo`) en keel-spring,
+    y `db-check`/`doc-check` sobre `catalog-search(-mongo)` y `catalog-extended` en los otros tres.
+- **La nota de un `ne` sobre una columna sin nulo** (la relación obligatoria de `listDraftProducts`) decía «también sin
+  valor». Ahora la nota del handler y la del puerto lo dicen solo cuando `criterionNullable`.
+- **Pendiente, fuera de la 2.32: `size` anuncia `maximum: maxSize` en el contrato derivado.** Lo pone `gen/openapi.js`,
+  y el servidor acota en vez de rechazar (FL-PRD-003-E). Salió como `designGap` en la corrida de keel-spring.
 
 ## Preparación de B9 (2026-11-18)
 

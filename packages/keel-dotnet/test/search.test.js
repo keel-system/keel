@@ -78,7 +78,7 @@ test('la clave de la caché de un listado paginado suma la página, el tamaño y
 for (const [name, branch] of [['catalog-search', 'relational'], ['catalog-search-mongo', 'document']]) {
   test(`${name}: cada sabotaje de la búsqueda se aplica a lo emitido`, async () => {
     const { model, files } = await plan(name);
-    assert.equal(searchCases(model).length, 21, 'FS-1 a FS-10 y SO-1 a SO-11');
+    assert.equal(searchCases(model).length, 22, 'FS-1 a FS-11 y SO-1 a SO-11');
     for (const [id, specs] of Object.entries(SEARCH_SABOTAGE_SPECS)) {
       const spec = specs[branch];
       if (!spec) continue;

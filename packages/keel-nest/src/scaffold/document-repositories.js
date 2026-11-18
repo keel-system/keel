@@ -661,7 +661,9 @@ function documentFinderMethods(model, entity, use, imports) {
                   : `{ ${tsString(key)}: ${write(value)} }`;
       }
       const statement = `conditions.push(${condition});`;
-      lines.push(criterion.required ? `    ${statement}` : `    if (filter.${criterion.name} != null) ${statement}`);
+      // La lista vacía de un `in` tampoco restringe: es como llega la no informada (FS-11), y la explícita es 400 en el borde.
+      const present = criterion.op === 'in' ? `filter.${criterion.name} != null && filter.${criterion.name}.length > 0` : `filter.${criterion.name} != null`;
+      lines.push(criterion.required ? `    ${statement}` : `    if (${present}) ${statement}`);
     }
     // El alcance (D4) y lo borrado (DSL 2.28) se SUMAN a los criterios, la vida la última, y la misma consulta da el total.
     if (finder.scope) {

@@ -85,7 +85,7 @@ test('la nota del handler enumera los filtros que aplica el finder, y solo esos'
   const operation = operationOf(modelOf('catalog-extended'), 'listDraftProducts');
   const note = finderNote(operation, { call: 'productRepository.listDraftProducts(filter, pageable)' });
   assert.ok(note.includes('productRepository.listDraftProducts(filter, pageable)'));
-  assert.ok(note.includes('category (su id) = categoryId si viene; createdAt ≥ createdFrom si viene; createdAt ≤ createdTo si viene; category (su id) ≠ notCategoryId (también sin valor) si viene; status = draft'));
+  assert.ok(note.includes('category (su id) = categoryId si viene; createdAt ≥ createdFrom si viene; createdAt ≤ createdTo si viene; category (su id) ≠ notCategoryId si viene; status = draft'));
   assert.match(note, /designGap/);
 });
 

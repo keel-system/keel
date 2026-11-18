@@ -212,7 +212,7 @@ export function criterionText(criterion) {
   if (op === 'search') return how(criterion.targets.map((entry) => entry.target.path).join(' o '));
   const subject = target.kind === 'relation' ? `${target.path} (su id)` : target.path;
   if (op === 'in') return `${subject} es uno de ${name}${folding}`;
-  if (op === 'ne') return `${subject} ≠ ${name} (también sin valor)`;
+  if (op === 'ne') return `${subject} ≠ ${name}${criterionNullable(criterion) ? ' (también sin valor)' : ''}`;
   if (match !== 'exact') return how(subject);
   return `${subject} ${OPERATOR_TEXT[op]} ${name}${folding}`;
 }
@@ -231,7 +231,7 @@ export function finderNote(operation, { call }) {
     return (
       `Las filas las busca ${call}, que build emite con los filtros del diseño y solo esos: ${applied.join('; ')}. ` +
       'Un filtro opcional sin valor no restringe' +
-      (criteria.some((criterion) => criterion.op === 'in') ? ' (y una lista de in vacía no llega: es 400 en el borde)' : '') +
+      (criteria.some((criterion) => criterion.op === 'in') ? ' (la lista de un in llega vacía cuando no viene, y vacía tampoco restringe: la vacía explícita es 400 en el borde)' : '') +
       '. Lo que la operación valide en prosa (un rango imposible, un id que no existe) va ' +
       'en el handler ANTES de llamarlo; una rule que restrinja algo más que esto no la aplica el finder: si es contrato, es un ' +
       'designGap (falta en filter o where).'
@@ -317,6 +317,12 @@ export function matchesFinder(finder, row, inputs, { sabotage = null } = {}) {
   for (const criterion of finder.criteria) {
     const wanted = inputs[criterion.name];
     if (absent(wanted)) continue;
+    // La lista vacía de un `in` no restringe: es como llega la ausencia al finder (el mensaje normaliza la lista no
+    // informada a vacía), y la vacía explícita ya es 400 en el borde (FS-11, lo destapó B9).
+    if (criterion.op === 'in' && wanted.length === 0) {
+      if (sabotage === 'finder-in-empty') return false;
+      continue;
+    }
     if (criterion.op === 'search') {
       const paths = criterion.targets.map((entry) => entry.target.path);
       const hit = paths.some((path) =>
@@ -378,12 +384,14 @@ export const FINDER_SEARCH_CASES = Object.freeze([
   { id: 'FS-7', inputs: { q: '5_%' }, expect: [], what: 'search: un comodín no casa con otro carácter' },
   { id: 'FS-8', inputs: { statuses: ['active'], q: 'mesa' }, expect: ['AAA-0004'], what: 'los criterios se suman (AND); la búsqueda es un OR solo dentro de over' },
   { id: 'FS-9', inputs: {}, expect: ['AAA-0004', 'AAA-0002', 'AAA-0003', 'AAA-0001'], what: 'sin inputs, el listado entero' },
-  { id: 'FS-10', inputs: { q: 'r.ble' }, expect: [], what: 'search: un punto es un punto, no cualquier carácter (el comodín de una expresión regular)' }
+  { id: 'FS-10', inputs: { q: 'r.ble' }, expect: [], what: 'search: un punto es un punto, no cualquier carácter (el comodín de una expresión regular)' },
+  { id: 'FS-11', inputs: { statuses: [] }, expect: ['AAA-0004', 'AAA-0002', 'AAA-0003', 'AAA-0001'], what: 'in con la lista vacía no restringe: es como llega la ausencia (la vacía explícita es 400 en el borde)' }
 ]);
 
 /** Los sabotajes de los finders de 2.32, con los casos que tumban; los nombra la red de cada generador. */
 export const FINDER_SABOTAGES = Object.freeze({
   'finder-in': { breaks: ['FS-1'], what: 'in compara solo con el primer elemento de la lista' },
+  'finder-in-empty': { breaks: ['FS-11'], what: 'in con la lista vacía no casa con nada (el `IN ()`): la lista ausente vacía el listado' },
   'finder-ne-null': { breaks: ['FS-3'], what: 'ne deja fuera la fila sin valor (el `<>` de SQL a pelo)' },
   // Uno por familia de patrón, porque cada modelo tiene sus comodines: LIKE (relacional) y la expresión regular (documental).
   'finder-search-literal': { breaks: ['FS-7'], what: 'el texto de la búsqueda se usa como patrón LIKE, sin escapar (rama relacional)' },

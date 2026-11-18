@@ -19,7 +19,7 @@
 //   finder-where    la Specification / el Criteria pierde su filtro fijo
 //   finder-literal  el patrón LIKE (relacional) o la expresión regular (documental) deja de escapar el texto
 //   empty-page      una página fuera de rango lleva los totales reales, y no la forma de la página vacía del contrato
-//   finder-in, finder-ne-null, finder-search-literal (FINDER_SABOTAGES) y so-open, so-case, so-duplicate, so-append
+//   finder-in, finder-in-empty, finder-ne-null, finder-search-literal (FINDER_SABOTAGES) y so-open, so-case, so-duplicate, so-append
 //   (SO_SABOTAGES), sobre los sujetos de 2.32: verde es que cada uno cae en EXACTAMENTE los casos que dice keel-core.
 
 import fs from 'node:fs';
@@ -72,6 +72,8 @@ const SABOTAGES = {
   },
   // DSL 2.32: el finder.
   'finder-in': both(['RepositoryImpl.java', /\.in\((filter\.\w+\(\))\)/, '.in($1.subList(0, 1))']),
+  // La lista vacía de un `in` vuelve a restringir: el `IN ()` que vacía el listado cuando la lista no viene.
+  'finder-in-empty': both(['RepositoryImpl.java', /(filter\.\w+\(\) != null) && !filter\.\w+\(\)\.isEmpty\(\)/, '$1']),
   'finder-ne-null': {
     relational: ['RepositoryImpl.java', /cb\.or\(cb\.isNull\(root\.get\("\w+"\)\), (cb\.notEqual\(root\.get\("\w+"\), [^;]*\))\)\);/, '$1);'],
     document: ['RepositoryImpl.java', /(Criteria\.where\("\w+"\))\.ne\(/, '$1.nin((Object) null, ']
@@ -108,7 +110,7 @@ SABOTAGES['order-collation'] = {
 const EXACT_BREAKS = {
   ...FINDER_SABOTAGES,
   ...SO_SABOTAGES,
-  ...(database === 'mysql' ? { 'order-collation': { breaks: ['FS-3', 'FS-9'] } } : {})
+  ...(database === 'mysql' ? { 'order-collation': { breaks: ['FS-3', 'FS-9', 'FS-11'] } } : {})
 };
 
 function run(command, commandArgs, options = {}) {

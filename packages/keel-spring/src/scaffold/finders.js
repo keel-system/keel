@@ -109,6 +109,12 @@ function searchTargets(model, entity, criterion, documental, imports) {
 }
 
 const JPA_OPERATOR = { eq: 'equal', gt: 'greaterThan', gte: 'greaterThanOrEqualTo', lt: 'lessThan', lte: 'lessThanOrEqualTo' };
+/** Cuándo restringe un criterio: con valor, y una lista de `in` además no vacía (FS-11; la ausente llega vacía). */
+function present(criterion) {
+  const value = `filter.${criterion.name}()`;
+  return criterion.op === 'in' ? `${value} != null && !${value}.isEmpty()` : `${value} != null`;
+}
+
 const MONGO_OPERATOR = { eq: 'is', gt: 'gt', gte: 'gte', lt: 'lt', lte: 'lte' };
 
 /** El tipo del valor que se compara (para los genéricos de los operadores de orden de JPA). */
@@ -145,7 +151,8 @@ export function jpaFinderMethods(model, entity, imports, jpaField) {
       const property = mirrorProperty(model, entity, criterion, false);
       const value = criterion.op === 'in' ? preparedList(model, criterion, `filter.${criterion.name}()`, imports) : prepared(model, criterion, `filter.${criterion.name}()`, imports);
       if (criterion.op === 'in') {
-        // Uno de los valores de la lista (DSL 2.32, D10): la lista vacía no llega, es 400 en el borde.
+        // Uno de los valores de la lista (DSL 2.32, D10). La vacía no restringe: es como llega la lista no informada
+        // (el record la normaliza), y la vacía explícita ya es 400 en el borde.
         predicate = `root.get("${property}").in(${value})`;
       } else if (criterion.op === 'ne') {
         // Distinto, y la fila SIN valor también lo es (D11): el <> de SQL a pelo la dejaría fuera.
@@ -161,7 +168,7 @@ export function jpaFinderMethods(model, entity, imports, jpaField) {
         for (const name of target.imports ?? []) imports.add(name);
         predicate = `cb.${JPA_OPERATOR[criterion.op]}(root.<${targetJavaType(criterion)}>get("${property}"), ${value})`;
       }
-      lines.push(`            if (filter.${criterion.name}() != null) {`, `                where.add(${predicate});`, '            }');
+      lines.push(`            if (${present(criterion)}) {`, `                where.add(${predicate});`, '            }');
     }
     // El alcance (D4) y lo borrado (DSL 2.28, D2) se SUMAN a los criterios, la vida la última: así sustituir en vez de
     // sumar (lc-implicit-replace) se lleva todo lo de antes y se ve. La misma Specification da las filas
@@ -228,7 +235,7 @@ export function mongoFinderMethods(model, entity, imports) {
           : criterion.match === 'prefix'
             ? `Criteria.where("${property}").regex("^" + Pattern.quote(${value}))`
             : `Criteria.where("${property}").${MONGO_OPERATOR[criterion.op]}(${value})`;
-      lines.push(`        if (filter.${criterion.name}() != null) {`, `            where.add(${condition});`, '        }');
+      lines.push(`        if (${present(criterion)}) {`, `            where.add(${condition});`, '        }');
     }
     // El alcance (D4) y lo borrado (DSL 2.28) se SUMAN a los criterios, la vida la última, y la misma consulta da el total.
     if (finder.scope) lines.push(...MONGO_SCOPE_LINES);

@@ -50,8 +50,8 @@ function criterionDoc(criterion) {
     return criterion.match === 'contains' ? `${over} lo contiene${folding}` : criterion.match === 'prefix' ? `${over} empieza por él${folding}` : `${over} es igual a él${folding}`;
   }
   const subject = criterion.target.kind === 'relation' ? `el id de ${criterion.target.path}` : criterion.target.path;
-  if (criterion.op === 'in') return `${subject} es uno de ellos${folding} (la lista vacía es 400 en el borde)`;
-  if (criterion.op === 'ne') return `${subject} distinto de él, también sin valor`;
+  if (criterion.op === 'in') return `${subject} es uno de ellos${folding} (vacía no restringe: es la no informada; la vacía explícita es 400 en el borde)`;
+  if (criterion.op === 'ne') return `${subject} distinto de él${criterionNullable(criterion) ? ', también sin valor' : ''}`;
   if (criterion.match === 'contains') return `${subject} lo contiene${folding}`;
   if (criterion.match === 'prefix') return `${subject} empieza por él${folding}`;
   return `${subject} ${OPERATOR_DOC[criterion.op]} él${folding}`;
@@ -174,7 +174,8 @@ function relationalFilterLines(model, entity, finder) {
     if (criterion.required) {
       lines.push(`        var ${local} = ${member};`, ...prepared.map((line) => `        ${line}`), `        query = query.Where(r => ${predicate});`);
     } else {
-      lines.push(`        if (${member} is { } ${local})`, '        {', ...prepared.map((line) => `            ${line}`), `            query = query.Where(r => ${predicate});`, '        }');
+      // La lista vacía de un `in` tampoco restringe: es como llega la no informada (FS-11), y la explícita es 400 en el borde.
+      lines.push(`        if (${member} is ${criterion.op === 'in' ? '{ Count: > 0 }' : '{ }'} ${local})`, '        {', ...prepared.map((line) => `            ${line}`), `            query = query.Where(r => ${predicate});`, '        }');
     }
   }
   return lines;

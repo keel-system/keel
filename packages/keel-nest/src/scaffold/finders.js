@@ -3,7 +3,7 @@
 // restringe cada input lo decide keel-core/gen/query-filters.js, el mismo para los tres generadores: aquí solo se
 // escribe. Los nombres son los de keel-dotnet en camelCase: la misma API sobre otro lenguaje.
 
-import { findersOf, RANGE_OPERATORS } from '@keel-system/keel-core/gen';
+import { criterionNullable, findersOf, RANGE_OPERATORS } from '@keel-system/keel-core/gen';
 import { persistedMembers } from '@keel-system/keel-core/gen/relational';
 import { screamingSnake } from '@keel-system/keel-core/gen/naming';
 import { classPath, DIRS, fieldImports, tsString } from './render.js';
@@ -30,8 +30,8 @@ function criterionDoc(criterion) {
     return criterion.match === 'contains' ? `${over} lo contiene${folding}` : criterion.match === 'prefix' ? `${over} empieza por él${folding}` : `${over} es igual a él${folding}`;
   }
   const subject = criterion.target.kind === 'relation' ? `el id de ${criterion.target.path}` : criterion.target.path;
-  if (criterion.op === 'in') return `${subject} es uno de ellos${folding} (la lista vacía es 400 en el borde)`;
-  if (criterion.op === 'ne') return `${subject} distinto de él, también sin valor`;
+  if (criterion.op === 'in') return `${subject} es uno de ellos${folding} (vacía no restringe: es la no informada; la vacía explícita es 400 en el borde)`;
+  if (criterion.op === 'ne') return `${subject} distinto de él${criterionNullable(criterion) ? ', también sin valor' : ''}`;
   if (criterion.match === 'contains') return `${subject} lo contiene${folding}`;
   if (criterion.match === 'prefix') return `${subject} empieza por él${folding}`;
   return `${subject} ${OPERATOR_DOC[criterion.op]} él${folding}`;
@@ -142,7 +142,9 @@ export function relationalFinderMethods(model, entity, imports, { ormClass, hasR
         condition = `${TYPEORM_OPERATOR[criterion.op]}(${value})`;
       }
       const statement = `and(${tsString(ormProperty(model, entity, criterion))}, ${condition});`;
-      lines.push(criterion.required ? `    ${statement}` : `    if (filter.${criterion.name} != null) ${statement}`);
+      // La lista vacía de un `in` tampoco restringe: es como llega la no informada (FS-11), y la explícita es 400 en el borde.
+      const present = criterion.op === 'in' ? `filter.${criterion.name} != null && filter.${criterion.name}.length > 0` : `filter.${criterion.name} != null`;
+      lines.push(criterion.required ? `    ${statement}` : `    if (${present}) ${statement}`);
     }
     // El alcance (D4) y lo borrado (DSL 2.28, D2) se SUMAN a los criterios, la vida la última: así sustituir en vez de
     // sumar (lc-implicit-replace) se lleva todo lo de antes y se ve. La misma condición da las filas y el total.

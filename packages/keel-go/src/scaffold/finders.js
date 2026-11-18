@@ -8,7 +8,7 @@
 // elemento plegado si el input pliega), `ne` (la fila sin valor también es distinta, D11) y la búsqueda libre (un OR del
 // patrón sobre la columna o la sombra de cada campo de `over`, D13).
 
-import { findersOf } from '@keel-system/keel-core/gen';
+import { criterionNullable, findersOf } from '@keel-system/keel-core/gen';
 import { persistedMembers } from '@keel-system/keel-core/gen';
 import { enumConstant, goExported } from '../lib/go-projection.js';
 import { goString } from '../lib/go-source.js';
@@ -52,8 +52,8 @@ function criterionDoc(criterion) {
     return criterion.match === 'contains' ? `${over} lo contiene${folding}` : criterion.match === 'prefix' ? `${over} empieza por él${folding}` : `${over} es igual a él${folding}`;
   }
   const subject = criterion.target.kind === 'relation' ? `el id de ${criterion.target.path}` : criterion.target.path;
-  if (criterion.op === 'in') return `${subject} es uno de ellos${folding} (la lista vacía es 400 en el borde)`;
-  if (criterion.op === 'ne') return `${subject} distinto de él, también sin valor`;
+  if (criterion.op === 'in') return `${subject} es uno de ellos${folding} (vacía no restringe: es la no informada; la vacía explícita es 400 en el borde)`;
+  if (criterion.op === 'ne') return `${subject} distinto de él${criterionNullable(criterion) ? ', también sin valor' : ''}`;
   if (criterion.match === 'contains') return `${subject} lo contiene${folding}`;
   if (criterion.match === 'prefix') return `${subject} empieza por él${folding}`;
   return `${subject} ${OPERATOR_DOC[criterion.op]} él${folding}`;
@@ -170,9 +170,9 @@ function filterLines(model, entity, finder, writeValue) {
     const calls = criterionLines(model, entity, criterion, local, writeValue);
     const member = `filter.${goExported(criterion.name)}`;
     if (isListCriterion(criterion)) {
-      // Una lista ya es nil cuando no llega: no se desreferencia.
+      // Una lista no se desreferencia, y vacía no restringe, como nil (FS-11): la vacía explícita es 400 en el borde.
       if (criterion.required) lines.push(`\t${local} := ${member}`, ...calls.map((line) => `\t${line}`));
-      else lines.push(`\tif ${local} := ${member}; ${local} != nil {`, ...calls.map((line) => `\t\t${line}`), '\t}');
+      else lines.push(`\tif ${local} := ${member}; len(${local}) > 0 {`, ...calls.map((line) => `\t\t${line}`), '\t}');
     } else if (criterion.required) lines.push(`\t${local} := ${member}`, ...calls.map((line) => `\t${line}`));
     else lines.push(`\tif ${member} != nil {`, `\t\t${local} := *${member}`, ...calls.map((line) => `\t\t${line}`), '\t}');
   }

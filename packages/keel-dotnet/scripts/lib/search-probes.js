@@ -40,6 +40,11 @@ export const SEARCH_SABOTAGE_SPECS = {
     relational: [ADAPTER, /query = query\.Where\(r => (\w+)\.Contains\(r\.(\w+)\)\)/g, 'query = query.Where(r => r.$2 == $1[0])'],
     document: [ADAPTER, /new BsonArray\((\w+)\.Select\(/g, 'new BsonArray($1.Take(1).Select(']
   },
+  // La lista vacía de un `in` vuelve a restringir: el `IN ()` que vacía el listado cuando la lista no viene (FS-11).
+  'finder-in-empty': {
+    relational: [ADAPTER, /is \{ Count: > 0 \} (\w+)\)/g, 'is { } $1)'],
+    document: [ADAPTER, /is \{ Count: > 0 \} (\w+)\)/g, 'is { } $1)']
+  },
   'finder-ne-null': {
     relational: [ADAPTER, /r\.(\w+) == null \|\| r\.\1 != /g, 'r.$1 != null && r.$1 != '],
     document: [ADAPTER, /new BsonDocument\("\$ne", (BsonValues\.\w+\([^()]*\))\)/g, 'new BsonDocument("$nin", new BsonArray { BsonNull.Value, $1 })']
@@ -71,7 +76,7 @@ export function searchCases(model) {
 /** Lo que tiene que caer con un sabotaje: sus casos, y solo esos (`order-collation`, solo en MySQL: en PostgreSQL, ninguno). */
 export function searchSabotageVerdict(failures, id, model, { engine = null } = {}) {
   const cases = searchCases(model);
-  const breaks = id === 'order-collation' ? (engine === 'mysql' ? ['FS-3', 'FS-9'] : []) : BREAKS[id] ?? [];
+  const breaks = id === 'order-collation' ? (engine === 'mysql' ? ['FS-3', 'FS-9', 'FS-11'] : []) : BREAKS[id] ?? [];
   const want = breaks.filter((caseId) => cases.includes(caseId)).sort();
   const failed = [...new Set(failures.flatMap((line) => [...line.matchAll(/_(FS|SO)(\d+)_/g)].map((match) => `${match[1]}-${match[2]}`)))].sort();
   return { exact: failed.length === want.length && failed.every((name, index) => name === want[index]), failed, want };

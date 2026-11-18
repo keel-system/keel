@@ -738,7 +738,7 @@ function documentFinderMethods(model, entity, type, constant, uses) {
       const body = [...prepared, `conditions = append(conditions, ${condition})`];
       if (criterion.required) lines.push(`\t${local} := ${member}`, ...body.map((line) => `\t${line}`));
       // Una lista (`in`) ya es nil cuando no llega: no se desreferencia.
-      else if (isListCriterion(criterion)) lines.push(`\tif ${local} := ${member}; ${local} != nil {`, ...body.map((line) => `\t\t${line}`), '\t}');
+      else if (isListCriterion(criterion)) lines.push(`\tif ${local} := ${member}; len(${local}) > 0 {`, ...body.map((line) => `\t\t${line}`), '\t}');
       else lines.push(`\tif ${member} != nil {`, `\t\t${local} := *${member}`, ...body.map((line) => `\t\t${line}`), '\t}');
     }
     const encodes = lines.some((line) => line.includes('e.decimal('));

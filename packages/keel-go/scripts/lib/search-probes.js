@@ -65,6 +65,11 @@ export const SEARCH_SABOTAGE_SPECS = {
     relational: { files: ADAPTER, from: /f\.oneOf\(("[^"]+"), (\w+)\)/g, to: 'f.oneOf($1, $2[:1])' },
     document: { files: ADAPTER, from: /\{Key: "\$in", Value: (\w+)\}/g, to: '{Key: "$in", Value: $1[:1]}' }
   },
+  // La lista vacía de un `in` vuelve a restringir: el `IN ()` que vacía el listado cuando la lista no viene (FS-11).
+  'finder-in-empty': {
+    relational: { files: ADAPTER, from: /; len\((\w+)\) > 0 \{/g, to: '; $1 != nil {' },
+    document: { files: ADAPTER, from: /; len\((\w+)\) > 0 \{/g, to: '; $1 != nil {' }
+  },
   // ne deja fuera la fila sin valor: el <> de SQL a pelo, y $nin con el nulo en Mongo.
   'finder-ne-null': {
     relational: { files: VALUES, from: '"("+column+" IS NULL OR "+column+" <>"', to: '"("+column+" <>"' },
@@ -103,7 +108,7 @@ export function searchCases(model) {
 /** Lo que tiene que caer con un sabotaje: sus casos, y solo esos (`order-collation`: FS-3 y FS-9 solo en MySQL). */
 export function searchSabotageVerdict(failures, id, model, { engine = null } = {}) {
   const cases = searchCases(model);
-  const breaks = id === 'order-collation' ? (engine === 'mysql' ? ['FS-3', 'FS-9'] : []) : BREAKS[id] ?? [];
+  const breaks = id === 'order-collation' ? (engine === 'mysql' ? ['FS-3', 'FS-9', 'FS-11'] : []) : BREAKS[id] ?? [];
   const want = breaks.filter((caseId) => cases.includes(caseId)).sort();
   const failed = [...new Set(failures.flatMap((line) => [...line.matchAll(/_(FS|SO)(\d+)_/g)].map((match) => `${match[1]}-${match[2]}`)))].sort();
   return { exact: failed.length === want.length && failed.every((name, index) => name === want[index]), failed, want };

@@ -53,7 +53,7 @@ test('searchCatalog tiene finder entero: in, ne y la búsqueda libre, cada uno c
   assert.equal(q.target, null);
   assert.deepEqual(q.targets.map((entry) => [entry.target.path, entry.shadow?.name]), [['name', 'nameNormalized'], ['notes', 'notesNormalized']]);
   assert.deepEqual(finder.criteria.map(criterionText), ['status es uno de statuses', 'notes ≠ notNotes (también sin valor)', 'name o notes contiene q (sin mayúsculas ni acentos)']);
-  assert.match(finderNote(searchCatalog(), { call: 'repo.searchCatalog(filter)' }), /una lista de in vacía no llega: es 400 en el borde/);
+  assert.match(finderNote(searchCatalog(), { call: 'repo.searchCatalog(filter)' }), /la lista de un in llega vacía cuando no viene, y vacía tampoco restringe/);
 });
 
 test('la búsqueda pide la sombra plegada de cada campo de over, solo para filtrar', () => {

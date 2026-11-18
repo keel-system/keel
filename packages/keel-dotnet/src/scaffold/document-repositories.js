@@ -668,7 +668,8 @@ function documentFinderMethods(model, entity) {
       if (criterion.required) {
         lines.push(`        var ${local} = ${member};`, ...prepared.map((line) => `        ${line}`), `        conditions.Add(${condition});`);
       } else {
-        lines.push(`        if (${member} is { } ${local})`, '        {', ...prepared.map((line) => `            ${line}`), `            conditions.Add(${condition});`, '        }');
+        // La lista vacía de un `in` tampoco restringe: es como llega la no informada (FS-11), y la explícita es 400 en el borde.
+        lines.push(`        if (${member} is ${criterion.op === 'in' ? '{ Count: > 0 }' : '{ }'} ${local})`, '        {', ...prepared.map((line) => `            ${line}`), `            conditions.Add(${condition});`, '        }');
       }
     }
     lines.push('        var query = conditions.Count == 0 ? FilterDefinition<BsonDocument>.Empty : Builders<BsonDocument>.Filter.And(conditions);');

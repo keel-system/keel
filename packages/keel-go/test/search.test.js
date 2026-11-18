@@ -31,7 +31,7 @@ const file = (files, pattern) => files.find((entry) => pattern.test(entry.path))
 
 test('el finder relacional: in con la lista, ne que deja pasar el nulo y la búsqueda como un OR del patrón literal', () => {
   const adapter = file(plan('catalog-search').files, /postgres\/product_repository\.go$/);
-  assert.match(adapter, /if statuses := filter\.Statuses; statuses != nil \{/);
+  assert.match(adapter, /if statuses := filter\.Statuses; len\(statuses\) > 0 \{/);
   assert.match(adapter, /statusesValues = append\(statusesValues, productStatusColumn\(item\)\)/);
   assert.match(adapter, /f\.oneOf\("status", statusesValues\)/);
   assert.match(adapter, /f\.distinct\("notes", notNotes\)/);
@@ -92,7 +92,7 @@ test('la clave de la caché de un listado paginado suma la página, el tamaño y
 for (const [name, branch] of [['catalog-search', 'relational'], ['catalog-search-mongo', 'document']]) {
   test(`${name}: cada sabotaje de la búsqueda se aplica a lo emitido`, () => {
     const { model, files } = plan(name);
-    assert.equal(searchCases(model).length, 21, 'FS-1 a FS-10 y SO-1 a SO-11');
+    assert.equal(searchCases(model).length, 22, 'FS-1 a FS-11 y SO-1 a SO-11');
     assert.equal(searchProbeFiles(model).length, 2, 'FS-* en el almacén y SO-* en internal/httpapi');
     for (const [id, specs] of Object.entries(SEARCH_SABOTAGE_SPECS)) {
       const spec = specs[branch];

@@ -36,6 +36,11 @@ export const SEARCH_SABOTAGE_SPECS = {
     relational: [IMPL, /In\((filter\.\w+)\)/g, 'In($1.slice(0, 1))'],
     document: [IMPL, /\$in: (filter\.\w+)\.map/g, '$in: $1.slice(0, 1).map']
   },
+  // La lista vacía de un `in` vuelve a restringir: el `IN ()` que vacía el listado cuando la lista no viene (FS-11).
+  'finder-in-empty': {
+    relational: [IMPL, /(filter\.\w+ != null) && filter\.\w+\.length > 0/g, '$1'],
+    document: [IMPL, /(filter\.\w+ != null) && filter\.\w+\.length > 0/g, '$1']
+  },
   'finder-ne-null': {
     relational: [IMPL, /Or\(IsNull\(\), (Not\(Equal\(filter\.\w+\)\))\)/g, '$1'],
     document: [IMPL, /\$ne: (filter\.\w+)/g, '$nin: [null, $1]']
@@ -67,7 +72,7 @@ export function searchCases(model) {
 /** Lo que tiene que caer con un sabotaje: sus casos, y solo esos (`order-collation`, solo en MySQL: en PostgreSQL, ninguno). */
 export function searchSabotageVerdict(checks, id, model, { engine = null } = {}) {
   const cases = searchCases(model);
-  const breaks = id === 'order-collation' ? (engine === 'mysql' ? ['FS-3', 'FS-9'] : []) : BREAKS[id] ?? [];
+  const breaks = id === 'order-collation' ? (engine === 'mysql' ? ['FS-3', 'FS-9', 'FS-11'] : []) : BREAKS[id] ?? [];
   const want = breaks.filter((caseId) => cases.includes(caseId)).sort();
   const failed = [...new Set(checks.filter((check) => !check.ok && /^(FS|SO)-\d+:/.test(check.name)).map((check) => /^((FS|SO)-\d+):/.exec(check.name)[1]))].sort();
   return { exact: failed.length === want.length && failed.every((name, index) => name === want[index]), failed, want };
