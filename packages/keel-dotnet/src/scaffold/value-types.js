@@ -34,10 +34,17 @@ export function generate(model) {
   const files = (model.formatTypes ?? []).map((type) => formatClass(model, type));
   if ((model.valueObjects ?? []).length > 0) files.push(supportFile(model, 'ValueEquality', valueEqualityBody(), ['System.Collections', 'System.Text.Json']));
   // La escala la normaliza un value object y también un mensaje que redondea su decimal al entrar: un diseño
-  // sin value objects puede necesitarla igual (lo destapó la variante payment-checkout-round de cs-check).
-  if ((model.valueObjects ?? []).length > 0 || messagesRoundScale(model)) files.push(supportFile(model, 'Decimals', decimalsBody()));
+  // sin value objects puede necesitarla igual (lo destapó la variante payment-checkout-round de cs-check). Y las
+  // conventions mandan Decimals.SetScale para toda escala que calcule el agente: con un decimal en una entidad, el
+  // archivo tiene que existir (lo destapó la corrida B9 de catalog-extended, donde el agente redondeó a mano).
+  if ((model.valueObjects ?? []).length > 0 || messagesRoundScale(model) || entitiesHoldDecimals(model)) files.push(supportFile(model, 'Decimals', decimalsBody()));
   for (const vo of model.valueObjects ?? []) files.push(valueObject(model, vo));
   return files;
+}
+
+/** ¿Guarda alguna entidad un decimal? Es lo que el agente escala con Decimals.SetScale. */
+function entitiesHoldDecimals(model) {
+  return (model.entities ?? []).some((entity) => (entity.fields ?? []).some((field) => field.csType === 'decimal'));
 }
 
 function supportFile(model, name, body, usings = []) {

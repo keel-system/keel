@@ -33,7 +33,7 @@ incremento. B2 hecho (lo neutral, § Medidas de B2). B3 hecho (keel-spring, § M
 `go-check --fixtures` pendiente del arreglo de la escala). Los cuatro generadores generan ya la búsqueda de 2.32.
 B7 hecho (contrato y método, § Medidas de B7). B8 hecho (fixtures, § Medidas de B8).
 B9 en curso: escenarios de la búsqueda en `catalog-extended` y los cinco proyectos generados en `D:\keel-example\catalog-232-*`
-(§ Preparación de B9). keel-spring registrada (67/67); su defecto, arreglado sin medir en vivo (§ Arreglos tras B9). Siguiente: el usuario lanza `/keel-generate-<tech>` en cada uno; después, contrastar cada informe
+(§ Preparación de B9). keel-spring, keel-nest y keel-dotnet registradas (67/67 las tres); sus defectos, arreglados sin medir en vivo (§ Arreglos tras B9). Siguiente: el usuario lanza `/keel-generate-<tech>` en cada uno; después, contrastar cada informe
 contra su proyecto y registrar `docs/corridas/2026-11-1x-catalog-232-*`.
 Lo que cada generador recoge en su incremento, todo de keel-core:
 - el finder: `criterion.op` `in`/`ne`/`search`, y `search` con `targets[]` en vez de `target`;
@@ -71,6 +71,11 @@ servidores lo siguen aceptando hasta su incremento.
     y `db-check`/`doc-check` sobre `catalog-search(-mongo)` y `catalog-extended` en los otros tres.
 - **La nota de un `ne` sobre una columna sin nulo** (la relación obligatoria de `listDraftProducts`) decía «también sin
   valor». Ahora la nota del handler y la del puerto lo dicen solo cuando `criterionNullable`.
+- **keel-dotnet no emitía `Decimals.cs` en un diseño con decimales sin value objects** (lo destapó su corrida). Las
+  conventions mandan `Decimals.SetScale` para toda escala, y el agente redondeó con `Math.Round`. Ahora el archivo sale
+  también cuando una entidad guarda un `decimal` (`entitiesHoldDecimals`, `value-types.js`).
+- **Las corridas de keel-nest y keel-dotnet confirman el defecto del `in`.** Las dos lo rodean en el handler, cada una a
+  su manera, y ningún informe lo cuenta. La huella no lo ve, porque el arreglo cae en un archivo con TODO.
 - **Pendiente, fuera de la 2.32: `size` anuncia `maximum: maxSize` en el contrato derivado.** Lo pone `gen/openapi.js`,
   y el servidor acota en vez de rechazar (FL-PRD-003-E). Salió como `designGap` en la corrida de keel-spring.
 
