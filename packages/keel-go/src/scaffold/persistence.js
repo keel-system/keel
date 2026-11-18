@@ -58,6 +58,10 @@ import { KEEL_TIMER } from '@keel-system/keel-core/gen/timer-store';
 import { usesTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { CHANGE_HISTORY, CHANGE_HISTORY_FIELD } from '@keel-system/keel-core/gen/history-store';
 import { usesHistory } from '@keel-system/keel-core/gen/history';
+import { orderCollationWork, orderedTextColumns } from '@keel-system/keel-core/gen/pagination';
+import { binaryCollationFor } from '@keel-system/keel-core/gen/infra-catalog';
+import fs from 'node:fs';
+import path from 'node:path';
 import { batchJobTables } from './batch-jobs.js';
 
 export { usesRelational };
@@ -267,6 +271,17 @@ function auditColumns(entity) {
   ];
 }
 
+/**
+ * Las columnas de texto por las que se ordena (el `sort` o el `sortable` de una query) con la collation binaria del motor
+ * (DSL 2.32, U7 y D17): propiedad → collation, para que el texto se ordene por punto de código en los dos motores. La de
+ * PostgreSQL va sin comillas: columnLine las pone.
+ */
+export function orderCollations(model, entity) {
+  const collation = binaryCollationFor(relationalEngine(model))?.replace(/^"(.*)"$/, '$1');
+  if (!collation) return new Map();
+  return new Map(orderedTextColumns(model, entity.name).map((column) => [column.property, collation]));
+}
+
 /** Las tablas del esquema, como datos: lo que escribe el SQL y lo que relee la prueba de su forma. */
 export function schemaTables(model) {
   const engine = relationalEngine(model);
@@ -279,13 +294,17 @@ export function schemaTables(model) {
     const columns = [];
     const constraints = [];
     const notes = [];
-    if (entity.idField?.columns) columns.push(entity.idField.columns);
+    // La collation binaria del orden (DSL 2.32, U7): la de la unicidad, si ya la lleva, es la misma en MySQL.
+    const ordered = orderCollations(model, entity);
+    const withOrder = (spec, property) => (ordered.has(property) && !spec.collation ? { ...spec, collation: ordered.get(property) } : spec);
+    // El id de texto también se ordena (el desempate, o un sort sobre él): con la misma collation.
+    if (entity.idField?.columns) columns.push(withOrder(entity.idField.columns, entity.idField.name));
     for (const member of members) {
       if (member.kind === 'scalar') {
         const { field } = member;
         if (field.isId || !field.columns) continue;
-        columns.push(field.columns);
-        if (member.folded) columns.push({ name: member.folded.column, base: 'string', textual: true, length: member.folded.maxLength ?? 255, nullable: !member.folded.required });
+        columns.push(withOrder(field.columns, field.name));
+        if (member.folded) columns.push(withOrder({ name: member.folded.column, base: 'string', textual: true, length: member.folded.maxLength ?? 255, nullable: !member.folded.required }, member.folded.name));
         if (member.ranked) columns.push({ name: member.ranked.column, base: 'int', nullable: !member.ranked.required });
       } else if (member.kind === 'vo') {
         for (const sub of member.subs) {
@@ -294,7 +313,7 @@ export function schemaTables(model) {
             continue;
           }
           // La columna aplanada: las cotas del sub-campo, NOT NULL solo si el value object entero es obligatorio.
-          columns.push({ ...sub.sub.columns, name: sub.column, nullable: !(sub.ownerRequired && !sub.sub.columns.nullable) });
+          columns.push(withOrder({ ...sub.sub.columns, name: sub.column, nullable: !(sub.ownerRequired && !sub.sub.columns.nullable) }, sub.name));
         }
       } else if (member.kind === 'externalRef') {
         columns.push(idColumn(model, member.relation.entity, member.column, !member.relation.required));
@@ -581,5 +600,10 @@ export function schemaSteps(model, projectDir) {
       return { name: `${String(step.version).padStart(VERSION_WIDTH, '0')}_${step.slug}.sql`, content: gooseStep(step) };
     }
   });
-  return { ...result, tables: created };
+  // La collation del orden (DSL 2.32, U7) no llega sola a una base desplegada: goose no reaplica la baseline reescrita, así
+  // que lo dice la que está en disco, la que se aplicó.
+  const baseline = projectDir ? path.join(projectDir, layout(model).store.dir, 'migrations', BASELINE_FILE) : null;
+  const deployed = baseline && fs.existsSync(baseline) ? fs.readFileSync(baseline, 'utf8') : null;
+  const collation = orderCollationWork(model, deployed, binaryCollationFor(relationalEngine(model)));
+  return { ...result, work: [...(result.work ?? []), ...collation], tables: created };
 }

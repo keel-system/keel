@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './tmp.js';
-import { FINDER_DESIGNS } from '../../../keel-core/test/helpers/finder-designs.js';
+import { FINDER_DESIGNS, SEARCH_DESIGNS } from '../../../keel-core/test/helpers/finder-designs.js';
 import { CONDITIONAL_WRITE_DESIGNS } from '../../../keel-core/test/helpers/conditional-write-designs.js';
 import { READ_SCOPE_DESIGNS } from '../../../keel-core/test/helpers/read-scope-designs.js';
 import { DATA_LIFECYCLE_DESIGNS } from '../../../keel-core/test/helpers/data-lifecycle-designs.js';
@@ -290,6 +290,16 @@ export const UNCOVERED_BRANCHES = [
         delete need.replica;
         need.strategy = 'on-demand';
       }
+    }
+  })),
+  // La búsqueda de 2.32 (in, ne, search y sortable): catalog-search y su gemelo documental, los MISMOS que miden los otros
+  // tres. Los ejecutan db-check y doc-check (FS-* y SO-*).
+  ...SEARCH_DESIGNS.map((design) => ({
+    name: design.name,
+    from: design.from,
+    mutate(manifest, layers) {
+      manifest.service.name = design.name;
+      design.mutate(layers);
     }
   }))
 ];

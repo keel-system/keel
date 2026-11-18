@@ -25,7 +25,7 @@ import { documentScopeLines, isScopedRoot, readScopeDocumentMethods, scopedLoads
 import { enumConstant, goExported } from '../lib/go-projection.js';
 import { alignRows, goString } from '../lib/go-source.js';
 import { isDeclaredLockVersion } from './entities.js';
-import { entityFinders, finderMethod, finderParams, finderResult, fixedArg } from './finders.js';
+import { entityFinders, finderMethod, finderParams, finderResult, fixedArg, isListCriterion } from './finders.js';
 import { docComment, goFileName, isOptional, layout, localName, packageFile } from './render.js';
 import { declaredAuthorship, usesDeclaredAuthorship } from './audit-actor.js';
 import { emitsEvents, usesGoOutbox } from './messaging.js';
@@ -679,14 +679,43 @@ function criterionTarget(model, entity, criterion, value, uses) {
   return { key, value: writer(target.field, value, uses) };
 }
 
-/** La condición de un criterio. El texto buscado es LITERAL: se escapa antes de componer la expresión. */
-function criterionCondition(model, entity, criterion, value, uses) {
-  const { key, value: written } = criterionTarget(model, entity, criterion, value, uses);
+/** La condición de texto sobre una clave: la expresión regular CITADA (literal) o la igualdad. */
+function textCondition(key, match, written) {
   const condition = (operand) => `bson.D{{Key: ${goString(key)}, Value: ${operand}}}`;
-  if (criterion.match === 'contains') return condition(`bson.Regex{Pattern: regexp.QuoteMeta(${written})}`);
-  if (criterion.match === 'prefix') return condition(`bson.Regex{Pattern: "^" + regexp.QuoteMeta(${written})}`);
-  if (RANGE_OPERATOR[criterion.op]) return condition(`bson.D{{Key: ${goString(RANGE_OPERATOR[criterion.op])}, Value: ${written}}}`);
+  if (match === 'contains') return condition(`bson.Regex{Pattern: regexp.QuoteMeta(${written})}`);
+  if (match === 'prefix') return condition(`bson.Regex{Pattern: "^" + regexp.QuoteMeta(${written})}`);
   return condition(written);
+}
+
+/**
+ * Las líneas que preparan un criterio y su condición. El texto buscado es LITERAL: se escapa antes de componer la
+ * expresión. Los de 2.32: `$in` con cada elemento escrito como se guarda, `$ne` (ya deja pasar el documento sin el campo,
+ * D11) y la búsqueda libre, un `$or` de expresiones citadas sobre la sombra de cada campo de `over` (D13).
+ */
+function criterionCondition(model, entity, criterion, value, uses) {
+  if (criterion.op === 'search') {
+    const shadow = criterion.targets[0]?.shadow;
+    const folded = shadow ? `${value}Folded` : value;
+    const branches = criterion.targets.map((entry) => {
+      const { key } = criterionTarget(model, entity, { target: entry.target, shadow: entry.shadow }, folded, uses);
+      return textCondition(key, criterion.match, folded);
+    });
+    return {
+      prepared: shadow ? [`${folded} := ${shadow.accents ? 'textfold.CaseAndAccents' : 'textfold.Case'}(${value})`] : [],
+      condition: `bson.D{{Key: "$or", Value: bson.A{${branches.join(', ')}}}}`
+    };
+  }
+  if (criterion.op === 'in') {
+    const { key, value: written } = criterionTarget(model, entity, criterion, 'item', uses);
+    return {
+      prepared: [`${value}Values := make(bson.A, 0, len(${value}))`, `for _, item := range ${value} {`, `\t${value}Values = append(${value}Values, ${written})`, '}'],
+      condition: `bson.D{{Key: ${goString(key)}, Value: bson.D{{Key: "$in", Value: ${value}Values}}}}`
+    };
+  }
+  const { key, value: written } = criterionTarget(model, entity, criterion, value, uses);
+  if (criterion.op === 'ne') return { prepared: [], condition: `bson.D{{Key: ${goString(key)}, Value: bson.D{{Key: "$ne", Value: ${written}}}}}` };
+  if (RANGE_OPERATOR[criterion.op]) return { prepared: [], condition: `bson.D{{Key: ${goString(key)}, Value: bson.D{{Key: ${goString(RANGE_OPERATOR[criterion.op])}, Value: ${written}}}}}` };
+  return { prepared: [], condition: textCondition(key, criterion.match, written) };
 }
 
 /** Los métodos del adaptador: los filtros del diseño sobre el documento, y solo esos. */
@@ -704,12 +733,13 @@ function documentFinderMethods(model, entity, type, constant, uses) {
     }
     for (const criterion of finder.criteria) {
       const member = `filter.${goExported(criterion.name)}`;
-      if (criterion.required) {
-        lines.push(`\tconditions = append(conditions, ${criterionCondition(model, entity, criterion, member, uses)})`);
-      } else {
-        const local = localName(criterion.name);
-        lines.push(`\tif ${member} != nil {`, `\t\t${local} := *${member}`, `\t\tconditions = append(conditions, ${criterionCondition(model, entity, criterion, local, uses)})`, '\t}');
-      }
+      const local = localName(criterion.name);
+      const { prepared, condition } = criterionCondition(model, entity, criterion, local, uses);
+      const body = [...prepared, `conditions = append(conditions, ${condition})`];
+      if (criterion.required) lines.push(`\t${local} := ${member}`, ...body.map((line) => `\t${line}`));
+      // Una lista (`in`) ya es nil cuando no llega: no se desreferencia.
+      else if (isListCriterion(criterion)) lines.push(`\tif ${local} := ${member}; ${local} != nil {`, ...body.map((line) => `\t\t${line}`), '\t}');
+      else lines.push(`\tif ${member} != nil {`, `\t\t${local} := *${member}`, ...body.map((line) => `\t\t${line}`), '\t}');
     }
     const encodes = lines.some((line) => line.includes('e.decimal('));
     const prelude = encodes ? '\te := &encoder{}\n' : '';

@@ -37,6 +37,7 @@ import { BATCH_JOB_SABOTAGE_SPECS, BATCH_JOB_SUBJECTS, batchJobProbeFile, batchJ
 import { BATCH_KEY_SABOTAGE_SPECS, BATCH_KEY_SUBJECTS, batchKeyProbeFile, batchKeySabotageSubject, batchKeySabotageVerdict, isBatchKeySabotage } from './lib/batch-key-probes.js';
 import { HISTORY_ALSO, HISTORY_SABOTAGE_SPECS, HISTORY_SUBJECTS, historyProbeFile, historySabotageVerdict, isHistorySabotage } from './lib/history-probes.js';
 import { INVARIANT_RUN, INVARIANT_SABOTAGE_SPECS, INVARIANT_SUBJECTS, invariantProbeFile, invariantSabotageVerdict, isInvariantSabotage } from './lib/invariant-probes.js';
+import { SEARCH_RUN, SEARCH_SABOTAGE_SPECS, SEARCH_SORT_PACKAGE, SEARCH_SUBJECTS, isSearchSabotage, searchProbeFiles, searchSabotageVerdict } from './lib/search-probes.js';
 
 // Los del cronómetro y los plazos (DSL 2.26) caen en EXACTAMENTE sus casos DL (scripts/lib/timer-probes.js).
 // Los de la lectura acotada (DSL 2.27) caen en EXACTAMENTE sus casos RS (scripts/lib/read-scope-probes.js).
@@ -59,7 +60,9 @@ const SABOTAGES = {
   // bk-keep-failed no: el todo o nada con clave solo tiene sujeto relacional (BATCH_KEY_DESIGNS).
   ...Object.fromEntries(Object.entries(BATCH_KEY_SABOTAGE_SPECS).filter(([id]) => id !== 'bk-keep-failed').map(([id, spec]) => [id, spec.document])),
   // Los de la guarda del agregado (DSL 2.31) caen en EXACTAMENTE sus casos IC y CP (scripts/lib/invariant-probes.js).
-  ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document]))
+  ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.document])),
+  // Los de la búsqueda (DSL 2.32) caen en EXACTAMENTE sus casos FS y SO (scripts/lib/search-probes.js).
+  ...Object.fromEntries(Object.entries(SEARCH_SABOTAGE_SPECS).filter(([, spec]) => spec.document).map(([id, spec]) => [id, spec.document]))
 };
 import { resolveRuntime, startMongo, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 
@@ -117,7 +120,9 @@ try {
     // Los lotes síncronos con clave (DSL 2.30, D15, BK-1 a BK-4): los MISMOS diseños que miden los otros tres.
     ...UNCOVERED_BRANCHES.filter((design) => BATCH_KEY_SUBJECTS.document.includes(design.name)),
     // La guarda del agregado (DSL 2.31, IC-1 a IC-11 y CP-1 a CP-5): el MISMO sujeto que miden los otros tres.
-    ...UNCOVERED_BRANCHES.filter((design) => INVARIANT_SUBJECTS.document.includes(design.name))
+    ...UNCOVERED_BRANCHES.filter((design) => INVARIANT_SUBJECTS.document.includes(design.name)),
+    // La búsqueda de 2.32 (FS-* y SO-*): el MISMO sujeto que miden los otros tres; solo ejecuta sus casos.
+    ...UNCOVERED_BRANCHES.filter((design) => SEARCH_SUBJECTS.document.includes(design.name))
   ]
     .filter((design) => only || !isReadScopeSabotage(sabotage) || READ_SCOPE_SUBJECTS.document.includes(design.name))
     .filter((design) => only || !isLifecycleSabotage(sabotage) || LIFECYCLE_SUBJECTS.document.includes(design.name))
@@ -125,7 +130,9 @@ try {
     .filter((design) => only || !isBatchSabotage(sabotage) || BATCH_SUBJECTS.document.includes(design.name))
     .filter((design) => only || !isBatchJobSabotage(sabotage) || BATCH_JOB_SUBJECTS.document.includes(design.name))
     .filter((design) => only || !isBatchKeySabotage(sabotage) || BATCH_KEY_SUBJECTS.document.includes(design.name))
-    .filter((design) => only || !isInvariantSabotage(sabotage) || INVARIANT_SUBJECTS.document.includes(design.name));
+    .filter((design) => only || !isInvariantSabotage(sabotage) || INVARIANT_SUBJECTS.document.includes(design.name))
+    // Los de la búsqueda, solo en su sujeto; y su sujeto, solo con ellos (sus casos no son las sondas de los demás).
+    .filter((design) => only || (isSearchSabotage(sabotage) ? SEARCH_SUBJECTS.document.includes(design.name) : !sabotage || !SEARCH_SUBJECTS.document.includes(design.name)));
   for (const { name, from, mutate } of designs) {
     // `--only` admite una lista separada por comas.
     if (only && !only.split(',').includes(name)) continue;
@@ -162,17 +169,22 @@ try {
     const batchKeyProbe = batchKeyProbeFile(plan.model);
     // La guarda del agregado (DSL 2.31): su archivo aparte, también en el paquete del almacén.
     const invariantProbe = invariantProbeFile(plan.model);
+    // La búsqueda (DSL 2.32): FS-* en el paquete del almacén y SO-* en internal/httpapi.
+    const searchProbes = searchProbeFiles(plan.model);
+    // El sujeto de la búsqueda sale de product-catalog, que declara lotes con seguridad: sus sondas (por el http.Handler,
+    // sin token) son de los sujetos de los lotes, como en db-check.
+    const searched = searchProbes.length > 0;
     const dir = path.join(root, name);
-    for (const file of [...files, probe, ...(invariantProbe ? [invariantProbe] : []), ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : []), ...(lifecycleProbe ? [lifecycleProbe] : []), ...(historyProbe ? [historyProbe] : []), ...(batchProbe ? [batchProbe] : []), ...(batchJobProbe ? [batchJobProbe] : []), ...(batchKeyProbe ? [batchKeyProbe] : [])]) {
+    for (const file of [...files, probe, ...searchProbes, ...(invariantProbe ? [invariantProbe] : []), ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : []), ...(lifecycleProbe ? [lifecycleProbe] : []), ...(historyProbe ? [historyProbe] : []), ...(batchProbe && !searched ? [batchProbe] : []), ...(batchJobProbe && !searched ? [batchJobProbe] : []), ...(batchKeyProbe && !searched ? [batchKeyProbe] : [])]) {
       const target = path.join(dir, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, file.content);
     }
     if (probe.unsampled.length > 0) console.log(`  (${name}: sin muestra para ${probe.unsampled.join(', ')})`);
-    subjects.push({ name, dir, model: plan.model, invariants: Boolean(invariantProbe), db: `${name.replace(/-/g, '_')}_doc_probes`, purgeTimer: Boolean(purgeTimerProbe), drain: probe.content.includes('TestDrain_DR1_') });
+    subjects.push({ name, dir, model: plan.model, invariants: Boolean(invariantProbe), search: searchProbes.length > 0, db: `${name.replace(/-/g, '_')}_doc_probes`, purgeTimer: Boolean(purgeTimerProbe), drain: probe.content.includes('TestDrain_DR1_') });
   }
   const url = (db) => database.url.replace(/\/keel_db_check\?/, `/${db}?`);
-  const outcomes = await pool(subjects, 2, async ({ dir, db, invariants }) => {
+  const outcomes = await pool(subjects, 2, async ({ dir, db, invariants, search }) => {
     const tidied = await runAsync('go', ['mod', 'tidy'], { cwd: dir });
     if (!tidied.ok) return { tidied };
     // Compilada aparte y ejecutada desde el sujeto: en Windows el antivirus puede denegar el .test.exe de %TEMP%\go-build.
@@ -180,8 +192,15 @@ try {
     const built = await runAsync('go', ['test', '-c', '-o', binary, `./${storePath}/`], { cwd: dir });
     if (!built.ok) return { tidied, tested: built };
     // El sujeto de la guarda (DSL 2.31) solo ejecuta sus vectores: la muestra de los demás bloques no cumple sus checks.
-    const run = invariants ? [`-test.run=${INVARIANT_RUN}`] : [];
-    return { tidied, tested: await runAsync(binary, ['-test.count=1', '-test.v', ...run], { cwd: path.join(dir, storePath), env: { DOC_CHECK_URL: url(db) } }) };
+    const run = invariants ? [`-test.run=${INVARIANT_RUN}`] : search ? [`-test.run=${SEARCH_RUN}`] : [];
+    const tested = await runAsync(binary, ['-test.count=1', '-test.v', ...run], { cwd: path.join(dir, storePath), env: { DOC_CHECK_URL: url(db) } });
+    if (!search) return { tidied, tested };
+    // Los SO-* (el ?sort= del cliente) viven en internal/httpapi: pageableParam no se exporta. Sin base.
+    const sortBinary = path.join(dir, process.platform === 'win32' ? 'sort-probe.test.exe' : 'sort-probe.test');
+    const sortBuilt = await runAsync('go', ['test', '-c', '-o', sortBinary, `./${SEARCH_SORT_PACKAGE}/`], { cwd: dir });
+    if (!sortBuilt.ok) return { tidied, tested: { ok: false, output: `${tested.output}${sortBuilt.output}` } };
+    const sorted = await runAsync(sortBinary, ['-test.count=1', '-test.v', `-test.run=${SEARCH_RUN}`], { cwd: path.join(dir, SEARCH_SORT_PACKAGE) });
+    return { tidied, tested: { ok: tested.ok && sorted.ok, output: `${tested.output}${sorted.output}` } };
   });
   subjects.forEach(({ name, model, purgeTimer, drain }, index) => {
     const { tidied, tested } = outcomes[index];
@@ -193,6 +212,18 @@ try {
       const ok = tested.ok && ran > 0;
       step(`${name}: los adaptadores documentales guardan, leen y traducen contra MongoDB (${passed.length} sondas)`, ok, ok ? '' : failed.join(', ') || tested.output.slice(-3000));
       if (!ok && failed.length > 0) console.error(failureLines(tested.output));
+      return;
+    }
+    if (isSearchSabotage(sabotage)) {
+      const verdict = searchSabotageVerdict(failed, sabotage, model);
+      // Y ninguna otra sonda: el sabotaje rompe la búsqueda, no el resto del adaptador.
+      const stray = failed.filter((test) => !/_(FS|SO)\d+_/.test(test));
+      step(
+        `falsado: ${sabotage} en ${name} cae en exactamente sus casos`,
+        ran > 0 && verdict.exact && stray.length === 0,
+        `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]${stray.length > 0 ? `; además ${stray.join(', ')}` : ''}`
+      );
+      if (verdict.exact && verdict.want.length > 0) results.at(-1).caught = true;
       return;
     }
     if (isInvariantSabotage(sabotage)) {

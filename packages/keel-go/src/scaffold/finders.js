@@ -4,7 +4,9 @@
 //
 // El adaptador compone el WHERE con un `filters` (values.go) que pone cada valor como PARÁMETRO: nunca se concatena un
 // dato de la petición en el SQL. Un filtro opcional a nil no restringe; el texto por patrón se busca LITERAL (con `%`,
-// `_` y `\` escapados), sobre la sombra plegada si el diseño pide plegarlo.
+// `_` y `\` escapados), sobre la sombra plegada si el diseño pide plegarlo. Los de 2.32: `in` (uno de la lista, cada
+// elemento plegado si el input pliega), `ne` (la fila sin valor también es distinta, D11) y la búsqueda libre (un OR del
+// patrón sobre la columna o la sombra de cada campo de `over`, D13).
 
 import { findersOf } from '@keel-system/keel-core/gen';
 import { persistedMembers } from '@keel-system/keel-core/gen';
@@ -27,19 +29,31 @@ export const hasFilter = (finder) => finder.criteria.length > 0;
 export const finderMethod = (finder) => goExported(finder.method);
 export const filterTypeName = (finder) => goExported(finder.filterType);
 
-/** El tipo de un filtro (en el dominio, o calificado fuera): un opcional es un puntero, y nil no restringe. */
+/** El tipo de un filtro (en el dominio, o calificado fuera): un opcional es un puntero, y nil no restringe; una lista (`in`) ya lo es. */
 function criterionType(criterion, { qualify = false } = {}) {
   const { input } = criterion;
   const named = input.kind === 'enum' || input.kind === 'composite';
-  const type = qualify && named ? `domain.${input.goType}` : input.goType;
-  return criterion.required ? type : `*${type}`;
+  const list = input.goType.startsWith('[]');
+  const element = list ? input.goType.slice(2) : input.goType;
+  const type = `${list ? '[]' : ''}${qualify && named ? `domain.${element}` : element}`;
+  return criterion.required || list ? type : `*${type}`;
 }
+
+/** ¿El filtro es una lista (`in`)? Entonces nil no restringe y no se desreferencia. */
+export const isListCriterion = (criterion) => criterion.input.goType.startsWith('[]');
 
 const OPERATOR_DOC = { eq: 'igual a', gt: 'mayor que', gte: 'mayor o igual que', lt: 'menor que', lte: 'menor o igual que' };
 
 function criterionDoc(criterion) {
-  const subject = criterion.target.kind === 'relation' ? `el id de ${criterion.target.path}` : criterion.target.path;
   const folding = criterion.compare === 'ignore-case-accents' ? ', sin mayúsculas ni acentos' : criterion.compare === 'ignore-case' ? ', sin mayúsculas' : '';
+  // La búsqueda libre (DSL 2.32, D13): un OR sobre los campos de over.
+  if (criterion.op === 'search') {
+    const over = criterion.targets.map((entry) => entry.target.path).join(' o ');
+    return criterion.match === 'contains' ? `${over} lo contiene${folding}` : criterion.match === 'prefix' ? `${over} empieza por él${folding}` : `${over} es igual a él${folding}`;
+  }
+  const subject = criterion.target.kind === 'relation' ? `el id de ${criterion.target.path}` : criterion.target.path;
+  if (criterion.op === 'in') return `${subject} es uno de ellos${folding} (la lista vacía es 400 en el borde)`;
+  if (criterion.op === 'ne') return `${subject} distinto de él, también sin valor`;
   if (criterion.match === 'contains') return `${subject} lo contiene${folding}`;
   if (criterion.match === 'prefix') return `${subject} empieza por él${folding}`;
   return `${subject} ${OPERATOR_DOC[criterion.op]} él${folding}`;
@@ -112,24 +126,55 @@ export function fixedArg(model, entry) {
   return goString(String(entry.value));
 }
 
+const foldCall = (shadow) => (shadow.accents ? 'textfold.CaseAndAccents' : 'textfold.Case');
+
+/** El patrón de LIKE de un texto buscado, LITERAL: sus comodines no lo son. */
+const likePattern = (match, value) => (match === 'contains' ? `"%"+likeLiteral(${value})+"%"` : match === 'prefix' ? `likeLiteral(${value})+"%"` : `likeLiteral(${value})`);
+
+/** Las líneas que restringen `f` con un criterio cuyo valor es `local` (ya desreferenciado). */
+function criterionLines(model, entity, criterion, local, writeValue) {
+  // La búsqueda libre (DSL 2.32, D13): el texto, plegado una vez, contra la columna o la sombra de cada campo de over.
+  if (criterion.op === 'search') {
+    const columns = criterion.targets.map((entry) => goString(columnOf(model, entity, { target: entry.target, shadow: entry.shadow }).column));
+    const shadow = criterion.targets[0]?.shadow;
+    const value = shadow ? `${foldCall(shadow)}(${local})` : local;
+    return [`f.anyLike([]string{${columns.join(', ')}}, ${likePattern(criterion.match, value)})`];
+  }
+  const { column, field } = columnOf(model, entity, criterion);
+  // `in` (D12): uno de la lista, con cada elemento escrito (o plegado) como lo guarda la columna.
+  if (criterion.op === 'in') {
+    const item = criterion.shadow ? `${foldCall(criterion.shadow)}(item)` : field ? writeValue(field, 'item', false) : 'item';
+    return [
+      `${local}Values := make([]any, 0, len(${local}))`,
+      `for _, item := range ${local} {`,
+      `\t${local}Values = append(${local}Values, ${item})`,
+      '}',
+      `f.oneOf(${goString(column)}, ${local}Values)`
+    ];
+  }
+  let value = local;
+  if (criterion.shadow) value = `${foldCall(criterion.shadow)}(${local})`;
+  else if (field) value = writeValue(field, local, false);
+  // Distinto, y la fila sin valor también lo es (D11): el <> de SQL a pelo la dejaría fuera.
+  if (criterion.op === 'ne') return [`f.distinct(${goString(column)}, ${value})`];
+  if (criterion.match === 'contains') return [`f.contains(${goString(column)}, ${value})`];
+  if (criterion.match === 'prefix') return [`f.prefix(${goString(column)}, ${value})`];
+  return [`f.add(${goString(column)}, ${goString(COMPARISON[criterion.op])}, ${value})`];
+}
+
 /** Las líneas que añaden las condiciones de un finder a `f`. */
 function filterLines(model, entity, finder, writeValue) {
   const lines = finder.fixed.map((entry) => `\tf.add(${goString(qFor(model)(entry.field.columns.name))}, "=", ${fixedArg(model, entry)})`);
   for (const criterion of finder.criteria) {
-    const { column, field } = columnOf(model, entity, criterion);
     const local = localName(criterion.name);
-    let value = local;
-    if (criterion.shadow) value = `${criterion.shadow.accents ? 'textfold.CaseAndAccents' : 'textfold.Case'}(${local})`;
-    else if (field) value = writeValue(field, local, false);
-    const call =
-      criterion.match === 'contains'
-        ? `f.contains(${goString(column)}, ${value})`
-        : criterion.match === 'prefix'
-          ? `f.prefix(${goString(column)}, ${value})`
-          : `f.add(${goString(column)}, ${goString(COMPARISON[criterion.op])}, ${value})`;
+    const calls = criterionLines(model, entity, criterion, local, writeValue);
     const member = `filter.${goExported(criterion.name)}`;
-    if (criterion.required) lines.push(`\t${local} := ${member}`, `\t${call}`);
-    else lines.push(`\tif ${member} != nil {`, `\t\t${local} := *${member}`, `\t\t${call}`, '\t}');
+    if (isListCriterion(criterion)) {
+      // Una lista ya es nil cuando no llega: no se desreferencia.
+      if (criterion.required) lines.push(`\t${local} := ${member}`, ...calls.map((line) => `\t${line}`));
+      else lines.push(`\tif ${local} := ${member}; ${local} != nil {`, ...calls.map((line) => `\t\t${line}`), '\t}');
+    } else if (criterion.required) lines.push(`\t${local} := ${member}`, ...calls.map((line) => `\t${line}`));
+    else lines.push(`\tif ${member} != nil {`, `\t\t${local} := *${member}`, ...calls.map((line) => `\t\t${line}`), '\t}');
   }
   return lines;
 }
@@ -194,9 +239,14 @@ export function filtersUses(model, roots) {
   for (const entity of roots) {
     for (const finder of entityFinders(model, entity)) {
       uses.add('filters');
-      if (finder.fixed.length > 0 || finder.criteria.some((criterion) => criterion.match === 'exact')) uses.add('add');
-      if (finder.criteria.some((criterion) => criterion.match === 'contains')) uses.add('contains');
-      if (finder.criteria.some((criterion) => criterion.match === 'prefix')) uses.add('prefix');
+      const plain = finder.criteria.filter((criterion) => !['in', 'ne', 'search'].includes(criterion.op));
+      if (finder.fixed.length > 0 || plain.some((criterion) => criterion.match === 'exact')) uses.add('add');
+      if (plain.some((criterion) => criterion.match === 'contains')) uses.add('contains');
+      if (plain.some((criterion) => criterion.match === 'prefix')) uses.add('prefix');
+      // Los de 2.32: la lista, el distinto y la búsqueda libre.
+      if (finder.criteria.some((criterion) => criterion.op === 'in')) uses.add('oneOf');
+      if (finder.criteria.some((criterion) => criterion.op === 'ne')) uses.add('distinct');
+      if (finder.criteria.some((criterion) => criterion.op === 'search')) uses.add('anyLike');
       if (finder.result === 'page') uses.add('page');
       if (finder.live) uses.add('alive');
     }
@@ -213,11 +263,13 @@ export function filtersUses(model, roots) {
 /** Los bloques de values.go con los que los finders componen su WHERE, solo los que alguno usa. */
 export function filtersBlocks(uses, d) {
   if (!uses.has('filters')) return [];
-  const like = uses.has('contains') || uses.has('prefix');
+  const like = uses.has('contains') || uses.has('prefix') || uses.has('anyLike');
   // El parámetro que acaba de añadirse: `$n` en PostgreSQL, `?` en MySQL. Y el escape de LIKE: en una cadena de MySQL
   // la barra ya escapa, así que el carácter de escape se escribe doblado.
   const param = d.mysql ? '" ?"' : '" $"+strconv.Itoa(len(f.args))';
   const likeTail = d.mysql ? `\` LIKE ? ESCAPE '\\\\'\`` : `" LIKE $"+strconv.Itoa(len(f.args))+\` ESCAPE '\\'\``;
+  // La misma cola en una asignación, donde gofmt pone espacios alrededor del +.
+  const likeTailSpaced = likeTail.replace(/\+/g, ' + ');
   return [
     `// filters compone el WHERE de un finder: cada condición con su valor como PARÁMETRO (${d.mysql ? '?' : '$n'}), nunca concatenado.
 type filters struct {
@@ -244,6 +296,38 @@ func (f *filters) in(head string, values []string, tail string) {
 		marks[i] = ${d.mysql ? '"?"' : '"$" + strconv.Itoa(len(f.args))'}
 	}
 	f.conditions = append(f.conditions, head+" IN ("+strings.Join(marks, ", ")+")"+tail)
+}`,
+    uses.has('oneOf') &&
+      `// oneOf restringe column a uno de values (op: in, DSL 2.32). Sin valores, ninguna fila: una lista vacía no llega
+// (es 400 en el borde), y «nada» nunca puede volverse «todo».
+func (f *filters) oneOf(column string, values []any) {
+	if len(values) == 0 {
+		f.conditions = append(f.conditions, "1 = 0")
+		return
+	}
+	marks := make([]string, len(values))
+	for i, value := range values {
+		f.args = append(f.args, value)
+		marks[i] = ${d.mysql ? '"?"' : '"$" + strconv.Itoa(len(f.args))'}
+	}
+	f.conditions = append(f.conditions, column+" IN ("+strings.Join(marks, ", ")+")")
+}`,
+    uses.has('distinct') &&
+      `// distinct restringe column a lo distinto de value (op: ne, DSL 2.32, D11): la fila sin valor también lo es.
+func (f *filters) distinct(column string, value any) {
+	f.args = append(f.args, value)
+	f.conditions = append(f.conditions, "("+column+" IS NULL OR "+column+" <>"+${param}+")")
+}`,
+    uses.has('anyLike') &&
+      `// anyLike restringe a las filas en las que ALGUNA de columns casa con pattern (la búsqueda libre, DSL 2.32, D13): un
+// OR dentro de sus paréntesis, sumado con AND a lo demás.
+func (f *filters) anyLike(columns []string, pattern string) {
+	branches := make([]string, len(columns))
+	for i, column := range columns {
+		f.args = append(f.args, pattern)
+		branches[i] = column + ${likeTailSpaced}
+	}
+	f.conditions = append(f.conditions, "("+strings.Join(branches, " OR ")+")")
 }`,
     uses.has('contains') &&
       `// contains restringe column a los textos que contienen text, LITERAL: sus comodines no lo son.

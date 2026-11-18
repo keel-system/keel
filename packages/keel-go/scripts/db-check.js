@@ -49,10 +49,14 @@ import { BATCH_JOB_SABOTAGE_SPECS, BATCH_JOB_SUBJECTS, batchJobProbeFile, batchJ
 import { BATCH_KEY_SABOTAGE_SPECS, BATCH_KEY_SUBJECTS, batchKeyProbeFile, batchKeySabotageSubject, batchKeySabotageVerdict, isBatchKeySabotage } from './lib/batch-key-probes.js';
 import { HISTORY_ALSO, HISTORY_SABOTAGE_SPECS, HISTORY_SUBJECTS, historyProbeFile, historySabotageVerdict, isHistorySabotage } from './lib/history-probes.js';
 import { INVARIANT_RUN, INVARIANT_SABOTAGE_SPECS, INVARIANT_SUBJECTS, invariantProbeFile, invariantSabotageVerdict, isInvariantSabotage } from './lib/invariant-probes.js';
+import { SEARCH_RUN, SEARCH_SABOTAGE_SPECS, SEARCH_SORT_PACKAGE, SEARCH_SUBJECTS, isSearchSabotage, searchProbeFiles, searchSabotageVerdict } from './lib/search-probes.js';
 import { resolveRuntime, startDatabase, stopDatabase } from '../../keel-nest/scripts/lib/database-container.js';
 import { ENGINE_LABELS, STORE_PACKAGES } from '../src/lib/relational-engine.js';
 import { SUPPORTED_DATABASES } from '../src/lib/supported-features.js';
 import { schemaSteps } from '../src/scaffold/persistence.js';
+import { orderedTextColumns } from '@keel-system/keel-core/gen/pagination';
+import { binaryCollationFor } from '@keel-system/keel-core/gen/infra-catalog';
+import { snakeCase } from '@keel-system/keel-core/gen';
 
 const only = process.argv.find((arg) => arg.startsWith('--only='))?.slice('--only='.length) ?? null;
 const engine = process.argv.find((arg) => arg.startsWith('--database='))?.slice('--database='.length) ?? 'postgresql';
@@ -87,7 +91,9 @@ const SABOTAGES = {
   // cada uno cae en exactamente sus casos BK.
   ...Object.fromEntries(Object.entries(BATCH_KEY_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational])),
   // Los de la guarda del agregado (DSL 2.31) caen en EXACTAMENTE sus casos IC y CP (scripts/lib/invariant-probes.js).
-  ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational]))
+  ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, spec]) => [id, spec.relational])),
+  // Los de la búsqueda (DSL 2.32) caen en EXACTAMENTE sus casos FS y SO (scripts/lib/search-probes.js).
+  ...Object.fromEntries(Object.entries(SEARCH_SABOTAGE_SPECS).filter(([, spec]) => spec.relational).map(([id, spec]) => [id, spec.relational]))
 };
 
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -164,7 +170,9 @@ try {
     ...UNCOVERED_BRANCHES.filter((design) => BATCH_KEY_SUBJECTS.relational.includes(design.name) && (!only || only.split(',').includes(design.name))).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) })),
     // La guarda del agregado (DSL 2.31, IC-1 a IC-11 y CP-1 a CP-5): el MISMO sujeto que miden los otros tres
     // (keel-core/test/helpers/entity-check-designs.js).
-    ...UNCOVERED_BRANCHES.filter((design) => INVARIANT_SUBJECTS.relational.includes(design.name) && (!only || only.split(',').includes(design.name))).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) }))
+    ...UNCOVERED_BRANCHES.filter((design) => INVARIANT_SUBJECTS.relational.includes(design.name) && (!only || only.split(',').includes(design.name))).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) })),
+    // La búsqueda de 2.32 (keel-core/test/helpers/finder-designs.js, SEARCH_DESIGNS): solo ejecuta sus casos FS y SO.
+    ...UNCOVERED_BRANCHES.filter((design) => SEARCH_SUBJECTS.relational.includes(design.name) && (!only || only.split(',').includes(design.name))).map((design) => ({ name: design.name, from: design.from, mutate: (layers, manifest) => design.mutate(manifest, layers) }))
   ]
     .filter((subject) => only || !isReadScopeSabotage(sabotage) || READ_SCOPE_SUBJECTS.relational.includes(subject.name))
     .filter((subject) => only || !isLifecycleSabotage(sabotage) || LIFECYCLE_SUBJECTS.relational.includes(subject.name))
@@ -172,15 +180,17 @@ try {
     .filter((subject) => only || !isBatchSabotage(sabotage) || BATCH_SUBJECTS.relational.includes(subject.name))
     .filter((subject) => only || !isBatchJobSabotage(sabotage) || BATCH_JOB_SUBJECTS.relational.includes(subject.name))
     .filter((subject) => only || !isBatchKeySabotage(sabotage) || subject.name === batchKeySabotageSubject(sabotage, false))
-    .filter((subject) => only || !isInvariantSabotage(sabotage) || INVARIANT_SUBJECTS.relational.includes(subject.name));
+    .filter((subject) => only || !isInvariantSabotage(sabotage) || INVARIANT_SUBJECTS.relational.includes(subject.name))
+    // Los de la búsqueda, solo en su sujeto; y su sujeto, solo con ellos (sus casos no son las sondas de los demás).
+    .filter((subject) => only || (isSearchSabotage(sabotage) ? SEARCH_SUBJECTS.relational.includes(subject.name) : !sabotage || !SEARCH_SUBJECTS.relational.includes(subject.name)));
 
   // ─── El esquema ─────────────────────────────────────────────────────────────────────────────────
   if (!sabotage) {
     // La fixture ENTERA, como las sondas: planService no pasa por la frontera, y así entran también las tablas de los
     // mecanismos que keel-go ya emite aunque su capa todavía se rechace (outbox_event y processed_event, incremento 9).
     for (const name of relational) {
-      const files = planService({ ...loadService(path.join(FIXTURES_DIR, name)), workspace: FIXTURES_DIR, stack }).files;
-      const differences = applyAndCompare(name.replace(/-/g, '_'), baselineOf(files), goSchema(files));
+      const { files, model } = planService({ ...loadService(path.join(FIXTURES_DIR, name)), workspace: FIXTURES_DIR, stack });
+      const differences = applyAndCompare(name.replace(/-/g, '_'), baselineOf(files), goSchema(files), model);
       step(`${name}: el catálogo del motor es el esquema emitido, y Down lo deja vacío`, differences.length === 0, differences.slice(0, 8).join(' | '));
     }
     // Falsado: sin un índice de FK, la comparación tiene que verlo. Si el sabotaje ya no se aplica, el paso sale rojo.
@@ -234,8 +244,10 @@ try {
     const batchKeyProbe = ofBatch(BATCH_KEY_SUBJECTS) ? batchKeyProbeFile(plan.model) : null;
     // La guarda del agregado (DSL 2.31): su archivo aparte, también en el paquete del almacén.
     const invariantProbe = invariantProbeFile(plan.model);
+    // La búsqueda (DSL 2.32): FS-* en el paquete del almacén y SO-* en internal/httpapi.
+    const searchProbes = searchProbeFiles(plan.model);
     const dir = path.join(root, name);
-    for (const file of [...files, probe, ...(invariantProbe ? [invariantProbe] : []), ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : []), ...(lifecycleProbe ? [lifecycleProbe] : []), ...(historyProbe ? [historyProbe] : []), ...(batchProbe ? [batchProbe] : []), ...(batchJobProbe ? [batchJobProbe] : []), ...(batchKeyProbe ? [batchKeyProbe] : [])]) {
+    for (const file of [...files, probe, ...searchProbes, ...(invariantProbe ? [invariantProbe] : []), ...(timerProbe ? [timerProbe] : []), ...(purgeTimerProbe ? [purgeTimerProbe] : []), ...(lifecycleProbe ? [lifecycleProbe] : []), ...(historyProbe ? [historyProbe] : []), ...(batchProbe ? [batchProbe] : []), ...(batchJobProbe ? [batchJobProbe] : []), ...(batchKeyProbe ? [batchKeyProbe] : [])]) {
       const target = path.join(dir, file.path);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, file.content);
@@ -245,13 +257,13 @@ try {
     // Una base que no se pudo crear daría un rojo de las sondas que no es del generador: se dice aquí.
     const created = recreate(db);
     if (!step(`${name}: base ${db} creada`, created.ok, created.ok ? '' : created.output.trim().slice(0, 300))) continue;
-    subjects.push({ name, dir, db, model: plan.model, invariants: Boolean(invariantProbe), purgeTimer: Boolean(purgeTimerProbe), drain: probe.content.includes('TestDrain_DR1_') });
+    subjects.push({ name, dir, db, model: plan.model, invariants: Boolean(invariantProbe), search: searchProbes.length > 0, purgeTimer: Boolean(purgeTimerProbe), drain: probe.content.includes('TestDrain_DR1_') });
   }
   const env = (db) =>
     engine === 'mysql'
       ? { DB_CHECK_URL: `mysql://127.0.0.1:${database.port}/${db}`, DB_CHECK_USER: 'root', DB_CHECK_PASSWORD: database.password }
       : { DB_CHECK_URL: `postgresql://127.0.0.1:${database.port}/${db}`, DB_CHECK_USER: database.user, DB_CHECK_PASSWORD: database.password };
-  const outcomes = await pool(subjects, 4, async ({ dir, db, invariants }) => {
+  const outcomes = await pool(subjects, 4, async ({ dir, db, invariants, search }) => {
     const tidied = await runAsync('go', ['mod', 'tidy'], { cwd: dir });
     if (!tidied.ok) return { tidied };
     // La sonda se compila aparte (go test -c) y se ejecuta desde el sujeto, como haría go test desde el paquete. No con
@@ -262,12 +274,21 @@ try {
     const built = await runAsync('go', ['test', '-c', '-o', binary, `./${storePath}/`], { cwd: dir, env: env(db) });
     if (!built.ok) return { tidied, tested: built };
     // El sujeto de la guarda (DSL 2.31) solo ejecuta sus vectores: la muestra de los demás bloques no cumple sus checks.
-    const run = invariants ? [`-test.run=${INVARIANT_RUN}`] : [];
-    return { tidied, tested: await runAsync(binary, ['-test.count=1', '-test.v', ...run], { cwd: path.join(dir, storePath), env: env(db) }) };
+    const run = invariants ? [`-test.run=${INVARIANT_RUN}`] : search ? [`-test.run=${SEARCH_RUN}`] : [];
+    const tested = await runAsync(binary, ['-test.count=1', '-test.v', ...run], { cwd: path.join(dir, storePath), env: env(db) });
+    if (!search) return { tidied, tested };
+    // Los SO-* (el ?sort= del cliente) viven en internal/httpapi: pageableParam no se exporta. Sin base.
+    const sortBinary = path.join(dir, process.platform === 'win32' ? 'sort-probe.test.exe' : 'sort-probe.test');
+    const sortBuilt = await runAsync('go', ['test', '-c', '-o', sortBinary, `./${SEARCH_SORT_PACKAGE}/`], { cwd: dir });
+    if (!sortBuilt.ok) return { tidied, tested: { ok: false, output: `${tested.output}${sortBuilt.output}` } };
+    const sorted = await runAsync(sortBinary, ['-test.count=1', '-test.v', `-test.run=${SEARCH_RUN}`], { cwd: path.join(dir, SEARCH_SORT_PACKAGE) });
+    return { tidied, tested: { ok: tested.ok && sorted.ok, output: `${tested.output}${sorted.output}` } };
   });
-  subjects.forEach(({ name, model, purgeTimer, drain }, index) => {
+  subjects.forEach(({ name, db, model, search, purgeTimer, drain }, index) => {
     const { tidied, tested } = outcomes[index];
     if (!step(`${name}: go mod tidy`, tidied.ok, tidied.ok ? '' : tidied.output.slice(0, 2000))) return;
+    // La collation del orden de la base que migró la sonda, contra el DISEÑO (U7): la ve en los dos motores.
+    const collation = search ? orderCollationDifferences(model, engine === 'mysql' ? mysqlCatalog(db) : catalog(db)) : [];
     const failed = [...tested.output.matchAll(/^\s*--- FAIL: (\S+)/gm)].map((m) => m[1]).filter((test) => !test.includes('/'));
     const passed = [...tested.output.matchAll(/^\s*--- PASS: (\S+)/gm)].map((m) => m[1]);
     const skipped = [...tested.output.matchAll(/^\s*--- SKIP: (\S+)/gm)].map((m) => m[1]);
@@ -277,6 +298,21 @@ try {
       const detail = ok ? (skipped.length > 0 ? `se saltan ${skipped.join(', ')}` : '') : failed.join(', ') || tested.output.slice(-3000);
       step(`${name}: los adaptadores guardan, leen y traducen contra ${label} (${passed.length} sondas)`, ok, detail);
       if (!ok && failed.length > 0) console.error(failureLines(tested.output));
+      if (search) step(`${name}: las columnas que se ordenan llevan la collation binaria del motor (U7)`, collation.length === 0, collation.join(' | '));
+      return;
+    }
+    if (isSearchSabotage(sabotage)) {
+      const verdict = searchSabotageVerdict(failed, sabotage, model, { engine });
+      // Y ninguna otra sonda: el sabotaje rompe la búsqueda, no el resto del adaptador.
+      const stray = failed.filter((test) => !/_(FS|SO)\d+_/.test(test));
+      // La collation la ve además la comparación del esquema contra el diseño, en los dos motores; nada más la ve.
+      const schemaOk = sabotage === 'order-collation' ? collation.length > 0 : collation.length === 0;
+      step(
+        `falsado: ${sabotage} en ${name} cae en exactamente sus casos`,
+        ran > 0 && verdict.exact && stray.length === 0 && schemaOk,
+        `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]${stray.length > 0 ? `; además ${stray.join(', ')}` : ''}${sabotage === 'order-collation' ? `; esquema: ${collation.join(' | ') || 'no lo vio'}` : ''}`
+      );
+      if (verdict.exact && (verdict.want.length > 0 || (sabotage === 'order-collation' && collation.length > 0))) results.at(-1).caught = true;
       return;
     }
     if (isInvariantSabotage(sabotage)) {
@@ -619,8 +655,12 @@ function failureLines(output) {
     .join('\n');
 }
 
-/** Crea la base, aplica Up, compara el catálogo con lo esperado, aplica Down y comprueba que queda vacía. */
-function applyAndCompare(db, sql, expected) {
+/**
+ * Crea la base, aplica Up, compara el catálogo con lo esperado, aplica Down y comprueba que queda vacía. Con `model`, además,
+ * la collation de cada columna de texto ordenable contra la que pide el DISEÑO (DSL 2.32, U7): binaria en los dos motores,
+ * para que ordenen igual. Comparada con lo emitido se daría la razón a sí misma.
+ */
+function applyAndCompare(db, sql, expected, model = null) {
   const differences = [];
   const created = recreate(db);
   if (!created.ok) return [`no se pudo crear la base: ${created.output.trim()}`];
@@ -662,6 +702,7 @@ function applyAndCompare(db, sql, expected) {
     }
     if (engine === 'mysql') differences.push(...mysqlDifferences(table, want, got));
   }
+  if (model) differences.push(...orderCollationDifferences(model, actual));
 
   const reverted = execute(db, down);
   if (!reverted.ok) differences.push(`Down falla: ${reverted.output.trim()}`);
@@ -671,6 +712,22 @@ function applyAndCompare(db, sql, expected) {
     if (left.stdout.trim() !== '0') differences.push(`Down deja ${left.stdout.trim()} tabla(s)`);
   }
   drop(db);
+  return differences;
+}
+
+/** Las columnas de texto ordenables cuya collation en el motor no es la binaria que pide el diseño (U7, D17). */
+function orderCollationDifferences(model, actual) {
+  const wanted = binaryCollationFor(engine)?.replace(/^"(.*)"$/, '$1');
+  if (!wanted) return [];
+  const differences = [];
+  for (const entity of model.entities.filter((candidate) => candidate.persisted)) {
+    for (const column of orderedTextColumns(model, entity.name)) {
+      const name = snakeCase(column.property);
+      const got = actual.get(entity.tableName)?.columns.get(name);
+      if (!got) differences.push(`${entity.tableName}.${name}: se ordena (${column.path}) y no está en el motor`);
+      else if (got.collation !== wanted) differences.push(`${entity.tableName}.${name}: se ordena (${column.path}) con la collation ${got.collation || 'por defecto'}, el diseño pide ${wanted}`);
+    }
+  }
   return differences;
 }
 
@@ -754,12 +811,12 @@ function catalog(db) {
   };
   const columns = query(
     db,
-    `SELECT table_name, column_name, is_nullable, coalesce(character_maximum_length::text, ''), CASE WHEN data_type = 'numeric' THEN numeric_scale::text ELSE '' END
+    `SELECT table_name, column_name, is_nullable, coalesce(character_maximum_length::text, ''), CASE WHEN data_type = 'numeric' THEN numeric_scale::text ELSE '' END, coalesce(collation_name, '')
        FROM information_schema.columns WHERE table_schema = 'public'`
   );
   for (const line of columns.stdout.trim().split('\n').filter(Boolean)) {
-    const [tableName, column, nullable, length, scale] = line.split('\t');
-    table(tableName).columns.set(column, { nullable: nullable === 'YES', length: length ? Number(length) : null, scale: scale ? Number(scale) : null });
+    const [tableName, column, nullable, length, scale, collation] = line.split('\t');
+    table(tableName).columns.set(column, { nullable: nullable === 'YES', length: length ? Number(length) : null, scale: scale ? Number(scale) : null, collation: collation ?? '' });
   }
   const constraints = query(db, `SELECT conrelid::regclass::text, conname FROM pg_constraint WHERE connamespace = 'public'::regnamespace AND contype IN ('u', 'f')`);
   for (const line of constraints.stdout.trim().split('\n').filter(Boolean)) {

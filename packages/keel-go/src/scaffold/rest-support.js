@@ -36,7 +36,7 @@ export function generate(model) {
   const file = (name, imports, body) => ({ path: `${httpapi.dir}/${name}.go`, content: packageFile(model, httpapi, { imports, body: `\n${body}\n` }) });
   const uses = closure(plan.uses);
   const files = [
-    file('errors', ['errors', 'context', 'fmt', 'net/http', 'time', 'encoding/json/jsontext', 'encoding/json/v2', 'internal/domain', 'internal/platform/correlation'], errorsBody(model)),
+    file('errors', ['errors', 'context', 'fmt', 'net/http', 'time', 'encoding/json/jsontext', 'encoding/json/v2', 'internal/domain', 'internal/platform/correlation'], errorsBody(model, uses)),
     file('reply', ['fmt', 'net/http', 'net/url', 'strings', 'internal/platform/wire'], pick(REPLY, uses, ['writeJSON'])),
     file('middleware', ['fmt', 'log/slog', 'net/http', 'runtime/debug', 'strings', 'internal/application', 'internal/platform/correlation'], middlewareBody(model))
   ];
@@ -45,7 +45,7 @@ export function generate(model) {
     files.push(
       file(
         'reading',
-        ['bytes', 'errors', 'io', 'math', 'net/http', 'regexp', 'strconv', 'strings', 'time', 'unicode', 'encoding/json/jsontext', 'encoding/json/v2', 'github.com/google/uuid', 'internal/domain', 'internal/platform/wire'],
+        ['bytes', 'errors', 'io', 'math', 'net/http', 'regexp', 'slices', 'strconv', 'strings', 'time', 'unicode', 'encoding/json/jsontext', 'encoding/json/v2', 'github.com/google/uuid', 'internal/domain', 'internal/platform/wire'],
         reading
       )
     );
@@ -123,7 +123,9 @@ function retryAfter(model) {
 `;
 }
 
-function errorsBody(model) {
+/** errors.go; `uses` son los auxiliares del borde: el `?sort=` que no se ofrece solo existe con un listado paginado. */
+function errorsBody(model, uses = new Set()) {
+  const sorts = uses.has('sortParam');
   const missing = WIRE_SHAPES.errorResponse.filter((name) => !ERROR_TYPES[name]);
   if (missing.length > 0) throw new Error(`ErrorResponse: el contrato del cable nombra ${missing.join(', ')} y keel-go no lo emite`);
   const goName = (name) => (name === 'correlationId' ? 'CorrelationID' : name[0].toUpperCase() + name.slice(1));
@@ -135,6 +137,7 @@ function errorsBody(model) {
     [
       ['invalid', '*validationError'],
       ['missing', '*missingParameterError'],
+      ...(sorts ? [['invalidSort', '*invalidSortError']] : []),
       ['unread', '*malformedError'],
       ['tooLarge', '*http.MaxBytesError'],
       ...(usesMultipart(model) ? [['upload', '*uploadError']] : []),
@@ -191,7 +194,22 @@ func (e *missingParameterError) Error() string {
 	return "falta el parámetro " + e.name
 }
 
-// validationError es una petición que se leyó pero incumple lo que el diseño declara. params distingue la ruta y la
+${
+    sorts
+      ? `// invalidSortError es un ?sort= que el listado no ofrece (DSL 2.32, D16): un campo fuera de sortable, una dirección que
+// no es asc o desc, más de una coma, el mismo campo dos veces o un valor vacío. Sin sortable, cualquiera.
+type invalidSortError struct {
+	value string
+}
+
+// Error nombra el valor.
+func (e *invalidSortError) Error() string {
+	return "no se puede ordenar por " + e.value
+}
+
+`
+      : ''
+  }// validationError es una petición que se leyó pero incumple lo que el diseño declara. params distingue la ruta y la
 // query del cuerpo: en keel-spring responden con mensajes distintos.
 type validationError struct {
 	params  bool
@@ -246,7 +264,13 @@ ${targets}
 		return newErrorResponse(r, ${fw('invalidBody')}, new(validationCode), message, invalid.details)
 	case errors.As(err, &missing):
 		return newErrorResponse(r, ${fw('missingParameter')}, new(validationCode), fmt.Sprintf(${formatString(FW.missingParameter.message).replace("'{name}'", "'%s'")}, missing.name), nil)
-	case errors.As(err, &unread):
+${
+    sorts
+      ? `	case errors.As(err, &invalidSort):
+		return newErrorResponse(r, ${fw('invalidSort')}, new(validationCode), fmt.Sprintf(${formatString(FW.invalidSort.message).replace("'{sort}'", "'%s'")}, invalidSort.value), nil)
+`
+      : ''
+  }	case errors.As(err, &unread):
 		return newErrorResponse(r, ${fw('malformed')}, new(validationCode), ${goString(FW.malformed.message)}, nil)
 ${usesMultipart(model) ? `	// La subida multipart: su respuesta ya viene decidida (multipart.go). Antes que el tope del cuerpo: su 413 lo envuelve y
 	// lleva el code del diseño.
@@ -717,10 +741,12 @@ func textEnum[T ~string](raw string, values ...T) (T, error) {
   pageableParam: {
     deps: ['boundedParam', 'sortParam'],
     code: `
-// pageableParam lee ?page=&size=&sort=prop,dir como el PageableHandlerMethodArgumentResolver de Spring Data, que es
-// indulgente a propósito: una página o un tamaño que no se pueden leer no son un 400 sino su valor por defecto, una
-// página negativa es la 0 y un tamaño por encima del tope es el tope. Sin ?sort=, el orden del diseño.
-func pageableParam(r *http.Request, defaultSize, maxSize int32, defaultSort []domain.SortOrder) domain.Pageable {
+// pageableParam lee ?page=&size=&sort=campo,dir. La página y el tamaño, como el PageableHandlerMethodArgumentResolver de
+// Spring Data, que es indulgente a propósito: una página o un tamaño que no se pueden leer no son un 400 sino su valor por
+// defecto, una página negativa es la 0 y un tamaño por encima del tope es el tope. El orden, contra sortable (DSL 2.32,
+// D16: ruta del contrato → propiedad del adaptador; nil no ofrece ninguno), y lo que no ofrece es 400. Sin ?sort=, el
+// orden del diseño.
+func pageableParam(r *http.Request, defaultSize, maxSize int32, defaultSort []domain.SortOrder, sortable map[string]string) (domain.Pageable, error) {
 	query := r.URL.Query()
 	page, ok := boundedParam(query.Get("page"), math.MaxInt32)
 	if !ok {
@@ -730,11 +756,14 @@ func pageableParam(r *http.Request, defaultSize, maxSize int32, defaultSort []do
 	if !ok || size < 1 {
 		size = defaultSize
 	}
-	sort := sortParam(query["sort"])
-	if len(sort) == 0 {
+	sort, err := sortParam(query["sort"], sortable)
+	if err != nil {
+		return domain.Pageable{}, err
+	}
+	if sort == nil {
 		sort = defaultSort
 	}
-	return domain.Pageable{Page: page, Size: size, Sort: sort}
+	return domain.Pageable{Page: page, Size: size, Sort: sort}, nil
 }`
   },
   boundedParam: {
@@ -757,33 +786,33 @@ func boundedParam(text string, upper int32) (int32, bool) {
   },
   sortParam: {
     code: `
-// sortParam lee ?sort= repetido o con varias propiedades: name,desc o status,name. La última pieza es la dirección si
-// lo es (sin distinguir mayúsculas) y vale para todas las propiedades de ese valor; si no, el orden es ascendente.
-func sortParam(values []string) []domain.SortOrder {
-	var orders []domain.SortOrder
-	for _, value := range values {
-		var parts []string
-		for part := range strings.SplitSeq(value, ",") {
-			if strings.TrimSpace(part) != "" {
-				parts = append(parts, part)
-			}
-		}
-		if len(parts) == 0 {
-			continue
-		}
-		direction := domain.SortAsc
-		switch strings.ToLower(strings.TrimSpace(parts[len(parts)-1])) {
-		case "asc":
-			parts = parts[:len(parts)-1]
-		case "desc":
-			direction = domain.SortDesc
-			parts = parts[:len(parts)-1]
-		}
-		for _, property := range parts {
-			orders = append(orders, domain.SortOrder{Property: property, Direction: direction})
-		}
+// sortParam lee ?sort= (la referencia es readClientSort de keel-core): cada valor es campo o campo,asc|desc, con el campo
+// en sortable y la dirección en minúsculas; uno vacío, con más de una coma o con el mismo campo dos veces es 400. El orden
+// del cliente SUSTITUYE al del diseño (nil: no pidió ninguno); el desempate por id lo añade el adaptador.
+func sortParam(values []string, sortable map[string]string) ([]domain.SortOrder, error) {
+	if len(values) == 0 {
+		return nil, nil
 	}
-	return orders
+	orders := make([]domain.SortOrder, 0, len(values))
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		parts := strings.Split(value, ",")
+		direction := "asc"
+		if len(parts) > 1 {
+			direction = parts[1]
+		}
+		property, ok := sortable[parts[0]]
+		if len(parts) > 2 || !ok || (direction != "asc" && direction != "desc") || seen[parts[0]] {
+			return nil, &invalidSortError{value: value}
+		}
+		seen[parts[0]] = true
+		order := domain.SortOrder{Property: property, Direction: domain.SortAsc}
+		if direction == "desc" {
+			order.Direction = domain.SortDesc
+		}
+		orders = append(orders, order)
+	}
+	return orders, nil
 }`
   },
   queryValue: {
@@ -850,17 +879,23 @@ func optionalText(r *http.Request, name string) *string {
   },
   listParam: {
     code: `
-// listParam lee una lista de la query: el parámetro repetido o separado por comas.
+// listParam lee una lista de la query (DSL 2.32, U8 y D10; la referencia es readQueryList de keel-core): el parámetro
+// repetido, y cada valor partido por comas (un elemento con coma solo viaja repitiendo el parámetro). Ausente no filtra;
+// vacía, o con un elemento vacío, es 400 con el nombre del parámetro en los detalles.
 func listParam[T any](r *http.Request, name string, parse func(string) (T, error)) ([]T, error) {
 	values := r.URL.Query()[name]
 	if len(values) == 0 {
 		return nil, nil
 	}
-	if len(values) == 1 {
-		values = strings.Split(values[0], ",")
+	var items []string
+	for _, value := range values {
+		items = append(items, strings.Split(value, ",")...)
 	}
-	list := make([]T, 0, len(values))
-	for _, raw := range values {
+	if slices.Contains(items, "") {
+		return nil, &validationError{params: true, details: []string{name}}
+	}
+	list := make([]T, 0, len(items))
+	for _, raw := range items {
 		value, err := parse(raw)
 		if err != nil {
 			return nil, err

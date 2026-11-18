@@ -22,14 +22,15 @@
 | B3 | keel-spring: el finder (`in`, `ne`, `search`), `QueryParameters` (`?sort=` y la lista de la query), la collation del orden, la clave de la caché y `finder-check` con FS-*/SO-* | hecho (2026-11-17, § Medidas de B3) |
 | B4 | keel-nest: el finder (`In`, `ne` con la fila nula, la búsqueda como ramas OR), `readPageable` contra `sortable`, la lista de la query, la collation del orden, la clave de la caché y las sondas FS-*/SO-* de db-check y doc-check | hecho (2026-11-17, § Medidas de B4) |
 | B5 | keel-dotnet: el finder (`Contains` sobre la lista, `ne` con el nulo, la búsqueda como un OR de LINQ o un `$or` citado), `PageableReading.Read` contra `sortable`, la lista de la query, la collation del orden, la clave de la caché y las sondas FS-*/SO-* de db-check y doc-check | hecho (2026-11-17, § Medidas de B5) |
-| B6-B9 | Fase B: DSL 2.32 (R8) | pendiente |
+| B6 | keel-go: el finder (`f.oneOf`, `f.distinct` con la fila nula, la búsqueda como `f.anyLike`, o `$in`/`$ne`/`$or` citado), `pageableParam` contra `sortable`, la lista de la query, la collation del orden, la clave de la caché y las sondas FS-*/SO-* de db-check y doc-check | hecho (2026-11-17, § Medidas de B6) |
+| B7-B9 | Fase B: contrato y método, fixtures y corridas de control | pendiente |
 
-**Para retomar.** La fase A (DSL 2.31) está cerrada (A9: cinco corridas de `shop-api` en 92/92). Pendiente de ella:
-`go-check --fixtures` de keel-go (§ Arreglo de la escala), que se pasa en B6. Fase B: B0 medido (U7 y U8 decididas) y B1
+**Para retomar.** La fase A (DSL 2.31) está cerrada (A9: cinco corridas de `shop-api` en 92/92). Fase B: B0 medido (U7 y U8 decididas) y B1
 hecho: el DSL es 2.32 y los cuatro generadores rechazan `in`/`ne`/`search`/`sortable` con `searchPendingErrors` hasta su
-incremento. B2 hecho (lo neutral, § Medidas de B2). B3 hecho (keel-spring, § Medidas de B3). B4 hecho (keel-nest, § Medidas de B4). B5 hecho (keel-dotnet, § Medidas de B5).
-Siguiente: B6, keel-go (y su `go-check --fixtures` pendiente); los moldes son `keel-nest/scripts/lib/search-probes.js` y
-`keel-dotnet/scripts/lib/search-probes.js`.
+incremento. B2 hecho (lo neutral, § Medidas de B2). B3 hecho (keel-spring, § Medidas de B3). B4 hecho (keel-nest, § Medidas de B4). B5 hecho (keel-dotnet, § Medidas de B5). B6 hecho (keel-go, § Medidas de B6; con él, el
+`go-check --fixtures` pendiente del arreglo de la escala). Los cuatro generadores generan ya la búsqueda de 2.32.
+Siguiente: B7, el contrato y el método (`openapi.test.js` en los cuatro, la guía Postman de `/keel-docs`, la pregunta de
+`/keel-design`, `/keel-recover`, los agentes y el aviso de `cursor` en los README).
 Lo que cada generador recoge en su incremento, todo de keel-core:
 - el finder: `criterion.op` `in`/`ne`/`search`, y `search` con `targets[]` en vez de `target`;
 - el lector de `?sort=` contra `operation.sortable` (`readClientSort`, `invalidSortMessage`);
@@ -45,6 +46,46 @@ Lo que cada generador recoge en su incremento, todo de keel-core:
 
 Ventana conocida, como la de A2: desde B2 el contrato ya no anuncia `sort` en un listado sin `sortable`, y los
 servidores lo siguen aceptando hasta su incremento.
+
+## Medidas de B6 (2026-11-17)
+
+keel-go, con `db-check --only=catalog-search` (PostgreSQL y MySQL) y `doc-check --only=catalog-search-mongo`: 21/21 casos
+(FS-1 a FS-10 y SO-1 a SO-11, una prueba por caso) en los tres motores, y la collation del orden contra el diseño en la base
+del sujeto. Cada sabotaje cae en exactamente sus casos: `finder-in`, `finder-ne-null` y los cuatro `so-*` en los tres motores,
+`finder-search-literal` en los dos relacionales, `finder-search-regex` en MongoDB y `order-collation` en FS-3 y FS-9 solo en
+MySQL; en los DOS motores lo ve además la comparación de la collation contra el diseño, como en keel-dotnet. Las redes ENTERAS,
+en verde: db-check en PostgreSQL y en MySQL (todos sus sujetos, con el esquema de cada fixture comparado también contra la
+collation que pide el diseño) y doc-check 47/47. Y `go-check` entero (con las 168 variantes de `--fixtures`, el pendiente del arreglo de la escala): 313/313 en verde.
+
+- **Finder relacional** (`src/scaffold/finders.js`). `in` es `f.oneOf(columna, valores)`: la lista (en el filtro, `[]T`, y nil
+  no restringe) se convierte elemento a elemento con el códec de la columna o se pliega; `ne` es `f.distinct`,
+  `(col IS NULL OR col <> $n)` en los dos motores; la búsqueda es `f.anyLike([]string{…}, patrón)`, un OR de LIKE sobre la
+  columna o la sombra de cada campo de `over`, con el texto plegado una vez y escapado con `likeLiteral`. Los auxiliares de
+  `values.go` solo se emiten si algún finder los usa.
+- **Finder documental** (`document-repositories.js`). `$in` con cada elemento escrito como se guarda, `$ne` y un `$or` de
+  `bson.Regex` con `regexp.QuoteMeta` sobre el texto plegado.
+- **El borde.** `pageableParam` devuelve `(domain.Pageable, error)` y recibe `sortable` (ruta del contrato → propiedad del
+  adaptador; nil no ofrece ninguno, también en los resultados de un trabajo de lote); `sortParam` cumple `readClientSort` con
+  `*invalidSortError` → 400 `VALIDATION_ERROR` con `invalidSort`, emitido solo con un listado paginado (staticcheck U1000).
+  `listParam` aplica U8 y D10 (`&validationError{params: true, details: []string{name}}`). La tabla de rutas solo anuncia
+  `sort` con `sortable`, y `contract-parity.test.js` lo compara con keel-spring como en los otros dos.
+- **Collation** (U7). `orderCollations` (`persistence.js`) lleva `binaryCollationFor` a la baseline de goose; `schemaSteps` pasa
+  la baseline que hay EN DISCO (goose no reaplica la reescrita) a `orderCollationWork`.
+- **Caché** (D18). La clave suma la página, el tamaño y `sortKey(…Sort)` (en `cached_operations.go`, solo si alguna caché
+  lo usa). Ninguna fixture cachea un listado paginado: se compiló aparte con `go build`, `go vet` y staticcheck.
+- **Las sondas** (`scripts/lib/search-probes.js`). Los FS-* en `search_probe_test.go` del paquete del almacén (las filas
+  sembradas una vez por el adaptador emitido) y los SO-* en `internal/httpapi/search_sort_probe_test.go`, un segundo binario
+  sin base, porque `pageableParam` no se exporta. El sujeto solo ejecuta `^TestSearch_`; en doc-check no lleva las sondas de
+  los lotes de product-catalog (van por el `http.Handler` sin token, como ya pasaba en db-check). La sonda de 2.22 se salta
+  los criterios de 2.32. `test/search.test.js` fija la forma y que cada sabotaje se aplique.
+- **Lo que destapó la red ENTERA, cerrado en el incremento.**
+  - La comparación de la collation contra el diseño cayó en `shop-api` en los dos motores: `product_infos` se ordena por su
+    id, que es TEXTO, y keel-go no llevaba la collation a la columna del id (solo a los miembros). Ahora la lleva. No hay FK
+    hacia `product_infos` (en MySQL una FK de texto exige la misma collation en las dos columnas).
+  - Leer `collation_name` del catálogo de PostgreSQL rompió la evolución del esquema: el `trim()` de la salida se come el
+    último campo vacío de la última fila, y esa columna salía sin `collation` en una de las dos bases comparadas.
+  - Con la primera versión de `so-open` caían también SO-2 y SO-4: el sabotaje dejaba de traducir `price.amount` a su
+    propiedad. Ahora solo acepta además lo desconocido, como el de keel-dotnet.
 
 ## Medidas de B5 (2026-11-17)
 

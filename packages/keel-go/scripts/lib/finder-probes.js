@@ -50,7 +50,9 @@ export function finderProbes(model, root, { repo, id }) {
 
   return findersOf(model, root.name).map((finder, index) => {
     const method = finderMethod(finder);
-    const textCriteria = finder.criteria.filter((criterion) => criterion.match !== 'exact' && (criterion.target.field.text?.maxLength ?? Infinity) > FINDER_PROBE_TEXT.length);
+    // Los criterios de 2.32 (in, ne y la búsqueda libre) los miden sus casos FS-* (search-probes.js): aquí no se ponen.
+    const criteria = finder.criteria.filter((criterion) => !['in', 'ne', 'search'].includes(criterion.op));
+    const textCriteria = criteria.filter((criterion) => criterion.match !== 'exact' && (criterion.target.field.text?.maxLength ?? Infinity) > FINDER_PROBE_TEXT.length);
     // Las dos filas: dentro del where y con el texto de la sonda; fuera, con otro texto (si el campo es único, el mismo
     // chocaría al guardarla).
     const set = (target, field, value) => `\t${target}.${goExported(field.name)} = ${memberOf(field.name)?.optional ? `ptr(${value})` : value}`;
@@ -67,7 +69,7 @@ export function finderProbes(model, root, { repo, id }) {
     // El valor guardado de lo que restringe un criterio, leído de la fila releída.
     const locals = [];
     const cases = [];
-    finder.criteria.forEach((criterion, position) => {
+    criteria.forEach((criterion, position) => {
       const local = `v${position}`;
       if (criterion.match !== 'exact') {
         if (!textCriteria.includes(criterion)) return;
@@ -111,7 +113,7 @@ export function finderProbes(model, root, { repo, id }) {
     // El filtro con un solo criterio puesto; los obligatorios llevan siempre el valor que encuentra la fila.
     const filterOf = (probed, value) => {
       if (!hasFilter(finder)) return 'struct{}{}';
-      const fields = finder.criteria
+      const fields = criteria
         .map((criterion, position) => {
           const raw = criterion === probed ? value : criterion.required ? `v${position}` : null;
           if (raw == null) return null;
@@ -132,7 +134,7 @@ export function finderProbes(model, root, { repo, id }) {
       for (const miss of misses) assertions.push(`\tif finds(${filterOf(criterion, miss)}, s.${id}()) {\n\t\tt.Error(${goString(`${criterion.name} = ${miss} la encuentra`)})\n\t}`);
     }
     // El where: la fila que no lo cumple no sale. Con un filtro obligatorio la aislaría también ese filtro: no se afirma.
-    if (finder.fixed.length > 0 && !finder.criteria.some((criterion) => criterion.required)) {
+    if (finder.fixed.length > 0 && !criteria.some((criterion) => criterion.required)) {
       assertions.push(`\tif finds(${noFilter}, outside.${id}) {\n\t\tt.Error("la fila que no cumple el where sale")\n\t}`);
     }
     const filterParam = hasFilter(finder) ? `filter domain.${filterTypeName(finder)}` : '_ struct{}';

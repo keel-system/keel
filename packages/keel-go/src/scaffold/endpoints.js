@@ -507,12 +507,15 @@ function renderReader(model, operation, plan) {
       continue;
     }
     // La página con persistencia: el Pageable de Spring Data (página, tamaño y orden), con el orden del diseño cuando
-    // el cliente no pide uno. Los defaults y el tope: keel-core/gen/pagination.js.
+    // el cliente no pide uno. Los defaults y el tope: keel-core/gen/pagination.js. Lo que el cliente puede pedir en
+    // ?sort= (DSL 2.32): ruta del contrato → propiedad del adaptador; sin sortable, nada.
     if (component.pageable) {
       plan.uses.add('pageableParam');
       const { defaultSize, maxSize, defaultSort } = pageableDefaults(model, operation);
       const sort = defaultSort.map((criterion) => `{Property: ${goString(criterion.property)}, Direction: domain.${criterion.direction === 'desc' ? 'SortDesc' : 'SortAsc'}}`);
-      queryLines.push(`	${field} = pageableParam(r, ${defaultSize}, ${maxSize}, []domain.SortOrder{${sort.join(', ')}})`);
+      const sortable = (operation.sortable ?? []).map((entry) => `${goString(entry.path)}: ${goString(entry.property)}`);
+      const sortableArg = sortable.length > 0 ? `map[string]string{${sortable.join(', ')}}` : 'nil';
+      queryLines.push(...returnErr(`${field}, err = pageableParam(r, ${defaultSize}, ${maxSize}, []domain.SortOrder{${sort.join(', ')}}, ${sortableArg})`));
       continue;
     }
     // La página sin persistencia: dos enteros de la query con sus defaults (también con cuerpo).
@@ -644,8 +647,8 @@ ${out.join('\n')}${out.length > 0 ? '\n' : ''}\treturn msg, nil
 /** La fila del contrato HTTP de una operación: lo que registra `routes` y compara la paridad. */
 export function routeRow(model, operation) {
   const { asBody, bodyRequired } = shapeOf(operation);
-  // El Pageable viaja como los tres parámetros de Spring Data.
-  const names = (c) => (c.pageable ? ['page', 'size', 'sort'] : [c.name]);
+  // El Pageable viaja como los parámetros de Spring Data; `sort`, solo con sortable (DSL 2.32, U3).
+  const names = (c) => (c.pageable ? ((operation.sortable ?? []).length > 0 ? ['page', 'size', 'sort'] : ['page', 'size']) : [c.name]);
   const query = asBody
     ? messageComponents(operation, model).filter((c) => c.paging).flatMap(names)
     : messageComponents(operation, model)

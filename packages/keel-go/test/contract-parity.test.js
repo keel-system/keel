@@ -61,6 +61,9 @@ for (const name of fixtures) {
       assert.ok(fromSpring, `keel-spring no expone ${operation.name}`);
       const expected = { ...fromSpring };
       delete expected.multipart;
+      // `sort` solo se ofrece con `sortable` (DSL 2.32, U3): sin él, keel-spring lo recibe en su Pageable pero
+      // QueryParameters lo rechaza con un 400.
+      if ((operation.sortable ?? []).length === 0) expected.query = expected.query.filter((name) => name !== 'sort');
       const { handle, ...actual } = table.get(operation.name);
       assert.equal(handle, endpointName(operation), `${operation.name}: la fila apunta a su endpoint`);
       assert.match(go.files.find((f) => /^internal\/httpapi\/\w+_endpoints\.go$/.test(f.path) && f.content.includes(`func (a *api) ${handle}(`))?.path ?? '', /_endpoints\.go$/, `${operation.name}: su endpoint existe`);

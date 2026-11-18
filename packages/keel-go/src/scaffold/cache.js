@@ -24,7 +24,7 @@
 // `infra/reset-db.sh` y el mismo `ClearCache()` del arnés las borran en los cuatro servidores.
 
 import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
-import { cachedOperations, cacheInvalidations, cacheNote, CACHE_ENTRY_SEPARATOR, CACHE_KEY_PART_SEPARATOR } from '@keel-system/keel-core/gen/cache-plan';
+import { cachedOperations, cacheInvalidations, cacheKeyExtras, cacheNote, CACHE_ENTRY_SEPARATOR, CACHE_KEY_PART_SEPARATOR } from '@keel-system/keel-core/gen/cache-plan';
 import { cacheYaml } from '@keel-system/keel-core/gen/cache-config';
 import { CACHES, devtoolsContainer } from '@keel-system/keel-core/gen/infra-catalog';
 import { cacheFlushCmd } from '@keel-system/keel-core/gen/infra-scripts';
@@ -113,7 +113,7 @@ export function generate(model) {
         body: operationCacheBody()
       })
     },
-    { path: applicationPath(model, 'cached_operations'), content: packageFile(model, application, { imports: ['time'], body: cachedOperationsBody(model) }) },
+    { path: applicationPath(model, 'cached_operations'), content: packageFile(model, application, { imports: ['strings', 'time', 'internal/domain'], body: cachedOperationsBody(model) }) },
     {
       path: applicationPath(model, 'operation_cache').replace(/\.go$/, '_test.go'),
       content: packageFile(model, application, {
@@ -456,6 +456,7 @@ function cachedOperationsBody(model) {
       invalidators.get(cache.cacheName).push(entry.operation);
     }
   }
+  let sorted = false;
   const vars = caches.map((cache) => {
     const operation = byName.get(cache.operation);
     const components = new Map(messageComponents(operation, model).map((component) => [component.name, component]));
@@ -468,7 +469,17 @@ function cachedOperationsBody(model) {
     const variable = operation.messageKind === 'query' ? 'query' : 'cmd';
     // Con una lectura acotada (DSL 2.27, D6) el scope del llamante es parte de la clave, con la forma de keel-spring: si no,
     // la caché sirve a uno la fila de otro. Dos exentos comparten entrada (`all`).
-    const parts = [...cache.keyFields.map((field) => `${variable}.${goExported(field)}`), ...(operation.readScope ? [`${variable}.ReadScope.CacheKey()`] : [])];
+    // Un listado paginado (DSL 2.32, D18): la página, su tamaño y, con sortable, el orden pedido; si no, dos páginas o dos
+    // órdenes compartirían la entrada.
+    const pageable = [...components.values()].find((component) => component.pageable);
+    const EXTRA = {
+      page: pageable ? `${variable}.${goExported(pageable.name)}.Page` : `${variable}.Page`,
+      size: pageable ? `${variable}.${goExported(pageable.name)}.Size` : `${variable}.Size`,
+      sort: pageable ? `sortKey(${variable}.${goExported(pageable.name)}.Sort)` : null
+    };
+    const extras = cacheKeyExtras(operation).map((extra) => EXTRA[extra]).filter(Boolean);
+    if (extras.some((extra) => extra.startsWith('sortKey('))) sorted = true;
+    const parts = [...cache.keyFields.map((field) => `${variable}.${goExported(field)}`), ...extras, ...(operation.readScope ? [`${variable}.ReadScope.CacheKey()`] : [])];
     const key = parts.length > 0 ? `CacheKey(${parts.join(', ')})` : 'CacheKey("all")';
     const by = invalidators.get(cache.cacheName) ?? [];
     const doc = [
@@ -492,7 +503,21 @@ var ${cacheVar(cache.operation)} = CachedOperation[${messageType(operation)}]{
 // diseño, que nombran igual sus cachés.
 
 ${vars.join('\n\n')}
-`;
+${
+    sorted
+      ? `
+// sortKey es el orden pedido de una página como parte de la clave de su caché (DSL 2.32, D18): propiedad,dirección,
+// separados por ;.
+func sortKey(sort []domain.SortOrder) string {
+	parts := make([]string, len(sort))
+	for i, order := range sort {
+		parts[i] = order.Property + "," + strings.ToLower(string(order.Direction))
+	}
+	return strings.Join(parts, ";")
+}
+`
+      : ''
+  }`;
 }
 
 // ─── internal/infrastructure/cache ───────────────────────────────────────────────────────────────

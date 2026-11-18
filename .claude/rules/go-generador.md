@@ -172,3 +172,35 @@ con clave su almacén de trabajos, porque el endpoint lo pide también sin la ca
 `src/scaffold/entity-checks.js` emite en cada entidad cuyo agregado guarda algo `EnsureInvariants() error` (hijas, derivados, cotas y checks: el orden de D23), con un `return Errorf(<centinela>, …)` por invariante rota (`ErrInvariantViolated`, 422, en `errors.go` vía `invariantSentinels`, o el del `error` del check; con un status por operación, `StatusErrorf` con el del primer uso). Los checks se escriben ya negados (sin `!(…)`, que staticcheck sugiere invertir): una comparación rota exige sus operandos presentes (`p.x != nil && p.y != nil && (*p.x).Cmp(*p.y) > 0`, D19/D22), y un `when` o un `unless` va delante con `&&` y la rota entre paréntesis, que es lo que deja aplicar `ic-null-fails`. Comparan con `Cmp` sobre `wire.Decimal`, `Compare` sobre `time.Time`/`wire.Date` y los operadores de Go sobre los enteros; la longitud de un texto con `utf8.RuneCountInString` (D24); los patrones como variables de paquete `<entidad><Campo>Pattern` en el archivo de la entidad. El derivado NO es miembro del struct: su accesor calcula desde las hijas (`compute<Campo>() (T, bool)`: exacto con `wire.Decimal`, que no desborda nunca, y un solo `Rescale(escala, wire.RoundHalfUp)`; el bool dice si cabe en la columna, `exceedsDecimal`, o en el entero del campo, `strconv.ParseInt`), `<Raíz>State` lo sigue trayendo de la base y `Rehydrate` lo ignora. Las ayudas compartidas (`presentCount`, `exceedsDecimal`) van UNA vez en `internal/domain/invariants.go`, solo las usadas. `saveGuardLines` es lo primero del `Save` de los dos adaptadores, antes de `PullEvents` y de abrir la transacción.
 
 Lo miden `test/entity-checks.test.js` (forma, orden, notas y mensajes contra keel-spring, casos contra keel-dotnet y que cada sabotaje se aplique) y `db-check --only=catalog-invariants` (PostgreSQL y MySQL) y `doc-check --only=catalog-invariants-mongo` con `scripts/lib/invariant-probes.js`: `invariant_probe_test.go` en el paquete del almacén, una prueba por vector (`TestInvariants_IC3_2_Rechaza`) que construye el estado con `Rehydrate` sobre la muestra y guarda por el adaptador emitido; el sujeto solo ejecuta esas (`-test.run=^TestInvariants_`), porque la muestra de las demás sondas no cumple sus checks. `cp-stale` en Go es el UPDATE con `COALESCE(columna, $n)` (conserva lo que la fila traía) y, en documental, la entrada del derivado fuera del codificador; `ic-no-bounds` desactiva las cotas con `if false && (…)` en vez de borrarlas (el import de `unicode/utf8` se quedaría sin usar). El sujeto documental quita la réplica del precio del proveedor (rechazo escrito de keel-go), como la escritura condicional.
+
+## Búsqueda (DSL 2.32, incremento B6 de `PLAN-DSL-231-232-INVARIANTES-Y-BUSQUEDA.md`)
+
+El finder relacional (`src/scaffold/finders.js`) escribe `in` como `f.oneOf(columna, valores)` (la lista, que en el filtro es
+`[]T` y nil no restringe, se convierte elemento a elemento con el códec de la columna o se pliega), `ne` como
+`f.distinct`, que compone `(col IS NULL OR col <> $n)` (D11), y la búsqueda como `f.anyLike([]string{…}, patrón)`: un OR
+de LIKE sobre la columna o la sombra de cada campo de `over`, con el texto plegado una vez y escapado con `likeLiteral`.
+Los tres auxiliares de `values.go` solo se emiten si algún finder los usa (`filtersUses`). gofmt: la cola del LIKE en una
+asignación lleva espacios alrededor del `+` (`likeTailSpaced`); en una lista de argumentos, no. El documental
+(`document-repositories.js`): `$in` con cada elemento escrito como se guarda, `$ne` y un `$or` de `bson.Regex` con
+`regexp.QuoteMeta` sobre el texto plegado.
+
+El borde: `pageableParam` devuelve ahora `(domain.Pageable, error)` y recibe `sortable` (ruta del contrato → propiedad del
+adaptador; nil no ofrece ninguno, también en los resultados de un trabajo de lote); `sortParam` cumple `readClientSort` y
+devuelve `*invalidSortError` (400 `VALIDATION_ERROR` con `invalidSort` en `errorResponse`), que solo existe con un listado
+paginado (staticcheck U1000). `listParam` parte por comas también un valor repetido (U8) y la vacía o con un elemento vacío
+es `&validationError{params: true, details: []string{name}}` (D10). La tabla de rutas solo anuncia `sort` con `sortable`, y
+`contract-parity.test.js` lo compara con keel-spring como en los otros dos.
+
+La collation del orden (U7): `orderCollations` (`persistence.js`) lleva `binaryCollationFor` a la columna de la baseline
+(`COLLATE "C"` en PostgreSQL, `utf8mb4_bin` en MySQL), sin doblar la de la unicidad; `schemaSteps` pasa la baseline que hay en
+disco (la que se aplicó: goose no reaplica la reescrita) a `orderCollationWork`. db-check compara la collation de cada columna
+ordenable contra el DISEÑO en los dos motores, en las fixtures y en la base del sujeto, así que `order-collation` cae también en
+PostgreSQL por el esquema. La caché (D18): `sortKey` en `cached_operations.go` (solo si alguna caché la usa) y la página y el
+tamaño del Pageable en la clave.
+
+Lo miden `test/search.test.js` (la forma y que cada sabotaje se aplique) y `db-check --only=catalog-search` /
+`doc-check --only=catalog-search-mongo` con `scripts/lib/search-probes.js`: los FS-* en `search_probe_test.go` del paquete del
+almacén (las filas sembradas una vez por el adaptador emitido) y los SO-* en `internal/httpapi/search_sort_probe_test.go`, un
+segundo binario sin base, porque `pageableParam` no se exporta. El sujeto solo ejecuta `^TestSearch_`, y en doc-check no lleva
+las sondas de los lotes de product-catalog (van por el `http.Handler` sin token). La sonda de finders de 2.22 se salta los
+criterios de 2.32.

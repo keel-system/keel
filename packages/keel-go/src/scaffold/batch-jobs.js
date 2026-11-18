@@ -1526,7 +1526,12 @@ func (a *api) batchJobResults(w http.ResponseWriter, r *http.Request, operation 
 	if err != nil {
 		return err
 	}
-	page, err := a.useCases.${BATCH_JOBS.field}().Results(r.Context(), job.ID, pageableParam(r, defaultSize, maxSize, nil))
+	// Los resultados no ofrecen orden (DSL 2.32, U3): todo ?sort= es 400.
+	pageable, err := pageableParam(r, defaultSize, maxSize, nil, nil)
+	if err != nil {
+		return err
+	}
+	page, err := a.useCases.${BATCH_JOBS.field}().Results(r.Context(), job.ID, pageable)
 	if err != nil {
 		return err
 	}
