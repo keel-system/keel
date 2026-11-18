@@ -54,13 +54,13 @@
 
 | Operación | Flujos | Superficie |
 |-----------|--------|------------|
-| createProduct | FL-PRD-001, FL-PRD-002, FL-PRD-003, FL-PRD-004, FL-IMG-001, FL-OBX-001 | usuarios |
+| createProduct | FL-PRD-001, FL-PRD-002, FL-PRD-003, FL-PRD-004, FL-PRD-007, FL-IMG-001, FL-OBX-001 | usuarios |
 | getProductBySlug | FL-PRD-002, FL-PRD-006, FL-AUT-001, FL-CBR-001 | usuarios |
 | updateProduct | FL-PRD-002, FL-PRD-006, FL-AUT-003, FL-AUT-004 | usuarios |
-| listProducts | FL-PRD-003 | usuarios |
+| listProducts | FL-PRD-003, FL-PRD-007 | usuarios |
 | getProductsByIds | FL-PRD-003 | usuarios |
 | listDraftProducts | FL-PRD-005 | usuarios |
-| retireProduct | FL-PRD-004, FL-CMP-001, FL-AUT-002, FL-RTY-001, FL-RTY-001-B | usuarios |
+| retireProduct | FL-PRD-004, FL-PRD-007, FL-CMP-001, FL-AUT-002, FL-RTY-001, FL-RTY-001-B | usuarios |
 | projectSupplierPrice | FL-SUB-001 | interna (suscripción) |
 | reactivateWithdrawnProduct | FL-CMP-001, FL-DLQ-001 | interna (compensación) |
 | addProductImage | FL-IMG-001 | usuarios |
@@ -325,6 +325,15 @@ una con `Idempotency-Key` propio.
 1. Status `200` las dos veces.
 2. La primera lleva `<d2>` (se dio de alta después de esa fecha); la segunda es la página vacía.
 
+#### FL-PRD-005-E: fuera de una categoría
+
+**When**: `GET /api/v1/products/drafts?notCategoryId=<c1>` y después con un uuid de categoría que
+no existe.
+**Then**:
+1. Status `200` las dos veces.
+2. La primera es la página vacía: el único borrador, `<d2>`, está en `c1`. La segunda lleva `<d2>`:
+   «fuera de una categoría que no existe» es todo.
+
 ### FL-PRD-006: escritura condicional — la edición con una lectura vieja no pisa la de otro
 
 Ana carga la ficha, Luis la edita y la guarda, y Ana guarda después con su formulario: sin la
@@ -408,6 +417,85 @@ igual a `<etag-c>` con el prefijo `W/` delante.
 que se acepta publica `ProductUpdated`, que invalida la caché de `getProductBySlug`, así que las
 lecturas de C y F tienen que ver la versión vigente; la de C, además, sigue sirviendo la entrada
 que llenó B, con su mismo `ETag`.
+
+### FL-PRD-007: la búsqueda del listado — varios estados, texto libre y el orden que pide el cliente
+
+**Given**: la categoría `c1` existe.
+
+#### FL-PRD-007-A: preparación
+
+**When**: `createProduct` tres veces, en este orden y cada una con `Idempotency-Key` propio: sku
+`SRCH-1` con nombre `Portátil Pro`, sku `SRCH-2` con nombre `Ratón 50% rebajado` y sku `SRCH-3`
+con nombre `Teclado`; después `retireProduct` sobre el tercero.
+**Then**:
+1. Las tres altas devuelven `201`; sus ids son `<s1>`, `<s2>` y `<s3>`. La retirada devuelve `200`.
+
+#### FL-PRD-007-B: uno de varios estados
+
+**When**: `listProducts` — `GET /api/v1/products?statuses=draft`.
+**Then**:
+1. Status `200`.
+2. La página lleva exactamente `<s2>` y luego `<s1>` (el orden del diseño, `createdAt`
+   descendente): el retirado no está.
+
+#### FL-PRD-007-C: la lista, repetida o separada por comas
+
+**When**: `GET /api/v1/products?statuses=draft&statuses=retired` y después
+`GET /api/v1/products?statuses=draft,retired`.
+**Then**:
+1. Status `200` las dos veces, con la misma página: `<s3>`, `<s2>` y `<s1>`, en ese orden.
+
+#### FL-PRD-007-D: la lista vacía no es «ninguno»
+
+**When**: `GET /api/v1/products?statuses=` y después `GET /api/v1/products?statuses=draft,`.
+**Then**:
+1. Status `400` con `code` = `"VALIDATION_ERROR"` las dos veces: una lista vacía, o con un
+   elemento vacío, no se interpreta.
+
+#### FL-PRD-007-E: el texto libre, en el nombre o en el sku, sin mayúsculas ni acentos
+
+**When**: `GET /api/v1/products?q=portatil` y después `GET /api/v1/products?q=srch-3`.
+**Then**:
+1. Status `200` las dos veces.
+2. La primera lleva solo `<s1>` (`portatil` casa con `Portátil Pro` por el nombre); la segunda,
+   solo `<s3>` (por el sku, sin distinguir mayúsculas).
+
+#### FL-PRD-007-F: el texto se busca como literal
+
+**When**: `GET /api/v1/products?q=50%25` (el texto `50%`), después `?q=%25` (el texto `%`) y
+después `?q=_`.
+**Then**:
+1. Status `200` las tres veces.
+2. Las dos primeras llevan solo `<s2>`: el `%` es un carácter más, no un comodín que casaría con
+   todos. La tercera es la página vacía: ningún nombre ni sku contiene `_`, y como comodín de un
+   carácter casaría con los tres.
+
+#### FL-PRD-007-G: el filtro de estado y el texto se suman
+
+**When**: `GET /api/v1/products?statuses=retired&q=srch`.
+**Then**:
+1. Status `200`; la página lleva solo `<s3>`.
+
+#### FL-PRD-007-H: el orden que pide el cliente sustituye al del diseño
+
+**When**: `GET /api/v1/products?sort=name` y después `GET /api/v1/products?sort=sku,desc`.
+**Then**:
+1. Status `200` las dos veces.
+2. La primera lleva `<s1>`, `<s2>` y `<s3>`, en ese orden (`Portátil Pro`, `Ratón 50% rebajado`,
+   `Teclado`); la segunda, `<s3>`, `<s2>` y `<s1>`.
+
+#### FL-PRD-007-I: solo se ordena por lo que el listado ofrece
+
+**When**: `GET /api/v1/products?sort=status`, después `?sort=nombre`, después `?sort=name,DESC` y
+después `?sort=name&sort=name,desc`.
+**Then**:
+1. Status `400` con `code` = `"VALIDATION_ERROR"` las cuatro veces: `status` existe pero no está en
+   `sortable`, `nombre` no existe, la dirección es `asc` o `desc` en minúsculas y el mismo campo no
+   se repite. Ninguno es un `500`.
+
+**Notas de determinación**: los nombres empiezan por letras distintas en mayúscula (`P`, `R`, `T`),
+así que el orden por `name` es el mismo con cualquier collation; el orden por punto de código lo
+miden las redes de cada generador, no este flujo.
 
 ## Proyección del precio de proveedor
 

@@ -25,14 +25,16 @@
 | B6 | keel-go: el finder (`f.oneOf`, `f.distinct` con la fila nula, la búsqueda como `f.anyLike`, o `$in`/`$ne`/`$or` citado), `pageableParam` contra `sortable`, la lista de la query, la collation del orden, la clave de la caché y las sondas FS-*/SO-* de db-check y doc-check | hecho (2026-11-17, § Medidas de B6) |
 | B7 | Contrato y método: las filas `finder-in-ne`, `search` y `sortable` de las cuatro matrices, el contrato de `catalog-search` en los cuatro, la guía Postman de `/keel-docs`, la clase 5 de `/keel-design`, `/keel-recover` y los agentes | hecho (2026-11-17, § Medidas de B7) |
 | B8 | Fixtures: `catalog-extended` declara `in`, `ne`, `search` y `sortable`; `product-catalog`, `sortable`; las demás aceptan `OBL-QUERY-SORT-UNDECIDED` con su motivo | hecho (2026-11-17, § Medidas de B8) |
-| B9 | Corridas de control | pendiente |
+| B9 | Corridas de control | en curso (2026-11-18: escenarios FL-PRD-005-E y FL-PRD-007 y cinco proyectos generados, § Preparación de B9) |
 
 **Para retomar.** La fase A (DSL 2.31) está cerrada (A9: cinco corridas de `shop-api` en 92/92). Fase B: B0 medido (U7 y U8 decididas) y B1
 hecho: el DSL es 2.32 y los cuatro generadores rechazan `in`/`ne`/`search`/`sortable` con `searchPendingErrors` hasta su
 incremento. B2 hecho (lo neutral, § Medidas de B2). B3 hecho (keel-spring, § Medidas de B3). B4 hecho (keel-nest, § Medidas de B4). B5 hecho (keel-dotnet, § Medidas de B5). B6 hecho (keel-go, § Medidas de B6; con él, el
 `go-check --fixtures` pendiente del arreglo de la escala). Los cuatro generadores generan ya la búsqueda de 2.32.
 B7 hecho (contrato y método, § Medidas de B7). B8 hecho (fixtures, § Medidas de B8).
-Siguiente: B9, las corridas de control de `catalog-extended` (o `product-catalog`) en los cuatro generadores y una en MySQL.
+B9 en curso: escenarios de la búsqueda en `catalog-extended` y los cinco proyectos generados en `D:\keel-example\catalog-232-*`
+(§ Preparación de B9). Siguiente: el usuario lanza `/keel-generate-<tech>` en cada uno; después, contrastar cada informe
+contra su proyecto y registrar `docs/corridas/2026-11-1x-catalog-232-*`.
 Lo que cada generador recoge en su incremento, todo de keel-core:
 - el finder: `criterion.op` `in`/`ne`/`search`, y `search` con `targets[]` en vez de `target`;
 - el lector de `?sort=` contra `operation.sortable` (`readClientSort`, `invalidSortMessage`);
@@ -48,6 +50,22 @@ Lo que cada generador recoge en su incremento, todo de keel-core:
 
 Ventana conocida, como la de A2: desde B2 el contrato ya no anuncia `sort` en un listado sin `sortable`, y los
 servidores lo siguen aceptando hasta su incremento.
+
+## Preparación de B9 (2026-11-18)
+
+Ni `catalog-extended` ni `product-catalog` tenían un escenario que pisara la búsqueda de 2.32: una corrida de control
+no la habría medido. Se eligió `catalog-extended`, la única fixture que declara las cuatro piezas, y se le añadieron:
+- **FL-PRD-005-E**: `notCategoryId` (`ne` sobre la relación obligatoria), con `c1` y con una categoría que no existe.
+- **FL-PRD-007** (A-I), sobre `listProducts`: `statuses` con un valor, repetido y separado por comas (U8), la lista
+  vacía o con un elemento vacío como 400; `q` por el nombre sin acentos y por el sku sin mayúsculas; `%` y `_` como
+  literales; filtro y texto sumados; `?sort=name` y `?sort=sku,desc` sustituyendo al orden del diseño; y cuatro
+  `?sort=` inválidos como 400 `VALIDATION_ERROR`, ninguno 500. El orden por punto de código (U7) no lo mide el
+  flujo, a propósito: los nombres empiezan por mayúsculas distintas; lo miden las redes.
+
+Stack de las cinco: `rabbitmq · redis · minio`, sin auth ni telemetría, como las corridas de la 2.25 sobre este diseño.
+Proyectos en `D:\keel-example\catalog-232-{spring,nest,dotnet,go}-postgre-rabbit` y
+`catalog-232-dotnet-mysql-rabbit` (MySQL en keel-dotnet: A9 la hizo en keel-nest y la 2.30 en keel-spring). Todos con
+`--accept-unready` (8 criterios del cierre en rojo, los mismos que antes de B8).
 
 ## Medidas de B8 (2026-11-17)
 
