@@ -12,7 +12,8 @@ La prueba de que la promesa se cumple está en este repo. El mismo diseño (`not
 su variante relacional y en la documental) se generó con los cuatro generadores —ocho proyectos— y los
 ocho cerraron **23 de 23 escenarios** con el agente tocando **17 o 18 archivos de ~300** que escribió el
 generador ([corridas de control](docs/corridas/): 2026-10-18; las de Go, 2026-11-03, y las de Spring sobre
-Java 25, 2026-11-06).
+Java 25, 2026-11-06). Cada capacidad que el DSL ha ganado desde entonces —de la 2.25 a la 2.32— se
+cerró igual: con una corrida de control por generador sobre un diseño que la usa, todas al 100 %.
 
 **Índice**: [Cómo funciona](#cómo-funciona-en-un-minuto) ·
 [Instalación](#requisitos-e-instalación) · [Guía: tu primer servicio](#guía-de-uso-tu-primer-servicio) ·
@@ -419,6 +420,14 @@ visible**. Por eso en Keel se derivan del diseño y los genera `build` enteros e
 | **Caché** con TTL y degradación a miss | servir datos rancios sin que nadie haya dicho cuánto es demasiado |
 | **Seguridad**: realm aprovisionado, matriz M2M, identidad del llamante, alcance por recurso y por propietario | que el llamante elija de qué inquilino lee, o lea lo que no es suyo |
 | **Pagos** con pasarela, avisos verificados y conciliación | cobrar dos veces, o dar por cobrado lo que la pasarela rechazó |
+| **Escritura condicional**: ETag, `If-Match`, 412/428 | que dos clientes editen la misma versión y el segundo pise al primero sin saberlo |
+| **Plazos de negocio** sobre un **cronómetro único** por servicio | la reserva que nunca caduca, o el plazo que vence dos veces porque lo vigilan dos réplicas |
+| **Lectura acotada** e **identidad opcional** | que un listado o una ficha enseñen lo que el llamante no puede ver, o que distinguir 403 de 404 filtre que existe |
+| **Ciclo de vida del dato**: borrado lógico, restauración, retención y anonimización | el dato personal que nadie borra, o la baja que rompe la unicidad de los vivos |
+| **Historial de cambios** consultable | no poder decir quién cambió qué, cuándo y desde qué valor |
+| **Lotes** con resultado por elemento, síncronos o asíncronos | que un elemento malo tumbe el lote entero, o que el reintento del lote lo aplique dos veces |
+| **Guarda del agregado** y **derivados** (`sum`, `count`) | el agregado que se guarda violando su invariante, o el total que no cuadra con sus líneas |
+| **Búsqueda**: `in`, `ne`, texto libre y orden permitido | el `?sort=` sobre cualquier columna, o el filtro que trata un `%` del usuario como comodín |
 
 Nada de esto se comprueba leyendo código: **se ejecuta**, contra bases de datos, brokers, Keycloak,
 WireMock, Mailpit y Redis en contenedores. Y cada red se ha roto a propósito (**medición por
@@ -427,10 +436,10 @@ por mecanismo y motor:
 
 | Generador | Matriz (`npm run matrix --workspace packages/<gen>`) |
 |---|---|
-| keel-spring | 54 celdas · 36 verificadas contra un motor real, 33 de ellas falsadas · 12 sin ejecutar · 2 degradadas |
-| keel-nest | 38 celdas · 33 verificadas · 3 degradadas · 0 pendientes |
-| keel-dotnet | 38 celdas · 33 verificadas, ninguna sin falsar · 3 degradadas · 0 pendientes |
-| keel-go | 38 celdas · 33 verificadas, ninguna sin falsar · 3 degradadas · 0 pendientes |
+| keel-spring | 86 celdas · 68 verificadas contra un motor real, 65 de ellas falsadas · 12 sin ejecutar · 2 degradadas |
+| keel-nest | 70 celdas · 65 verificadas, 3 sin falsar · 3 degradadas · 0 pendientes |
+| keel-dotnet | 70 celdas · 65 verificadas, ninguna sin falsar · 3 degradadas · 0 pendientes |
+| keel-go | 70 celdas · 65 verificadas, ninguna sin falsar · 3 degradadas · 0 pendientes |
 
 Lo que un motor no sostiene —la unicidad condicionada en MariaDB y en Oracle, por ejemplo— se declara
 `degradado`, con la garantía que se pierde, en vez de fingirse.
@@ -549,7 +558,7 @@ mi-proyecto/
 │   ├── use-cases.keel.yaml   #   operaciones, idempotencia, caché (obligatoria)
 │   ├── *.keel.yaml           #   api, security, messaging, http-clients, dependencies,
 │   │                         #   persistence, storage, mail, payments (opcionales)
-│   └── decisions.yaml, validation-scenarios.md, DESIGN.md…   # decisiones, escenarios y derivados
+│   └── decisions.yaml, validation-scenarios.md, fixtures.yaml, DESIGN.md…   # decisiones, escenarios, estado de partida y derivados
 ├── templates/service/        # una plantilla por capa
 ├── contracts/<proveedor>/    # INTEGRATION.md de servidores externos de los que dependemos
 ├── legacy/<servicio>/        # solo con keel-recover: sandbox, sondas, grabaciones y paridad
@@ -608,15 +617,45 @@ El detalle de cada uno —qué genera `build`, qué deja al agente y su frontera
   cuando el input la trae con otro nombre. El modelo ve entonces la guarda y el listener sale en el
   orden correcto en los cuatro generadores (comprobar, despachar y registrar después), y un aviso nuevo
   marca la suscripción cuyos reintentos quedarían muertos tras reclamar el mensaje antes de procesarlo.
+- **DSL 2.25 a 2.32, ocho capacidades nuevas en los cuatro generadores**, cada una con su plan
+  cerrado en [completed_plans/](completed_plans/), sus casos neutrales en `keel-core/gen`, su red en
+  vivo con sabotajes y corridas de control al 100 %:
+  - **2.25, escritura condicional** (`api.concurrency`): ETag en la lectura, `If-Match` en la
+    escritura, 412 si la versión cambió y 428 si falta la cabecera.
+  - **2.26, plazos de negocio** (`lifecycle.deadlines`): el estado del que la entidad sale sola al
+    vencer un plazo. Los dispara un **cronómetro único** por servicio (tabla `keel_timer`, reclamo con
+    `SKIP LOCKED` y valla), al que migraron todos los relojes: purgas, `schedule` y el relay del
+    outbox, que ahora despierta con el commit que escribe en él.
+  - **2.27, lectura acotada e identidad opcional** (`reads`/`readMiss` en `scoping` y `ownership`,
+    `level: optional`): las lecturas filtran por alcance o propietario en la consulta, y una ruta puede
+    servir a anónimos y a autenticados a la vez.
+  - **2.28, ciclo de vida del dato** (`personal`, `deletion: logical`, `restorableFor`, `retention`):
+    borrado lógico con la unicidad entre vivas, restauración con plazo, retención que anonimiza y el
+    inventario `docs/keel/personal-data.md`, idéntico en los cuatro.
+  - **2.29, historial de cambios** (`audit.history`): quién cambió qué campo, cuándo y desde qué
+    valor, consultable como una query paginada y anonimizado con el dato.
+  - **2.30, lotes** (`use-cases.<op>.batch`): 207 con el resultado de cada elemento, por elemento o
+    todo o nada, y asíncronos (202 y un trabajo que se sondea), con la clave de idempotencia del lote.
+  - **2.31, guarda del agregado** (`entities.<E>.checks`, `computed: { sum, count }`): los
+    invariantes se hacen cumplir en el `save` del puerto (422) y los derivados se calculan, no se guardan.
+  - **2.32, búsqueda** (`in`, `ne`, `search`, `sortable`): filtros de lista y de distinto, texto libre
+    con el patrón literal y un `?sort=` restringido a lo que el diseño permite.
+- **Proveedor de identidad** ([PLAN-PROVEEDOR-IDENTIDAD](completed_plans/PLAN-PROVEEDOR-IDENTIDAD.md)):
+  lo que el diseño lee del token se contrasta con lo que cada proveedor emite, `build` escribe
+  `docs/keel/identity-contract.md` con las precondiciones, y el arnés de los cuatro pide personas y
+  titulares del alcance también al emulador de Cognito.
 - **keel-recover**: el recorrido completo (sandbox, observación, diseño con procedencia, fidelidad,
   paridad) orquestado por `/keel-recover-run`, con MongoDB, PostgreSQL y MySQL
   ([PLAN-KEEL-RECOVER](PLAN-KEEL-RECOVER.md), banco en [docs/recover-bench](docs/recover-bench/)).
-- **Verificación del propio Keel**: 388 archivos de test (`npm test`), 17 diseños de fixture —entre
+- **Verificación del propio Keel**: 462 archivos de test (`npm test`), 19 diseños de fixture —entre
   ellos pares que solo se diferencian en el modelo de persistencia— y redes en vivo por generador
   contra motores, brokers, proveedores de identidad y buzones en contenedores (ver
-  `CLAUDE.md § Comandos`). 85 corridas registradas en [docs/corridas](docs/corridas/).
+  `CLAUDE.md § Comandos`). 132 corridas registradas en [docs/corridas](docs/corridas/); la última,
+  `catalog-extended` sobre la DSL 2.32, cerró 67/67 en los cuatro generadores (y en .NET también
+  sobre MySQL), con una huella de 21 a 24 archivos de entre 368 y 431.
 - **Pendiente**: MariaDB, SQL Server y Oracle medidos en vivo en keel-nest,
-  keel-dotnet y keel-go; las pasarelas de pago contra su sandbox real; brokers distintos de RabbitMQ y
+  keel-dotnet y keel-go; las pasarelas de pago contra su sandbox real; Cognito real (no el
+  emulador); el cronómetro medido con más de dos réplicas; brokers distintos de RabbitMQ y
   keel-go como destino en keel-recover, y las corridas de control de keel-recover sobre legacys
   relacionales.
 
