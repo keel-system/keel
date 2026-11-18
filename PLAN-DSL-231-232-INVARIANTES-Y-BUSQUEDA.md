@@ -33,7 +33,7 @@ incremento. B2 hecho (lo neutral, § Medidas de B2). B3 hecho (keel-spring, § M
 `go-check --fixtures` pendiente del arreglo de la escala). Los cuatro generadores generan ya la búsqueda de 2.32.
 B7 hecho (contrato y método, § Medidas de B7). B8 hecho (fixtures, § Medidas de B8).
 B9 en curso: escenarios de la búsqueda en `catalog-extended` y los cinco proyectos generados en `D:\keel-example\catalog-232-*`
-(§ Preparación de B9). keel-spring, keel-nest y keel-dotnet registradas (67/67 las tres); sus defectos, arreglados sin medir en vivo (§ Arreglos tras B9). Siguiente: el usuario lanza `/keel-generate-<tech>` en cada uno; después, contrastar cada informe
+(§ Preparación de B9). keel-spring, keel-nest, keel-dotnet y keel-go registradas (67/67 las cuatro; falta la de MySQL); sus defectos, arreglados sin medir en vivo (§ Arreglos tras B9). Siguiente: el usuario lanza `/keel-generate-<tech>` en cada uno; después, contrastar cada informe
 contra su proyecto y registrar `docs/corridas/2026-11-1x-catalog-232-*`.
 Lo que cada generador recoge en su incremento, todo de keel-core:
 - el finder: `criterion.op` `in`/`ne`/`search`, y `search` con `targets[]` en vez de `target`;
