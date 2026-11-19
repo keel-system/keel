@@ -514,6 +514,23 @@ export function storageContainer(serviceName, storage) {
 }
 
 /**
+ * Nombre fijo del contenedor de la base en infra/docker-compose.yaml. Fuente única del compose
+ * y del arnés, que lo detiene y lo levanta en los escenarios de «almacén indisponible».
+ */
+export function databaseContainer(serviceName) {
+  return `${serviceName}-db`;
+}
+
+/**
+ * Nombre fijo del contenedor del relay de correo de prueba (Mailpit), por lo mismo que el del
+ * broker: el arnés lo detiene y lo levanta en los escenarios de «relay caído», donde el envío
+ * falla sin respuesta del relay —no es un rechazo, que se alcanza con el chaos del buzón—.
+ */
+export function mailContainer(serviceName) {
+  return `${serviceName}-${MAIL_SERVICE}`;
+}
+
+/**
  * Los plazos del productor de Kafka: cuánto puede retener un envío sin confirmar. Cortos en el perfil
  * `local` —el de los escenarios— y el default de Kafka en el resto, por variable de entorno; las mismas
  * variables en los dos generadores.

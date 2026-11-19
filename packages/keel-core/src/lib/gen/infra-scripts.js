@@ -40,7 +40,9 @@ import {
   selectedInfra,
   brokerContainer,
   devtoolsContainer,
-  storageContainer
+  storageContainer,
+  databaseContainer,
+  mailContainer
 } from './infra-catalog.js';
 
 // Paquetes base del toolbox: shell + utilidades de red/JSON comunes a todos los checks.
@@ -585,7 +587,7 @@ export function infraFiles(model, platform) {
     const db = DATABASES[stack.database];
     // Las opciones en memoria no levantan contenedor (composeService null).
     if (db?.composeService) {
-      services.db = { container_name: `${service.name}-db`, ...db.composeService(service.name.replace(/-/g, '_')) };
+      services.db = { container_name: databaseContainer(service.name), ...db.composeService(service.name.replace(/-/g, '_')) };
       volumes['db-data'] = null;
     }
   }
@@ -630,7 +632,10 @@ export function infraFiles(model, platform) {
   // termina en un correo no se puede puntuar sin a quién mandárselo, y sin la API
   // del buzón el Then sobre el correo es siempre manual (ver MAIL_SINK).
   if (layersPresent.mail) {
-    Object.assign(services, MAIL_SINK.composeServices());
+    const mailServices = MAIL_SINK.composeServices();
+    // Nombre fijo, como el del broker: el arnés lo detiene y lo levanta (relay caído).
+    mailServices[MAIL_SINK.serviceKey].container_name = mailContainer(service.name);
+    Object.assign(services, mailServices);
   }
 
   if (Object.keys(services).length === 0) return [];

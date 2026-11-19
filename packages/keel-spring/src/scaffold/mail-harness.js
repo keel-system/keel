@@ -289,8 +289,12 @@ export function mailSection(model) {
      * El mensaje COMPLETO por su id. La búsqueda solo devuelve el resumen de cada uno:
      * sin esta segunda llamada no hay forma de afirmar sobre el cuerpo, que es justo lo
      * que separa «ha salido un correo» de «ha salido el correo correcto».
+     *
+     * <p>Es {@code protected} para el Then que necesita un correo concreto de los que
+     * devolvió {@link #awaitMailTo} y no el último: copiar este GET en la clase de prueba
+     * duplica la ruta del buzón, que solo vive aquí.
      */
-    private static Map<String, Object> mailMessage(String id) {
+    protected static Map<String, Object> mailMessage(String id) {
         return JsonPath.read(mailApi("${ROUTES.message('')}" + id), "$");
     }
 
@@ -323,6 +327,86 @@ export function mailSection(model) {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new AssertionError("Espera interrumpida", e);
+        }
+    }
+`;
+}
+
+/**
+ * La palanca del RELAY CAÍDO: detener el contenedor del buzón y volver a levantarlo.
+ *
+ * Es otro desenlace que el rechazo y no se alcanza con el chaos: con el chaos el relay CONTESTA
+ * (un 5xx a RCPT TO) y el envío termina en un rechazo; con el relay caído el intento falla SIN
+ * respuesta —conexión rehusada—, que es el error de entrega que el diseño distingue del rechazo
+ * (`failureReason` distinto, sin supresión). Sin ella el agente no podía escribir ese escenario:
+ * la clase base es de build y una clase de prueba no debe parar contenedores por su cuenta.
+ *
+ * Mismo contrato que la palanca del almacenamiento: flag de caída provocada, espera a que deje
+ * de servir y a que vuelva, y restauración en el reset de cada clase si el `finally` del
+ * escenario no llegó a correr. Necesita el motor de contenedores del arnés (`runProcess`).
+ */
+export function mailRelayControlSection(model, container) {
+  if (!hasMail(model)) return '';
+  return `
+    /** Contenedor del relay de prueba (Mailpit) en \`infra/docker-compose.yaml\`. */
+    private static final String MAIL_RELAY_CONTAINER = "${container}";
+
+    /** Espera máxima a que el relay vuelva a servir tras levantarlo. */
+    private static final Duration MAIL_RELAY_READY_TIMEOUT = Duration.ofSeconds(60);
+
+    /** ¿Lo tiró el propio escenario? Mismo papel que el flag del broker. */
+    private static final AtomicBoolean MAIL_RELAY_STOPPED = new AtomicBoolean(false);
+
+    /**
+     * Detiene el relay de correo: a partir de aquí el servicio no puede ni CONECTAR con él, así
+     * que un envío falla sin respuesta del relay —el error de entrega, no el rechazo—. Para el
+     * rechazo está {@link #relayRejectsRecipients()}, que deja el relay en pie contestando que no.
+     *
+     * <p>Con el relay parado tampoco responde la API del buzón: los Then sobre el correo van
+     * después de {@link #startMailRelay()}. <b>El escenario que lo llama lo restaura</b> en un
+     * {@code finally}; {@link #resetState} lo levanta igualmente al abrir cada clase. Al volver,
+     * el buzón arranca VACÍO y con el chaos apagado: lo que llegue después es lo que se envió
+     * después.
+     */
+    protected static void stopMailRelay() {
+        runProcess(List.of(containerRuntime(), "stop", MAIL_RELAY_CONTAINER));
+        MAIL_RELAY_STOPPED.set(true);
+        awaitMailRelay(false);
+    }
+
+    /** Levanta el relay y <b>espera a que sirva</b>: arrancado no es listo. */
+    protected static void startMailRelay() {
+        runProcess(List.of(containerRuntime(), "start", MAIL_RELAY_CONTAINER));
+        awaitMailRelay(true);
+        MAIL_RELAY_STOPPED.set(false);
+    }
+
+    /** Restaura el relay si algún escenario lo dejó caído, y solo entonces. */
+    private static void restoreMailRelay() {
+        if (MAIL_RELAY_STOPPED.get()) {
+            startMailRelay();
+        }
+    }
+
+    private static void awaitMailRelay(boolean up) {
+        Instant deadline = Instant.now().plus(MAIL_RELAY_READY_TIMEOUT);
+        while (Instant.now().isBefore(deadline)) {
+            if (mailRelayAnswers() == up) {
+                return;
+            }
+            sleepQuietly(500L);
+        }
+        throw new IllegalStateException("El relay de correo no " + (up ? "volvió a servir" : "dejó de servir")
+                + " en " + MAIL_RELAY_READY_TIMEOUT);
+    }
+
+    /** Sondeo de disponibilidad (la API del buzón): aquí el fallo es la respuesta, no un error. */
+    private static boolean mailRelayAnswers() {
+        try {
+            mailApi("${ROUTES.info()}");
+            return true;
+        } catch (AssertionError e) {
+            return false;
         }
     }
 `;

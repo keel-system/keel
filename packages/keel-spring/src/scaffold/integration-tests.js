@@ -16,9 +16,9 @@ import { credentialClientId, identityProvider, tokenContract } from '@keel-syste
 import { usesConditionalWrites } from '@keel-system/keel-core/gen/conditional-writes';
 import { paymentHarnessImports, paymentHarnessSection } from './payments-harness.js';
 import { javaFile, javaPath } from './render.js';
-import { mailSection, hasMail, MAIL_IMPORTS } from './mail-harness.js';
+import { mailSection, mailRelayControlSection, hasMail, MAIL_IMPORTS } from './mail-harness.js';
 import { pascalCase, snakeCase, screamingSnake } from '../lib/naming.js';
-import { DATABASES, BROKERS, CACHES, STORAGE, selectedInfra, brokerContainer, storageContainer } from '../lib/stack-catalog.js';
+import { DATABASES, BROKERS, CACHES, STORAGE, selectedInfra, brokerContainer, storageContainer, databaseContainer, mailContainer } from '../lib/stack-catalog.js';
 import { cacheFlushCmd, concreteCmd, needsDevtools } from './devtools.js';
 import { outboxRelayBeanName, usesOutbox } from './outbox.js';
 import {
@@ -1245,7 +1245,9 @@ function abstractImports(model) {
   // búsqueda, así que la sección necesita el codificador y su charset.
   if (hasMail(model)) imports.push(...MAIL_IMPORTS, 'java.util.ArrayList', 'java.util.List', 'java.util.Map');
   // Flag de la caída provocada por el propio escenario (palanca del outbox).
-  if (usesBrokerControl(model) || usesStorageControl(model)) imports.push('java.util.concurrent.atomic.AtomicBoolean');
+  if (usesBrokerControl(model) || usesStorageControl(model) || usesDatabaseControl(model) || usesMailRelayControl(model)) {
+    imports.push('java.util.concurrent.atomic.AtomicBoolean');
+  }
   // La pausa del relay resuelve su bean por NOMBRE desde el contexto: nada de src/main.
   if (pausesRelay(model)) {
     imports.push(
@@ -2103,7 +2105,7 @@ ${hasIdempotency(model) ? `
     }
 
     // ── Estado e infraestructura ─────────────────────────────────────────────
-${resetSection(model)}${inMemoryResetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${paymentHarnessSection(model)}${mailSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${storageControlSection(model)}${replicaSection(model)}${kafkaGroupsSection(model)}${dbSection(model)}${timerFireSection(model)}${deadlineAgingSection(model)}${deletionAgingSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
+${resetSection(model)}${inMemoryResetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${paymentHarnessSection(model)}${mailSection(model)}${usesMailRelayControl(model) ? mailRelayControlSection(model, mailContainer(model.service.name)) : ''}${devtoolsSection(model)}${brokerControlSection(model)}${storageControlSection(model)}${databaseControlSection(model)}${replicaSection(model)}${kafkaGroupsSection(model)}${dbSection(model)}${timerFireSection(model)}${deadlineAgingSection(model)}${deletionAgingSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
 }
 
 // Proveedor de prueba de las integraciones salientes. Es infraestructura, no un
@@ -2424,8 +2426,12 @@ function resetSection(model) {
   // antes, un timeout de Gradle) todos los flujos siguientes de la misma suite
   // fallarían por una causa que no es la suya. Y el purgado del script habla con el
   // broker, así que tiene que encontrarlo vivo.
+  // La base y el relay de correo, los primeros: el propio reset-db.sh habla con los dos.
   const restore =
-    (usesBrokerControl(model) ? '\n        restoreBroker();' : '') + (usesStorageControl(model) ? '\n        restoreStorage();' : '');
+    (usesDatabaseControl(model) ? '\n        restoreDatabase();' : '') +
+    (usesMailRelayControl(model) ? '\n        restoreMailRelay();' : '') +
+    (usesBrokerControl(model) ? '\n        restoreBroker();' : '') +
+    (usesStorageControl(model) ? '\n        restoreStorage();' : '');
   // Y una réplica viva sigue publicando y barriendo: si el finally de su escenario
   // no llego a correr, los flujos siguientes fallarian por una causa ajena. Pararla
   // es idempotente, asi que abrir cada clase con esto no cuesta nada.
@@ -2619,6 +2625,99 @@ function usesBrokerControl(model) {
 // Solo con un almacenamiento que levanta contenedor (minio) y con devtools para sondearlo.
 function usesStorageControl(model) {
   return Boolean(model.layersPresent.storage) && model.stack.storage === 'minio' && usesDevtools(model);
+}
+
+// La palanca del RELAY DE CORREO caído (el error de entrega sin respuesta del relay, que no es
+// el rechazo del chaos). La sección vive en mail-harness.js; aquí solo su condición, porque
+// necesita el motor de contenedores del arnés.
+function usesMailRelayControl(model) {
+  return hasMail(model) && usesContainerExec(model);
+}
+
+// La palanca del ALMACÉN indisponible: parar el contenedor de la base y volver a levantarlo.
+// Es la única forma de alcanzar en caja negra lo que pasa cuando la escritura falla por
+// infraestructura —un listener que agota sus reintentos y acaba en el descarte, una API que
+// responde 503— sin fabricarlo; sin ella el agente no podía escribir esos escenarios. Se emite
+// con toda base que levante contenedor: el volumen sobrevive al stop/start, así que no pierde
+// datos, y el pool de la aplicación reconecta solo.
+function usesDatabaseControl(model) {
+  return Boolean(dbEntry(model));
+}
+
+function databaseControlSection(model) {
+  if (!usesDatabaseControl(model)) return '';
+  const entry = dbEntry(model);
+  const dbName = model.service.name.replaceAll('-', '_');
+  return `
+    /** Contenedor de ${entry.label} en \`infra/docker-compose.yaml\`. */
+    private static final String DATABASE_CONTAINER = "${databaseContainer(model.service.name)}";
+
+    /** Espera máxima a que la base vuelva a servir tras levantarla. */
+    private static final Duration DATABASE_READY_TIMEOUT = Duration.ofSeconds(120);
+
+    /** ¿La tiró el propio escenario? Mismo papel que el flag del broker. */
+    private static final AtomicBoolean DATABASE_STOPPED = new AtomicBoolean(false);
+
+    /**
+     * Detiene el contenedor de la base. Es la palanca de los escenarios de <b>almacén
+     * indisponible</b>: con ella parada, la escritura del servicio falla por infraestructura —un
+     * listener agota sus reintentos y el mensaje acaba en el descarte, una operación responde el
+     * error que el diseño declare—. Los datos sobreviven (el volumen no se toca) y el pool de la
+     * aplicación reconecta solo al volver.
+     *
+     * <p>Con la base parada no hay nada que consultar: los Then sobre el estado van después de
+     * {@link #startDatabase()}. <b>El escenario que la llama la restaura</b> en un
+     * {@code finally}; {@link #resetState} la levanta igualmente al abrir cada clase.
+     */
+    protected static void stopDatabase() {
+        runProcess(List.of(containerRuntime(), "stop", DATABASE_CONTAINER));
+        DATABASE_STOPPED.set(true);
+        awaitDatabase(false);
+    }
+
+    /**
+     * Levanta la base y <b>espera a que acepte conexiones</b>: arrancado no es listo. El sondeo
+     * es el mismo que usa \`infra/validate-infra.sh\`.
+     */
+    protected static void startDatabase() {
+        runProcess(List.of(containerRuntime(), "start", DATABASE_CONTAINER));
+        awaitDatabase(true);
+        DATABASE_STOPPED.set(false);
+    }
+
+    /** Restaura la base si algún escenario la dejó caída, y solo entonces. */
+    private static void restoreDatabase() {
+        if (DATABASE_STOPPED.get()) {
+            startDatabase();
+        }
+    }
+
+    private static void awaitDatabase(boolean up) {
+        Instant deadline = Instant.now().plus(DATABASE_READY_TIMEOUT);
+        while (Instant.now().isBefore(deadline)) {
+            if (databaseAccepts() == up) {
+                return;
+            }
+            try {
+                Thread.sleep(500L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrumpido esperando a la base", e);
+            }
+        }
+        throw new IllegalStateException("${entry.label} no " + (up ? "volvió a aceptar conexiones" : "dejó de aceptarlas") + " en " + DATABASE_READY_TIMEOUT);
+    }
+
+    /** Sondeo de disponibilidad: aquí el fallo es la respuesta, no un error. */
+    private static boolean databaseAccepts() {
+        try {
+            dbShell(${javaString(concreteCmd(entry, dbName))});
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+`;
 }
 
 function storageControlSection(model) {
