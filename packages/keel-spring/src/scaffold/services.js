@@ -40,6 +40,7 @@ import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { claimMechanism } from './claim.js';
 import { cacheNote } from '@keel-system/keel-core/gen/cache-plan';
 import { naturalKeyBatchFinder, naturalKeyFinder } from './repositories.js';
+import { outboundBoundaryNote } from '@keel-system/keel-core/gen/outbound-boundary';
 import { deletedRootOf, logicalDeletionNote, restoreNote } from '@keel-system/keel-core/gen/data-lifecycle';
 import * as history from './history.js';
 import { BATCH_ITEM_COMPONENT } from './batch.js';
@@ -899,6 +900,9 @@ function renderHandler(model, service, operation) {
   for (const { dependency, activation } of operation.dependencyActivations ?? []) {
     notes.push(activationNote(dependency, activation, (operation.reconciles ?? []).length > 0));
   }
+  // La frontera: encargar y dejar esperando es un orden de commits, no una transacción (keel-core/gen/outbound-boundary).
+  const boundary = outboundBoundaryNote(model, operation);
+  if (boundary) notes.push(boundary);
   // Orden de los efectos. Solo se dice cuando hay las dos cosas, porque solo entonces
   // se puede equivocar: una llamada saliente NO participa de la transacción, así que
   // si sale antes de la guarda de estado y la guarda rechaza, el rollback deshace la

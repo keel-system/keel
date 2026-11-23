@@ -11,7 +11,7 @@
 import { batchRequestClass, controllerBatchCall, BATCH_ITEM_COMPONENT } from './batch.js';
 import { controllerBatchJobMethods, controllerKeyedBatchCall } from './batch-jobs.js';
 import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
-import { callsPaymentGateway } from '../lib/payments-model.js';
+import { commitsBeforeOutbound } from '@keel-system/keel-core/gen/outbound-boundary';
 import { FRAMEWORK_ERRORS } from '@keel-system/keel-core';
 import { DOMAIN_ERROR_RESPONSES as DOMAIN, FRAMEWORK_RESPONSES as FW } from '@keel-system/keel-core/gen/api-errors';
 import { callerResolution } from './security.js';
@@ -495,9 +495,9 @@ function renderMethod(model, operation, imports) {
     dispatchArg = `new ${operation.messageClass}(${args.join(', ')})`;
   }
 
-  // Una operación que llama a la pasarela de pago va SIN transacción abarcadora (ver
-  // callsPaymentGateway): su garantía es registrar y confirmar ANTES de llamar.
-  const dispatch = `mediator.${callsPaymentGateway(model, operation.name) ? 'dispatchWithoutTransaction' : 'dispatch'}(${dispatchArg});`;
+  // Una operación que llama a la pasarela de pago, o que encarga una activación HTTP y la deja esperando, va SIN
+  // transacción abarcadora (commitsBeforeOutbound, keel-core): su garantía es registrar y confirmar ANTES de llamar.
+  const dispatch = `mediator.${commitsBeforeOutbound(model, operation.name) ? 'dispatchWithoutTransaction' : 'dispatch'}(${dispatchArg});`;
   let call;
   // Con escritura condicional el handler devuelve Versioned<T> (D6): la versión va al ETag y el valor al cuerpo. El ETag
   // se escribe en la HttpServletResponse y no con ResponseEntity.eTag(...), que en un GET evaluaría If-None-Match (D7).

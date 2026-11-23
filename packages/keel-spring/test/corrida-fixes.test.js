@@ -390,6 +390,18 @@ test('el outbox publica cuántos eventos se rindió, y el arnés lo lee por HTTP
   assert.match(harness, /protected long deadLetteredEvents\(\)/);
 });
 
+// Corrida order de prueba-gelsa (G3): «cualquier usuario autenticado», sin roles ni clientes máquina. actuatorCredential
+// no encontraba con qué pedir la métrica, deadLetteredEvents/queryCount/queryExecutions la pedían sin token y daban 401;
+// el agente las cambió a /actuator/prometheus. conduit tiene esa misma forma.
+test('sin roles ni clientes máquina, la métrica del actuator se pide con una persona sin roles', async () => {
+  const { actuatorCredential } = await import('../src/scaffold/integration-tests.js');
+  const model = modelFor('conduit', { ...RELATIONAL, auth: 'keycloak' });
+  assert.deepEqual(model.security.roles ?? [], []);
+  assert.equal(actuatorCredential(model), 'tokenAs("actuator-reader", Map.of())');
+  // Con roles, sigue el orden de antes: la persona es el último recurso.
+  assert.match(actuatorCredential(modelFor('profile-directory', { ...RELATIONAL, auth: 'keycloak' })), /^tokenFor\(/);
+});
+
 test('el arnés sabe envejecer la marca de espera de una fila concreta', () => {
   const harness = project('stock-reservation', SNSSQS).file('AbstractFlowIT.java');
 

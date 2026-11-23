@@ -51,6 +51,12 @@ validación/reset de datos.
   relaciones lazy se resuelven dentro de la transacción, no en la vista — la del
   `UseCaseMediator` en los caminos normales, y la del propio adaptador cuando no
   hay ninguna, que es para lo que su clase lleva `@Transactional(readOnly = true)`).
+  **Consecuencia para lo que añadas al adaptador**: todo método nuevo hereda esa
+  transacción de SOLO LECTURA. Una escritura que añadas —un `@Modifying` que reclama
+  un lote, un UPDATE condicional— lleva su propio `@Transactional` en el método, o
+  falla en el motor por transacción de solo lectura en cuanto se ejecuta fuera del
+  mediator (un barrido, una operación despachada sin transacción). Pasó en la corrida
+  `payment` de prueba-gelsa con el reclamo del barrido de pagos.
 - `infra/docker-compose.yaml`: contenedor de la BD elegida (h2 no levanta
   contenedor) e `infra/reset-db.sh` para vaciar datos entre flujos.
 

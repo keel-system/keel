@@ -404,7 +404,9 @@ function renderReconciliation(model) {
  * candidatos son los cobros en ${payments.awaitingStates.join(', ')} cuyo ${payments.record.awaitingSince} es
  * anterior a {@link #staleBefore}, en lotes de {@link #batchSize}; y el handler reclama cada uno
  * volviendo a estampar ${payments.record.awaitingSince} ANTES de llamar aquí, para que otra réplica no lo
- * consulte en la misma pasada.${
+ * consulte en la misma pasada. Ese reclamo es una ESCRITURA en el adaptador de persistencia, cuya clase lleva
+ * {@code @Transactional(readOnly = true)}: el método lleva su propio {@code @Transactional}, o el motor lo rechaza
+ * por transacción de solo lectura (el barrido corre sin transacción abarcadora).${
    scheduledByTimer(model, payments.reconciliation.sweep)
      ? `
  *

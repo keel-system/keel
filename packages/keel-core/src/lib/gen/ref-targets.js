@@ -7,6 +7,8 @@
 // (`findAllByIds`, `findAllByIdIn`). El otro caso es una query que RECIBE una lista de ids de la raíz que devuelve
 // (`getProductsByIds`): las cuatro corridas de catalog, en los dos generadores, escribieron esa lectura a mano.
 
+import { replicaKeyField, replicaReadInListing } from './relational.js';
+
 /**
  * Las raíces que algún payload embebe (`model.refDtos`), con su `RefDto`. Sin persistencia no hay puerto que
  * consultar; crossrefs ya garantiza que el destino de un embed es raíz de agregado.
@@ -74,6 +76,11 @@ export function idBatchReason(model, entity) {
   if (!entity?.persisted || !entity.isAggregateRoot || !entity.idField) return null;
   if (isRefTarget(model, entity.name)) return 'embed';
   if (listedIdQueries(model, entity).length > 0) return 'listed-ids';
+  // Una réplica cuya clave es la identidad (keyField: id) y que lee un listado: su lectura por lote es por id, porque
+  // no hay clave natural que la sostenga (resolveReplica no mete la identidad en ella).
+  if (entity.replicaOf && replicaKeyField(model, entity) === entity.idField.name && replicaReadInListing(model, entity)) {
+    return 'replica-listing';
+  }
   return null;
 }
 

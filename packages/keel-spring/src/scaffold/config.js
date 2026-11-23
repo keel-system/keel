@@ -8,6 +8,7 @@ import { usesPersonalData } from '@keel-system/keel-core/gen/personal-data';
 import { identityProvider, tokenContract } from '@keel-system/keel-core/gen/identity-providers';
 import { SCOPE_PREFIX_AUDIENCE_COMMENT, clientIdLines, needsAudience, translatedClients } from '@keel-system/keel-core/gen/security-config';
 import { localIssuer } from '@keel-system/keel-core/gen/identity-realm';
+import { localTokenUri } from '@keel-system/keel-core/gen/http-clients-config';
 import { DENIED_ADDRESSES_ENV, usesOutboundPolicy } from './outbound-address.js';
 import { DATABASES, HTTP_STUB, TELEMETRY_INFRA, collectorHostEndpoint } from '../lib/stack-catalog.js';
 import { JAVA_DATABASES } from '../lib/java-stack.js';
@@ -1685,22 +1686,19 @@ function storageYaml(model, profile) {
 // antes de llegar a la llamada de negocio, y el síntoma no menciona al token.
 //
 // Se conserva el PATH declarado y solo se cambia el origen: el diseño dice dónde
-// pide el token ese proveedor, y un escenario que programe el stub tiene que poder
-// leerlo del diseño en vez de adivinar una ruta que nos hayamos inventado aquí.
-// Si el `tokenUrl` no es una URL absoluta parseable, se deja tal cual: es dato del
-// diseño y `keel validate` es quien tiene que juzgarlo, no el emisor de YAML.
+// pide el token ese proveedor, y el mapping que lo contesta (infra/http-stubs/
+// mappings/<cliente>-token.json, keel-core/gen/http-clients-config.js) usa esa misma
+// ruta. Si el `tokenUrl` no es una URL absoluta parseable (un marcador, que `keel
+// validate` ya avisa), la ruta es una fija por cliente: dejarlo tal cual daba un 500
+// en todo alta de la corrida order de prueba-gelsa.
 //
 // La redirección es de `local` y SOLO de `local`: en develop el valor del diseño es
 // el default de la env var y en production es obligatoria sin default. Colar el
 // stub como default fuera de local haría que un despliegue mal configurado pidiera
 // el token a un puerto de nuestra máquina en vez de fallar al arrancar.
 function tokenUri(client, profile) {
-  if (profile !== 'local') return client.auth.tokenUrl;
-  try {
-    return LOCAL_STUB_BASE_URL + new URL(client.auth.tokenUrl).pathname;
-  } catch {
-    return client.auth.tokenUrl;
-  }
+  // En local, la ruta del token en el proveedor de prueba, la misma que contesta el mapping de infra/ (keel-core).
+  return profile === 'local' ? localTokenUri(client) : client.auth.tokenUrl;
 }
 
 /**

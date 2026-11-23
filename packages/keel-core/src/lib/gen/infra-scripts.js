@@ -27,6 +27,7 @@ import { declaredBuckets } from './buckets.js';
 import { deadLetterDestination, deadLetterSubscriptions, subscriptionDestination } from './dead-letter.js';
 import { scopingClaimChecks } from './identity-realm.js';
 import { fixturesSql } from './fixtures.js';
+import { tokenStubMappings } from './http-clients-config.js';
 import {
   DATABASES,
   BROKERS,
@@ -691,6 +692,7 @@ export function infraFiles(model, platform) {
   // como root y el contenedor no puede leerlo (podman rootless, sobre todo).
   if (layersPresent.httpClients || layersPresent.payments) {
     files.push({ path: 'infra/http-stubs/mappings/.gitkeep', content: '' });
+    files.push(...tokenStubMappings(model));
     files.push({ path: 'infra/http-stubs/README.md', content: platform.httpStubsReadme(service) });
   }
   files.push(...(platform.extraFiles?.(model) ?? []));

@@ -17,6 +17,7 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainSubPackage, domainTypeImport } from './entities.js';
 import { naturalKeyBatchFinder } from './repositories.js';
+import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { occurredAtField } from '@keel-system/keel-core/gen/replica';
 
 const PROJECTION_PKG = 'application.projection';
@@ -205,7 +206,11 @@ ${missBody(model, dependency, need, entity)}${batch}
  * política onMiss sigue siendo de `byKey(...)`, que se aplica a cada clave que falte.
  */
 function batchReadBody(model, need, entity, imports) {
-  const finder = naturalKeyBatchFinder(model, entity);
+  // Una réplica cuya clave es la identidad lee el lote por findAllById (idBatchReason de keel-core): no tiene clave natural.
+  const finder =
+    idBatchReason(model, entity) === 'replica-listing'
+      ? { reason: 'replica-listing', name: 'findAllById', args: 'ids' }
+      : naturalKeyBatchFinder(model, entity);
   if (finder?.reason !== 'replica-listing') return '';
   const { keyField, keyFieldJavaType, keyGetter } = need.replica;
   for (const name of ['java.util.Collection', 'java.util.HashMap', 'java.util.Map', ...(need.replica.keyFieldImports ?? [])]) {

@@ -241,8 +241,8 @@ assertEquals(stubRequestHeader(peticiones.get(0), "Idempotency-Key"),
              "el reintento estrenó clave: para el proveedor son dos encargos distintos");
 ```
 
-Las respuestas son las mismas cuatro formas que ya conoces: `StubResponse.ok(status, cuerpo)`,
-`.failure(status)`, `.timeout(ms)` y `.connectionFault()`.
+Las respuestas son las mismas cinco formas que ya conoces: `StubResponse.ok(status, cuerpo)`,
+`.failure(status)`, `.timeout(ms)`, `.delayed(status, cuerpo, ms)` y `.connectionFault()`.
 
 Dos cosas que conviene saber antes de usarlo:
 
@@ -1236,6 +1236,7 @@ Helpers de `AbstractFlowIT`:
 | `stubFailure(método, patrónRuta, status)` | Ejercitar `onFailure`/`onMiss` y el circuit breaker (5xx reintenta, 4xx no) |
 | `stubConnectionFault(método, patrónRuta)` | El proveedor **no contesta**: corta la conexión. Lo que ejercita `retryOn: [connection]` |
 | `stubTimeout(método, patrónRuta, msDeRetraso)` | El proveedor tarda más de lo que la llamada tolera. Lo que ejercita `retryOn: [timeout]`; el retraso tiene que superar el `timeoutMs` declarado |
+| `stubForDelayed(método, patrónRuta, status, cuerpoJson, msDeRetraso)` | Una respuesta **válida** que llega tarde. Lo que mide un escenario de respuesta lenta que cabe en el `timeoutMs`, o una que llega cuando el servicio ya decidió. No uses `stubTimeout` para eso: devuelve un cuerpo vacío |
 | `stubSequence(método, patrónRuta, respuestas…)` | Respuestas **distintas en llamadas sucesivas** a la misma ruta. Es lo que hace escribible un escenario de REINTENTO; ver abajo |
 | `stubCallCount(método, patrónRuta)` | El Then: cuántas veces se llamó al proveedor — la única forma en caja negra de afirmar que un dato se cacheó, o que algo no se reintentó |
 | `stubRequests(método, patrónRuta)` | El Then que no se conforma con cuántas veces, sino con **qué** se envió: devuelve el log de peticiones recibidas, cada una como el JSON del stub |

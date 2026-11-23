@@ -10,16 +10,58 @@ import { envValue } from './profile-values.js';
 import { LOCAL_STUB_BASE_URL, UNREACHABLE_BASE_URL } from './infra-catalog.js';
 
 /**
- * El endpoint de token en `local`: el PATH del diseño sobre el proveedor de prueba (el WireMock de infra/), como
- * keel-spring. Solo en local: fuera, el valor del diseño es el default (develop) o la variable obligatoria.
+ * La ruta del endpoint de token en el proveedor de prueba: el PATH de la URL del diseño, o una fija por cliente si no
+ * se lee (un marcador como `${IDP_TOKEN_URL}`, que `CHK-HTTP-TOKENURL-PLACEHOLDER` ya avisa). Antes, la URL que no se
+ * leía llegaba tal cual a `local` y todo alta daba 500 (corrida order de prueba-gelsa, G4).
+ */
+export function localTokenPath(client) {
+  try {
+    const { pathname } = new URL(client.auth.tokenUrl);
+    if (pathname && pathname !== '/' && !/[${}]/.test(client.auth.tokenUrl)) return pathname;
+  } catch {
+    // la ruta fija de abajo
+  }
+  return `/${client.id}/oauth2/token`;
+}
+
+/** El endpoint de token en `local`: esa ruta sobre el proveedor de prueba (el WireMock de infra/). */
+export function localTokenUri(client) {
+  return LOCAL_STUB_BASE_URL + localTokenPath(client);
+}
+
+/**
+ * Solo en local la URL apunta al proveedor de prueba: fuera, el valor del diseño es el default (develop) o la
+ * variable obligatoria.
  */
 function tokenUri(client, profile) {
-  if (profile !== 'local') return client.auth.tokenUrl;
-  try {
-    return LOCAL_STUB_BASE_URL + new URL(client.auth.tokenUrl).pathname;
-  } catch {
-    return client.auth.tokenUrl;
-  }
+  return profile === 'local' ? localTokenUri(client) : client.auth.tokenUrl;
+}
+
+/**
+ * Los mappings del proveedor de prueba que contestan el token de cada cliente con `oauth2-client-credentials`
+ * (`infra/http-stubs/mappings/<cliente>-token.json`). Es lo que no pertenece a ningún flujo —el servidor lo pide antes
+ * de cualquier llamada—, así que va en un archivo y sobrevive al reset (`/__admin/reset` vuelve a los de archivo).
+ * Sin él, toda llamada saliente del cliente falla en local antes de llegar a su stub (G4).
+ */
+export function tokenStubMappings(model) {
+  return (model.httpClients ?? [])
+    .filter((client) => client.auth?.type === 'oauth2-client-credentials')
+    .map((client) => ({
+      path: `infra/http-stubs/mappings/${client.id}-token.json`,
+      content: `${JSON.stringify(
+        {
+          request: { method: 'POST', urlPath: localTokenPath(client) },
+          response: {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+            jsonBody: { access_token: `stub-${client.id}-token`, token_type: 'Bearer', expires_in: 3600 }
+          }
+        },
+        null,
+        2
+      )}
+`
+    }));
 }
 
 /**

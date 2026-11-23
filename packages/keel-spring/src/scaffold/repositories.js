@@ -22,7 +22,7 @@ import { entityFinders, finderFields, jpaFinderMethods, likePatternHelper, portF
 import { isScopedRoot, readScopeJpaMethods, readScopePortMethods } from './read-scope.js';
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import { partialUniqueIndexes } from './persistence-members.js';
-import { collectInternalEntities, keyShadow, naturalKeyBatchReason, uniqueFields } from '@keel-system/keel-core/gen/relational';
+import { collectInternalEntities, keyShadow, naturalKeyBatchReason, naturalKeyIsIdentity, uniqueFields } from '@keel-system/keel-core/gen/relational';
 import * as lifecycle from './data-lifecycle.js';
 import * as history from './history.js';
 
@@ -109,8 +109,11 @@ export function naturalKeyParams(model, entity) {
  * por eso se exige un tipo con nombre y no un primitivo.
  */
 export function naturalKeyBatchFinder(model, entity) {
-  const finder = naturalKeyFinder(model, entity);
-  if (!finder) return null;
+  // Por los parámetros de la clave y no por `naturalKeyFinder`: una réplica cuyo `keyField` es el id no tiene finder
+  // sencillo (lo cubre `findById`) y su lectura por lote sigue haciendo falta.
+  const params = naturalKeyParams(model, entity);
+  if (params.length === 0) return null;
+  const finder = { params };
   // Cuándo hace falta lo decide keel-core, igual para keel-nest: una lista del mismo value type
   // en la entrada, o la copia de una réplica que lee una operación de listado.
   const reason = naturalKeyBatchReason(model, entity);
@@ -265,6 +268,8 @@ export function uniqueFieldFinders(model, entity) {
 }
 
 export function naturalKeyFinder(model, entity) {
+  // Una clave que es la identidad no da finder propio: ya está `findById` en el puerto.
+  if (naturalKeyIsIdentity(entity)) return null;
   const params = naturalKeyParams(model, entity);
   if (params.length === 0) return null;
   return {

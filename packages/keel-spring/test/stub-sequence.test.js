@@ -56,7 +56,7 @@ test('con capa http-clients el arnés puede programar una SECUENCIA de respuesta
   assert.match(source, /protected static void stubSequence\(String method, String pathPattern, StubResponse\.\.\. responses\)/);
   // Las cuatro formas que ya existían de un disparo, disponibles también en secuencia: sin
   // `timeout` no se puede escribir «falla la primera y responde la segunda», que es el caso.
-  for (const forma of ['ok', 'failure', 'timeout', 'connectionFault']) {
+  for (const forma of ['ok', 'failure', 'timeout', 'delayed', 'connectionFault']) {
     assert.match(source, new RegExp(`public static StubResponse ${forma}\\(`), `StubResponse no ofrece ${forma}`);
   }
 });
@@ -89,8 +89,25 @@ test('programar dos veces la misma ruta falla en el sitio, no en silencio', () =
 });
 
 test('y el registro se limpia con los mappings, o la clase siguiente no podría programar', () => {
-  const cuerpo = bodyOf(harness('catalog-extended'), 'protected static void resetStubs()');
-  assert.match(cuerpo, /SEQUENCED\.clear\(\)/, 'el guard sobreviviría al reset y fallaría la clase siguiente');
+  const source = harness('catalog-extended');
+  assert.match(bodyOf(source, 'protected static void resetStubs()'), /SEQUENCED\.clear\(\)/, 'el guard sobreviviría al reset y fallaría la clase siguiente');
+  // Corrida order de prueba-gelsa (G1): el reset entre clases es resetState(), que pasa por reset-db.sh y no por
+  // resetStubs(). Reiniciar el stub no vacía el registro de la JVM, y la segunda clase con stubSequence sobre la misma
+  // ruta reventaba en su @BeforeAll.
+  const reset = bodyOf(source, 'protected static void resetState()');
+  assert.match(reset, /runInfraScript\("infra\/reset-db\.sh"/);
+  assert.match(reset, /SEQUENCED\.clear\(\)/, 'resetState no vacía el registro de secuencias');
+});
+
+test('una respuesta válida con retardo sale del mismo renderizado que las demás', () => {
+  // Corrida order de prueba-gelsa (G2): FL-ORD-008 y FL-CAN-006 piden una respuesta válida que llega tarde, y
+  // StubResponse.timeout devuelve un cuerpo vacío. El agente lo escribió a mano en su soporte de flujos.
+  const source = harness('catalog-extended');
+  assert.match(source, /protected static void stubForDelayed\(String method, String pathPattern, int status, String jsonBody, int delayMs\)/);
+  assert.match(bodyOf(source, 'protected static void stubForDelayed('), /stubMapping\(method, pathPattern, stubDelayedBody\(status, jsonBody, delayMs\)/);
+  assert.match(bodyOf(source, 'public static StubResponse delayed('), /stubDelayedBody\(status, jsonBody, delayMs\)/);
+  assert.match(bodyOf(source, 'private static String stubOkBody('), /return stubDelayedBody\(status, jsonBody, 0\)/);
+  assert.match(bodyOf(source, 'private static String stubSlowBody('), /return stubDelayedBody\(200, "\{\}", delayMs\)/);
 });
 
 test('las cuatro respuestas se renderizan en UN solo sitio', () => {
@@ -106,7 +123,7 @@ test('las cuatro respuestas se renderizan en UN solo sitio', () => {
     /stubMapping\(method, pathPattern, stubFaultBody\(\)/
   );
   // Y una sola definición de cada forma, no dos.
-  for (const render of ['stubOkBody', 'stubSlowBody', 'stubFaultBody']) {
+  for (const render of ['stubOkBody', 'stubSlowBody', 'stubDelayedBody', 'stubFaultBody']) {
     assert.equal(
       (source.match(new RegExp(`private static String ${render}\\(`, 'g')) ?? []).length,
       1,

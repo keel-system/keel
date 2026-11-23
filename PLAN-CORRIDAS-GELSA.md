@@ -1,6 +1,6 @@
 # Lo que destaparon las corridas de prueba-gelsa: cazarlo en diseño y corregir los generadores
 
-**Estado: ABIERTO (2026-11-20).** Inc. 0 y 1 hechos (2026-11-23). Se ejecuta en varias sesiones, un incremento por sesión
+**Estado: ABIERTO (2026-11-20).** Inc. 0, 1 y 2 hechos (2026-11-23). Se ejecuta en varias sesiones, un incremento por sesión
 como norma, y cada uno se cierra con «Para retomar» en § Estado y su commit.
 
 ## Contexto
@@ -191,7 +191,7 @@ Lo neutral en `keel-core/gen`, y cada generador con su test de paridad.
 |---|---|---|
 | 0. Registro de corridas | hecho (2026-11-23) | `corrida-metrics.js series`: `page-out-of-range-totals` repetido en 3 corridas; H1 sin cambio |
 | 1. keel-core: puerta sin DSL | hecho (2026-11-23) | suite de keel-core 1684/1684, `design-matrix` sin `sin-mutacion` (246 falsados), `--ready` sobre las copias |
-| 2. keel-core/gen + keel-spring | pendiente | |
+| 2. keel-core/gen + keel-spring | hecho (2026-11-23) | `npm test` de la raíz en verde (6 paquetes); `compile-check` de catalog-extended en 4 combos; el arnés de la copia de order y el `main` de job-dispatch con `naturalKey: [id]` compilados, y G6 falsado |
 | 3. nest, dotnet, go | pendiente | |
 | 4. DSL 2.33 en keel-core | pendiente | |
 | 5. keel-spring 2.33 y pagos | pendiente | |
@@ -213,4 +213,32 @@ Sobre las copias originales (`D:\keel-gelsa`), `--ready` sale en rojo en order (
 y payment sigue en verde hasta el inc. 4 (D7). D2 también es del inc. 4. `CHK-DOCS-*` no cuenta en `incoherences`
 (`OWNED_ELSEWHERE` de `readiness.js`), así que en order D3 lo pone en rojo la regla de la proyección.
 
-Siguiente: el inc. 2 (keel-core/gen + keel-spring).
+**Inc. 2, lo que quedó:**
+- **G6**: `naturalKeyIsIdentity` (`gen/relational.js`). keel-spring no emite el finder de una clave que es la
+  identidad. La causa de order no era solo el `naturalKey: [id]` escrito a mano: `resolveReplica` (`gen/model.js`) metía
+  en la clave la `keyField` de una réplica aunque fuera el id. Ya no lo hace, y la lectura por lote de esa réplica va
+  por `findAllById` (`idBatchReason` → `replica-listing`, `ref-targets.js`). Falsado: sin la guarda, el `main` de
+  job-dispatch con `naturalKey: [id]` no compila.
+- **G5**: `gen/outbound-boundary.js` (`commitsBeforeOutbound`, `outboundBoundaryNote`). Restringido a las
+  activaciones HTTP con `awaitingSince` y `awaits: acknowledgement`: con `outcome` el veredicto decide la transición y
+  no hay espera que confirmar (publishAsset y retireProduct no cambian). Ninguna fixture tiene la forma; la silueta es
+  la retirada de catalog-extended con `acknowledgement` (`keel-spring/test/outbound-boundary.test.js`).
+- **G4**: `localTokenPath`/`tokenStubMappings` en `gen/http-clients-config.js`, con ruta fija por cliente si la URL no
+  se lee. El mapping `infra/http-stubs/mappings/<cliente>-token.json` lo emite `infra-scripts.js`, NEUTRAL, así que ya
+  lo tienen los cuatro (catalog-extended es la única fixture con oauth2). keel-spring no tiene `stub-check`: su red es
+  el test del JSON y el compile-check; la medida en vivo es la corrida de control.
+- **G1 + G2**: `resetState()` vacía `SEQUENCED` tras `reset-db.sh`, y `stubForDelayed`/`StubResponse.delayed` salen de
+  `stubDelayedBody`, del que derivan también la respuesta normal y la lenta.
+- **G3**: `actuatorCredential` cae en una persona sin roles (`tokenAs("actuator-reader", Map.of())`) cuando el diseño no
+  tiene roles ni clientes y sí tokens de persona. El `Accept` de `/actuator/prometheus` NO se tocó: el arnés no lee
+  ese endpoint; el agente se pasó a él porque `metrics` le daba 401.
+- **G11**: solo notas (el javadoc de `PaymentReconciliation` y la skill `keel-spring-database`). El check del gate
+  necesitaría una clase de comprobación nueva en el motor neutral (`idempotency-gate.js`: un `@Modifying` sin su
+  `@Transactional` en el mismo método), y la solución de raíz es que **build genere el reclamo del barrido de pagos**
+  (re-estampar `awaitingSince` con un UPDATE condicional sobre los estados en vuelo, como `reconciliation-claim.js`).
+  Se valora y se mueve al **inc. 5** (pagos).
+- Sin medir en vivo: `telemetry-check` no aplica a G3 (el helper es del arnés, no del servidor) y la red en vivo de
+  G1-G4 es la corrida de control.
+
+Siguiente: el inc. 3 (keel-nest, keel-dotnet y keel-go: G5, G6, G1/G2 y G3 donde aplique; G4 ya les llega por lo
+neutral).

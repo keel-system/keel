@@ -2883,7 +2883,9 @@ function resolveReplica(depId, needName, replica, entityByName, subscriptionByEv
 
   // La clave con la que el proveedor identifica el recurso es, por definición, la
   // clave natural de la copia: garantiza el finder findBy<KeyField> del repositorio.
-  if (!(entity.naturalKey ?? []).includes(replica.keyField)) {
+  // Salvo que sea la identidad de la copia: ya es única y ya la lee findById, y meterla
+  // en la clave daba un findById duplicado (corrida order de prueba-gelsa, G6).
+  if (replica.keyField !== entity.idField?.name && !(entity.naturalKey ?? []).includes(replica.keyField)) {
     entity.naturalKey = [replica.keyField, ...(entity.naturalKey ?? [])];
   }
 

@@ -2173,7 +2173,19 @@ function httpStubSection(model) {
         stubMapping(method, pathPattern, stubSlowBody(delayMs), null, null, null);
     }
 
-    /** Rutas con secuencia ya programada. {@link #resetStubs()} lo vacía entre clases. */
+    /**
+     * Una respuesta VÁLIDA que llega tarde: el cuerpo y el status de {@link #stubFor} con un retardo.
+     *
+     * <p>Es lo que mide un escenario de respuesta lenta que todavía cabe en el {@code timeoutMs} (el servicio espera y
+     * sigue), o uno en el que la respuesta llega cuando el servicio ya decidió por su cuenta. No es
+     * {@link #stubTimeout}: aquel devuelve un cuerpo vacío, y un servicio que espera la respuesta lo trataría como
+     * una respuesta mal formada en vez de como lo que el escenario describe.
+     */
+    protected static void stubForDelayed(String method, String pathPattern, int status, String jsonBody, int delayMs) {
+        stubMapping(method, pathPattern, stubDelayedBody(status, jsonBody, delayMs), null, null, null);
+    }
+
+    /** Rutas con secuencia ya programada. {@code resetState()} y {@link #resetStubs()} lo vacían entre clases. */
     private static final Set<String> SEQUENCED = new HashSet<>();
 
     /**
@@ -2201,6 +2213,11 @@ function httpStubSection(model) {
          */
         public static StubResponse timeout(int delayMs) {
             return new StubResponse(stubSlowBody(delayMs));
+        }
+
+        /** Respuesta válida con retardo, como {@link #stubForDelayed}. */
+        public static StubResponse delayed(int status, String jsonBody, int delayMs) {
+            return new StubResponse(stubDelayedBody(status, jsonBody, delayMs));
         }
 
         /** Corta la conexión antes de responder. */
@@ -2259,19 +2276,25 @@ function httpStubSection(model) {
         }
     }
 
-    /** El cuerpo de una respuesta normal del stub. Fuente única de su forma. */
+    /** El cuerpo de una respuesta normal del stub. */
     private static String stubOkBody(int status, String jsonBody) {
-        return """
-                {"status": %d, "headers": {"Content-Type": "application/json"}, "body": %s}"""
-                .formatted(status, jsonBody == null ? "\\"\\"" : quote(jsonBody));
+        return stubDelayedBody(status, jsonBody, 0);
     }
 
     /** El cuerpo de una respuesta que tarda más de lo tolerado. */
     private static String stubSlowBody(int delayMs) {
+        return stubDelayedBody(200, "{}", delayMs);
+    }
+
+    /**
+     * El cuerpo de una respuesta del stub, con o sin retardo. Fuente única de su forma: la normal, la lenta y la
+     * válida con retardo salen de aquí, y una cabecera cambiada en una no puede quedarse sin cambiar en las otras.
+     */
+    private static String stubDelayedBody(int status, String jsonBody, int delayMs) {
+        String delay = delayMs > 0 ? "\\"fixedDelayMilliseconds\\": %d, ".formatted(delayMs) : "";
         return """
-                {"status": 200, "fixedDelayMilliseconds": %d,
-                 "headers": {"Content-Type": "application/json"}, "body": "{}"}"""
-                .formatted(delayMs);
+                {"status": %d, %s"headers": {"Content-Type": "application/json"}, "body": %s}"""
+                .formatted(status, delay, jsonBody == null ? "\\"\\"" : quote(jsonBody));
     }
 
     /** El cuerpo de un corte de conexión, que no es una respuesta HTTP. */
@@ -2351,7 +2374,7 @@ function httpStubSection(model) {
         return null;
     }
 
-    /** Borra los mappings, el log de peticiones y las secuencias. Lo llama {@link #resetState()}. */
+    /** Borra los mappings, el log de peticiones y las secuencias, sin pasar por reset-db.sh. */
     protected static void resetStubs() {
         // El registro de secuencias va con los mappings: si sobreviviera al reset, la clase
         // siguiente no podría programar la misma ruta y fallaría por el guard, no por su escenario.
@@ -2467,7 +2490,14 @@ function resetSection(model) {
      * lista <b>no</b> se puede dar por limpio.
      */
     protected static void resetState() {${inMemoryResetCalls(model)}${restore}${stopReplicaLine}
-        runInfraScript("infra/reset-db.sh", "¿Está la infraestructura arriba?");${marks}
+        runInfraScript("infra/reset-db.sh", "¿Está la infraestructura arriba?");${
+          model.layersPresent.httpClients
+            ? `
+        // reset-db.sh reinicia el proveedor de prueba, pero el registro de secuencias vive en la JVM: sin
+        // vaciarlo, la clase siguiente que programe la misma ruta caería en el guard de stubSequence.
+        SEQUENCED.clear();`
+            : ''
+        }${marks}
     }
 `;
 }
@@ -5382,7 +5412,7 @@ function actuatorMetric(model, path) {
  * `authenticated()`, el primero que haya — el mismo orden que el humo del arnés, porque un diseño
  * puede declarar solo roles o solo `serviceClients` (`notification-mailer` no tiene roles).
  */
-function actuatorCredential(model) {
+export function actuatorCredential(model) {
   const sec = model.security ?? {};
   const roles = sec.roles ?? [];
   const clients = sec.serviceAuth ? sec.serviceClients ?? [] : [];
@@ -5406,6 +5436,11 @@ function actuatorCredential(model) {
   // 403 que devuelva el helper es la pista—: vale la primera que haya.
   if (roles[0]) return `tokenFor("${roles[0]}")`;
   if (clients[0]) return asClient(clients[0]);
+  // Ni roles ni clientes máquina: «cualquier usuario autenticado» (corrida order de prueba-gelsa, G3). Con tokens de
+  // persona hay un usuario sin roles que satisface `authenticated()`; sin esta rama, las tres métricas daban 401.
+  if (usesPersonaTokens(model) && rule.roles.length === 0 && rule.permissions.length === 0 && rule.scopes.length === 0) {
+    return 'tokenAs("actuator-reader", Map.of())';
+  }
   return null;
 }
 

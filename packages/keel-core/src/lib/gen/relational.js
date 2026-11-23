@@ -158,6 +158,16 @@ export function rankShadow(field) {
   return { name: field.rank.shadow, source: field.name, column: snakeCase(field.rank.shadow), required: Boolean(field.required), enum: field.namedType ?? null };
 }
 
+/**
+ * ¿La clave natural es la propia identidad? Pasa con una réplica cuyo `keyField` es el id (resolveReplica lo mete en la
+ * clave) o con un `naturalKey: [id]` escrito a mano (CHK-PERSIST-NATURALKEY-IS-ID). Su finder sería un `findBy<Id>` que
+ * repite el `findById` del puerto, y en Java no compila (corrida order de prueba-gelsa): ningún generador lo emite.
+ */
+export function naturalKeyIsIdentity(entity) {
+  const key = entity?.naturalKey ?? [];
+  return key.length === 1 && key[0] === entity?.idField?.name;
+}
+
 /** La sombra que lleva la UNICIDAD y las búsquedas por clave del campo: solo la de su propio `compare`. */
 export function keyShadow(field) {
   const shadow = foldedShadow(field);
@@ -727,7 +737,7 @@ export function naturalKeyBatchReason(model, entity) {
   if (key.length === 0) return null;
   const field = entity.fields.find((f) => f.name === key[key.length - 1]);
   if (!field || field.list) return null;
-  if (entity.replicaOf && key.length === 1 && replicaReadInListing(model, entity)) return 'replica-listing';
+  if (entity.replicaOf && key.length === 1 && key[0] === replicaKeyField(model, entity) && replicaReadInListing(model, entity)) return 'replica-listing';
   if (key.length === 1 && model.security?.scoping?.over === `${entity.name}.${key[0]}`) return 'scope-claim';
   if (!field.typeName || isBaseType(field.typeName)) return null;
   const listed = (model.services ?? [])
@@ -735,6 +745,13 @@ export function naturalKeyBatchReason(model, entity) {
     .flatMap((operation) => operation.bodyFields ?? [])
     .some((input) => input.list && input.typeName === field.typeName);
   return listed ? 'listed-input' : null;
+}
+
+/** El `keyField` de la réplica de la que esta entidad es copia, o null. */
+export function replicaKeyField(model, entity) {
+  const { dependency, need: needName } = entity.replicaOf ?? {};
+  const need = (model.dependencies ?? []).find((dep) => dep.id === dependency)?.needs?.find((n) => n.name === needName);
+  return need?.replica?.keyField ?? null;
 }
 
 /** ¿Lee la copia local de esta réplica alguna operación que devuelve una lista o una página? */

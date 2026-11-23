@@ -16,6 +16,7 @@
 // keel-spring-<broker>.
 
 import { callsPaymentGateway } from '../lib/payments-model.js';
+import { commitsBeforeOutbound } from '@keel-system/keel-core/gen/outbound-boundary';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainTypeImport } from './entities.js';
 import { nullInclusion } from './dtos.js';
@@ -670,9 +671,13 @@ function contractJavadoc(sub, model) {
     // La puerta, si el mensaje la lleva (keel-core/gen/entry-gates.js): por aquí es SUBSCRIPTION.
     const gate = entryGateValue(model, sub.trigger, 'SUBSCRIPTION');
     const args = [...sub.triggerArguments.map((a) => `${a.component} = ${argument(a)}`), ...(gate ? [`entryGate = ${gate}`] : [])].join(', ');
-    // La misma regla que el controller y el scheduler: lo que llama a la pasarela va sin
-    // transacción abarcadora (callsPaymentGateway).
-    const via = callsPaymentGateway(model, sub.trigger) ? 'UseCaseMediator.dispatchWithoutTransaction(...) —llama a la pasarela: registra y confirma antes de llamarla—' : 'UseCaseMediator';
+    // La misma regla que el controller y el scheduler: lo que llama a la pasarela, o encarga una activación HTTP que
+    // deja esperando, va sin transacción abarcadora (commitsBeforeOutbound).
+    const via = callsPaymentGateway(model, sub.trigger)
+      ? 'UseCaseMediator.dispatchWithoutTransaction(...) —llama a la pasarela: registra y confirma antes de llamarla—'
+      : commitsBeforeOutbound(model, sub.trigger)
+        ? 'UseCaseMediator.dispatchWithoutTransaction(...) —encarga trabajo que deja esperando: registra la espera y confirma antes de llamar—'
+        : 'UseCaseMediator';
     lines.push(
       `Lo consume ${sub.listenerClass} (listener del broker del stack; lo escribe el agente) despachando ${sub.triggerMessageClass ?? sub.trigger}${args ? `(${args})` : ''} vía ${via}.`
     );
