@@ -14,7 +14,7 @@
 // (Decimal, bigint) y sus decoradores tendrían que ir en los mensajes de la capa application.
 
 import { requestShape, returnsLocation, locationTarget } from '@keel-system/keel-core/gen/api-contract';
-import { callsPaymentGateway } from '@keel-system/keel-core/gen/payments-model';
+import { commitsBeforeOutbound } from '@keel-system/keel-core/gen/outbound-boundary';
 import { pageableDefaults } from '@keel-system/keel-core/gen/pagination';
 import { DIRS, classPath, fieldImports, tsModule, tsdoc, tsString } from './render.js';
 import { ENTRY_GATE_TS, MEDIATOR_TS } from './mediator.js';
@@ -277,9 +277,9 @@ function renderMethod(model, operation, imports, readers) {
   if (batch) return renderBatchMethod(model, operation, decorator, readerName, imports);
 
   const params = ['@Param() params: Record<string, string>', '@Query() query: Record<string, unknown>', '@Body() body: unknown'];
-  // Lo que llama a la pasarela de pago va SIN transacción abarcadora (callsPaymentGateway, keel-core): su garantía
-  // es registrar y confirmar ANTES de llamarla, como en keel-spring.
-  const dispatch = callsPaymentGateway(model, operation.name) ? 'dispatchWithoutTransaction' : 'dispatch';
+  // Lo que llama a la pasarela de pago, o encarga una activación HTTP y la deja esperando, va SIN transacción
+  // abarcadora (commitsBeforeOutbound, keel-core): su garantía es registrar y confirmar ANTES de llamar, como en keel-spring.
+  const dispatch = commitsBeforeOutbound(model, operation.name) ? 'dispatchWithoutTransaction' : 'dispatch';
   // La escritura condicional (api.concurrency): If-Match se lee ANTES que el lector, porque el 428 va antes que todo 400
   // (D3), y llega al lector, que lo estampa en el mensaje.
   const conditional = carriesExpectedVersions(model, operation);

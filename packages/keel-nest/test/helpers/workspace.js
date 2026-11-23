@@ -135,6 +135,17 @@ export const DERIVED_SILHOUETTES = [
       };
     }
   },
+  // Las dos formas de la corrida order de prueba-gelsa que ninguna fixture tiene: la réplica cuya clave es la identidad
+  // (G6: su lote va por findAllById) y la activación HTTP que deja esperando (G5: se despacha sin transacción).
+  {
+    name: 'catalog-gelsa-order',
+    fixture: 'catalog-extended',
+    withoutLayers: [],
+    mutate(layers) {
+      layers.dependencies.dependencies.pricing.needs.supplierPrice.replica.keyField = 'id';
+      layers.dependencies.dependencies.compliance.activations.recordWithdrawal.awaits = 'acknowledgement';
+    }
+  },
   ...['notification-mailer', 'notification-mailer-mongo'].map((fixture) => ({
     name: fixture === 'notification-mailer' ? 'mailer-author' : 'mailer-mongo-author',
     fixture,

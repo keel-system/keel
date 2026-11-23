@@ -14,6 +14,7 @@ import { DIRS, capitalize, classPath, decapitalize, entityDir, tsModule } from '
 import { portPath as clientPortPath } from './http-clients.js';
 import { ANNOTATIONS_TS } from './mediator.js';
 import { PORT_DIR, naturalKeyBatchFinder } from './repositories.js';
+import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { occurredAtField } from '@keel-system/keel-core/gen/replica';
 
 const PROJECTION_DIR = 'application/projection';
@@ -66,7 +67,8 @@ function renderProjector(model, dependency, need, entity) {
   ];
   for (const field of [keyField, ...fields].filter(Boolean)) imports.push(...(field.imports ?? []).map((imp) => ({ ...imp, type: true })));
   const type = (field) => (field.required ? field.tsType : `${field.tsType} | null`);
-  const snapshot = [keyField, ...fields].filter(Boolean).map((field) => `  readonly ${field.name}: ${type(field)};`);
+  // La clave de correlación identifica la copia: siempre viene, aunque sea el id (`keyField: id`), que no es `required`.
+  const snapshot = [keyField && { ...keyField, required: true }, ...fields].filter(Boolean).map((field) => `  readonly ${field.name}: ${type(field)};`);
   const updateArgs = fields.map((field) => `snapshot.${field.name}`).join(', ');
   const guard = ordering
     ? `
@@ -91,7 +93,7 @@ ${snapshot.join('\n')}
  * Necesidad que la justifica: ${dependency.id}.${need.name}${need.description ? ` — ${need.description}` : ''}
  *
  * TODO (agente): añade a ${entity.name} los dos métodos de dominio que usa (el dominio no tiene setters):
- *   static projectionOf(snapshot: ${entity.name}Snapshot): ${entity.name}   — la copia nueva; genera el id
+ *   static projectionOf(snapshot: ${entity.name}Snapshot): ${entity.name}   — la copia nueva; ${replica.keyField === entity.idField?.name ? 'el id es el que informa el proveedor, no lo generes' : 'genera el id'}
  *   applySnapshot(${fields.map((field) => `${field.name}: ${type(field)}`).join(', ')}): void   — actualiza lo informado
  */
 @ApplicationComponent()
@@ -120,12 +122,21 @@ export class ${replica.projectorClass} {
 }
 
 /**
+ * El finder por lote de la copia: el de su clave natural o, si la clave es la identidad (`keyField: id`), `findAllById`
+ * (idBatchReason de keel-core, `replica-listing`), porque entonces no hay clave natural que lo sostenga. Como keel-spring.
+ */
+export function replicaBatchFinder(model, entity) {
+  if (idBatchReason(model, entity) === 'replica-listing') return { reason: 'replica-listing', name: 'findAllById', plural: 'ids' };
+  return naturalKeyBatchFinder(model, entity);
+}
+
+/**
  * La lectura POR LOTE de la copia, cuando la lee una operación de listado: el `byKeys` del Reader de keel-spring.
  * Devuelve solo lo ya replicado; la política onMiss sigue siendo de `byKey(...)`, que se aplica a cada clave que
  * falte. Sin él, el camino de menor resistencia era una consulta por elemento de la página.
  */
 function batchRead(model, replica, entity, keyType) {
-  const finder = naturalKeyBatchFinder(model, entity);
+  const finder = replicaBatchFinder(model, entity);
   if (finder?.reason !== 'replica-listing') return '';
   return `
 

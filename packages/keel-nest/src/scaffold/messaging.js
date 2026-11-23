@@ -38,6 +38,7 @@ import { entryGateAssignment } from './services.js';
 import { acknowledgeNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { callsPaymentGateway } from '@keel-system/keel-core/gen/payments-model';
+import { commitsBeforeOutbound } from '@keel-system/keel-core/gen/outbound-boundary';
 import { TELEMETRY_TS, usesTelemetry } from './telemetry.js';
 import { OUTBOX_RELAY } from '@keel-system/keel-core/gen/messaging-stores';
 import { TIMER_SWITCH } from '@keel-system/keel-core/gen/timer-store';
@@ -749,10 +750,13 @@ function contractDoc(model, sub) {
               : 'TODO (agente)';
     const gate = entryGateAssignment(model, sub.trigger, 'SUBSCRIPTION');
     const args = [...sub.triggerArguments.map((a) => `${a.component} = ${argument(a)}`), ...(gate ? [gate.replace(': ', ' = ')] : [])].join(', ');
-    // La misma regla que el controlador y el scheduler: lo que llama a la pasarela va sin transacción abarcadora.
+    // La misma regla que el controlador y el scheduler: lo que llama a la pasarela, o encarga una activación HTTP que
+    // deja esperando, va sin transacción abarcadora (commitsBeforeOutbound).
     const via = callsPaymentGateway(model, sub.trigger)
       ? 'UseCaseMediator.dispatchWithoutTransaction(...) —llama a la pasarela: registra y confirma antes de llamarla—'
-      : 'el UseCaseMediator';
+      : commitsBeforeOutbound(model, sub.trigger)
+        ? 'UseCaseMediator.dispatchWithoutTransaction(...) —encarga trabajo que deja esperando: registra la espera y confirma antes de llamar—'
+        : 'el UseCaseMediator';
     lines.push(
       `Lo consume ${consumer} (lo escribe el agente y lo registra en broker-bindings.ts), despachando ${sub.triggerMessageClass ?? sub.trigger}${args ? `(${args})` : ''} por ${via}.`
     );

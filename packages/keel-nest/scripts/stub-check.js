@@ -106,6 +106,20 @@ try {
   const slow = await adapter().cancelStock(ID);
   step('stubTimeout: más que el timeout de la llamada es transporte, y se reintenta', slow.cancelled === null && (await stub.stubCallCount('DELETE', ROUTE)) === 3);
 
+  // La respuesta VÁLIDA que llega tarde (corrida order de prueba-gelsa, G2): dentro del timeout el adaptador espera y
+  // recibe el cuerpo programado, en una sola petición. stubTimeout no sirve para esto: su cuerpo va vacío.
+  current = 'stubForDelayed';
+  await stub.resetStubs();
+  await stub.stubForDelayed('DELETE', ROUTE, 200, { cancelled: true }, 250);
+  const started = Date.now();
+  const late = await adapter().cancelStock(ID);
+  const waited = Date.now() - started;
+  step(
+    'stubForDelayed: la respuesta válida llega tarde, dentro del timeout, y el adaptador la recibe sin reintentar',
+    late.cancelled === true && waited >= 250 && (await stub.stubCallCount('DELETE', ROUTE)) === 1,
+    `${waited} ms`
+  );
+
   current = 'stubSequence';
   await stub.resetStubs();
   await stub.stubSequence('DELETE', ROUTE, stub.StubResponse.connectionFault(), stub.StubResponse.ok(200, { cancelled: true }));

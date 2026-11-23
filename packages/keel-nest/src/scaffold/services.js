@@ -25,6 +25,7 @@ import { finderNote } from '@keel-system/keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
 import { usesLikePattern, LIKE_PATTERN_TS } from './persistence-entities.js';
 import { refTargetsOf, listedIdsNote } from '@keel-system/keel-core/gen/ref-targets';
+import { outboundBoundaryNote } from '@keel-system/keel-core/gen/outbound-boundary';
 import { inverseCollectionsNote } from '@keel-system/keel-core/gen/inverse-collections';
 import { resolverPath } from './ref-resolvers.js';
 import { uploadNotes } from '@keel-system/keel-core/gen/buckets';
@@ -34,7 +35,7 @@ import { callerResolution } from './security.js';
 import { mailPorts, sendsMail } from './mail.js';
 import { ANNOTATIONS_TS, ENTRY_GATE_TS, HANDLERS_TS, MESSAGES_TS } from './mediator.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
-import { repositoryRoots, portClass, portPath, occupantFinders, naturalKeyBatchFinder, naturalKeyFinder, PAGE_TS } from './repositories.js';
+import { repositoryRoots, portClass, portPath, occupantFinders, naturalKeyFinder, PAGE_TS } from './repositories.js';
 import { deadlineHandlerNote, lateTransitionNote } from '@keel-system/keel-core/gen/deadlines';
 import { invariantHandlerNotes } from '@keel-system/keel-core/gen/entity-checks';
 import { clockDependencies, lateTransitionHint } from './timer.js';
@@ -53,7 +54,7 @@ import { schedulerPath } from './scheduling.js';
 import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { portPath as clientPortPath } from './http-clients.js';
-import { projectorPath, readerPath, replicas } from './projections.js';
+import { projectorPath, readerPath, replicaBatchFinder, replicas } from './projections.js';
 import { repositoryOf, isPartialUpdate } from '@keel-system/keel-core/gen/features';
 import { VERSIONED_TS, carriesExpectedVersions, conditionalHandlerNote, returnsVersioned, versionedType } from './conditional-writes.js';
 import { readScopeHandlerCall, readScopeImport } from './read-scope.js';
@@ -592,6 +593,9 @@ function handlerNotes(model, operation) {
   const compensation = compensationNote(operation);
   if (compensation) notes.push(compensation);
   for (const note of activationNotes(operation)) notes.push(note);
+  // La frontera: encargar y dejar esperando es un orden de commits, no una transacción (keel-core/gen/outbound-boundary).
+  const boundary = outboundBoundaryNote(model, operation);
+  if (boundary) notes.push(boundary);
   for (const { dependency, need } of operation.dependencyNeeds ?? []) notes.push(needNote(dependency, need, operation, model));
   for (const note of projectionNotes(model, operation)) notes.push(note);
   for (const eventName of operation.emits ?? []) {
@@ -745,7 +749,7 @@ function needNote(depId, need, operation, model) {
   }[replica.onMiss.action];
   // En un listado, primero el lote: un byKey(...) por elemento son N consultas por página. La misma nota que keel-spring.
   const replicaEntity = model?.entities?.find((entity) => entity.name === replica.entityName);
-  const batch = (operation?.returnsList || operation?.paginated) && replicaEntity && naturalKeyBatchFinder(model, replicaEntity)
+  const batch = (operation?.returnsList || operation?.paginated) && replicaEntity && replicaBatchFinder(model, replicaEntity)
     ? ` Esta operación devuelve una lista: lee la página entera con await this.${decap(replica.readerClass)}.byKeys(...) (UNA consulta) y pasa por byKey(...) solo las claves que falten, que es donde se aplica onMiss.`
     : '';
   return `Dependencia ${depId}.${need.name} (replicada)${why}: lee ${replica.entityName} con await this.${decap(replica.readerClass)}.byKey(...), que ya aplica onMiss: ${replica.onMiss.action}. ${onMiss}${batch} NUNCA leas el repositorio de la réplica directamente ni la escribas desde aquí: la copia solo se escribe desde ${replica.projectorClass}.${exposeNote(need, operation)}`;

@@ -284,7 +284,7 @@ function renderPort(model, entity) {
     methods.push(
       `  /**
    * Las raíces de esos ids en UNA consulta: el orden no está garantizado y lo que no exista no aparece; quien llama
-   * indexa por id. ${idBatch === 'embed' ? `La usa ${entity.name}RefResolver para el \`embed\` de una página` : `La usa ${listedIdQueries(model, entity).map((op) => op.name).join(', ')}, que recibe la lista de ids`}:
+   * indexa por id. ${idBatch === 'embed' ? `La usa ${entity.name}RefResolver para el \`embed\` de una página` : idBatch === 'replica-listing' ? `La usa el byKeys(...) del lector de la copia, que lee un listado` : `La usa ${listedIdQueries(model, entity).map((op) => op.name).join(', ')}, que recibe la lista de ids`}:
    * leerlos en un bucle es una consulta por elemento.
    */
 ` + `  abstract findAllById(ids: readonly ${idType}[]): Promise<${entity.name}[]>;`
