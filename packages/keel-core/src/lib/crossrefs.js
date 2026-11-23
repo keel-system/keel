@@ -3384,6 +3384,19 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
   // http-clients: tipado de requests/responses y coherencia path ↔ pathParams.
   // (method↔path juntos, request→method, GET/DELETE sin body y retryOn sin 4xx los cubre ya el schema.)
   for (const [clientId, client] of Object.entries(httpClients?.clients ?? {})) {
+    // El endpoint de tokens es la URL del entorno de referencia: lo que cambia por entorno ya
+    // lo externaliza el generador en su variable. Un marcador (`${IDP_TOKEN_URL}`) llega tal
+    // cual a la configuración local, nadie lo define y toda llamada saliente da 500 (corrida
+    // order de prueba-gelsa: 33 de 38 escenarios en rojo en la primera pasada).
+    const tokenUrl = client.auth?.tokenUrl;
+    if (typeof tokenUrl === 'string' && !isAbsoluteHttpUrl(tokenUrl)) {
+      warn(
+        'CHK-HTTP-TOKENURL-PLACEHOLDER',
+        `http-clients: clients.${clientId}.auth.tokenUrl: '${tokenUrl}' no es una URL absoluta http(s) — el generador la usa ` +
+          `como valor por defecto de la configuración y ya la externaliza por variable de entorno. Escribe la URL del ` +
+          `proveedor de identidad de referencia (la de producción o la de su documentación), no un marcador`
+      );
+    }
     for (const [callName, call] of Object.entries(client.calls ?? {})) {
       const where = `http-clients: clients.${clientId}.calls.${callName}`;
       httpCallKeys.add(`${clientId}|${callName}`);
@@ -4379,6 +4392,18 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     const entity = domain.entities?.[entityName] ?? {};
     for (const member of spec?.naturalKey ?? []) {
       checkPersistenceMember(entityName, entity, member, 'naturalKey');
+    }
+    // La identidad ya es única: una natural key que la incluye no añade ninguna constraint, y
+    // lo que sí añade es un finder por esa clave que repite el `findById` del puerto (la corrida
+    // order de prueba-gelsa no compilaba por eso). Una natural key es OTRA forma de encontrar la fila.
+    const idField = Object.entries(entity.fields ?? {}).find(([, field]) => field?.id === true)?.[0];
+    if (idField && (spec?.naturalKey ?? []).includes(idField)) {
+      warn(
+        'CHK-PERSIST-NATURALKEY-IS-ID',
+        `persistence: entities.${entityName}.naturalKey incluye '${idField}', que es la identidad de la entidad y ya es única — ` +
+          `la natural key es otra clave por la que se encuentra la fila (un código, un slug, una referencia externa). ` +
+          `Quítala, o nombra el campo de negocio que la identifica`
+      );
     }
     for (const index of spec?.indexes ?? []) {
       // Dos formas admitidas: la lista de campos a secas y el objeto con unique/when.
@@ -6053,6 +6078,50 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       );
     }
 
+    // (4c) La página vacía lleva los totales a cero, también FUERA DE RANGO aunque haya elementos
+    // en otras páginas (contrato del cable, wire-contract.md § Página). Tres corridas lo
+    // escribieron al revés —catalog-nest, y payment y notifications de prueba-gelsa— y la tercera
+    // se paró en KO con el servidor correcto. Por CLÁUSULA (ítem numerado partido por `;`): un
+    // Then encadena varias peticiones y los totales de una no son los de la otra.
+    const emptyItems = /`?items`?\s*(?::|=)\s*`?\[\s*\]/;
+    const nonZeroTotal = /`?total(Elements|Pages)`?\s*(?::|=)\s*`?([1-9]\d*)/;
+    for (const { id, when, then } of sections) {
+      const opName = whenOperation(when);
+      if (operations[opName]?.output?.paginated !== true) continue;
+      const items = numberedItems(then);
+      const clause = (items.length > 0 ? items : [then])
+        .flatMap((item) => item.split(';'))
+        .find((part) => emptyItems.test(part) && nonZeroTotal.test(part));
+      if (!clause) continue;
+      const [, which, value] = nonZeroTotal.exec(clause);
+      warn(
+        'CHK-SCEN-PAGE-TOTALS',
+        `validation-scenarios.md: ${id} afirma en ${opName} una página con items [] y total${which} ${value} — la página ` +
+          `vacía o fuera de rango lleva totalElements 0 y totalPages 0 aunque haya elementos en otras páginas, y el ` +
+          `servidor seguirá al contrato del cable. Corrige el Then`
+      );
+    }
+    // (4d) Una proyección enumerada en la convención («lleva exactamente `a`, `b`…») es la forma con la que se comparan
+    // todos los cuerpos: un campo que la entidad no tiene la hace imposible de cumplir para un servidor correcto. La
+    // corrida order de prueba-gelsa dio a `OrderLine` un `orderId` que el dominio no declara, y el agente tuvo que
+    // elegir entre el documento y el YAML. «Cada línea» o «cada elemento de `rel`» pasan a la hija.
+    for (const claim of projectionClaims(conventionsText(scenarios) ?? '', domain.entities ?? {})) {
+      warn(
+        'CHK-SCEN-PROJECTION-UNKNOWN-FIELD',
+        `validation-scenarios.md: la proyección de ${claim.entity} enumera ${claim.unknown.map((f) => `'${f}'`).join(', ')}, que ` +
+          `${claim.entity} no declara en domain (ni como campo ni como relación) — ningún servidor correcto lo devuelve. ` +
+          `Declara el campo o la relación en domain, o quítalo de la proyección`
+      );
+    }
+    if (conventions?.paginacion && /fuera\s+de\s+rango/i.test(conventions.paginacion) && /\bsi\s+no\s+hay\b/i.test(conventions.paginacion)) {
+      warn(
+        'CHK-SCEN-PAGE-TOTALS',
+        `validation-scenarios.md: la convención de paginación condiciona los totales a cero de la página fuera de rango a ` +
+          `que no haya ningún elemento — el contrato los pone a cero en toda página vacía o fuera de rango. Escríbela así: ` +
+          `«página vacía o fuera de rango: items [], totalElements 0 y totalPages 0»`
+      );
+    }
+
     // (5) Un Then que afirma en la RESPUESTA un dato que el YAML no pone en ningún contrato.
     // Salió dos veces en la misma corrida (`asset-vault`, 2026-09-28) y el agente eligió al
     // revés cada vez: con la auditoría siguió al YAML y el escenario salió rojo; con la
@@ -6472,9 +6541,61 @@ function conventionsSection(text) {
     if (/ausencia|nulos?/i.test(head)) out.ausencia = para;
     else if (/n[uú]meros|decimal|escala/i.test(head)) out.numeros = para;
     else if (/may[uú]sculas|acentos|texto|colaci[oó]n/i.test(head)) out.texto = para;
+    else if (/paginaci[oó]n/i.test(head)) out.paginacion = para;
     else if (/orden/i.test(head)) out.orden = para;
   }
   return out;
+}
+
+/**
+ * Las proyecciones que la convención enumera con «exactamente» y los campos que su entidad no tiene. Cada viñeta (o
+ * párrafo) nombra su entidad en un fragmento entre comillas invertidas (`Order`, o `output: { entity: Payment }`); una
+ * frase que empieza por «Cada» habla de la hija: la de la relación que nombra, o la única one-to-many de la entidad.
+ */
+function projectionClaims(conventions, entities) {
+  const members = (entity) => {
+    const known = new Set(Object.keys(entity.fields ?? {}));
+    for (const relation of Object.keys(entity.relations ?? {})) {
+      known.add(relation);
+      known.add(`${relation}Id`);
+      known.add(`${relation}Ids`);
+    }
+    return known;
+  };
+  const claims = [];
+  for (const block of conventions.split(/\n(?=\s*[-*]\s)|\n\s*\n/)) {
+    const spans = [...block.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+    let current = spans.flatMap((span) => span.match(/[A-Z][A-Za-z0-9]*/g) ?? []).find((word) => entities[word]) ?? null;
+    if (!current) continue;
+    for (const sentence of block.split(/(?<=\.)\s+/)) {
+      const at = sentence.search(/exactamente/i);
+      if (at < 0) continue;
+      let target = current;
+      if (/^\s*cada\b/i.test(sentence)) {
+        const relations = Object.entries(entities[current]?.relations ?? {});
+        const named = relations.find(([name]) => new RegExp('`' + name + '`').test(sentence.slice(0, at)));
+        const toMany = relations.filter(([, relation]) => relation?.cardinality === 'one-to-many');
+        target = (named ?? (toMany.length === 1 ? toMany[0] : null))?.[1]?.entity ?? null;
+      }
+      if (!target || !entities[target]) continue;
+      const known = members(entities[target]);
+      const listed = [...sentence.slice(at).matchAll(/`([a-z][A-Za-z0-9]*)`/g)].map((m) => m[1]);
+      const unknown = [...new Set(listed.filter((name) => !known.has(name)))];
+      if (unknown.length > 0) claims.push({ entity: target, unknown });
+    }
+  }
+  return claims;
+}
+
+/** Si el texto es una URL absoluta http(s) sin marcadores de plantilla. */
+function isAbsoluteHttpUrl(text) {
+  if (/[${}]/.test(text)) return false;
+  try {
+    const url = new URL(text);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.hostname !== '';
+  } catch {
+    return false;
+  }
 }
 
 /** La entidad de un `input`/`output` de la forma `{ entity: X }`, o null. */

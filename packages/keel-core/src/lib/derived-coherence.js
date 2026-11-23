@@ -154,6 +154,35 @@ function checkOpenapi(file, layers, warn, serviceName) {
       }
     }
   }
+
+  // Los esquemas de componentes salen de `domain.entities` (/keel-docs): uno con el nombre de una entidad no puede traer
+  // un campo que la entidad no tiene. El contrato de order de prueba-gelsa dio a `OrderLine` un `orderId` que el dominio
+  // no declara, los escenarios lo copiaron y el agente tuvo que elegir. Solo lo que SOBRA: lo que falta suele ser un
+  // campo que el diseño excluye de toda salida a propósito (un dato sensible, una marca de espera).
+  for (const [schemaName, schema] of Object.entries(doc.components?.schemas ?? {})) {
+    const entity = layers.domain?.entities?.[schemaName];
+    if (!entity || !schema?.properties) continue;
+    const known = entityMembers(entity);
+    const extra = Object.keys(schema.properties).filter((property) => !known.has(property));
+    if (extra.length > 0) {
+      warn(
+        id,
+        `docs: openapi.yaml da al esquema '${schemaName}' ${extra.map((p) => `'${p}'`).join(', ')}, que la entidad no declara en domain — ` +
+          `o falta en el dominio, o el contrato promete un campo que el servidor no tiene`
+      );
+    }
+  }
+}
+
+/** Los nombres por los que una entidad puede aparecer en el cable: sus campos y sus relaciones (por nombre o por id). */
+function entityMembers(entity) {
+  const known = new Set(Object.keys(entity.fields ?? {}));
+  for (const relation of Object.keys(entity.relations ?? {})) {
+    known.add(relation);
+    known.add(`${relation}Id`);
+    known.add(`${relation}Ids`);
+  }
+  return known;
 }
 
 // ─── asyncapi.yaml ───────────────────────────────────────────────────────────

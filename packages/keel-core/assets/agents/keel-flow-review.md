@@ -65,6 +65,11 @@ flujo y la **lista cerrada** de contradicciones que se buscan. En resumen:
    base o lo haya pedido la operación a un proveedor.
 3. Comprueba que cada aserción del `Then` se **deduce** de ese estado. Si no se deduce, es
    un hallazgo, con las dos citas: lo que dice el escenario y lo que dice el YAML.
+   **Y que cada valor que el `Then` afirma, o del que depende, está fijado en su `Given`** (o lo
+   deriva el YAML de lo que el `Given` fija): un total, unas líneas o un campo que nadie estableció
+   los elegirá quien traduzca el escenario, distinto en cada generador. Es un hallazgo
+   `unfixed-given`, y también lo es el `Then` que no dice qué pasa con un campo que el paso podría
+   cambiar o conservar.
 4. Cruza los flujos entre sí: dos escenarios que afirman cosas incompatibles del mismo estado
    también son un hallazgo.
 

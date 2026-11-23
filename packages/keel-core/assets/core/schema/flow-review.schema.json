@@ -58,6 +58,7 @@
               "count",
               "evaluation-order",
               "unreachable-given",
+              "unfixed-given",
               "cross-flow",
               "unobservable",
               "other"

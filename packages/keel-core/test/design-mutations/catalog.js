@@ -1322,6 +1322,14 @@ export const MUTATIONS = [
 
   // ── http-clients ──
   {
+    id: 'M-HTTP-TOKENURL-PLACEHOLDER',
+    title: 'el endpoint de tokens de un cliente saliente escrito como marcador',
+    mutate: (d) => {
+      d.layers['http-clients'].clients.directory.auth = { type: 'oauth2-client-credentials', tokenUrl: '${IDP_TOKEN_URL}' };
+    },
+    expect: ['CHK-HTTP-TOKENURL-PLACEHOLDER']
+  },
+  {
     id: 'M-HTTP-NO-TIMEOUT',
     title: 'una llamada saliente sin timeoutMs',
     mutate: (d) => {
@@ -1394,6 +1402,14 @@ export const MUTATIONS = [
       delete d.layers.persistence.entities.Queue;
     },
     expect: ['CHK-PERSIST-ROOT-UNMAPPED']
+  },
+  {
+    id: 'M-PERSIST-NATURALKEY-IS-ID',
+    title: 'una natural key sobre la propia identidad de la entidad',
+    mutate: (d) => {
+      d.layers.persistence.entities.Queue.naturalKey = ['id'];
+    },
+    expect: ['CHK-PERSIST-NATURALKEY-IS-ID']
   },
   {
     id: 'M-PERSIST-BOUNDARY-DEFAULT',
@@ -2384,6 +2400,40 @@ export const MUTATIONS = [
     },
     // El escenario sigue nombrando TICKET_EXPIRED, que ya no declara nadie: lo dice también la matriz de errores.
     expect: ['CHK-DOMAIN-DEADLINE-ERROR-UNDECLARED']
+  },
+  {
+    id: 'M-SCEN-PAGE-TOTALS',
+    title: 'un Then da totales distintos de cero a una página fuera de rango',
+    extends: 'search',
+    mutate: (d) =>
+      replaceIn(
+        d,
+        '**Then** llegan ordenados por asunto.',
+        '**Then** llegan ordenados por asunto; `?page=9` → `items: []`, `totalElements: 3`.'
+      ),
+    expect: ['CHK-SCEN-PAGE-TOTALS']
+  },
+  {
+    id: 'M-SCEN-PROJECTION-UNKNOWN-FIELD',
+    title: 'la proyección enumerada de la convención nombra un campo que la entidad no declara',
+    mutate: (d) =>
+      replaceIn(
+        d,
+        '## Matriz de cobertura',
+        '## Convenciones de determinación\n\n- **Proyección de `Ticket`**: lleva **exactamente** `id`, `subject`, `status` y `queueName`.\n\n## Matriz de cobertura'
+      ),
+    expect: ['CHK-SCEN-PROJECTION-UNKNOWN-FIELD']
+  },
+  {
+    id: 'M-SCEN-PAGE-TOTALS-CONVENTION',
+    title: 'la convención de paginación condiciona los ceros de la página fuera de rango',
+    mutate: (d) =>
+      replaceIn(
+        d,
+        '## Matriz de cobertura',
+        '## Convenciones de determinación\n\n- **Paginación**: página vacía o fuera de rango: `items: []` y, si no hay ningún elemento, `totalElements: 0`.\n\n## Matriz de cobertura'
+      ),
+    expect: ['CHK-SCEN-PAGE-TOTALS']
   },
   {
     id: 'M-USECASES-FILTER-IN-NOT-LIST',

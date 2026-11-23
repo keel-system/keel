@@ -44,7 +44,7 @@ clients:
 ## Autenticación saliente (`auth`, por cliente)
 
 - `type`: `none` | `api-key` (con `headerName`, por defecto `X-Api-Key`) | `bearer-static` | `basic` | `oauth2-client-credentials` (con `tokenUrl` obligatorio y `scopes` opcionales).
-- **Las credenciales jamás van en el diseño.** Aquí se declara solo el mecanismo; los valores (api keys, tokens, client secrets, incluso el `tokenUrl` efectivo por entorno) llegan por configuración/variables de entorno del servicio generado.
+- **Las credenciales jamás van en el diseño.** Aquí se declara solo el mecanismo; los valores (api keys, tokens, client secrets) llegan por configuración/variables de entorno del servicio generado. El `tokenUrl` sí se escribe, y como **URL absoluta** del proveedor de referencia: el generador la usa de valor por defecto y la externaliza en su variable, así que lo que cambia por entorno ya lo cubre él. Un marcador (`"${IDP_TOKEN_URL}"`) llega tal cual a la configuración local y toda llamada saliente falla; `keel validate` avisa (`CHK-HTTP-TOKENURL-PLACEHOLDER`).
 
 ## Resiliencia
 

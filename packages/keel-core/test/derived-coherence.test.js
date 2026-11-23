@@ -129,6 +129,27 @@ test('CHK-DOCS-OPENAPI-DRIFT: ruta, successStatus, errores y operaciones de más
   assert.match(movida[0].message, /documenta 'getProduct' como GET \/api\/v1\/items\/\{id\}/);
 });
 
+test('CHK-DOCS-OPENAPI-DRIFT: el esquema de una entidad con un campo que el dominio no declara', () => {
+  const conCampos = () => {
+    const base = layers();
+    base.domain.entities.Product.fields.name = { type: 'string' };
+    base.domain.entities.Product.relations = { brand: { entity: 'Brand', cardinality: 'many-to-one' } };
+    return base;
+  };
+  const schema = (properties) => (doc) => {
+    doc.components = { schemas: { Product: { type: 'object', properties } } };
+  };
+  // La firma de order en prueba-gelsa: la hija con el id de su padre, que el dominio no tiene.
+  const sobra = run({ openapi: schema({ id: {}, name: {}, catalogId: {} }) }, conCampos);
+  assert.deepEqual(ids(sobra), ['CHK-DOCS-OPENAPI-DRIFT']);
+  assert.match(sobra[0].message, /esquema 'Product' 'catalogId'/);
+  // Los campos, la relación por nombre o por id, y lo que falta (un campo excluido de toda salida) no son hallazgo.
+  assert.deepEqual(run({ openapi: schema({ id: {}, brandId: {} }) }, conCampos), []);
+  assert.deepEqual(run({ openapi: schema({ id: {}, name: {}, brand: {} }) }, conCampos), []);
+  // Un esquema que no se llama como una entidad (una petición, una página) no se contrasta.
+  assert.deepEqual(run({ openapi: (doc) => { doc.components = { schemas: { CreateProductRequest: { properties: { extra: {} } } } }; } }, conCampos), []);
+});
+
 test('CHK-DOCS-ASYNCAPI-DRIFT: canal, campos del payload y obligatoriedad', () => {
   const findings = run({
     asyncapi: (doc) => {

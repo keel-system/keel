@@ -229,6 +229,25 @@ test('REV-MSG-DEDUPE-WINDOW aplica donde no hay guarda, y NO donde la hay', () =
   assert.ok(!errors.some((error) => /recordReading/.test(error) && /idempot/i.test(error)));
 });
 
+test('REV-PAYMENTS-RECONCILE-INFLIGHT-NOTFOUND aplica con una acción de seguimiento en vuelo, y la CLI no la ve', async () => {
+  // Corrida payment de prueba-gelsa: un cobro en capturing o refunding que la pasarela no conoce no tenía desenlace.
+  const ID = 'REV-PAYMENTS-RECONCILE-INFLIGHT-NOTFOUND';
+  const { freshBase, evaluate } = await import('./design-mutations/runner.js');
+  const { EXTENSIONS } = await import('./design-mutations/catalog.js');
+  const design = freshBase();
+  EXTENSIONS.payments(design);
+
+  assert.ok(applicableReviews(design.layers).includes(ID), 'con capture.inFlight la revisión aplica');
+  const withoutFollowUps = structuredClone(design.layers);
+  delete withoutFollowUps.payments.capture;
+  delete withoutFollowUps.payments.refund;
+  assert.ok(!applicableReviews(withoutFollowUps).includes(ID), 'sin acciones de seguimiento solo queda notReceived desde pending');
+
+  // El diseño de la extensión no dice nada de ese caso, y la puerta mecánica sigue en silencio.
+  const result = evaluate(design);
+  assert.deepEqual(result.ids, [], 'si la CLI la viera, la revisión sobra y su sitio es crossrefs.js');
+});
+
 test('REV-PAYMENTS-FAILED-RECORD aplica con medio guardado, y la contradicción no la ve la CLI', async () => {
   // designGap `failed-saved-method`, en las DOS corridas de payment-checkout (2026-10-02): una
   // rule anota el medio guardado en el registro «siempre», otra registra como failed el cobro que

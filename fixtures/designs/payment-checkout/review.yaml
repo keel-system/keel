@@ -134,6 +134,15 @@ findings:
       inexistente y ajeno (FL-CHG-004). Por evento, el ajeno acaba en failed invalidPaymentMethod
       (FL-EVT-003). La gatewayReference no sale (sensitive, excluida del output).
 
+  - id: REV-PAYMENTS-RECONCILE-INFLIGHT-NOTFOUND
+    scope: payments
+    verdict: ok
+    note: >-
+      Una rule de sweepPendingPayments lo decide (plan de prueba-gelsa, 2026-11-23): un cobro en
+      capturing, canceling o refunding que la pasarela no conoce es una anomalía, no una petición
+      perdida; el barrido no lo da por fallido ni lo mueve, lo deja con awaitingSince renovado para la
+      siguiente pasada. notReceived queda solo para pending.
+
   - id: REV-PAYMENTS-FAILED-RECORD
     scope: use-cases.operations.requestCharge
     verdict: ok

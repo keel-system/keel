@@ -1048,6 +1048,13 @@ export const CHECKS = {
   },
 
   // ─── http-clients ──────────────────────────────────────────────────────────
+  'CHK-HTTP-TOKENURL-PLACEHOLDER': {
+    layer: 'http-clients',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'el endpoint de tokens de un cliente saliente no es una URL absoluta (un marcador de plantilla)',
+    closes: "escribir en 'auth.tokenUrl' la URL del proveedor de identidad de referencia; el generador ya la externaliza por entorno"
+  },
   'CHK-HTTP-NO-TIMEOUT': {
     layer: 'http-clients',
     severity: 'warning',
@@ -1465,6 +1472,27 @@ export const CHECKS = {
     nature: 'incoherence',
     title: 'un escenario o la convención de orden afirma un orden de colección que el `sort` de la salida no declara',
     closes: "declarar ese orden en 'output.sort', o corregir el escenario para que afirme el orden declarado"
+  },
+  'CHK-PERSIST-NATURALKEY-IS-ID': {
+    layer: 'persistence',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'la natural key de una entidad incluye su propia identidad, que ya es única',
+    closes: "quitar la 'naturalKey', o nombrar en ella el campo de negocio que identifica la fila"
+  },
+  'CHK-SCEN-PAGE-TOTALS': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'un escenario o la convención de paginación da totales distintos de cero a una página vacía o fuera de rango',
+    closes: 'escribir la página vacía o fuera de rango con items [], totalElements 0 y totalPages 0, como el contrato del cable'
+  },
+  'CHK-SCEN-PROJECTION-UNKNOWN-FIELD': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'una proyección enumerada en la convención nombra un campo que la entidad no declara',
+    closes: 'declarar el campo o la relación en domain, o quitarlo de la proyección'
   },
   'CHK-SCEN-CONVENTION-UNBACKED': {
     layer: 'validation-scenarios',

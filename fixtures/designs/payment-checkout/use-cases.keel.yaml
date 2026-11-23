@@ -335,6 +335,10 @@ operations:
         Si la pasarela no conoce un cobro en pending, la petición no le llegó nunca: el barrido lo
         da por fallido con failureReason notReceived y sale PaymentFailed.
       - >-
+        Si la pasarela no conoce un cobro en capturing, canceling o refunding, es una anomalía y no
+        una petición perdida: el cobro ya existía allí. El barrido no lo da por fallido ni lo mueve;
+        lo deja como está, con awaitingSince renovado, para la siguiente pasada y para quien lo revise.
+      - >-
         Si una acción de seguimiento no llegó a hacerse (la pasarela dice que el cobro sigue
         autorizado, o capturado), el barrido devuelve el cobro al estado del que salió, con
         awaitingSince vacío.

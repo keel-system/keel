@@ -1,6 +1,6 @@
 # Lo que destaparon las corridas de prueba-gelsa: cazarlo en diseño y corregir los generadores
 
-**Estado: ABIERTO (2026-11-20).** Inc. 0 hecho (2026-11-23). Se ejecuta en varias sesiones, un incremento por sesión
+**Estado: ABIERTO (2026-11-20).** Inc. 0 y 1 hechos (2026-11-23). Se ejecuta en varias sesiones, un incremento por sesión
 como norma, y cada uno se cierra con «Para retomar» en § Estado y su commit.
 
 ## Contexto
@@ -190,7 +190,7 @@ Lo neutral en `keel-core/gen`, y cada generador con su test de paridad.
 | Incremento | Estado | Medido con |
 |---|---|---|
 | 0. Registro de corridas | hecho (2026-11-23) | `corrida-metrics.js series`: `page-out-of-range-totals` repetido en 3 corridas; H1 sin cambio |
-| 1. keel-core: puerta sin DSL | pendiente | |
+| 1. keel-core: puerta sin DSL | hecho (2026-11-23) | suite de keel-core 1684/1684, `design-matrix` sin `sin-mutacion` (246 falsados), `--ready` sobre las copias |
 | 2. keel-core/gen + keel-spring | pendiente | |
 | 3. nest, dotnet, go | pendiente | |
 | 4. DSL 2.33 en keel-core | pendiente | |
@@ -198,9 +198,19 @@ Lo neutral en `keel-core/gen`, y cada generador con su test de paridad.
 | 6. nest, dotnet, go 2.33 y pagos | pendiente | |
 | 7. Corrida de control | pendiente | |
 
-**Para retomar:** el inc. 0 está hecho: `docs/corridas/2026-11-19-{order,payment,notifications}-gelsa.md`, con la
-huella de cada proyecto y sus `designGaps` (claves `dual-threshold-source`, `contract-phantom-field`,
-`naturalkey-is-id`, `tokenurl-placeholder`, `given-unfixed-values`, `then-incomplete`, `saved-card-unsourced` y
-`page-out-of-range-totals`, esta reutilizada de catalog-nest-v2). La huella no se clasificó archivo a archivo; los
-proyectos ya pueden borrarse. Seguir con el inc. 1, cuyo primer punto (`CHK-SCEN-PAGE-TOTALS`) tiene el esbozo probado
-más arriba. Las dos decisiones pendientes del usuario no bloquean el inc. 1.
+**Para retomar:** inc. 0 y 1 hechos. El inc. 1 dejó en keel-core:
+- `CHK-SCEN-PAGE-TOTALS` (D1);
+- `CHK-PERSIST-NATURALKEY-IS-ID` (D4);
+- `CHK-HTTP-TOKENURL-PLACEHOLDER` (D5; el plan decía `CHK-HTTPCLIENT-…`, pero el prefijo de la capa es `CHK-HTTP-`);
+- `CHK-SCEN-PROJECTION-UNKNOWN-FIELD` (D3);
+- `CHK-DOCS-OPENAPI-DRIFT` sobre los esquemas (D3). Compara solo lo que SOBRA en un esquema que se llama como una
+  entidad, contra el dominio y no contra `gen/openapi.js`, que exige una proyección de lenguaje. Lo que falta suele
+  ser un campo excluido a propósito; medido sobre siete openapi.yaml reales, la única desviación es `OrderLine.orderId`;
+- el kind `unfixed-given` del careo (D6);
+- `REV-PAYMENTS-RECONCILE-INFLIGHT-NOTFOUND` (G13).
+
+Sobre las copias originales (`D:\keel-gelsa`), `--ready` sale en rojo en order (D3, D4, D5) y en notifications (D1),
+y payment sigue en verde hasta el inc. 4 (D7). D2 también es del inc. 4. `CHK-DOCS-*` no cuenta en `incoherences`
+(`OWNED_ELSEWHERE` de `readiness.js`), así que en order D3 lo pone en rojo la regla de la proyección.
+
+Siguiente: el inc. 2 (keel-core/gen + keel-spring).

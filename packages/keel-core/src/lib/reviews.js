@@ -511,6 +511,23 @@ export const REVIEWS = {
       'rechaza ANTES de llamar a la pasarela —medio inexistente, de otro titular, ausente o doble—, y es compatible con ' +
       'los invariantes de la entidad de record? La doctrina (docs/dsl/payments.md § Lo que conserva un cobro failed): ' +
       'lo que no llegó a existir no se anota'
+  },
+  // Nació de la corrida payment de prueba-gelsa (2026-11-19): el barrido da por fallido con
+  // `notReceived` el cobro que la pasarela no conoce, y eso solo vale desde `pending`. Un cobro en el
+  // estado en vuelo de una captura, una anulación o una devolución ya existía en la pasarela, así que
+  // «no lo conozco» ahí es una anomalía (otra cuenta, una referencia mal guardada), no una petición
+  // perdida, y el generador lo deja como estaba sin que nadie lo haya decidido. Es revisión y no CHK:
+  // el DSL no tiene dónde declarar ese desenlace, y lo que se pide es una frase del diseño.
+  'REV-PAYMENTS-RECONCILE-INFLIGHT-NOTFOUND': {
+    scope: 'payments',
+    gapClass: 18,
+    severity: 'warning',
+    appliesTo: (layers) => ['capture', 'void', 'refund'].some((action) => Boolean(layers.payments?.[action]?.inFlight)),
+    title: 'no está dicho qué hace el barrido si la pasarela no conoce un cobro en el estado en vuelo de una acción de seguimiento',
+    asks:
+      '¿qué pasa cuando el barrido consulta un cobro en capturing, canceling o refunding y la pasarela contesta que no lo ' +
+      'conoce? notReceived solo vale desde pending (la petición no llegó nunca); aquí el cobro ya existía. ¿Se queda en ' +
+      'vuelo y alerta, pasa a un estado de revisión manual, o se da por fallido? Dilo en una rule del barrido'
   }
 };
 

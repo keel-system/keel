@@ -6476,6 +6476,91 @@ test('CHK-SCEN-CONVENTION-UNBACKED: en una lista, la negación no es la promesa'
   assert.equal(run('- **Mayúsculas y acentos**: la unicidad de `name` ignora mayúsculas y acentos.'), 1);
 });
 
+test('CHK-SCEN-PAGE-TOTALS: la página vacía o fuera de rango lleva los totales a cero', () => {
+  const layers = {
+    domain: { entities: { Brand: { fields: { id: { type: 'uuid', id: true, generated: true }, name: { type: 'string' } } } } },
+    'use-cases': {
+      operations: {
+        listBrands: { kind: 'query', input: 'void', output: { entity: 'Brand', paginated: true } },
+        allBrands: { kind: 'query', input: 'void', output: { entity: 'Brand', list: true } }
+      }
+    }
+  };
+  const run = (then, op = 'listBrands', conventions = '') =>
+    idsOf(
+      checkCrossRefs({
+        layers,
+        scenarios: `# x\n\n## Convenciones de determinación\n\n${conventions}\n\n## Brands\n\n### FL-BRD-001: listado\n**Given**: tres marcas.\n**When**: \`${op}\`\n**Then**:\n${then}\n`
+      }),
+      'CHK-SCEN-PAGE-TOTALS'
+    ).length;
+  // Las formas de notifications y payment: con dos puntos, con `=` y dentro del sobre.
+  assert.equal(run('1. `?page=5`: `items: []`, `page: 5`, `totalElements: 3`, `totalPages: 1`.'), 1);
+  assert.equal(run('1. `?page=4` → `items` = [], `totalElements: 3`; `?size=500` → `size: 100`.'), 1);
+  assert.equal(run('1. `page=5`: `{ items: [], page: 5, size: 2, totalElements: 3, totalPages: 2 }`.'), 1);
+  // Por cláusula: los totales de otra petición del mismo ítem no cuentan.
+  assert.equal(run('1. `?size=2` → `totalPages: 2`; `?page=9` → `items: []`, `totalElements: 0`, `totalPages: 0`.'), 0);
+  assert.equal(run('1. `?page=5`: `{ items: [], page: 5, size: 2, totalElements: 0, totalPages: 0 }`.'), 0);
+  // Solo sobre una salida paginada: una lista no tiene totales.
+  assert.equal(run('1. `items: []`, `totalElements: 3`.', 'allBrands'), 0);
+
+  // La convención que condiciona los ceros.
+  const condicionada =
+    '- **Paginación** (sobre canónico): página vacía o fuera de rango: `items: []` y, si no hay ningún elemento, `totalElements: 0` y `totalPages: 0`.';
+  assert.equal(run('1. `items: []`, `totalElements: 0`.', 'listBrands', condicionada), 1);
+  assert.equal(
+    run('1. `items: []`, `totalElements: 0`.', 'listBrands', '- **Paginación**: página vacía o fuera de rango: `items: []`, `totalElements: 0` y `totalPages: 0`.'),
+    0
+  );
+});
+
+test('CHK-SCEN-PROJECTION-UNKNOWN-FIELD: una proyección enumerada con un campo que la entidad no tiene', () => {
+  const domain = {
+    entities: {
+      Order: {
+        fields: { id: { type: 'uuid', id: true, generated: true }, status: { type: 'string' } },
+        relations: { lines: { entity: 'OrderLine', cardinality: 'one-to-many' } }
+      },
+      OrderLine: { fields: { id: { type: 'uuid', id: true, generated: true }, sku: { type: 'string' } } },
+      Payment: {
+        fields: { id: { type: 'uuid', id: true, generated: true }, amount: { type: 'decimal' } },
+        relations: { refunds: { entity: 'Refund', cardinality: 'one-to-many' }, notes: { entity: 'Note', cardinality: 'one-to-many' } }
+      },
+      Refund: {
+        fields: { id: { type: 'uuid', id: true, generated: true }, reason: { type: 'string' } },
+        relations: { payment: { entity: 'Payment', cardinality: 'many-to-one' } }
+      },
+      Note: { fields: { id: { type: 'uuid', id: true, generated: true } } }
+    }
+  };
+  const run = (conventions) =>
+    idsOf(
+      checkCrossRefs({
+        layers: { domain, 'use-cases': { operations: {} } },
+        scenarios: `# x\n\n## Convenciones de determinación\n\n${conventions}\n\n## Pedidos\n`
+      }),
+      'CHK-SCEN-PROJECTION-UNKNOWN-FIELD'
+    );
+  // La forma de order: la raíz y «Cada línea», que es la única one-to-many.
+  const order = run(
+    '- **Proyección de `Order`**. El cuerpo lleva **exactamente** `id`, `status` y `lines`. Cada línea lleva **exactamente** `id`, `orderId` y `sku`.'
+  );
+  assert.equal(order.length, 1);
+  assert.match(order[0].message, /OrderLine enumera 'orderId'/);
+  // La forma de payment: la entidad dentro de un fragmento, y la hija por la relación que se nombra; el id del padre
+  // por su relación many-to-one sí es un campo.
+  assert.equal(
+    run('- **Proyección de un cobro** (`output: { entity: Payment }`). Lleva **exactamente** `id`, `amount` y `refunds`. Cada elemento de `refunds` lleva exactamente `id`, `reason` y `paymentId`.').length,
+    0
+  );
+  assert.equal(
+    run('- **Proyección de un cobro** (`output: { entity: Payment }`). Lleva **exactamente** `id`, `amount`, `currency` y `refunds`.').length,
+    1
+  );
+  // Sin «exactamente» no es una enumeración cerrada.
+  assert.equal(run('- **Proyección de `Order`**: además de `id` trae `orderId`.').length, 0);
+});
+
 test('OBL-DECIMAL-SCALE-POLICY: un decimal con escala en la entrada exige decidir qué pasa con los decimales de más', () => {
   const domain = (constraints) => ({
     types: { Price: { base: 'decimal', constraints } },
@@ -6534,6 +6619,47 @@ test('compare, match y scalePolicy: su coherencia es error', () => {
     !result.errors.some((e) => e.includes('listProducts.input.fields.name')),
     'el filtro de la query es justo donde match y compare valen'
   );
+});
+
+test('CHK-HTTP-TOKENURL-PLACEHOLDER: el endpoint de tokens es una URL absoluta', () => {
+  const run = (tokenUrl) =>
+    idsOf(
+      checkCrossRefs({
+        layers: {
+          'http-clients': { clients: { payment: { purpose: 'cobrar', auth: { type: 'oauth2-client-credentials', tokenUrl }, calls: {} } } }
+        }
+      }),
+      'CHK-HTTP-TOKENURL-PLACEHOLDER'
+    ).length;
+  assert.equal(run('${IDP_TOKEN_URL}'), 1);
+  assert.equal(run('https://idp.example/realms/x/token${SUFFIX}'), 1);
+  assert.equal(run('/realms/x/protocol/openid-connect/token'), 1);
+  assert.equal(run('ftp://idp.example/token'), 1);
+  assert.equal(run('https://auth.partner.example/oauth2/token'), 0);
+  assert.equal(run('http://localhost:8180/realms/shop/protocol/openid-connect/token'), 0);
+});
+
+test('CHK-PERSIST-NATURALKEY-IS-ID: la identidad no es una natural key', () => {
+  const run = (naturalKey) =>
+    idsOf(
+      checkCrossRefs({
+        layers: {
+          domain: {
+            entities: {
+              Product: {
+                fields: { productId: { type: 'uuid', id: true }, sku: { type: 'string', unique: true }, name: { type: 'string' } }
+              }
+            }
+          },
+          persistence: { entities: { Product: { naturalKey } } }
+        }
+      }),
+      'CHK-PERSIST-NATURALKEY-IS-ID'
+    ).length;
+  // Se busca el campo `id: true`, se llame como se llame.
+  assert.equal(run(['productId']), 1);
+  assert.equal(run(['sku', 'productId']), 1);
+  assert.equal(run(['sku']), 0);
 });
 
 test('CHK-PERSIST-CONDITIONAL-UNIQUE-CODE: el índice único condicionado pide un code que nombre la condición', () => {

@@ -30,7 +30,7 @@ Recorre los artefactos y construye la lista de obligaciones. Es un borrador de t
 | `domain` campos `unique` | una colisión |
 | `domain` constraints y requeridos | casos borde `400` |
 | `api.endpoints` con `successStatus: 201` | una aserción de la cabecera `Location` (ver § 2) |
-| `api.endpoints` con `paginated` | primera página, siguiente, vacía, tope `maxSize` |
+| `api.endpoints` con `paginated` | primera página, siguiente, vacía o fuera de rango (`totalElements: 0`, `totalPages: 0` aunque haya elementos en otras páginas), tope `maxSize` |
 | query de colección con `embed`, `exposedAs` o un `need` `on-demand` | una afirmación de **coste**: dos páginas de tamaños muy distintos, y el trabajo de la operación no crece con el tamaño. Por **forma** («veinte no cuestan más que dos»), nunca por número absoluto. Solo con capa `api` |
 | `api.endpoints[].audience: services/both` | contrato M2M completo (request + response + errores + auth) |
 | `security.access` | `401` sin credencial y `403` sin permiso, por operación protegida |
@@ -77,6 +77,7 @@ Es fácil caer en ello sin darse cuenta, porque el nombre suena natural: un cód
 
 **Lo que no decide el diseñador.** Algunas afirmaciones del `Then` no dependen del diseño sino del generador, y escribirlas "como deberían ser" produce un escenario que ningún servidor correcto pasa. Antes de fijarlas, contrástalas con la documentación del generador previsto; si el diseño necesita otra cosa, es un cambio en el generador, no una convención que se declara y ya. En keel-spring, hoy:
 
+- La **página vacía o fuera de rango** es fija: `items: []`, `totalElements: 0` y `totalPages: 0`, con el `page` y el `size` pedidos, **aunque haya elementos en otras páginas**. Una convención que condiciona los ceros («si no hay ningún elemento») o un `Then` que da los totales reales fuera de rango los afirma al revés; `keel validate` avisa (`CHK-SCEN-PAGE-TOTALS`). Tres corridas lo escribieron así.
 - La **forma del cuerpo de error** es fija: `{timestamp, status, error, code, message, details}` (+ `correlationId`). La convención del servicio la **describe**, no la sustituye. Lo que sí decides es el `code` y el status de cada error, en el YAML.
 - El fallo de **audiencia** (`serviceAuth.validateAudience`) responde **403**, no 401.
 - Una operación `level: service` **no rechaza por sí sola un token de usuario**: la separación es por scopes, no por tipo de credencial.

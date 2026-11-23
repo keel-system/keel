@@ -18,7 +18,7 @@ Por cada bloque `FL-*`, antes de opinar, escribe (en tu razonamiento, no en la s
 
 | Paso | Qué hace según el YAML | Estado resultante (lo relevante) | Aserciones que toca | ¿Se deducen? |
 |---|---|---|---|---|
-| Given | las operaciones o datos que el Given nombra | filas, estados, campos estampados, eventos ya publicados | — | ¿es alcanzable por la superficie que exige? |
+| Given | las operaciones o datos que el Given nombra | filas, estados, campos estampados, eventos ya publicados | — | ¿es alcanzable por la superficie que exige? ¿fija cada valor que los Then afirman o del que dependen? |
 | When 1 | la operación con su input | transición, campos nuevos, `updatedAt`, eventos | Then 1..n | sí / no + por qué |
 
 La columna de estado es la que caza los huecos. Si no la escribes, acabas leyendo el `Then` como
@@ -34,6 +34,7 @@ verdadero porque suena bien.
 | `count` | Un número del `Then` (operaciones, elementos, eventos) que el diseño no da | catalog `FL-SEC-001`: 21 operaciones donde hay 19 |
 | `evaluation-order` | Con dos guardas que fallan a la vez, el `Then` espera el error que el orden declarado no produce | — |
 | `unreachable-given` | El `Given` exige un estado al que ninguna operación o evento declarado lleva, o una identidad que `security` no declara | — |
+| `unfixed-given` | El `Then` afirma un valor, o depende de uno, que su `Given` no fija: las líneas y el total de un pedido creado «con un pedido en `pendingPayment`», un campo que el Then compara y nadie estableció. Cada valor que un `Then` afirma, o del que depende, sale del `Given` o de lo que el YAML deriva de él; si no, quien traduzca el escenario lo elige, y dos generadores eligen distinto. También el `Then` incompleto: un campo que el paso cambia o conserva y el `Then` no dice cuál | order (prueba-gelsa) `FL-REC-002/004/005`: líneas y total sin fijar; `FL-ORD-006`: el `paymentId` del pedido cancelado sin decir |
 | `cross-flow` | Dos escenarios afirman cosas incompatibles sobre el mismo estado u operación | — |
 | `unobservable` | Una aserción que ninguna prueba de caja negra puede hacer (lo interno, «sin reintentos») | stock-reservation: «ni DLQ ni reintentos» |
 | `other` | Nada de lo anterior. Úsalo poco: si se repite entre diseños, es una fila nueva de esta tabla | — |
