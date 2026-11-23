@@ -6,7 +6,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { paymentProbesFor } from '@keel-system/keel-core/gen/payment-probes';
+import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { CURRENCY_MINOR_UNITS } from '@keel-system/keel-core/gen/payment-gateways';
 import { PAYMENT_TEST_SECRETS } from '../scaffold/config.js';
 import { isRawJsonField } from '../scaffold/jackson.js';
@@ -147,6 +147,12 @@ const SABOTAGES = {
     from: '\n                        .withInetAddressFilter(allowed));',
     to: ');'
   },
+  // El resumen de la tarjeta guardada deja de leerse: el medio se guarda sin él (DSL 2.33, G9).
+  'saved-card': {
+    file: (s) => `${s.adapter}.java`,
+    from: 'private static SavedCard savedCardOf(JsonNode saved) {\n        return ',
+    to: 'private static SavedCard savedCardOf(JsonNode saved) {\n        if (true) return null;\n        return '
+  },
   // La acción del cliente vuelve a salir como cadena con el JSON escapado dentro.
   'raw-json': { file: (s) => `${s.rawJson.eventClass}.java`, from: '@JsonRawValue ', to: '' }
 };
@@ -166,7 +172,10 @@ import ${base}.domain.payment.GatewayOutcome;
 import ${base}.domain.payment.GatewayStatus;
 import ${base}.domain.payment.PaymentGatewayUnavailableException;
 import ${base}.domain.payment.PaymentSource;
-import ${base}.application.port.out.PaymentGateway;
+${model.payments.savePaymentMethod ? `import ${base}.domain.payment.PaymentMethodAuthenticationRequiredException;
+import ${base}.domain.payment.PaymentMethodRejectedException;
+import ${base}.domain.payment.SavedPaymentMethod;
+` : ''}import ${base}.application.port.out.PaymentGateway;
 import ${base}.infrastructure.messaging.events.${shapes.rawJson.eventClass};
 import ${base}.infrastructure.http.${OUTBOUND_POLICY_CLASS};
 import ${base}.infrastructure.payment.InvalidPaymentNoticeException;
@@ -415,7 +424,7 @@ ${model.payments.refund?.amount ? `    @Test
         }
     }
 
-${rawJsonTest(shapes.rawJson)}    @Test
+${savedMethodTests(model, gateway, calls)}${rawJsonTest(shapes.rawJson)}    @Test
     void unAvisoFirmadoPorLaPasarelaVerificaYDiceDeQueCobroHabla() {
         Notice notice = notice(SECRET, NOW.getEpochSecond(), "");
         assertEquals(notice.id(), verifier().verify(notice.body(), notice.headers(), notice.query()).orElseThrow());
@@ -486,4 +495,42 @@ function findFile(dir, name) {
     }
   }
   return null;
+}
+
+/**
+ * Guardar un medio (DSL 2.33, G9): el resumen de la tarjeta leído de la respuesta del doble, escrita con las rutas de
+ * keel-core (`savedCardResponse`), y las dos negativas distinguidas. El 3DS al guardar solo existe donde la pasarela lo
+ * pide (`saveAuthenticationRejection`).
+ */
+function savedMethodTests(model, gateway, calls) {
+  if (!model.payments.savePaymentMethod) return '';
+  const card = DEFAULT_SAVED_CARD;
+  const authentication = saveAuthenticationRejection(gateway);
+  return `    @Test
+    void guardarDevuelveLaReferenciaYElResumenDeLaTarjeta() {
+        route(${q(calls.SAVE_METHOD.method)}, ${q(calls.SAVE_METHOD.path)}, 200, "{\\"id\\": \\"cus_1\\"}");
+        route(${q(calls.ATTACH_METHOD.method)}, ${q(calls.ATTACH_METHOD.path)}, 200, ${q(JSON.stringify(savedCardResponse(gateway)))});
+        SavedPaymentMethod saved = gateway().savePaymentMethod("tok_save", "payer-1");
+        assertTrue(saved.reference().startsWith("cus_1|"), saved.reference());
+        assertEquals(${q(card.brand)}, saved.card().brand());
+        assertEquals(${q(card.last4)}, saved.card().last4());
+        assertEquals(${card.expMonth}, saved.card().expMonth());
+        assertEquals(${card.expYear}, saved.card().expYear());
+    }
+
+    @Test
+    void unMedioQueLaPasarelaNoAceptaEsUnRechazo() {
+        route(${q(calls.SAVE_METHOD.method)}, ${q(calls.SAVE_METHOD.path)}, 200, "{\\"id\\": \\"cus_1\\"}");
+        route(${q(calls.ATTACH_METHOD.method)}, ${q(calls.ATTACH_METHOD.path)}, 400, "{\\"error\\": {\\"code\\": \\"card_declined\\"}}");
+        assertThrows(PaymentMethodRejectedException.class, () -> gateway().savePaymentMethod("tok_save", "payer-1"));
+    }
+
+${authentication ? `    @Test
+    void guardarConAutenticacionPendienteNoEsUnRechazo() {
+        route(${q(calls.SAVE_METHOD.method)}, ${q(calls.SAVE_METHOD.path)}, 200, "{\\"id\\": \\"cus_1\\"}");
+        route(${q(calls.ATTACH_METHOD.method)}, ${q(calls.ATTACH_METHOD.path)}, ${authentication.status}, ${q(JSON.stringify(authentication.body))});
+        assertThrows(PaymentMethodAuthenticationRequiredException.class, () -> gateway().savePaymentMethod("tok_save", "payer-1"));
+    }
+
+` : ''}`;
 }

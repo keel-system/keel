@@ -1820,7 +1820,10 @@ function otroEstado(entity, claim, enumType) {
  * cincuenta. Lo que se mide es que las cotas EXISTAN, no sus valores.
  */
 const parametrosDelBarrido = (claim) => [
-  `"reconciliation.${claim.configKey}.unanswered-after-seconds=${TOLERANCIA_SEGUNDOS}"`,
+  // Con el umbral enlazado a un parámetro (DSL 2.33) se pone el parámetro, en su unidad: no hay otra clave.
+  claim.unansweredParameter
+    ? `"${claim.unansweredParameter.property}=${Math.max(1, Math.round(TOLERANCIA_SEGUNDOS / claim.unansweredParameter.unitSeconds))}"`
+    : `"reconciliation.${claim.configKey}.unanswered-after-seconds=${TOLERANCIA_SEGUNDOS}"`,
   `"reconciliation.${claim.configKey}.claim-timeout-ms=${CLAIM_TIMEOUT_MS}"`,
   `"reconciliation.${claim.configKey}.batch-size=${BATCH_SIZE}"`
 ];

@@ -167,6 +167,12 @@ export const GATEWAY_TRANSLATIONS = {
     payerKey: 'keel_payer',
     // Los pasos de guardar un medio: el cliente y adjuntarle el medio.
     savedMethodSteps: ['customer', 'attach'],
+    // El resumen de la tarjeta guardada (DSL 2.33, SAVED_CARD_FIELDS): dónde lo trae la respuesta del último paso,
+    // campo neutro → ruta. El attach devuelve el PaymentMethod con su `card` (docs.stripe.com/api/payment_methods/attach).
+    savedCard: { brand: 'card.brand', last4: 'card.last4', expMonth: 'card.exp_month', expYear: 'card.exp_year' },
+    // El `code` o el `decline_code` de un 4xx al guardar que dice que la tarjeta exige autenticar (3DS): no es un
+    // rechazo del medio, y el cliente puede completarla y volver a pedirlo (docs.stripe.com/declines/codes).
+    saveAuthenticationCodes: ['authentication_required', 'authentication_not_handled'],
     // Un 4xx a la captura con este código es una autorización caducada: el cobro está anulado y no
     // hace falta preguntarle a la pasarela.
     expiredCaptureMarker: 'charge_expired_for_capture',
@@ -201,6 +207,10 @@ export const GATEWAY_TRANSLATIONS = {
   mercadopago: {
     referenceKey: 'external_reference',
     savedMethodSteps: ['customer', 'card'],
+    // La tarjeta del cliente que devuelve POST /v1/customers/{id}/cards: la marca es el id de su medio de pago.
+    savedCard: { brand: 'payment_method.id', last4: 'last_four_digits', expMonth: 'expiration_month', expYear: 'expiration_year' },
+    // Guardar una tarjeta en MercadoPago no pasa por 3DS: la autenticación es del cobro.
+    saveAuthenticationCodes: [],
     expiredCaptureMarker: null,
     // status_detail de un pago → motivo neutro.
     declines: [

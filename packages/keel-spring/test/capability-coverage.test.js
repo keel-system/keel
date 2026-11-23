@@ -52,15 +52,15 @@ const MOTIVOS = {
 const EXCEPCIONES = new Map([
   [
     'dependencies.dependencies.*.activations.*.unansweredAfter',
-    { motivo: MOTIVOS.hueco, porque: 'DSL 2.33: la frontera la rechaza (dsl233PendingErrors) hasta el incremento 5 de PLAN-CORRIDAS-GELSA.md, que trae la fixture que la declara.' }
+    { motivo: MOTIVOS.soloCadenas, porque: 'DSL 2.33: test/unanswered-parameter.test.js parchea stock-reservation, catalog-extended y payment-checkout en memoria. La fixture que la declare llega cuando la generen los cuatro (inc. 6 de PLAN-CORRIDAS-GELSA.md).' }
   ],
   [
     'payments.reconciliation.unansweredAfter',
-    { motivo: MOTIVOS.hueco, porque: 'DSL 2.33: la frontera la rechaza (dsl233PendingErrors) hasta el incremento 5 de PLAN-CORRIDAS-GELSA.md, que trae la fixture que la declara.' }
+    { motivo: MOTIVOS.soloCadenas, porque: 'DSL 2.33: test/unanswered-parameter.test.js parchea stock-reservation, catalog-extended y payment-checkout en memoria. La fixture que la declare llega cuando la generen los cuatro (inc. 6 de PLAN-CORRIDAS-GELSA.md).' }
   ],
   [
     'payments.savePaymentMethod.cardDetails',
-    { motivo: MOTIVOS.hueco, porque: 'DSL 2.33: la frontera la rechaza (dsl233PendingErrors) hasta el incremento 5 de PLAN-CORRIDAS-GELSA.md, que trae la fixture que la declara.' }
+    { motivo: MOTIVOS.soloCadenas, porque: 'DSL 2.33: test/saved-card.test.js parchea payment-checkout en memoria; el adaptador lo EJECUTA payment-check. La fixture que la declare llega cuando la generen los cuatro (inc. 6 de PLAN-CORRIDAS-GELSA.md).' }
   ],
   [
     'messaging.subscriptions.*.contract.schemaRef',

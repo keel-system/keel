@@ -6,7 +6,7 @@
 // No es un doble dentro de la JVM: el servidor habla HTTP con WireMock por el mismo socket que con la
 // pasarela real, con el mismo adaptador. Lo que se mide es el servidor.
 
-import { paymentProbesFor } from '@keel-system/keel-core/gen/payment-probes';
+import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { PAYMENT_TEST_SECRETS } from './config.js';
 import { PAYMENT_NOTICE_PATH } from './payments.js';
 import { paymentTestCurrency as testCurrency } from '@keel-system/keel-core/gen/payments-config';
@@ -37,6 +37,13 @@ export function paymentHarnessSection(model) {
   if (!usesPaymentHarness(model)) return '';
   const gateway = model.payments.gateway;
   const probes = paymentProbesFor(gateway.id);
+  // La respuesta de guardar con el resumen en las rutas que lee el adaptador (keel-core: savedCardResponse), como
+  // plantilla de String.format: %s para los textos y %d para los meses y años.
+  const cardTemplate = JSON.stringify(savedCardResponse(gateway.id, { brand: '@B@', last4: '@L@', expMonth: -71, expYear: -72 }))
+    .replace('"@B@"', '"%s"').replace('"@L@"', '"%s"').replace('-71', '%d').replace('-72', '%d')
+    .replace(/"/g, '\\"');
+  const authentication = saveAuthenticationRejection(gateway.id);
+  const card = DEFAULT_SAVED_CARD;
   const currency = testCurrency(model);
   const routes = Object.entries(probes.calls)
     .map(([call, route]) => `            Map.entry(GatewayCall.${call}, new String[] {"${route.method}", "${route.path}"})`)
@@ -145,12 +152,33 @@ ${routes});
         stubFor(route[0], route[1], 400, "{\\"error\\": {\\"code\\": \\"rejected_by_test\\"}}");
     }
 
-    /** La pasarela guarda el medio de pago que se le pase. */
+    /** La pasarela guarda el medio de pago que se le pase, con una tarjeta ${card.brand} terminada en ${card.last4} (${card.expMonth}/${card.expYear}). */
     protected static void gatewaySavesPaymentMethod() {
+        gatewaySavesCard("${card.brand}", "${card.last4}", ${card.expMonth}, ${card.expYear});
+    }
+
+    /**
+     * La pasarela guarda el medio con ESTE resumen de tarjeta: lo que un escenario afirma en la respuesta o en la ficha
+     * del medio guardado (savePaymentMethod.cardDetails).
+     */
+    protected static void gatewaySavesCard(String brand, String last4, int expMonth, int expYear) {
         String[] save = GATEWAY_ROUTES.get(GatewayCall.SAVE_METHOD);
         String[] attach = GATEWAY_ROUTES.get(GatewayCall.ATTACH_METHOD);
         stubFor(save[0], save[1], 200, "{\\"id\\": \\"cus_keel_test\\"}");
-        stubFor(attach[0], attach[1], 200, "{\\"id\\": \\"card_keel_test\\"}");
+        stubFor(attach[0], attach[1], 200, String.format("${cardTemplate}", brand, last4, expMonth, expYear));
+    }
+
+    /**
+     * La pasarela exige autenticar al cliente (3DS) para guardar la tarjeta.${authentication ? '' : ` ${gateway.name ?? gateway.id} no lo pide al
+     * guardar (la autenticación es del cobro), así que un escenario que lo use no se puede ejecutar con ella.`}
+     */
+    protected static void gatewayRequiresAuthenticationToSave() {
+${authentication
+  ? `        String[] save = GATEWAY_ROUTES.get(GatewayCall.SAVE_METHOD);
+        String[] attach = GATEWAY_ROUTES.get(GatewayCall.ATTACH_METHOD);
+        stubFor(save[0], save[1], 200, "{\\"id\\": \\"cus_keel_test\\"}");
+        stubFor(attach[0], attach[1], ${authentication.status}, "${JSON.stringify(authentication.body).replace(/"/g, '\\"')}");`
+  : `        throw new UnsupportedOperationException("${gateway.id} no pide autenticar al guardar un medio: este escenario no aplica con ella");`}
     }
 
     /** Cuántas veces llamó el servidor a la pasarela por esa llamada. */

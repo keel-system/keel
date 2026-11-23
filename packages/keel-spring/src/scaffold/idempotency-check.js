@@ -1010,16 +1010,21 @@ function reconciliationChecks(model) {
         claim: '@Value|@ConfigurationProperties',
         // Los puntos como clase entre corchetes: los patrones de un check `claim` viajan
         // por awk además de por grep, y allí el escape se pierde y rompe la regexp.
-        bound:
-          `reconciliation[.]${key}[.]unanswered-after-seconds|` +
-          `RECONCILIATION_${screamingSnake(activation.name)}_UNANSWERED_AFTER_SECONDS`,
+        // Con el umbral enlazado a un parámetro (DSL 2.33), la clave es la del parámetro: no hay otra.
+        bound: activation.unansweredParameter
+          ? activation.unansweredParameter.property.split('.').join('[.]')
+          : `reconciliation[.]${key}[.]unanswered-after-seconds|` +
+            `RECONCILIATION_${screamingSnake(activation.name)}_UNANSWERED_AFTER_SECONDS`,
         // Lo que build ya parametriza por su cuenta: encontrarlo probaría lo que build
         // hizo. El relay del outbox es el caso claro — tiene `@Value` y habla de reclamos.
         exclude: '/(OutboxRelay|OutboxRelayStore|OutboxPurge|OutboxDispatcher[A-Za-z]*|ProcessedEventPurge[A-Za-z]*|IdempotencyRecordPurge[A-Za-z]*|ReconciliationClaim[A-Za-z]*)\.java',
         why:
           `el umbral de espera de ${dependency}.${activation.name} no se lee en ninguna parte: build lo dejó ` +
-          `escrito en parameters/<perfil>/reconciliation.yaml como reconciliation.${key}.unanswered-after-seconds ` +
-          `—el valor que el diseño declara en unansweredAfterSeconds—, así que lo que falta es LEERLO con @Value. ` +
+          (activation.unansweredParameter
+            ? `escrito como el parámetro ${activation.unansweredParameter.name} (${activation.unansweredParameter.property}, en ${activation.unansweredParameter.unit}) ` +
+              `—el que el diseño enlaza en unansweredAfter—, así que lo que falta es LEERLO con @Value. `
+            : `escrito en parameters/<perfil>/reconciliation.yaml como reconciliation.${key}.unanswered-after-seconds ` +
+              `—el valor que el diseño declara en unansweredAfterSeconds—, así que lo que falta es LEERLO con @Value. `) +
           `Quemado en el código no se ajusta por entorno sin recompilar y deja de ser el número que el diseñador ` +
           `decidió, y el @Value de OTRO barrido no vale: cada proveedor tarda lo suyo, y por eso la clave va por ` +
           `activación. Ver conventions/dependencies.md`

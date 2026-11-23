@@ -1537,9 +1537,15 @@ function paymentsYaml(model, profile) {
     `    read-timeout: ${envFor('PAYMENT_GATEWAY_READ_TIMEOUT', profile)}`,
     `    notice-tolerance-seconds: ${envFor('PAYMENT_NOTICE_TOLERANCE_SECONDS', profile, gateway.webhook.toleranceSeconds)}`,
     '  reconciliation:',
-    '    # Lo decide el diseño (payments.reconciliation.unansweredAfterSeconds); en local y test se acorta',
-    '    # para que los escenarios del barrido no esperen un cuarto de hora.',
-    `    unanswered-after-seconds: ${isLocalish ? PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.local : envWithDefault(profile, PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.env, model.payments.reconciliation.unansweredAfterSeconds)}`,
+    // Con el umbral enlazado a un parámetro (DSL 2.33) no hay clave propia: se lee la del parámetro, y su valor de
+    // local y test es el testValue que el diseño le dio.
+    ...(model.payments.reconciliation.unansweredParameter
+      ? [`    # El silencio tolerado es el parámetro ${model.payments.reconciliation.unansweredParameter.name} (en ${model.payments.reconciliation.unansweredParameter.unit}): sin clave propia (DSL 2.33).`]
+      : [
+          '    # Lo decide el diseño (payments.reconciliation.unansweredAfterSeconds); en local y test se acorta',
+          '    # para que los escenarios del barrido no esperen un cuarto de hora.',
+          `    unanswered-after-seconds: ${isLocalish ? PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.local : envWithDefault(profile, PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.env, model.payments.reconciliation.unansweredAfterSeconds)}`
+        ]),
     '    # Cuántos cobros consulta una pasada como máximo: capacidad, no diseño. Se ajusta con datos de producción.',
     `    batch-size: ${envWithDefault(profile, PAYMENT_SWEEP_PARAMETERS.batchSize.env, PAYMENT_SWEEP_PARAMETERS.batchSize.default)}`
   ];
@@ -2058,11 +2064,18 @@ function reconciliationYaml(model, profile) {
   // adaptador del reclamo pone los mismos en sus @Value, y el servidor de keel-nest lee los mismos.
   for (const { dependency, activation, sweeper } of reconciledActivations(model)) {
     const parameters = reconciliationParameters(activation, sweeper);
+    const linked = parameters.unansweredAfterSeconds.parameter;
     lines.push(
       `  ${kebabCase(activation.name)}:`,
-      `    # Encargos a ${dependency} sin desenlace pasado este tiempo: candidatos del barrido.`,
-      '    # Lo declara el DISEÑO; aquí solo se parametriza para poder moverlo por entorno.',
-      `    unanswered-after-seconds: ${envWithDefault(profile, parameters.unansweredAfterSeconds.env, parameters.unansweredAfterSeconds.default)}`,
+      // Con el umbral enlazado a un parámetro (DSL 2.33) no hay clave propia: dos umbrales para la misma espera es lo
+      // que dejó la corrida order de prueba-gelsa.
+      ...(linked
+        ? [`    # El silencio tolerado es el parámetro ${linked.name} (en ${linked.unit}): sin clave propia, para que no haya dos.`]
+        : [
+            `    # Encargos a ${dependency} sin desenlace pasado este tiempo: candidatos del barrido.`,
+            '    # Lo declara el DISEÑO; aquí solo se parametriza para poder moverlo por entorno.',
+            `    unanswered-after-seconds: ${envWithDefault(profile, parameters.unansweredAfterSeconds.env, parameters.unansweredAfterSeconds.default)}`
+          ]),
       '    # Caducidad del reclamo: una réplica que muere con el lote en vuelo retiene sus',
       '    # candidatos hasta que pasa esto. Del generador, no del diseño: cubre el lote entero',
       '    # (lote × timeout de la llamada con sus reintentos) y al menos dos ticks del cron.',

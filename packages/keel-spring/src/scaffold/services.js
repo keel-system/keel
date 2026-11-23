@@ -47,7 +47,7 @@ import { BATCH_ITEM_COMPONENT } from './batch.js';
 import { batchNote } from '@keel-system/keel-core/gen/batch';
 import { stubNote as conditionalUniquenessNote } from './conditional-uniqueness.js';
 import { callerResolution } from './security.js';
-import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
+import { followUpRejectionNote, savedMethodNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { rawJsonAnnotations } from './jackson.js';
 import { readScopeNote, optionalIdentityNote } from '@keel-system/keel-core/gen/read-scope';
@@ -663,6 +663,13 @@ function renderHandler(model, service, operation) {
   // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la misma en los dos generadores.
   const rejection = followUpRejectionNote(model.payments, operation.name);
   if (rejection) notes.push(rejection);
+  const saving = savedMethodNote(model.payments, operation.name, {
+    saved: 'SavedPaymentMethod',
+    rejected: 'PaymentMethodRejectedException',
+    authentication: 'PaymentMethodAuthenticationRequiredException',
+    unavailable: 'PaymentGatewayUnavailableException'
+  });
+  if (saving) notes.push(saving);
   for (const code of operation.errors) {
     const error = operationError(model, operation.name, code);
     notes.push(`Error: lanzar ${error?.exceptionClass ?? code} (${code}, HTTP ${error?.http ?? 400})${error?.when ? ` cuando: ${error.when}` : ''}`);
@@ -828,8 +835,12 @@ function renderHandler(model, service, operation) {
           ? `Los candidatos son ${waiting.join(', ')} que llevan demasiado tiempo ahí. `
           : `Los candidatos son las entidades que quedaron esperando el desenlace. `) +
         `DESDE CUÁNDO: el estado dice que espera, no cuánto lleva. La marca temporal la declara el diseño en dependencies.${dependency}.activations.${activation.name}.awaitingSince${activation.awaitingSince ? ` — es el campo ${activation.awaitingSince} de la entidad, que estampa la operación que encarga` : ''}. NO uses createdAt —es cuándo nació la entidad, no cuándo empezó a esperar— ni un updatedAt de auditoría, que rejuvenece con cualquier otra escritura y deja la entidad invisible al barrido para siempre. ` +
-        `El umbral de "demasiado tiempo" LO DECLARA EL DISEÑO y build ya lo dejó escrito: léelo de ` +
-        `reconciliation.${kebabCase(activation.name)}.unanswered-after-seconds (parameters/<perfil>/reconciliation.yaml), nunca de una constante. ` +
+        (activation.unansweredParameter
+          ? `El umbral de "demasiado tiempo" LO DECLARA EL DISEÑO: es el parámetro ${activation.unansweredParameter.name} (en ${activation.unansweredParameter.unit}), ` +
+            `y se lee de su propiedad ${activation.unansweredParameter.property} multiplicada por ${activation.unansweredParameter.unitSeconds} para tenerlo en segundos, nunca de una constante ni de otra clave: ` +
+            `no hay reconciliation.${kebabCase(activation.name)}.unanswered-after-seconds, para que el servicio no tenga dos umbrales para la misma espera. `
+          : `El umbral de "demasiado tiempo" LO DECLARA EL DISEÑO y build ya lo dejó escrito: léelo de ` +
+            `reconciliation.${kebabCase(activation.name)}.unanswered-after-seconds (parameters/<perfil>/reconciliation.yaml), nunca de una constante. `) +
         `En el mismo bloque están claim-timeout-ms y batch-size, que NO son del diseño (mecánica y capacidad) pero se leen igual: de ahí, no del código. ` +
         `Y decide qué hace con cada uno según el efecto declarado ("${activation.effect}"): reintentar el encargo o disparar la compensación. Si el diseño no lo dice, es designGap. ` +
         (scheduledByTimer(model, operation.name)

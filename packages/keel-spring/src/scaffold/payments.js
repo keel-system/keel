@@ -50,6 +50,7 @@ export function generate(model) {
     renderPaymentSource(model),
     renderChargeRequest(model),
     renderUnavailable(model),
+    ...renderSavedMethod(model),
     renderPort(model),
     renderOutcomeApplier(model),
     renderNotices(model),
@@ -224,6 +225,55 @@ public class PaymentGatewayUnavailableException extends RuntimeException {
   return file(model, DOMAIN_PKG, 'PaymentGatewayUnavailableException', [], body);
 }
 
+/**
+ * Lo que devuelve guardar un medio (DSL 2.33, corrida payment de prueba-gelsa, G9): la referencia opaca y el resumen de
+ * la tarjeta que informa la pasarela, más las dos negativas que el handler tiene que distinguir. Con un `String` se
+ * perdía el resumen (que `savePaymentMethod.cardDetails` pide guardar) y el 3DS salía como un rechazo más.
+ */
+function renderSavedMethod(model) {
+  if (!model.payments.savePaymentMethod) return [];
+  const card = `/**
+ * El resumen visible de la tarjeta guardada, tal como lo informa la pasarela: nunca el número completo. Un campo que la
+ * pasarela no informa llega null.
+ */
+public record SavedCard(String brand, String last4, Integer expMonth, Integer expYear) {
+}`;
+  const saved = `/**
+ * Un medio de pago guardado en la pasarela.
+ *
+ * @param reference la referencia opaca de la pasarela: no sale nunca del servicio
+ * @param card el resumen de la tarjeta, o null si la pasarela no lo devolvió
+ */
+public record SavedPaymentMethod(String reference, SavedCard card) {
+}`;
+  const rejected = `/**
+ * La pasarela no acepta el medio de pago: el token no vale (inválido, caducado o ya usado) o rechaza la tarjeta. No se
+ * guardó nada, y repetir con el mismo token da lo mismo.
+ */
+public class PaymentMethodRejectedException extends RuntimeException {
+
+    public PaymentMethodRejectedException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}`;
+  const authentication = `/**
+ * La pasarela exige autenticar al cliente (3DS) para guardar la tarjeta. No es un rechazo del medio: el cliente puede
+ * completar la autenticación al tokenizar y volver a pedir el guardado. No se guardó nada.
+ */
+public class PaymentMethodAuthenticationRequiredException extends RuntimeException {
+
+    public PaymentMethodAuthenticationRequiredException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}`;
+  return [
+    file(model, DOMAIN_PKG, 'SavedCard', [], card),
+    file(model, DOMAIN_PKG, 'SavedPaymentMethod', [], saved),
+    file(model, DOMAIN_PKG, 'PaymentMethodRejectedException', [], rejected),
+    file(model, DOMAIN_PKG, 'PaymentMethodAuthenticationRequiredException', [], authentication)
+  ];
+}
+
 // ─── Puerto ──────────────────────────────────────────────────────────────────
 
 function portRef(model) {
@@ -269,9 +319,12 @@ function renderPort(model) {
     methods.push(`    /**
      * Guarda un medio de pago para cobrarlo sin el cliente delante.
      *
-     * @return la referencia opaca de la pasarela; no sale nunca del servicio
+     * @return la referencia opaca de la pasarela (no sale nunca del servicio) y el resumen de la tarjeta
+     * @throws PaymentMethodRejectedException si la pasarela no acepta el medio
+     * @throws PaymentMethodAuthenticationRequiredException si exige autenticar al cliente (3DS) para guardarlo
+     * @throws PaymentGatewayUnavailableException si no contestó: no se sabe si lo guardó
      */
-    String savePaymentMethod(String token, String payerReference);`);
+    SavedPaymentMethod savePaymentMethod(String token, String payerReference);`);
   }
   const body = `/**
  * La pasarela de pago, vista desde los casos de uso. No nombra ninguna: la implementación la eligió
@@ -283,6 +336,9 @@ public interface PaymentGateway {
 ${methods.join('\n\n')}
 }`;
   const imports = [`${domain}.ChargeRequest`, `${domain}.GatewayOutcome`, `${domain}.PaymentGatewayUnavailableException`];
+  if (payments.savePaymentMethod) {
+    imports.push(`${domain}.SavedPaymentMethod`, `${domain}.PaymentMethodRejectedException`, `${domain}.PaymentMethodAuthenticationRequiredException`);
+  }
   if (payments.capture?.amount || payments.refund?.amount) imports.push('java.math.BigDecimal');
   return file(model, PORT_PKG, 'PaymentGateway', imports, body);
 }
@@ -392,6 +448,17 @@ public class PaymentNotices {
   );
 }
 
+/**
+ * El umbral del barrido de pagos: su clave propia o, con `payments.reconciliation.unansweredAfter` (DSL 2.33), la
+ * propiedad del parámetro en segundos, la forma de stalledAfter. Sin clave propia no hay dos umbrales que ajustar.
+ */
+function sweepThresholdValue(model) {
+  const parameter = model.payments.reconciliation.unansweredParameter;
+  return parameter
+    ? `@Value("#{\${${parameter.property}} * ${parameter.unitSeconds}}")`
+    : `@Value("\${${PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.key}}")`;
+}
+
 function renderReconciliation(model) {
   const payments = model.payments;
   const base = model.service.basePackage;
@@ -425,7 +492,7 @@ public class PaymentReconciliation {
     private final int batchSize;
 
     public PaymentReconciliation(PaymentGateway gateway, PaymentOutcomeApplier applier,
-            @Value("\${${PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.key}}") long unansweredAfterSeconds,
+            ${sweepThresholdValue(model)} long unansweredAfterSeconds,
             @Value("\${${PAYMENT_SWEEP_PARAMETERS.batchSize.key}:${PAYMENT_SWEEP_PARAMETERS.batchSize.default}}") int batchSize) {
         if (unansweredAfterSeconds < 1 || batchSize < 1) {
             throw new IllegalArgumentException("El umbral y el lote del barrido de pagos tienen que ser positivos");
@@ -693,4 +760,55 @@ function file(model, subpackage, className, imports, body) {
 /** El nombre de la clase del adaptador de la pasarela elegida (lo usan readme, skills y tests). */
 export function adapterClass(model) {
   return `${pascalCase(model.payments.gateway.id)}PaymentGateway`;
+}
+
+/**
+ * Lo que los dos adaptadores escriben igual al guardar un medio (DSL 2.33, G9): el resumen de la tarjeta leído de las
+ * rutas de su traducción (`savedCard` de keel-core/gen/payment-gateways.js) y la clasificación de un 4xx entre la
+ * autenticación que pide (3DS, `saveAuthenticationCodes`) y el rechazo del medio. Las rutas son DATOS de keel-core: el
+ * doble de prueba (`savedCardResponse`) las usa para escribir la respuesta, así que leen lo mismo.
+ */
+export function savedMethodJava(translation, gatewayName) {
+  const path = (route) => `saved${route.split('.').map((key) => `.path("${key}")`).join('')}`;
+  const { brand, last4, expMonth, expYear } = translation.savedCard;
+  const codes = translation.saveAuthenticationCodes;
+  const authentication = codes.length
+    ? `
+    /** El 4xx al guardar que dice que la tarjeta exige autenticar (3DS): no es un rechazo del medio. */
+    private boolean asksAuthentication(RestClientResponseException rejected) {
+        JsonNode error = json(rejected.getResponseBodyAsString()).path("error");
+        String code = error.path("decline_code").asString(error.path("code").asString(""));
+        return ${codes.map((code) => `"${code}".equals(code)`).join(' || ')};
+    }
+`
+    : '';
+  return {
+    rejection: codes.length
+      ? `            if (asksAuthentication(rejected)) {
+                throw new PaymentMethodAuthenticationRequiredException("${gatewayName} exige autenticar al cliente para guardar el medio", rejected);
+            }
+            throw new PaymentMethodRejectedException("${gatewayName} no acepta el medio de pago: " + rejected.getStatusText(), rejected);`
+      : `            throw new PaymentMethodRejectedException("${gatewayName} no acepta el medio de pago: " + rejected.getStatusText(), rejected);`,
+    helpers: `
+    /** El resumen de la tarjeta guardada, de donde lo trae ${gatewayName}; un campo que no informa llega null. */
+    private static SavedCard savedCardOf(JsonNode saved) {
+        return new SavedCard(textOrNull(${path(brand)}), textOrNull(${path(last4)}),
+                intOrNull(${path(expMonth)}), intOrNull(${path(expYear)}));
+    }
+
+    private static String textOrNull(JsonNode node) {
+        return node.isValueNode() && !node.isNull() ? node.asString() : null;
+    }
+
+    private static Integer intOrNull(JsonNode node) {
+        return node.isIntegralNumber() ? node.intValue() : null;
+    }
+${authentication}`,
+    imports: (domainPkg) => [
+      `${domainPkg}.SavedCard`,
+      `${domainPkg}.SavedPaymentMethod`,
+      `${domainPkg}.PaymentMethodRejectedException`,
+      ...(codes.length ? [`${domainPkg}.PaymentMethodAuthenticationRequiredException`] : [])
+    ]
+  };
 }

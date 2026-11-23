@@ -52,3 +52,24 @@ export function acknowledgeNote(subscription) {
     'va al descarte, salvo el «no existe» cuando esta misma nota dice que se reintenta.'
   );
 }
+
+/**
+ * La nota del handler de guardar un medio (`payments.savePaymentMethod`, DSL 2.33): qué devuelve la pasarela y las dos
+ * negativas que hay que distinguir. Neutral: la escriben igual los cuatro generadores, con el nombre de sus tipos en
+ * `names` ({ saved, rejected, authentication, unavailable }).
+ */
+export function savedMethodNote(payments, operationName, names) {
+  const saving = payments?.savePaymentMethod;
+  if (!saving || saving.operation !== operationName) return null;
+  const card = saving.cardDetails
+    ? `El resumen de la tarjeta (marca, últimos cuatro, mes y año de caducidad) lo informa la pasarela en ${names.saved}: ` +
+      `guárdalo en el campo '${saving.cardDetails}' (payments.savePaymentMethod.cardDetails), campo a campo; lo que no informe queda vacío. `
+    : `${names.saved} trae también el resumen de la tarjeta; el diseño no dice dónde guardarlo (savePaymentMethod.cardDetails). `;
+  return (
+    `GUARDAR EL MEDIO: la pasarela devuelve ${names.saved}, con la referencia opaca (se guarda y no sale nunca del servicio). ` +
+    card +
+    `Dos negativas distintas: ${names.authentication} (la pasarela exige autenticar al cliente, 3DS: puede completarla y ` +
+    `volver a pedirlo) y ${names.rejected} (el medio no vale); cada una con su error del diseño. Sin respuesta ` +
+    `(${names.unavailable}) no se guardó nada aquí.`
+  );
+}

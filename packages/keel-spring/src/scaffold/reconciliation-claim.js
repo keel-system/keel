@@ -60,9 +60,11 @@ export function adapterCollaborator(model, entity) {
  */
 export function adapterValueFields(model, entity) {
   // Clave y default de cada uno: los de keel-core (`reconciliationParameters`), los mismos que config.js.
-  const value = ({ key, default: fallback }) => `@Value("\${${key}:${fallback}}")`;
+  // Con el umbral enlazado a un parámetro (DSL 2.33), la propiedad del parámetro en segundos: la forma de stalledAfter.
+  const value = ({ key, default: fallback, parameter }) =>
+    parameter ? `@Value("#{\${${parameter.property}} * ${parameter.unitSeconds}}")` : `@Value("\${${key}:${fallback}}")`;
   return claimsFor(model, entity.name).flatMap(({ parameters, ...claim }) => [
-    `    /** Umbral de silencio del proveedor: lo declara el diseño (${claim.dependency}.${claim.activation}). */
+    `    /** Umbral de silencio del proveedor, en segundos: lo declara el diseño (${claim.dependency}.${claim.activation}${parameters.unansweredAfterSeconds.parameter ? `, parámetro ${parameters.unansweredAfterSeconds.parameter.name}` : ''}). */
     ${value(parameters.unansweredAfterSeconds)}
     private long ${claim.activation}UnansweredAfterSeconds;`,
     `    /** Caducidad del reclamo: lo que retiene un candidato la réplica que muera con él en vuelo. */
@@ -90,8 +92,9 @@ function describe(claim) {
      * al commit, así que también sobreviviría a la réplica que muera con el candidato en
      * vuelo. Dimensiona el plazo por encima de lote × timeout de llamada.
      *
-     * <p>No recibe el tamaño del lote: los tres números —umbral, caducidad y cota— salen de
-     * {@code parameters/<perfil>/reconciliation.yaml}, y quien los lee es el adaptador.
+     * <p>No recibe el tamaño del lote: los tres números —umbral, caducidad y cota— los lee el adaptador
+     * ${claim.parameters?.unansweredAfterSeconds?.parameter ? `(el umbral es el parámetro {@code ${claim.parameters.unansweredAfterSeconds.parameter.name}}, en ${claim.parameters.unansweredAfterSeconds.parameter.unit}; la caducidad y la cota, de
+     * {@code parameters/<perfil>/reconciliation.yaml})` : `de {@code parameters/<perfil>/reconciliation.yaml}`}.
      * Actúa sobre lo que devuelve FUERA de esta llamada.`;
 }
 

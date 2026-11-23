@@ -10,6 +10,8 @@
 // imagen o con la pasarela, no con un lenguaje. Los comentarios cuentan cómo la usa keel-spring,
 // que es la implementación de referencia; un arnés de otro lenguaje la renderiza igual.
 
+import { gatewayTranslation } from './payment-gateways.js';
+
 export const PAYMENT_PROBES = {
   stripe: {
     // pi_<referencia sin símbolos>: determinista, para que el escenario sepa el id antes de pedir.
@@ -96,4 +98,36 @@ export function paymentProbesFor(gatewayId) {
   const probes = PAYMENT_PROBES[gatewayId];
   if (!probes) throw new Error(`payment-probes: la pasarela '${gatewayId}' no tiene doble de prueba`);
   return probes;
+}
+
+// ─── Guardar un medio de pago (DSL 2.33: el resumen de la tarjeta y el 3DS) ──────────────────────────────────────
+
+/** La tarjeta con la que el doble guarda un medio si el escenario no pide otra. */
+export const DEFAULT_SAVED_CARD = Object.freeze({ brand: 'visa', last4: '4242', expMonth: 12, expYear: 2030 });
+
+/**
+ * La respuesta del último paso de guardar (el attach de Stripe, la tarjeta del cliente de MercadoPago), con el resumen
+ * en las rutas que lee el adaptador (`savedCard` de payment-gateways.js). Un doble con el resumen en otra ruta haría que
+ * el escenario midiera el doble y no el servidor.
+ */
+export function savedCardResponse(gatewayId, card = DEFAULT_SAVED_CARD, id = 'card_keel_test') {
+  const paths = gatewayTranslation(gatewayId).savedCard;
+  const body = { id };
+  for (const [field, route] of Object.entries(paths)) {
+    if (card[field] === undefined) continue;
+    const keys = route.split('.');
+    let node = body;
+    for (const key of keys.slice(0, -1)) node = node[key] ??= {};
+    node[keys.at(-1)] = card[field];
+  }
+  return body;
+}
+
+/**
+ * El 4xx con el que la pasarela dice que guardar la tarjeta exige autenticar (3DS), o null si esa pasarela no lo pide
+ * al guardar (MercadoPago: la autenticación es del cobro).
+ */
+export function saveAuthenticationRejection(gatewayId) {
+  const [code] = gatewayTranslation(gatewayId).saveAuthenticationCodes;
+  return code ? { status: 402, body: { error: { type: 'card_error', code, decline_code: code } } } : null;
 }

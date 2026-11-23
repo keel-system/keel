@@ -13,6 +13,7 @@
 
 import { gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
 import { javaFile, javaPath, subPackage } from '../render.js';
+import { savedMethodJava } from '../payments.js';
 
 // Un corte de conexión a mitad de la respuesta no llega como ResourceAccessException sino como
 // RestClientException genérica: se captura la general (después de la de respuesta HTTP, que es más
@@ -26,6 +27,7 @@ const SUB = 'infrastructure.payment.mercadopago';
 // status_detail → motivo neutro, el campo de la referencia y la firma del aviso son contrato con
 // MercadoPago, no con Java: los comparte keel-nest (keel-core/gen/payment-gateways.js).
 const TRANSLATION = gatewayTranslation('mercadopago');
+const SAVED = savedMethodJava(TRANSLATION, 'MercadoPago');
 const DETAILS = TRANSLATION.declines;
 
 function renderAdapter(model, ctx) {
@@ -134,7 +136,7 @@ function renderAdapter(model, ctx) {
 
   if (p.savePaymentMethod) {
     methods.push(`    @Override
-    public String savePaymentMethod(String token, String payerReference) {
+    public SavedPaymentMethod savePaymentMethod(String token, String payerReference) {
         try {
             ObjectNode customerBody = mapper.createObjectNode();
             customerBody.put("description", payerReference);
@@ -153,12 +155,12 @@ function renderAdapter(model, ctx) {
                     .body(cardBody.toString())
                     .retrieve()
                     .body(String.class));
-            return customerId + "|" + card.path("id").asString();
+            return new SavedPaymentMethod(customerId + "|" + card.path("id").asString(), savedCardOf(card));
         } catch (RestClientResponseException rejected) {
             if (rejected.getStatusCode().is5xxServerError()) {
                 throw unavailable("savePaymentMethod", rejected);
             }
-            throw new IllegalArgumentException("La pasarela no acepta el medio de pago: " + rejected.getStatusText(), rejected);
+${SAVED.rejection}
         } catch (RestClientException noAnswer) {
             throw unavailable("savePaymentMethod", noAnswer);
         }
@@ -300,6 +302,7 @@ ${detailCases}
         }
     }
 
+${p.savePaymentMethod ? SAVED.helpers : ''}
     private PaymentGatewayUnavailableException unavailable(String action, Exception cause) {
         return new PaymentGatewayUnavailableException("MercadoPago no contestó a " + action + ": la acción queda en duda", cause);
     }
@@ -326,6 +329,7 @@ ${detailCases}
     'org.springframework.web.client.RestClient',
     'org.springframework.web.client.RestClientResponseException'
   ];
+  if (p.savePaymentMethod) imports.push(...SAVED.imports(ctx.domainPkg));
   return { path: javaPath(model, SUB, 'MercadopagoPaymentGateway'), content: javaFile(subPackage(model, SUB), imports, body) };
 }
 
