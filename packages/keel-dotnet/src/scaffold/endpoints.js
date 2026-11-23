@@ -20,7 +20,7 @@
 // después la ruta, y los campos y las partes en su orden, que es el de los argumentos del controlador de keel-spring.
 
 import { requestShape, returnsLocation, locationTarget } from '@keel-system/keel-core/gen/api-contract';
-import { callsPaymentGateway } from '@keel-system/keel-core/gen/payments-model';
+import { commitsBeforeOutbound } from '@keel-system/keel-core/gen/outbound-boundary';
 import { csFile, csLocal, csMember, csString, fieldUsings, located, namespaceOf, xmlDoc } from './render.js';
 import { componentType, entryGateAssignment, isPartialUpdate, isThreeState, messageComponents, messageNamespace } from './services.js';
 import { restNamespace, usesApi } from './rest-support.js';
@@ -227,9 +227,9 @@ function renderEndpoint(model, operation, usings) {
   const credential = operation.optionalAuth ? 'CallerIdentity.ResolveOptional()' : 'CallerIdentity.Resolve()';
   const callerArg = resolving ? `, () => http.RequestServices.GetRequiredService<CallerIdentityResolver>().Resolve(${credential}, http.RequestAborted)` : '';
   const read = `${asBody || resolving || operation.multipart ? 'await ' : ''}Read${csMember(operation.name)}(http.Request${callerArg})`;
-  // Lo que llama a la pasarela de pago va SIN transacción abarcadora (callsPaymentGateway, keel-core): su garantía
-  // es registrar y confirmar ANTES de llamarla, como en keel-spring y keel-nest.
-  const dispatch = callsPaymentGateway(model, operation.name) ? 'DispatchWithoutTransaction' : 'Dispatch';
+  // Lo que llama a la pasarela de pago, o encarga una activación HTTP y la deja esperando, va SIN transacción abarcadora
+  // (commitsBeforeOutbound, keel-core): su garantía es registrar y confirmar ANTES de llamar, como en keel-spring y keel-nest.
+  const dispatch = commitsBeforeOutbound(model, operation.name) ? 'DispatchWithoutTransaction' : 'Dispatch';
   const call = `await Mediator(http).${dispatch}(message, http.RequestAborted)`;
   const status = operation.route.status;
   // Un lote asíncrono (DSL 2.30, fase B): el alta sobre los bytes del cuerpo y las dos rutas del trabajo.

@@ -192,7 +192,7 @@ Lo neutral en `keel-core/gen`, y cada generador con su test de paridad.
 | 0. Registro de corridas | hecho (2026-11-23) | `corrida-metrics.js series`: `page-out-of-range-totals` repetido en 3 corridas; H1 sin cambio |
 | 1. keel-core: puerta sin DSL | hecho (2026-11-23) | suite de keel-core 1684/1684, `design-matrix` sin `sin-mutacion` (246 falsados), `--ready` sobre las copias |
 | 2. keel-core/gen + keel-spring | hecho (2026-11-23) | `npm test` de la raíz en verde (6 paquetes); `compile-check` de catalog-extended en 4 combos; el arnés de la copia de order y el `main` de job-dispatch con `naturalKey: [id]` compilados, y G6 falsado |
-| 3. nest, dotnet, go | en curso (3a hecho) | 3a: suite de keel-nest, `ts-check --only=catalog-gelsa-order` 13/13, `stub-check` 28/28 |
+| 3. nest, dotnet, go | en curso (3a y 3b hechos) | 3a: suite de keel-nest, `ts-check --only=catalog-gelsa-order` 13/13, `stub-check` 28/28. 3b: suite de keel-dotnet 1076/1076, `cs-check --fixtures --only=catalog-gelsa-order` (falsado), `stub-check` 9/9 |
 | 4. DSL 2.33 en keel-core | pendiente | |
 | 5. keel-spring 2.33 y pagos | pendiente | |
 | 6. nest, dotnet, go 2.33 y pagos | pendiente | |
@@ -258,7 +258,20 @@ y payment sigue en verde hasta el inc. 4 (D7). D2 también es del inc. 4. `CHK-D
     `test/natural-key-identity.test.js` lo mide, falsado quitando el `findAllById` del lector.
   - G3 no aplica: `deadLetteredEvents` y `queryCount` leen en el mismo proceso, sin actuator ni credencial. El humo ya
     cae en una persona vía `closingCredentialOf`.
-- Pendiente: lo mismo en keel-dotnet (3b) y keel-go (3c), con la silueta `catalog-gelsa-order` en sus redes de
-  sintaxis y de compilación. G4 ya les llega por lo neutral (`tokenStubMappings`). Ojo con el snapshot del proyector: en
-  keel-dotnet y keel-go, con `keyField: id`, puede pasar lo mismo que en keel-nest. Hay que ver si G3 aplica (¿leen las
-  métricas por HTTP con credencial?).
+- **3b (keel-dotnet) hecho (2026-11-23):**
+  - G2: `StubForDelayed` y `StubResponse.Delayed`, más `Timeout`, salen de `HttpStubHarness.Response(status, body,
+    delayMs)` (`src/scaffold/http-stub-harness.js`). Lo mide una sonda nueva en `scripts/probes/StubProbes` contra
+    WireMock real: `stub-check` 9/9, con 11 sondas. G1 ya estaba (`ForgetSequences()` en el reset).
+  - G5: `endpoints.js` y `messaging.js` con `commitsBeforeOutbound`, y `outboundBoundaryNote` en `services.js`.
+    `test/outbound-boundary.test.js` compara la nota con keel-spring y keel-nest.
+  - G6: aquí era peor que en keel-nest. Con `keyField: id`, el proyector y el lector buscaban la copia por la clave
+    natural de persistencia pasándole el id (`FindBySku(snapshot.Id)`, Guid contra string: no compila). Además, la copia
+    nueva nacía con un id nuevo y no con el del proveedor. Ahora `replicaFinder`/`replicaBatchFinder` (`projections.js`)
+    buscan por `FindById`/`FindAllById`, y la copia nueva toma `snapshot.Id`. La silueta `catalog-gelsa-order` está en
+    `UNCOVERED_BRANCHES` y `cs-check --fixtures --only=catalog-gelsa-order` la compila sin warnings (260 pruebas
+    emitidas). Falsado: sin `replicaFinder` caen el lector y el proyector con CS1503. Lo mide
+    `test/natural-key-identity.test.js`.
+  - G3 no aplica: `DeadLetteredEvents` y `QueryCount` leen la base o el proceso, sin credencial.
+- Pendiente: keel-go (3c), con la silueta `catalog-gelsa-order` en `go-syntax`/`go-check`. G4 ya le llega por lo
+  neutral (`tokenStubMappings`). Ya se vio que su proyector y su lector usan `FindBySku` con `keyField: id`, como
+  keel-dotnet; hay que mirar también el id de la copia nueva y si G3 aplica.

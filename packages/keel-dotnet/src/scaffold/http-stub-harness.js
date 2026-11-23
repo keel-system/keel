@@ -43,13 +43,10 @@ public static class StubResponse
     public static JsonObject Failure(int status) => HttpStubHarness.Response(status, new { });
 
     /// <summary>No contesta a tiempo: <paramref name="delayMs"/> tiene que superar el <c>timeoutMs</c> de la llamada.</summary>
-    public static JsonObject Timeout(int delayMs) => new()
-    {
-        ["status"] = 200,
-        ["fixedDelayMilliseconds"] = delayMs,
-        ["headers"] = new JsonObject { ["Content-Type"] = "application/json" },
-        ["body"] = "{}"
-    };
+    public static JsonObject Timeout(int delayMs) => HttpStubHarness.Response(200, "{}", delayMs);
+
+    /// <summary>Respuesta válida con retardo, como <c>StubForDelayed</c>.</summary>
+    public static JsonObject Delayed(int status, object? body, int delayMs) => HttpStubHarness.Response(status, body, delayMs);
 
     /// <summary>Corta la conexión antes de responder: el servidor lo ve como fallo del transporte.</summary>
     public static JsonObject ConnectionFault() => new() { ["fault"] = ${csString(HTTP_STUB_FAULT)} };
@@ -87,6 +84,14 @@ public abstract partial class FlowTest
     /// <summary>El proveedor tarda más de lo tolerado (<c>retryOn: [timeout]</c>): <paramref name="delayMs"/> por encima del <c>timeoutMs</c> de la llamada.</summary>
     protected static Task StubTimeout(string method, string pathPattern, int delayMs) =>
         HttpStubHarness.MappingAsync(method, pathPattern, StubResponse.Timeout(delayMs));
+
+    /// <summary>
+    /// Una respuesta VÁLIDA que llega tarde: el status y el cuerpo de <c>StubFor</c> con un retardo. Lo que mide un escenario
+    /// de respuesta lenta que cabe en el timeout, o una que llega cuando el servicio ya decidió; <c>StubTimeout</c> devuelve
+    /// un cuerpo vacío.
+    /// </summary>
+    protected static Task StubForDelayed(string method, string pathPattern, int status, object? body, int delayMs) =>
+        HttpStubHarness.MappingAsync(method, pathPattern, StubResponse.Delayed(status, body, delayMs));
 
     /// <summary>
     /// Respuestas DISTINTAS para llamadas sucesivas a la misma ruta: lo que hace escribible un escenario de REINTENTO
@@ -131,17 +136,26 @@ public static class HttpStubHarness
     public static string Admin =>
         Environment.GetEnvironmentVariable("HTTP_STUB_ADMIN") is { Length: > 0 } configured ? configured : ${csString(HTTP_STUB_ADMIN)};
 
-    public static JsonObject Response(int status, object? body) => new()
+    public static JsonObject Response(int status, object? body, int delayMs = 0)
     {
-        ["status"] = status,
-        ["headers"] = new JsonObject { ["Content-Type"] = "application/json" },
-        ["body"] = body switch
+        // Fuente única de la forma: la normal, la lenta y la válida con retardo salen de aquí.
+        var response = new JsonObject
         {
-            null => "",
-            string text => text,
-            _ => JsonSerializer.Serialize(body)
+            ["status"] = status,
+            ["headers"] = new JsonObject { ["Content-Type"] = "application/json" },
+            ["body"] = body switch
+            {
+                null => "",
+                string text => text,
+                _ => JsonSerializer.Serialize(body)
+            }
+        };
+        if (delayMs > 0)
+        {
+            response["fixedDelayMilliseconds"] = delayMs;
         }
-    };
+        return response;
+    }
 
     public static Task MappingAsync(string method, string pathPattern, JsonObject response) => MappingAsync(method, pathPattern, response, null);
 

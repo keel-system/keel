@@ -103,6 +103,18 @@ public sealed class StubProbes : FlowTest, IAsyncLifetime
     }
 
     [Fact]
+    public async Task LaRespuestaValidaConRetardoLlegaDentroDelTimeoutSinReintentar()
+    {
+        // Corrida order de prueba-gelsa (G2): 500 ms, por debajo del timeoutMs de 3000 de cancelStock.
+        await StubForDelayed("DELETE", Route, 200, new { cancelled = true }, 500);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var result = await inventory.CancelStock(Guid.CreateVersion7(), Cancel);
+        Assert.True(result.Cancelled);
+        Assert.True(watch.ElapsedMilliseconds >= 500, $"{watch.ElapsedMilliseconds} ms");
+        Assert.Equal(1, await StubCallCount("DELETE", Route));
+    }
+
+    [Fact]
     public async Task LaSecuenciaEntregaLaSegundaRespuestaConLaMismaClaveYSeQuedaPegada()
     {
         await StubSequence("DELETE", Route, StubResponse.ConnectionFault(), StubResponse.Ok(200, new { cancelled = true }));

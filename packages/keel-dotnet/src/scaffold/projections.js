@@ -18,6 +18,7 @@ import { occurredAtField } from '@keel-system/keel-core/gen/replica';
 import { csFile, csLocal, csMember, csString, declType, entityPlace, located, namespaceOf, typeUsings, xmlDoc } from './render.js';
 import { domainMembers } from './entities.js';
 import { naturalKeyBatchFinder, naturalKeyFinder, portClass, repositoriesNamespace } from './repositories.js';
+import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { clientPort, clientsNamespace } from './http-clients.js';
 
 /** Las réplicas que el diseño declara, ya resueltas por el modelo, con su entidad. */
@@ -53,6 +54,25 @@ export function generate(model) {
 }
 
 // Lo que la proyección mantiene: todo menos el id técnico y la clave de correlación, que identifican la fila.
+/**
+ * El finder que encuentra UNA copia por su clave de correlación: el de la clave natural o, si la clave es la identidad
+ * (`keyField: id`), `FindById` (corrida order de prueba-gelsa, G6). Sin esto el proyector buscaba la copia por la clave
+ * natural de persistencia pasándole el id, y no compilaba.
+ */
+function replicaFinder(model, entity, replica) {
+  if (replica.keyField === entity.idField?.name) return { name: 'FindById' };
+  return naturalKeyFinder(model, entity);
+}
+
+/**
+ * El finder por lote de la copia: el de su clave natural o, si la clave es la identidad, `FindAllById` (idBatchReason de
+ * keel-core, `replica-listing`). Como keel-spring y keel-nest.
+ */
+export function replicaBatchFinder(model, entity) {
+  if (idBatchReason(model, entity) === 'replica-listing') return { reason: 'replica-listing', name: 'FindAllById', plural: 'ids' };
+  return naturalKeyBatchFinder(model, entity);
+}
+
 function projectedFields(entity, replica) {
   return entity.fields.filter((field) => !field.isId && field.name !== replica.keyField && !field.generated);
 }
@@ -69,6 +89,8 @@ function stateAssignments(model, entity, replica, existing) {
     const name = csMember(member.name);
     if (member.field?.isId) {
       if (existing) assignments.push(`${name} = existing.${name}`);
+      // Con `keyField: id` el id es el que informa el proveedor: uno nuevo crearía otra copia en cada evento.
+      else if (member.name === replica.keyField) assignments.push(`${name} = snapshot.${name}`);
       else if (member.field.initializer) assignments.push(`${name} = ${member.field.initializer}`);
       else return null;
     } else if (member.declaredLock) {
@@ -94,7 +116,7 @@ function renderProjector(model, dependency, need, entity) {
   const snapshotFields = [keyField, ...fields].filter(Boolean);
   const usings = [namespaceOf(model, entityPlace(entity)), repositoriesNamespace(model), ...snapshotFields.flatMap((field) => typeUsings(model, [field.elementCsType ?? field.csType]))];
   const ordering = occurredAtField(entity);
-  const finder = naturalKeyFinder(model, entity);
+  const finder = replicaFinder(model, entity, replica);
   const created = stateAssignments(model, entity, replica, false);
   const updated = stateAssignments(model, entity, replica, true);
   const state = (assignments, pad) => `new ${entity.name}(new ${entity.name}State\n${pad}{\n${assignments.map((a) => `${pad}    ${a},`).join('\n')}\n${pad}})`;
@@ -164,7 +186,7 @@ function renderReader(model, dependency, need, entity) {
     const port = clientPort(client);
     deps.push({ type: port, name: `${port.slice(1, 2).toLowerCase()}${port.slice(2)}` });
   }
-  const finder = naturalKeyFinder(model, entity);
+  const finder = replicaFinder(model, entity, replica);
   const find = `await repository.${finder?.name ?? `FindBy${csMember(replica.keyField)}`}(${key}, cancellationToken)`;
   let method;
   if (onMiss.action === 'fetch' && client) {
@@ -204,7 +226,7 @@ function renderReader(model, dependency, need, entity) {
     public async Task<${entity.name}?> ByKey(${keyType} ${key}, CancellationToken cancellationToken = default) =>
         ${find};`;
   }
-  const batch = naturalKeyBatchFinder(model, entity);
+  const batch = replicaBatchFinder(model, entity);
   const byKeys =
     batch?.reason === 'replica-listing'
       ? `

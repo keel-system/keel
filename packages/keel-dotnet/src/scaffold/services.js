@@ -40,12 +40,13 @@ import { callMethod, clientPort, clientsNamespace } from './http-clients.js';
 import { mailNamespace, mailPorts, sendsMail } from './mail.js';
 import { OPERATION_CACHE_PORT, cacheCall, cachesOperation } from './cache.js';
 import { cacheNote } from '@keel-system/keel-core/gen/cache-plan';
-import { projectionNamespace, projectionNotes, projectionsFedBy, readerLocal } from './projections.js';
+import { projectionNamespace, projectionNotes, projectionsFedBy, readerLocal, replicaBatchFinder } from './projections.js';
 import { refTargetsOf, listedIdsNote } from '@keel-system/keel-core/gen/ref-targets';
+import { outboundBoundaryNote } from '@keel-system/keel-core/gen/outbound-boundary';
 import { inverseCollectionsNote } from '@keel-system/keel-core/gen/inverse-collections';
 import { resolverClass } from './ref-resolvers.js';
 import { usesPersistence } from './persistence.js';
-import { naturalKeyBatchFinder, naturalKeyFinder } from './repositories.js';
+import { naturalKeyFinder } from './repositories.js';
 import { deletedRootOf, logicalDeletionNote, restoreNote } from '@keel-system/keel-core/gen/data-lifecycle';
 import { uploadNotes } from '@keel-system/keel-core/gen/buckets';
 import { effectiveErrorCode, operationError } from '@keel-system/keel-core/gen/declared-errors';
@@ -560,6 +561,9 @@ function handlerNotes(model, operation) {
   const compensation = compensationNote(operation);
   if (compensation) notes.push(compensation);
   for (const note of activationNotes(model, operation)) notes.push(note);
+  // La frontera: encargar y dejar esperando es un orden de commits, no una transacción (keel-core/gen/outbound-boundary).
+  const boundary = outboundBoundaryNote(model, operation);
+  if (boundary) notes.push(boundary);
   for (const { dependency, need } of operation.dependencyNeeds ?? []) notes.push(needNote(model, dependency, need, operation));
   for (const note of projectionNotes(model, operation)) notes.push(note);
   for (const note of embedNotes(model, operation)) notes.push(note);
@@ -740,7 +744,7 @@ function replicaNote(model, depId, need, operation, why) {
     degrade: `Si la copia aún no tiene el dato, el lector devuelve null y el resultado degradado lo escribes TÚ, distinguible por el cliente de una respuesta normal: ${replica.onMiss.degradedTo}`
   }[replica.onMiss.action];
   const entity = (model.entities ?? []).find((candidate) => candidate.name === replica.entityName);
-  const batch = (operation.returnsList || operation.paginated) && entity && naturalKeyBatchFinder(model, entity)?.reason === 'replica-listing'
+  const batch = (operation.returnsList || operation.paginated) && entity && replicaBatchFinder(model, entity)?.reason === 'replica-listing'
     ? ` Esta operación devuelve una lista: lee la página entera con await ${reader}.ByKeys(..., cancellationToken) (UNA consulta) y pasa por ByKey(...) solo las claves que falten, que es donde se aplica onMiss.`
     : '';
   const exposed = need.exposedAs && need.dtoName ? ` El dato SALE en la respuesta: el mapper pide un ${need.dtoName} por parámetro y lo pone en el campo '${need.exposedAs}'.` : '';

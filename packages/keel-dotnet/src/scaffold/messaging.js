@@ -36,6 +36,7 @@ import { consumerUnits, consumesFromQueue, messagingYaml, routingKeyName, subscr
 import { acknowledgeNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { callsPaymentGateway } from '@keel-system/keel-core/gen/payments-model';
+import { commitsBeforeOutbound } from '@keel-system/keel-core/gen/outbound-boundary';
 import { csFile, csLocal, csMember, csString, declType, fieldUsings, located, namespaceOf, xmlDoc } from './render.js';
 import { configNamespace } from './config.js';
 import { wireNamespace } from './wire.js';
@@ -720,9 +721,13 @@ function contractDoc(model, sub) {
               : 'TODO (agente)';
     const gate = entryGateAssignment(model, sub.trigger, 'SUBSCRIPTION');
     const args = [...sub.triggerArguments.map((a) => `${csMember(a.component)} = ${argument(a)}`), ...(gate ? [gate] : [])].join(', ');
+    // Lo que llama a la pasarela, o encarga una activación HTTP que deja esperando, va sin transacción abarcadora
+    // (commitsBeforeOutbound), como en el endpoint.
     const via = callsPaymentGateway(model, sub.trigger)
       ? 'IUseCaseMediator.DispatchWithoutTransaction(...) —llama a la pasarela: registra y confirma antes de llamarla—'
-      : 'el IUseCaseMediator, en un ámbito de DI propio por mensaje';
+      : commitsBeforeOutbound(model, sub.trigger)
+        ? 'IUseCaseMediator.DispatchWithoutTransaction(...) —encarga trabajo que deja esperando: registra la espera y confirma antes de llamar—'
+        : 'el IUseCaseMediator, en un ámbito de DI propio por mensaje';
     lines.push(
       `Lo consume ${consumer} (lo escribe el agente y lo registra en BrokerBindings.cs), despachando ${sub.triggerMessageClass ?? sub.trigger}${args ? ` { ${args} }` : ''} por ${via}.`
     );

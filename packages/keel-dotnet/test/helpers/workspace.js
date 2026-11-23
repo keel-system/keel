@@ -82,6 +82,18 @@ const replicaOf = (layers) => Object.values(layers.dependencies.dependencies.pri
 const DEGRADED_REPLICA = 'Se cotiza sin precio del proveedor y la ficha lo dice.';
 const DEGRADED_ACTIVATION = 'El producto queda sin reindexar hasta el próximo cambio; la búsqueda lo encuentra con sus datos viejos.';
 export const UNCOVERED_BRANCHES = [
+  // Las dos formas de la corrida order de prueba-gelsa que ninguna fixture tiene, la misma silueta que keel-nest: la
+  // réplica cuya clave es la identidad (G6: se busca por FindById y su lote va por FindAllById) y la activación HTTP que
+  // deja esperando (G5: se despacha sin transacción).
+  {
+    name: 'catalog-gelsa-order',
+    from: 'catalog-extended',
+    mutate(manifest, layers, name) {
+      manifest.service.name = name;
+      replicaOf(layers).keyField = 'id';
+      layers.dependencies.dependencies.compliance.activations.recordWithdrawal.awaits = 'acknowledgement';
+    }
+  },
   {
     name: 'catalog-extended-replica-fail',
     from: 'catalog-extended',
