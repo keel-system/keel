@@ -41,14 +41,16 @@ test('el arnés habla el vocabulario del stub de keel-core', () => {
 });
 
 test('los helpers son los de keel-dotnet, como métodos del escenario', () => {
-  for (const helper of ['StubFor', 'StubFailure', 'StubConnectionFault', 'StubTimeout', 'StubSequence', 'StubCallCount', 'StubRequests', 'ResetStubs']) {
+  for (const helper of ['StubFor', 'StubFailure', 'StubConnectionFault', 'StubTimeout', 'StubForDelayed', 'StubSequence', 'StubCallCount', 'StubRequests', 'ResetStubs']) {
     assert.match(dotnetStub, new RegExp(`\\b${helper}\\(`), `keel-dotnet: ${helper}`);
     assert.match(stub, new RegExp(`^func \\(s \\*Scenario\\) ${helper}\\(`, 'm'), `keel-go: ${helper}`);
   }
   // Las respuestas de una secuencia y la lectura de lo que se le mandó.
-  for (const member of ['func RespondOK(status int, body any) StubResponse', 'func RespondFailure(status int) StubResponse', 'func RespondTimeout(delay time.Duration) StubResponse', 'func RespondConnectionFault() StubResponse', 'func (r StubRequest) Header(name string) string', 'func (r StubRequest) JSON() (any, error)']) {
+  for (const member of ['func RespondOK(status int, body any) StubResponse', 'func RespondFailure(status int) StubResponse', 'func RespondTimeout(delay time.Duration) StubResponse', 'func RespondDelayed(status int, body any, delay time.Duration) StubResponse', 'func RespondConnectionFault() StubResponse', 'func (r StubRequest) Header(name string) string', 'func (r StubRequest) JSON() (any, error)']) {
     assert.ok(stub.includes(member), member);
   }
+  // La respuesta lenta y la válida con retardo salen de la misma forma (corrida order de prueba-gelsa, G2).
+  assert.match(stub, /func RespondTimeout\(delay time\.Duration\) StubResponse \{\n\treturn RespondDelayed\(200, "\{\}", delay\)/);
   // Una secuencia por ruta y flujo: el flujo siguiente olvida las del anterior.
   assert.match(flow, /stubSequences\.forget\(\)/);
   assert.match(smoke, /SMOKE-6: el proveedor de prueba se deja programar/);

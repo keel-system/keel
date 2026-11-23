@@ -21,6 +21,7 @@ import { finderNote } from '@keel-system/keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
 import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { isPartialUpdate, repositoryRoots } from '@keel-system/keel-core/gen/features';
+import { outboundBoundaryNote } from '@keel-system/keel-core/gen/outbound-boundary';
 import { naturalKeyFinder, repositoryParam } from './repositories.js';
 import { deletedRootOf, logicalDeletionNote, restoreNote } from '@keel-system/keel-core/gen/data-lifecycle';
 import { handlerDependencies, usesDependencies } from './use-cases.js';
@@ -529,6 +530,9 @@ function handlerNotes(model, operation) {
   for (const { dependency, need } of operation.dependencyNeeds ?? []) notes.push(needNote(model, dependency, need, operation));
   notes.push(...projectionNotes(model, operation));
   notes.push(...activationNotes(model, operation));
+  // La frontera: encargar y dejar esperando es un orden de commits, no una transacción (keel-core/gen/outbound-boundary).
+  const boundary = outboundBoundaryNote(model, operation);
+  if (boundary) notes.push(boundary);
   for (const eventName of operation.emits ?? []) {
     const event = (model.events ?? []).find((e) => e.name === eventName);
     const emitters = [...new Set((event?.emittedBy ?? []).filter((e) => e.operation === operation.name && e.aggregate).map((e) => e.aggregate))];

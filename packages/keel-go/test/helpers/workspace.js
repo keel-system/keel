@@ -117,6 +117,18 @@ const replicaOf = (layers) => Object.values(layers.dependencies.dependencies.pri
  * en lo emitido, sin red), go-syntax y go-check, que las compila y ejecuta sus pruebas emitidas.
  */
 export const UNCOVERED_BRANCHES = [
+  // Las dos formas de la corrida order de prueba-gelsa que ninguna fixture tiene, la misma silueta que keel-nest y
+  // keel-dotnet: la réplica cuya clave es la identidad (G6: se busca por FindByID y su lote va por FindAllByID) y la
+  // activación HTTP que deja esperando (G5: se despacha sin transacción).
+  {
+    name: 'catalog-gelsa-order',
+    from: 'catalog-extended',
+    mutate(manifest, layers, name = 'catalog-gelsa-order') {
+      manifest.service.name = name;
+      replicaOf(layers).keyField = 'id';
+      layers.dependencies.dependencies.compliance.activations.recordWithdrawal.awaits = 'acknowledgement';
+    }
+  },
   {
     name: 'catalog-extended-replica-fail',
     from: 'catalog-extended',

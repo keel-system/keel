@@ -1,6 +1,6 @@
 # Lo que destaparon las corridas de prueba-gelsa: cazarlo en diseño y corregir los generadores
 
-**Estado: ABIERTO (2026-11-20).** Inc. 0, 1 y 2 hechos (2026-11-23). Se ejecuta en varias sesiones, un incremento por sesión
+**Estado: ABIERTO (2026-11-20).** Inc. 0 a 3 hechos (2026-11-23). Se ejecuta en varias sesiones, un incremento por sesión
 como norma, y cada uno se cierra con «Para retomar» en § Estado y su commit.
 
 ## Contexto
@@ -192,7 +192,7 @@ Lo neutral en `keel-core/gen`, y cada generador con su test de paridad.
 | 0. Registro de corridas | hecho (2026-11-23) | `corrida-metrics.js series`: `page-out-of-range-totals` repetido en 3 corridas; H1 sin cambio |
 | 1. keel-core: puerta sin DSL | hecho (2026-11-23) | suite de keel-core 1684/1684, `design-matrix` sin `sin-mutacion` (246 falsados), `--ready` sobre las copias |
 | 2. keel-core/gen + keel-spring | hecho (2026-11-23) | `npm test` de la raíz en verde (6 paquetes); `compile-check` de catalog-extended en 4 combos; el arnés de la copia de order y el `main` de job-dispatch con `naturalKey: [id]` compilados, y G6 falsado |
-| 3. nest, dotnet, go | en curso (3a y 3b hechos) | 3a: suite de keel-nest, `ts-check --only=catalog-gelsa-order` 13/13, `stub-check` 28/28. 3b: suite de keel-dotnet 1076/1076, `cs-check --fixtures --only=catalog-gelsa-order` (falsado), `stub-check` 9/9 |
+| 3. nest, dotnet, go | hecho (2026-11-23) | 3a: suite de keel-nest, `ts-check --only=catalog-gelsa-order` 13/13, `stub-check` 28/28. 3b: suite de keel-dotnet 1076/1076, `cs-check --fixtures --only=catalog-gelsa-order` (falsado), `stub-check` 9/9. 3c: suite de keel-go, `go-check` de la silueta y de stock-reservation (G6 falsado), `stub-check` 12/12 |
 | 4. DSL 2.33 en keel-core | pendiente | |
 | 5. keel-spring 2.33 y pagos | pendiente | |
 | 6. nest, dotnet, go 2.33 y pagos | pendiente | |
@@ -272,6 +272,22 @@ y payment sigue en verde hasta el inc. 4 (D7). D2 también es del inc. 4. `CHK-D
     emitidas). Falsado: sin `replicaFinder` caen el lector y el proyector con CS1503. Lo mide
     `test/natural-key-identity.test.js`.
   - G3 no aplica: `DeadLetteredEvents` y `QueryCount` leen la base o el proceso, sin credencial.
-- Pendiente: keel-go (3c), con la silueta `catalog-gelsa-order` en `go-syntax`/`go-check`. G4 ya le llega por lo
-  neutral (`tokenStubMappings`). Ya se vio que su proyector y su lector usan `FindBySku` con `keyField: id`, como
-  keel-dotnet; hay que mirar también el id de la copia nueva y si G3 aplica.
+- **3c (keel-go) hecho (2026-11-23):**
+  - G2: `StubForDelayed` y `RespondDelayed`, de la que sale también `RespondTimeout` (`src/scaffold/http-stub-harness.js`),
+    enseñados en `integration-tests.md` y en la skill `keel-go-httpclient`. Lo mide una sonda nueva de
+    `scripts/probes/stub_probe_test.go` contra WireMock real: `stub-check` 12/12, con 11 sondas en stock-reservation. G1
+    ya estaba (`stubSequences.forget()` en el reset).
+  - G5: `endpoints.js` y `messaging.js` con `commitsBeforeOutbound` (`application.WithoutTransaction`), y
+    `outboundBoundaryNote` en `services.js`.
+  - G6: como en keel-dotnet, el proyector y el lector buscaban la copia con `FindBySku(snapshot.ID)` (no compilaba) y la
+    copia nueva nacía con otro id. Ahora `replicaFinder`/`replicaBatchFinder` (`projections.js`) usan
+    `FindByID`/`FindAllByID`, y la copia nueva toma `snapshot.ID`. Falsado: sin la guarda, la silueta no compila.
+  - `test/gelsa-order.test.js` mide G5 (la nota, comparada con keel-spring y keel-dotnet, y las tres operaciones de control)
+    y G6. La silueta `catalog-gelsa-order` está en `UNCOVERED_BRANCHES`.
+  - G3 no aplica: `counter.Wrap` envuelve el servidor entero, por fuera de la seguridad, y `DeadLetteredEvents` lee la base.
+  - Medido: suite de keel-go 1676/1676, y los pasos de `go-check --fixtures` (tidy, gofmt, vet, staticcheck y pruebas)
+    sobre `catalog-gelsa-order` (PostgreSQL y MySQL) y stock-reservation. El `--fixtures` entero no se terminó: tenía 121
+    variantes que comprobar una a una (memoria libre baja, horas), y el cambio solo toca esas formas.
+
+**Inc. 3 cerrado.** Siguiente: inc. 4 (DSL 2.33 en keel-core). Antes hay que contestar las dos decisiones pendientes del
+usuario (§ Decisiones pendientes), sobre todo la 1: si D7 entra en la 2.33.

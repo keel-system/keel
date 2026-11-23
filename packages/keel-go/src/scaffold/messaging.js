@@ -25,7 +25,7 @@
 // base. La documental llega con el incremento 12.
 
 import { usesTelemetry } from '@keel-system/keel-core/gen/telemetry-vocabulary';
-import { callsPaymentGateway } from '@keel-system/keel-core/gen/payments-model';
+import { commitsBeforeOutbound } from '@keel-system/keel-core/gen/outbound-boundary';
 import { missingTargetRetryDestinations, subscriptionDestination, subscriptionGroupId, deadLetterDestination } from '@keel-system/keel-core/gen';
 import { OUTBOX_LAST_ERROR_LENGTH, OUTBOX_RELAY, outboxBackoffMs } from '@keel-system/keel-core/gen/messaging-stores';
 import { usesMessaging, usesBridge, usesProcessedEvents, usesPersistence } from '@keel-system/keel-core/gen/features';
@@ -1187,10 +1187,11 @@ function contractDoc(model, sub) {
     // Sin envoltura Keel no hay metadata de la que heredar la correlación: una nueva (el CorrelationContext.Open de
     // keel-dotnet con la de origen vacía).
     const inbound = sub.envelope === 'keel' ? 'messaging.Inbound(ctx, envelope.Metadata)' : 'correlation.WithID(ctx, correlation.Accept(""))';
-    // Lo que llama a la pasarela de pago va sin transacción abarcadora (callsPaymentGateway, keel-core).
+    // Lo que llama a la pasarela de pago, o encarga una activación HTTP que deja esperando, va sin transacción abarcadora
+    // (commitsBeforeOutbound, keel-core), como en el endpoint.
     // Con telemetría, el tratamiento entero va dentro de messaging.Consume, que ya da ese contexto.
     const consumed = usesTelemetry(model) && sub.envelope === 'keel' ? 'ctx' : inbound;
-    const dispatchCtx = callsPaymentGateway(model, sub.trigger) ? `application.WithoutTransaction(${consumed})` : consumed;
+    const dispatchCtx = commitsBeforeOutbound(model, sub.trigger) ? `application.WithoutTransaction(${consumed})` : consumed;
     lines.push(
       `Lo consume ${consumer}: lo escribe el agente en cmd/server/broker.go y despacha con useCases.${useCaseField(operation)}.Handle(${dispatchCtx}, application.${messageType(operation)}{${fields.join(', ')}}).`
     );

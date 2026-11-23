@@ -153,6 +153,23 @@ func TestStubProbeElRetrasoPorEncimaDelTimeoutEsTransporteYSeReintenta(t *testin
 	}
 }
 
+// Corrida order de prueba-gelsa (G2): 500 ms, por debajo del timeoutMs de 3000 de cancelStock.
+func TestStubProbeLaRespuestaValidaConRetardoLlegaDentroDelTimeoutSinReintentar(t *testing.T) {
+	s, inventory := probe(t)
+	s.StubForDelayed("DELETE", probeRoute, 200, map[string]any{"cancelled": true}, 500*time.Millisecond)
+	start := time.Now()
+	result, err := inventory.CancelStock(t.Context(), uuid.New())
+	if err != nil || result.Cancelled == nil || !*result.Cancelled {
+		t.Fatalf("CancelStock = %+v, %v; quiero cancelled true", result, err)
+	}
+	if elapsed := time.Since(start); elapsed < 500*time.Millisecond {
+		t.Fatalf("respondió en %v: el retardo no llegó", elapsed)
+	}
+	if got := s.StubCallCount("DELETE", probeRoute); got != 1 {
+		t.Fatalf("%d llamadas, quiero 1", got)
+	}
+}
+
 func TestStubProbeLaSecuenciaEntregaLaSegundaRespuestaConLaMismaClaveYSeQuedaPegada(t *testing.T) {
 	s, inventory := probe(t)
 	s.StubSequence("DELETE", probeRoute, RespondConnectionFault(), RespondOK(200, map[string]any{"cancelled": true}))

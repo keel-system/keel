@@ -16,6 +16,7 @@
 import { LOCK_VERSION } from '@keel-system/keel-core/gen';
 import { usesRelational } from '@keel-system/keel-core/gen/features';
 import { occurredAtField } from '@keel-system/keel-core/gen/replica';
+import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { goExported, goUnexported } from '../lib/go-projection.js';
 import { alignRows, commentLines, goString, keyedLiteral } from '../lib/go-source.js';
 import { domainMembers } from './entities.js';
@@ -95,6 +96,25 @@ export function generate(model) {
   return replicas(model).flatMap(({ dependency, need, entity }) => [renderProjector(model, dependency, need, entity), ...renderReader(model, dependency, need, entity)]);
 }
 
+/**
+ * El finder que encuentra UNA copia por su clave de correlación: el de la clave natural o, si la clave es la identidad
+ * (`keyField: id`), `FindByID` (corrida order de prueba-gelsa, G6). Sin esto el proyector y el lector buscaban la copia
+ * por la clave natural de persistencia pasándole el id, como keel-dotnet.
+ */
+function replicaFinder(model, entity, replica) {
+  if (replica.keyField === entity.idField?.name) return { name: 'FindByID' };
+  return naturalKeyFinder(model, entity);
+}
+
+/**
+ * El finder por lote de la copia: el de su clave natural o, si la clave es la identidad, `FindAllByID` (idBatchReason de
+ * keel-core, `replica-listing`). Como los otros tres.
+ */
+function replicaBatchFinder(model, entity) {
+  if (idBatchReason(model, entity) === 'replica-listing') return { name: 'FindAllByID', param: { name: entity.idField.name }, plural: 'ids' };
+  return naturalKeyBatchFinder(model, entity);
+}
+
 /** Lo que la proyección mantiene: todo menos el id técnico y la clave de correlación, que identifican la fila. */
 function projectedFields(entity, replica) {
   return entity.fields.filter((field) => !field.isId && field.name !== replica.keyField && !field.generated);
@@ -112,6 +132,8 @@ function stateAssignments(model, entity, replica, existing) {
     const name = goExported(member.name);
     if (member.field?.isId) {
       if (existing) pairs.push([name, `existing.${name}()`]);
+      // Con `keyField: id` el id es el que informa el proveedor: uno nuevo crearía otra copia en cada evento.
+      else if (member.name === replica.keyField) pairs.push([name, `snapshot.${name}`]);
       else if (member.field.initializer) pairs.push([name, /^uuid./.test(member.field.initializer) ? member.field.initializer : `domain.${member.field.initializer}`]);
       else return null;
     } else if (member.declaredLock) {
@@ -143,7 +165,7 @@ function renderProjector(model, dependency, need, entity) {
   const keyField = entity.fields.find((field) => field.name === replica.keyField);
   const snapshotFields = [keyField, ...fields].filter(Boolean);
   const ordering = occurredAtField(entity);
-  const finder = naturalKeyFinder(model, entity);
+  const finder = replicaFinder(model, entity, replica);
   const created = stateAssignments(model, entity, replica, false);
   const updated = stateAssignments(model, entity, replica, true);
   const writable = Boolean(created && updated && finder);
@@ -215,7 +237,7 @@ function renderReader(model, dependency, need, entity) {
   const keyType = declType(keyField ?? { goType: 'string', required: true }, { qualify: true });
   const key = localName(replica.keyField);
   const client = fetchClient(model, need);
-  const finder = naturalKeyFinder(model, entity);
+  const finder = replicaFinder(model, entity, replica);
   const find = `r.repository.${finder?.name ?? `FindBy${goExported(replica.keyField)}`}(ctx, ${key})`;
   const fields = alignRows([
     { indent: '\t', cells: ['repository', `domain.${portName(entity)}`] },
@@ -260,7 +282,7 @@ func (r *${type}) ByKey(ctx context.Context, ${key} ${keyType}) (*domain.${entit
 	return ${find}
 }`;
   }
-  const batch = naturalKeyBatchFinder(model, entity);
+  const batch = replicaBatchFinder(model, entity);
   const byKeys =
     batch && batch.param.name === replica.keyField
       ? `
@@ -340,7 +362,7 @@ export function replicaNote(model, depId, need, operation, why) {
     degrade: `Si la copia aún no tiene el dato, el lector devuelve false y el resultado degradado lo escribes TÚ, distinguible por el cliente de una respuesta normal: ${replica.onMiss.degradedTo}`
   }[replica.onMiss.action];
   const batch =
-    (operation.returnsList || operation.paginated) && naturalKeyBatchFinder(model, entity)
+    (operation.returnsList || operation.paginated) && replicaBatchFinder(model, entity)
       ? ` Esta operación devuelve una lista: lee la página entera con ${reader}.ByKeys(ctx, ...) (UNA consulta) y pasa por ByKey solo las claves que falten, que es donde se aplica onMiss.`
       : '';
   const exposed = need.exposedAs && need.dtoName ? ` El dato SALE en la respuesta: la función de mapeo pide un ${goTypeName(need.dtoName)} por parámetro y lo pone en el campo '${need.exposedAs}'.` : '';

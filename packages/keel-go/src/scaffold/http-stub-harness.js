@@ -2,8 +2,8 @@
 // WireMock de infra/ y lee lo que el servidor le mandó, y `AgeForReconciliation`/`HoldFromReconciliation`, que fabrican
 // la precondición de un barrido de reconciliación. Los mismos que el AbstractFlowIT de keel-spring, el flow.ts de
 // keel-nest y el `Support/HttpStub.cs` de keel-dotnet (`StubFor`, `StubFailure`, `StubConnectionFault`, `StubTimeout`,
-// `StubSequence`, `StubCallCount`, `StubRequests`, `ResetStubs`), como métodos del `*Scenario`, con el vocabulario del
-// stub de keel-core (`gen/http-stub-probes.js`): los cuatro hablan con el mismo contenedor.
+// `StubForDelayed`, `StubSequence`, `StubCallCount`, `StubRequests`, `ResetStubs`), como métodos del `*Scenario`, con el
+// vocabulario del stub de keel-core (`gen/http-stub-probes.js`): los cuatro hablan con el mismo contenedor.
 
 import { HTTP_STUB_ADMIN, HTTP_STUB_ENDPOINTS, HTTP_STUB_FAULT, HTTP_STUB_INITIAL_STATE } from '@keel-system/keel-core/gen/http-stub-probes';
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
@@ -43,8 +43,8 @@ export function httpStubHarnessBody(model) {
 // empezar cada flujo) lo deja como recién arrancado: un mapping que sobreviviera a su escenario sería estado global, y el
 // orden de ejecución decidiría el resultado.
 
-// StubResponse es una respuesta programada del proveedor, para StubSequence. Las cuatro formas son las de los helpers
-// de un disparo: RespondOK, RespondFailure, RespondTimeout y RespondConnectionFault.
+// StubResponse es una respuesta programada del proveedor, para StubSequence. Las cinco formas son las de los helpers
+// de un disparo: RespondOK, RespondFailure, RespondTimeout, RespondDelayed y RespondConnectionFault.
 type StubResponse map[string]any
 
 // RespondOK es una respuesta normal con su cuerpo: un string viaja tal cual; cualquier otro valor, como su JSON.
@@ -59,7 +59,13 @@ func RespondFailure(status int) StubResponse {
 
 // RespondTimeout es una respuesta que no llega a tiempo: delay tiene que superar el timeoutMs de la llamada.
 func RespondTimeout(delay time.Duration) StubResponse {
-	response := RespondOK(200, "{}")
+	return RespondDelayed(200, "{}", delay)
+}
+
+// RespondDelayed es una respuesta VÁLIDA que llega tarde: la de RespondOK con un retardo. De ella salen también la
+// respuesta lenta y la de StubForDelayed.
+func RespondDelayed(status int, body any, delay time.Duration) StubResponse {
+	response := RespondOK(status, body)
 	response["fixedDelayMilliseconds"] = delay.Milliseconds()
 	return response
 }
@@ -116,6 +122,14 @@ func (s *Scenario) StubConnectionFault(method, pathPattern string) {
 func (s *Scenario) StubTimeout(method, pathPattern string, delay time.Duration) {
 	s.Helper()
 	s.stub(method, pathPattern, RespondTimeout(delay))
+}
+
+// StubForDelayed es una respuesta VÁLIDA que llega tarde: el status y el cuerpo de StubFor con un retardo. Lo que mide
+// un escenario de respuesta lenta que cabe en el timeout, o una que llega cuando el servicio ya decidió; StubTimeout
+// devuelve un cuerpo vacío.
+func (s *Scenario) StubForDelayed(method, pathPattern string, status int, body any, delay time.Duration) {
+	s.Helper()
+	s.stub(method, pathPattern, RespondDelayed(status, body, delay))
 }
 
 // StubSequence programa respuestas DISTINTAS para llamadas sucesivas a la misma ruta: lo que hace escribible un

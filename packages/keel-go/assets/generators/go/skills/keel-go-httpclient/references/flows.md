@@ -12,6 +12,7 @@ s.StubFor("DELETE", "/stock/reservations/.*", 200, map[string]any{"cancelled": t
 s.StubFailure("DELETE", "/stock/reservations/.*", 503)                                 // 5xx (o 4xx)
 s.StubConnectionFault("DELETE", "/stock/reservations/.*")                              // corta la conexión
 s.StubTimeout("DELETE", "/stock/reservations/.*", 5*time.Second)                       // tarda más que su timeoutMs
+s.StubForDelayed("DELETE", "/stock/reservations/.*", 200, body, 500*time.Millisecond) // válida, pero llega tarde
 ```
 
 La ruta es una REGEX sobre el path, sin query. **Elige el fallo que el diseño distingue**: con

@@ -199,6 +199,7 @@ Con clientes salientes (capa `http-clients`), el arnés trae `tests/integration/
 | `s.StubFor(método, ruta, status, cuerpo)` | siempre | lo que responde el proveedor en este escenario; la ruta es una regex sobre el path |
 | `s.StubFailure(método, ruta, status)` | siempre | un 5xx o un 4xx sin cuerpo útil |
 | `s.StubConnectionFault(método, ruta)` / `s.StubTimeout(método, ruta, plazo)` | siempre | el proveedor no contesta: corta la conexión, o tarda más que el `timeoutMs` de la llamada |
+| `s.StubForDelayed(método, ruta, status, cuerpo, retardo)` | siempre | una respuesta **válida** que llega tarde: lenta pero dentro del `timeoutMs`, o que llega cuando el servicio ya decidió. No uses `StubTimeout` para eso: devuelve un cuerpo vacío |
 | `s.StubSequence(método, ruta, RespondConnectionFault(), RespondOK(200, cuerpo))` | siempre | respuestas distintas para llamadas sucesivas (el reintento); la última se queda pegada, una por ruta y flujo |
 | `s.StubCallCount(método, ruta)` / `s.StubRequests(método, ruta)` | siempre | cuántas veces se llamó y qué se le mandó (`request.Header(n)`, `request.JSON()`) |
 | `s.ResetStubs()` | siempre | el stub vacío, a mano (el reset de cada flujo ya lo hace) |
