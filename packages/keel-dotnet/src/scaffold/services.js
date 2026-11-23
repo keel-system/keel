@@ -23,7 +23,7 @@ import { finderNote } from '@keel-system/keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
 import { READ_SCOPE_PROPERTY, readScopeHandlerCall } from './read-scope.js';
 import { readScopeNote, optionalIdentityNote } from '@keel-system/keel-core/gen/read-scope';
-import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
+import { followUpRejectionNote, savedMethodNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { csFile, csMember, declType, fieldUsings, isNullable, located, namespaceOf, typeUsings, xmlDoc } from './render.js';
 import { carriesExpectedVersions, conditionalHandlerNote, expectedVersionsProperty, returnsVersioned, versionedType } from './conditional-writes.js';
@@ -501,6 +501,23 @@ function handlerNotes(model, operation) {
   // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la de los tres generadores.
   const rejection = followUpRejectionNote(model.payments, operation.name);
   if (rejection) notes.push(rejection);
+  const saving = savedMethodNote(model.payments, operation.name, {
+    saved: 'SavedPaymentMethod',
+    rejected: 'GatewayRejectedPaymentMethodException',
+    authentication: 'PaymentMethodAuthenticationRequiredException',
+    unavailable: 'PaymentGatewayUnavailableException'
+  });
+  if (saving) notes.push(saving);
+  // El barrido de pagos (G11 de la corrida payment de prueba-gelsa): el reclamo lo genera build en el puerto del registro.
+  if (model.payments?.reconciliation?.sweep === operation.name) {
+    const record = model.payments.record.entity;
+    notes.push(
+      `BARRIDO DE PAGOS: los candidatos ya RECLAMADOS los da await ${record.charAt(0).toLowerCase()}${record.slice(1)}Repository.ClaimForPaymentSweep(paymentReconciliation.StaleBefore(DateTimeOffset.UtcNow), paymentReconciliation.BatchSize(), cancellationToken), ` +
+        'que build generó (renueva awaitingSince con una escritura condicional en su propio ámbito y su propia transacción, y la confirma antes de volver). ' +
+        'Inyecta PaymentReconciliation (Application/Payment) y llama a paymentReconciliation.Consult(reference, gatewayPaymentId, cancellationToken) con cada uno, ' +
+        'fuera de toda transacción, y aplica lo que devuelva según las reglas. No escribas otro reclamo: un segundo mecanismo en paralelo al generado no reclama nada, solo reparte peor.'
+    );
+  }
   for (const code of operation.errors ?? []) {
     const error = operationError(model, operation.name, code);
     notes.push(

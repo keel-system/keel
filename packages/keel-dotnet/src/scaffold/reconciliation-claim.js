@@ -104,14 +104,20 @@ function settingsBody(model) {
   const entries = reconciledActivations(model).map(({ activation, sweeper }) => {
     const parameters = reconciliationParameters(activation, sweeper);
     const read = (parameter) => `Positive(configuration, ${csString(configKey(parameter.key))}, ${parameter.default})`;
+    // Con el umbral enlazado a un parámetro (DSL 2.33), la propiedad del parámetro en segundos: la forma de stalledAfter.
+    // Sin configuración (las pruebas de build) vale su valor de prueba, como el de ServiceParameters.
+    const linked = parameters.unansweredAfterSeconds.parameter;
+    const unanswered = linked
+      ? `Linked(configuration, ${csString(configKey(linked.property))}, ${linked.unitSeconds}, ${testValueOf(model, linked.name)})`
+      : read(parameters.unansweredAfterSeconds);
     return `                [${csString(activation.name)}] = new(
-                    ${read(parameters.unansweredAfterSeconds)},
+                    ${unanswered},
                     ${read(parameters.claimTimeoutMs)},
                     ${read(parameters.batchSize)}),`;
   });
   return `/// <summary>
 /// Los tres números de un barrido de reconciliación, y NO son la misma clase de decisión: el silencio tolerado lo declara
-/// el diseño (unansweredAfterSeconds de la activación); la caducidad del reclamo y la cota del lote son del generador
+/// el diseño (unansweredAfterSeconds de la activación, o su parámetro con unansweredAfter); la caducidad del reclamo y la cota del lote son del generador
 /// (mecánica y capacidad).
 /// </summary>
 public sealed record ReconciliationWindow(int UnansweredAfterSeconds, int ClaimTimeoutMs, int BatchSize);
@@ -149,8 +155,27 @@ ${entries.join('\n')}
         return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) && parsed > 0
             ? parsed
             : throw new InvalidOperationException($"{key.Replace(':', '.')} tiene que ser un entero positivo: '{value}'");
-    }
+    }${reconciledActivations(model).some(({ activation }) => activation.unansweredParameter) ? `
+
+    /// <summary>Un umbral enlazado a un parámetro de despliegue (DSL 2.33): su valor en segundos, sin default propio.</summary>
+    private static int Linked(ServiceConfiguration? configuration, string key, int unitSeconds, int testValue)
+    {
+        if (configuration is null)
+        {
+            return testValue * unitSeconds;
+        }
+        var value = Positive(configuration, key, 0);
+        return value > 0
+            ? value * unitSeconds
+            : throw new InvalidOperationException($"{key.Replace(':', '.')} es obligatorio: es el umbral de silencio de un barrido");
+    }` : ''}
 }`;
+}
+
+/** El valor de prueba de un parámetro del servicio (el de ServiceParameters en las pruebas de build). */
+export function testValueOf(model, name) {
+  const parameter = (model.service.parameters ?? []).find((candidate) => candidate.name === name);
+  return Number(parameter?.testValue ?? parameter?.default ?? 1);
 }
 
 // ─── La tienda del reclamo ───────────────────────────────────────────────────────────────────────

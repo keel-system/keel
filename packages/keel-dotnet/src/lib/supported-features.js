@@ -77,7 +77,7 @@ export function checkSupportedFeatures(manifest, layers) {
   errors.push(...batchPendingErrors(layers, 'keel-dotnet', { syncIncrement: null, asyncIncrement: null }));
   // El umbral de silencio desde un parámetro y el resumen de la tarjeta guardada (DSL 2.33) llegan en el incremento 6 de
   // PLAN-CORRIDAS-GELSA.md: hasta entonces se rechazan, con el mismo mensaje en los cuatro.
-  errors.push(...dsl233PendingErrors(layers, 'keel-dotnet', '6'));
+  errors.push(...dsl233PendingErrors(layers, 'keel-dotnet', '6', { generates: ['unansweredAfter', 'cardDetails'] }));
   // La búsqueda de 2.32 (op in/ne, search y sortable) se genera entera: el finder (scaffold/finders.js y
   // document-repositories.js) y el lector de ?sort= y de la lista de la query (rest-support.js).
   // Las invariantes que se hacen cumplir y los derivados estructurados (DSL 2.31: checks, las cotas de la entidad y

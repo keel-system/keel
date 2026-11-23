@@ -96,7 +96,7 @@ import { dotnetSchema } from '../test/helpers/schema.js';
 import { partialIndexSpecs, discriminatorColumn, persistedMembers } from '@keel-system/keel-core/gen';
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { expectedSchemaNames } from '../src/scaffold/persistence.js';
-import { probeProject, databaseOf } from './lib/db-probes.js';
+import { probeProject, databaseOf, PAYMENT_SWEEP_SABOTAGE_CASES, paymentSweepFailures } from './lib/db-probes.js';
 import { DRAIN_SABOTAGES, drainSabotageVerdict, isDrainSabotage } from './lib/timer-probes.js';
 import { RELAY_WAKE_SABOTAGES, isRelayWakeSabotage, relayWakeSabotageVerdict } from './lib/relay-wake-probes.js';
 import { timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
@@ -153,6 +153,10 @@ const SABOTAGES = {
   'reconciliation-expiry': ['Persistence/ReconciliationClaimStore.cs', 'claimed_at <= {expired}', 'claimed_at < {expired}'],
   'reconciliation-threshold': ['Repositories/', ' < {unansweredBefore}', ' <= {now}'],
   'reconciliation-head': ['Repositories/', 'c.claimed_at > {claimExpiredBefore})', 'c.claimed_at > {claimExpiredBefore} AND 1 = 0)'],
+  // El reclamo del barrido de pagos (G11 de PLAN-CORRIDAS-GELSA.md): con --only=payment-checkout, cada uno cae en exactamente
+  // sus casos PS (PAYMENT_SWEEP_SABOTAGE_CASES de scripts/lib/db-probes.js).
+  'payment-sweep-no-lease': ['Repositories/PaymentRepository.cs', 'SET awaiting_since = {leasedAt}', 'SET awaiting_since = {staleBefore.AddSeconds(-1)}'],
+  'payment-sweep-cutoff': ['Repositories/PaymentRepository.cs', 'awaiting_since < {staleBefore}', 'awaiting_since < {leasedAt.AddDays(1)}'],
   credential: ['Repositories/', 'Where(element => element.Value == ', 'Where(element => element.Position == 0 && element.Value == '],
   // La guarda del envío (mail.sentBy, 12e) escribe con el contexto del caso de uso: su marca se deshace con él.
   'send-guard': ['Repositories/', 'var own = scope.ServiceProvider.GetRequiredService<', 'var own = db; _ = scope.ServiceProvider.GetRequiredService<'],
@@ -478,6 +482,12 @@ async function checkEngine(engine) {
       if (isPurgeTimerSabotage(sabotage) && (timerPurges(subject.model).length > 0 || timerSchedules(subject.model).length > 0)) {
         const verdict = purgeTimerSabotageVerdict(mine, sabotage);
         step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+        continue;
+      }
+      if (PAYMENT_SWEEP_SABOTAGE_CASES[sabotage] && subject.model.payments?.reconciliation?.sweep) {
+        const failed = paymentSweepFailures(mine);
+        const want = [...PAYMENT_SWEEP_SABOTAGE_CASES[sabotage]].sort();
+        step(`${label} · ${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && failed.join() === want.join(), `esperaba [${want.join(', ')}], cayeron [${failed.join(', ')}]`);
         continue;
       }
       if (isTimerSabotage(sabotage) && timerSubject(subject.model)) {

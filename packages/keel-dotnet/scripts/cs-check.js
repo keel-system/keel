@@ -210,6 +210,9 @@ const FIXTURE_SABOTAGES = {
   'payment-5xx-pending': [`${PAYMENT_DIR}/Stripe/StripePaymentGateway.cs`, 'throw Unavailable("authorize", answer);', 'return GatewayOutcome.Of(GatewayStatus.Pending, request.Reference, null);'],
   'payment-rounding': [`${PAYMENT_DIR}/MoneyAmounts.cs`, 'if (decimal.Round(amount, digits, MidpointRounding.ToZero) != amount)', 'if (decimal.Round(amount, digits, MidpointRounding.ToZero) != amount && digits < 0)'],
   'payment-window': [`${PAYMENT_DIR}/Stripe/StripeNoticeVerifier.cs`, '> settings.NoticeToleranceSeconds)', '> settings.NoticeToleranceSeconds * 1000L)'],
+  // DSL 2.33 y G9 (inc. 6b de PLAN-CORRIDAS-GELSA.md): el resumen leído de otra ruta, y el 3DS al guardar tomado por un rechazo.
+  'payment-saved-card': [`${PAYMENT_DIR}/Stripe/StripePaymentGateway.cs`, 'TextOrNull(At(saved, "card", "brand"))', 'TextOrNull(At(saved, "card", "last4"))'],
+  'payment-save-3ds': [`${PAYMENT_DIR}/Stripe/StripePaymentGateway.cs`, 'if (answer.Status >= 400 && AsksAuthentication(answer))', 'if (answer.Status >= 600 && AsksAuthentication(answer))'],
   'payment-notice-open': ['payment-checkout/src/PaymentCheckout.Api/Rest/PaymentNoticeEndpoint.cs', 'StatusCodes.Status401Unauthorized;', 'StatusCodes.Status200OK;'],
   'payment-mp-manifest': [
     'payment-checkout-mp/src/PaymentCheckoutMp.Infrastructure/Payment/Mercadopago/MercadopagoNoticeVerifier.cs',

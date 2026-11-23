@@ -35,8 +35,9 @@ import { readScopePortMethods, readScopeRelationalMethods, scopedLoadsOf } from 
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import { relationalArming, timerDependencies } from './timer.js';
 import { sweepPassNamespace } from './timer.js';
-import { adapterClaimMethods, adapterGuardMethods, claimDependencies, claimUsings, guardDependencies, portClaimMethods, portGuardMethods } from './claim.js';
+import { adapterClaimMethods, adapterGuardMethods, claimDependencies, claimUsings, guardDependencies, portClaimMethods, portGuardMethods, storedState } from './claim.js';
 import { adapterReconciliationMethods, portReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
+import * as paymentSweepClaim from './payment-sweep-claim.js';
 import { renderDocumentAdapter } from './document-repositories.js';
 import * as lifecycle from './data-lifecycle.js';
 import * as history from './history.js';
@@ -369,6 +370,8 @@ function renderPort(model, entity) {
   methods.push(...portGuardMethods(model, entity));
   // Y los de reconciliación (incremento 11c).
   methods.push(...portReconciliationMethods(model, entity));
+  // El reclamo del barrido de pagos (G11 de la corrida payment de prueba-gelsa): lo escribía el agente.
+  methods.push(...paymentSweepClaim.portMethods(model, entity));
   methods.push(
     `${xmlDoc(
       [
@@ -547,6 +550,7 @@ ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Gr
   // Los de reconciliación: la marca de reconciliation_claim. El ayudante RequireOwnTransaction lo emite claim.js si la raíz
   // tiene además un reclamo de barrido.
   methods.push(...adapterReconciliationMethods(model, entity, { ownTransactionHelper: claimsForEntity(model, entity.name).length === 0 }));
+  methods.push(...paymentSweepClaim.adapterMethods(model, entity, (state) => storedState(model, entity, state)));
   usings.push(...claimUsings(model, entity));
   for (const dep of adapterExtras(model, entity)) usings.push(...dep.usings);
   methods.push(saveMethod(model, entity, helpers));

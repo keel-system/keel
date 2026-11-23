@@ -433,7 +433,9 @@ function probesCs(model, namespace, harness = null) {
     const beforeConditional = beforeInverse + inverseSampleCount(model, root);
     // Y las de la lectura acotada (DSL 2.27), detrás de todas.
     const beforeReadScope = beforeConditional + conditionalSampleCount(model, root);
-    const total = beforeReadScope + readScopeSampleCount(model, root);
+    // Y las del reclamo del barrido de pagos (G11), las últimas de todas.
+    const beforePaymentSweep = beforeReadScope + readScopeSampleCount(model, root);
+    const total = beforePaymentSweep + paymentSweepSampleCount(model, root);
     for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
@@ -655,6 +657,8 @@ ${precondition ? `            ${precondition}\n` : ''}            var error = aw
         }
       })
     );
+    // El reclamo del barrido de pagos (G11), con sus muestras lejos de todas las demás.
+    tests.push(...paymentSweepProbes(model, root, { state, first: beforePaymentSweep + 1, port, context: dbContext(model) }));
     blocks.push(`    // ─── ${root.name} ───\n\n${tests.join('\n\n')}`);
   }
 
@@ -2050,6 +2054,154 @@ ${seed(race, (i) => `now.AddSeconds(-${claim.unansweredAfterSeconds} - 3600 + ${
             Assert.Contains("DispatchWithoutTransaction", error.Message, StringComparison.Ordinal);
         });`);
   }
+  return tests;
+}
+
+// ─── El reclamo del barrido de pagos (G11 de PLAN-CORRIDAS-GELSA.md, inc. 6b) ──────────────────────────────────────
+
+/** Cuántas muestras guardan las sondas del barrido de pagos de esta raíz (van detrás de todas las demás). */
+export function paymentSweepSampleCount(model, root) {
+  const payments = model.payments;
+  if (!payments?.reconciliation?.sweep || payments.record?.entity !== root.name || !root.lifecycle) return 0;
+  const enumDef = model.enums.find((candidate) => candidate.name === root.lifecycle.enumType);
+  const other = enumDef.values.some((value) => !payments.awaitingStates.includes(value.literal));
+  // PS1, PS2, PS3 (si hay otro estado), PS4 (uno por estado en espera), PS5 (tres), PS6 y PS7 (seis).
+  return 1 + 1 + (other ? 1 : 0) + payments.awaitingStates.length + 3 + 1 + 6;
+}
+
+/**
+ * Los casos PS que tiene que tirar cada sabotaje del barrido de pagos, y solo esos. Son los de keel-nest más PS7: aquí la
+ * carrera remata con una pasada más (con filesort, MySQL bloquea todas las filas que examina y las dos réplicas pueden
+ * llevarse menos de dos lotes), y esa pasada solo no repite lo reclamado si el reclamo renovó el reloj.
+ */
+export const PAYMENT_SWEEP_SABOTAGE_CASES = Object.freeze({
+  // El reclamo no renueva el reloj: se lleva la fila, pero una segunda pasada inmediata la vuelve a tomar.
+  'payment-sweep-no-lease': ['PS1', 'PS7'],
+  // La cota se va al futuro: se lleva lo reciente, y una segunda pasada vuelve a tomar lo ya reclamado.
+  'payment-sweep-cutoff': ['PS1', 'PS2', 'PS7']
+});
+
+/** Los casos PS que cayeron, leídos de las líneas de fallo de `dotnet test`. */
+export function paymentSweepFailures(lines) {
+  return [...new Set(lines.map((line) => /PaymentSweep_(PS\d+)_/.exec(line)?.[1]).filter(Boolean))].sort();
+}
+
+/**
+ * El reclamo del barrido de pagos, contra el motor: los casos de claim-check de keel-spring y de db-check de keel-nest.
+ * Lo rancio de CADA estado en espera entra sin mover el estado y con el reloj renovado (una segunda pasada inmediata no
+ * lo vuelve a tomar); lo reciente, lo de otro estado y una fila sin reloj no; el lote va acotado; y dos réplicas a la
+ * vez no se llevan el mismo cobro. El corte lo pasa el handler: aquí es un instante cualquiera.
+ */
+function paymentSweepProbes(model, root, { state, first, port, context }) {
+  const payments = model.payments;
+  if (!payments?.reconciliation?.sweep || payments.record?.entity !== root.name || !root.lifecycle) return [];
+  const table = root.tableName;
+  const stateColumn = snakeCase(root.lifecycle.field);
+  const stamp = snakeCase(payments.record.awaitingSince);
+  const id = csMember(root.idField?.name ?? 'id');
+  const enumDef = model.enums.find((candidate) => candidate.name === root.lifecycle.enumType);
+  const awaiting = new Set(payments.awaitingStates);
+  const stored = (literal) => storedState(model, root, literal);
+  const waiting = payments.awaitingStates.map(stored);
+  const other = enumDef.values.map((value) => value.literal).find((literal) => !awaiting.has(literal));
+  const parkSql = `UPDATE ${table} SET ${stateColumn} = '${stored(other)}' WHERE ${stateColumn} IN (${waiting.map((s) => `'${s}'`).join(', ')})`;
+  let next = first;
+  const sql = (text) => `await InScope(other => other.GetRequiredService<${context}>().Database.${text})`;
+  const helpers = `    // ─── El reclamo del barrido de pagos (G11) ───
+
+    private static Task<IReadOnlyList<${root.name}>> PaymentSweep(DateTimeOffset staleBefore, int batchSize) =>
+        InScope(other => other.GetRequiredService<${port}>().ClaimForPaymentSweep(staleBefore, batchSize, Cancel));
+
+    private static async Task PaymentSweepPark() => ${sql(`ExecuteSqlRawAsync(${csString(parkSql)}, Cancel)`)};
+
+    private static async Task<DateTimeOffset?> PaymentSweepStamp(Guid row) =>
+        ${sql(`SqlQuery<DateTimeOffset?>($"SELECT ${stamp} ${sqlDialect(model).alias} FROM ${table} WHERE id = {row}").SingleAsync(Cancel)`)};
+
+    private static async Task<string> PaymentSweepState(Guid row) =>
+        ${sql(`SqlQuery<string>($"SELECT ${sqlDialect(model).text(stateColumn)} ${sqlDialect(model).alias} FROM ${table} WHERE id = {row}").SingleAsync(Cancel)`)};`;
+  // Guarda una muestra y la deja en ese estado con ese reloj.
+  const row = (variable, stateName, at) => {
+    const n = next++;
+    return `            var sample${n} = new ${root.name}(${state(n)});
+            await InScope(other => other.GetRequiredService<${port}>().Save(sample${n}, Cancel));
+            DateTimeOffset? at${n} = ${at};
+            ${sql(`ExecuteSqlAsync($"UPDATE ${table} SET ${stateColumn} = '${stateName}', ${stamp} = {at${n}} WHERE id = {sample${n}.${id}}", Cancel)`)};
+            var ${variable} = sample${n}.${id};`;
+  };
+  const minutesAgo = (minutes) => `DateTimeOffset.UtcNow.AddMinutes(-${minutes})`;
+  const tests = [helpers];
+  tests.push(`    [Fact]
+    public async Task PaymentSweep_PS1_SeLlevaLoRancioSinMoverElEstadoYRenuevaElReloj() =>
+        await InScope(async services =>
+        {
+        await PaymentSweepPark();
+${row('stale', waiting[0], minutesAgo(60))}
+        var cutoff = ${minutesAgo(10)};
+        var claimed = await PaymentSweep(cutoff, 10);
+        Assert.Equal([stale], claimed.Select(r => r.${id}));
+        Assert.Equal(${csString(waiting[0])}, await PaymentSweepState(stale));
+        Assert.True(await PaymentSweepStamp(stale) > cutoff, "el reclamo no renovó el reloj");
+        Assert.Empty(await PaymentSweep(cutoff, 10));
+        });`);
+  tests.push(`    [Fact]
+    public async Task PaymentSweep_PS2_NoSeLlevaLoRecienPuestoEnEspera() =>
+        await InScope(async services =>
+        {
+        await PaymentSweepPark();
+${row('fresh', waiting[0], 'DateTimeOffset.UtcNow')}
+        Assert.Empty(await PaymentSweep(${minutesAgo(10)}, 10));
+        });`);
+  if (other) {
+    tests.push(`    [Fact]
+    public async Task PaymentSweep_PS3_NoTocaUnCobroQueNoEsperaALaPasarela() =>
+        await InScope(async services =>
+        {
+        await PaymentSweepPark();
+${row('parked', stored(other), minutesAgo(60))}
+        Assert.Empty(await PaymentSweep(${minutesAgo(10)}, 10));
+        });`);
+  }
+  tests.push(`    [Fact]
+    public async Task PaymentSweep_PS4_CubreCadaEstadoEnEspera() =>
+        await InScope(async services =>
+        {
+        await PaymentSweepPark();
+${waiting.map((stateName, i) => row(`waiting${i}`, stateName, minutesAgo(60))).join('\n')}
+        Assert.Equal(${waiting.length}, (await PaymentSweep(${minutesAgo(10)}, 50)).Count);
+        });`);
+  tests.push(`    [Fact]
+    public async Task PaymentSweep_PS5_ElLoteVaAcotadoPorSuArgumento() =>
+        await InScope(async services =>
+        {
+        await PaymentSweepPark();
+${[0, 1, 2].map((i) => row(`bounded${i}`, waiting[0], minutesAgo(60 + i))).join('\n')}
+        Assert.Equal(2, (await PaymentSweep(${minutesAgo(10)}, 2)).Count);
+        });`);
+  tests.push(`    [Fact]
+    public async Task PaymentSweep_PS6_UnCobroEnEsperaSinRelojNoLoRecogeNadie() =>
+        await InScope(async services =>
+        {
+        await PaymentSweepPark();
+        // NULL < staleBefore no es falso, es UNKNOWN: la fila no entra en ningún lote.
+${row('clockless', waiting[0], 'null')}
+        Assert.Empty(await PaymentSweep(${minutesAgo(10)}, 10));
+        });`);
+  tests.push(`    [Fact]
+    public async Task PaymentSweep_PS7_DosReplicasALaVezNoSeLlevanElMismoCobro() =>
+        await InScope(async services =>
+        {
+        await PaymentSweepPark();
+${[0, 1, 2, 3, 4, 5].map((i) => row(`raced${i}`, waiting[0], minutesAgo(60 + i))).join('\n')}
+        var raced = new[] { raced0, raced1, raced2, raced3, raced4, raced5 };
+        var cutoff = ${minutesAgo(10)};
+        var replicas = await Task.WhenAll(Task.Run(() => PaymentSweep(cutoff, 6)), Task.Run(() => PaymentSweep(cutoff, 6)));
+        var taken = replicas.SelectMany(batch => batch.Select(r => r.${id})).ToList();
+        Assert.Equal(taken.Count, taken.Distinct().Count());
+        Assert.All(taken, row => Assert.Contains(row, raced));
+        // Con filesort, MySQL bloquea todas las filas que examina: entre las dos y la pasada siguiente, se llevan todas.
+        taken.AddRange((await PaymentSweep(cutoff, 6)).Select(r => r.${id}));
+        Assert.Equal(raced.OrderBy(row => row), taken.OrderBy(row => row));
+        });`);
   return tests;
 }
 

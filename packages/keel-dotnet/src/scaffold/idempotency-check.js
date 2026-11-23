@@ -436,7 +436,7 @@ function reconciliationChecks(model) {
         exclude: '/(ReconciliationSettings|ReconciliationClaimStore)[.]cs',
         why:
           `el umbral de espera de ${dependency}.${activation.name} no se lee en ninguna parte: build lo dejó en ` +
-          `ReconciliationSettings.Windows["${activation.name}"] (reconciliation.${kebabCase(activation.name)}.unanswered-after-seconds), y el de OTRO barrido no vale`
+          `ReconciliationSettings.Windows["${activation.name}"] (${activation.unansweredParameter ? `el parámetro ${activation.unansweredParameter.name}, que el diseño enlaza en unansweredAfter` : `reconciliation.${kebabCase(activation.name)}.unanswered-after-seconds`}), y el de OTRO barrido no vale`
       });
     }
   }

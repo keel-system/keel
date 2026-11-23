@@ -11,12 +11,15 @@
 // avisando.
 
 import { gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
-import { paymentProbesFor } from '@keel-system/keel-core/gen/payment-probes';
+import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { csFile, csString, located, namespaceOf } from '../render.js';
-import { PAYMENT_GATEWAY_PORT, NOTICE_VERIFIER_PORT, paymentInfraNamespace, paymentNamespace, reasonMember } from '../payments.js';
+import { PAYMENT_GATEWAY_PORT, NOTICE_VERIFIER_PORT, paymentInfraNamespace, paymentNamespace, reasonMember, savedMethodCs } from '../payments.js';
 
 const TRANSLATION = gatewayTranslation('mercadopago');
 const PROBES = paymentProbesFor('mercadopago');
+
+/** Un JSON como literal crudo de C# (las pruebas emitidas lo pasan a la pasarela falsa). */
+const csRaw = (value) => `"""${JSON.stringify(value)}"""`;
 
 export const place = 'mercadopago';
 export const adapterClass = 'MercadopagoPaymentGateway';
@@ -163,7 +166,7 @@ function adapterBody(model) {
 
   if (p.savePaymentMethod) {
     const [customerStep, cardStep] = TRANSLATION.savedMethodSteps;
-    methods.push(`    public async Task<string> SavePaymentMethod(string token, string payerReference, ${ct})
+    methods.push(`    public async Task<SavedPaymentMethod> SavePaymentMethod(string token, string payerReference, ${ct})
     {
         ArgumentNullException.ThrowIfNull(token);
         ArgumentNullException.ThrowIfNull(payerReference);
@@ -178,7 +181,8 @@ function adapterBody(model) {
             new GatewayRequest("POST", $"/v1/customers/{Uri.EscapeDataString(customerId)}/cards", GatewayJson.JsonBody(new JsonObject { ["token"] = token }), Key(GatewayKeys.SavedMethod(token, ${csString(cardStep)}))),
             cancellationToken);
         RejectedMethod(card);
-        return GatewayKeys.Saved(customerId, GatewayJson.Text(GatewayJson.Parse(card.Text, Gateway), "id") ?? string.Empty);
+        var saved = GatewayJson.Parse(card.Text, Gateway);
+        return new SavedPaymentMethod(GatewayKeys.Saved(customerId, GatewayJson.Text(saved, "id") ?? string.Empty), SavedCardOf(saved));
     }`);
   }
 
@@ -284,20 +288,7 @@ ${methods.join('\n\n')}
     private static PaymentGatewayUnavailableException Unavailable(string action, GatewayAnswer answer) =>
         new(string.Create(CultureInfo.InvariantCulture, $"{Gateway} no contestó a {action} (HTTP {answer.Status}): la acción queda en duda"));${
     p.savePaymentMethod
-      ? `
-
-    /// <summary>Guardar un medio: un 5xx deja la operación en duda; un 4xx es que la pasarela no acepta el medio.</summary>
-    private static void RejectedMethod(GatewayAnswer answer)
-    {
-        if (answer.Status >= 500)
-        {
-            throw Unavailable("savePaymentMethod", answer);
-        }
-        if (answer.Status >= 400)
-        {
-            throw new GatewayRejectedPaymentMethodException(answer.Status);
-        }
-    }`
+      ? `${savedMethodCs(TRANSLATION, 'MercadoPago')}`
       : ''
   }
 }`;
@@ -541,8 +532,12 @@ ${declineRows.join('\n')}
         var rejected = await Assert.ThrowsAsync<GatewayRejectedPaymentMethodException>(() => Gateway(FakeGateway.Json(HttpStatusCode.BadRequest, "{}")).SavePaymentMethod("tok", "payer-1", Token));
         Assert.Equal(400, rejected.Status);
         await Assert.ThrowsAsync<PaymentGatewayUnavailableException>(() => Gateway(FakeGateway.Json(HttpStatusCode.ServiceUnavailable, "{}")).SavePaymentMethod("tok", "payer-1", Token));
-        var fake = new FakeGateway((request, _) => Reply(HttpStatusCode.Created, request.RequestUri!.AbsolutePath.EndsWith("/cards", StringComparison.Ordinal) ? """{"id":"card_1"}""" : """{"id":"cus_1"}"""));
-        Assert.Equal("cus_1|card_1", await Gateway(fake).SavePaymentMethod("tok", "payer-1", Token));
+        var fake = new FakeGateway((request, _) => Reply(HttpStatusCode.Created, request.RequestUri!.AbsolutePath.EndsWith("/cards", StringComparison.Ordinal) ? ${csRaw(savedCardResponse('mercadopago', DEFAULT_SAVED_CARD, 'card_1'))} : """{"id":"cus_1"}"""));
+        var saved = await Gateway(fake).SavePaymentMethod("tok", "payer-1", Token);
+        Assert.Equal("cus_1|card_1", saved.Reference);
+        Assert.Equal(new SavedCard(${csString(DEFAULT_SAVED_CARD.brand)}, ${csString(DEFAULT_SAVED_CARD.last4)}, ${DEFAULT_SAVED_CARD.expMonth}, ${DEFAULT_SAVED_CARD.expYear}), saved.Card);
+        // MercadoPago no pide 3DS al guardar: el 402 de la autenticación de Stripe es un rechazo más.
+        await Assert.ThrowsAsync<GatewayRejectedPaymentMethodException>(() => Gateway(FakeGateway.Json(HttpStatusCode.PaymentRequired, ${csRaw(saveAuthenticationRejection('stripe').body)})).SavePaymentMethod("tok", "payer-1", Token));
         Assert.Equal("/v1/customers/cus_1/cards", fake.Requests[1].Request.RequestUri!.AbsolutePath);
         Assert.Equal(${csString(`save:tok:${TRANSLATION.savedMethodSteps[1]}`)}, fake.Requests[1].Request.Headers.GetValues(${header}).Single());
     }`);

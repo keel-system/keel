@@ -68,19 +68,30 @@ tiene registrados). Siempre en este orden, y el orden es la defensa:
    declare el diseño en `onRejected` (la nota del handler lo dice).
    - Un importe parcial viaja **con la moneda del cobro**, que ya tienes en el registro: no le preguntes la moneda a
      la pasarela.
-   - **Guardar un medio** (`savePaymentMethod`): la pasarela que lo rechaza lanza
-     `GatewayRejectedPaymentMethodException` (`src/<Raíz>.Domain/Payment/GatewayRejectedPaymentMethodException.cs`), y la
-     que no contesta, `PaymentGatewayUnavailableException`. Captura **esas dos** y tradúcelas a los errores que declare
-     el diseño; cualquier otra excepción se deja pasar, porque es un fallo de programación y tiene que salir como 500.
+   - **Guardar un medio** (`savePaymentMethod`): devuelve `SavedPaymentMethod` (`src/<Raíz>.Domain/Payment/SavedPaymentMethod.cs`):
+     la referencia opaca (se guarda y no sale nunca del servicio) y el resumen de la tarjeta (`Card`: marca, últimos
+     cuatro, mes y año), que va al campo que dice `payments.savePaymentMethod.cardDetails`. Tres negativas:
+     `GatewayRejectedPaymentMethodException` (el medio no vale), `PaymentMethodAuthenticationRequiredException` (la
+     pasarela exige autenticar al cliente, 3DS: puede completarla y volver a pedirlo) y
+     `PaymentGatewayUnavailableException` (no contestó: aquí no se guardó nada). Captura **esas** y tradúcelas a los
+     errores que declare el diseño; cualquier otra excepción se deja pasar, porque es un fallo de programación y tiene
+     que salir como 500.
 3. **Desenlaces** (`outcomes.*`): **idempotentes**. Si el cobro ya no está en el estado de origen —lo aplicó otro
    camino—, no hagas nada y no lances. Ver `references/outcomes.md`.
    - Al salir de un estado de espera, **vacía `AwaitingSince`** (y `CustomerAction` fuera de `actionRequired`).
    - Un cobro que rechazas **antes** de llamar a la pasarela nace sin el medio y sin `GatewayPaymentId`: lo que no
      llegó a existir no se anota.
-4. **Barrido** (`reconciliation.sweep`): candidatos en los estados que esperan desenlace con `AwaitingSince`
-   anterior a `paymentReconciliation.StaleBefore()`, como mucho `paymentReconciliation.BatchSize()`; **reclama** cada
-   uno volviendo a estampar `AwaitingSince` en una escritura condicional con su propia transacción, y llama a
-   `paymentReconciliation.Consult(reference, gatewayPaymentId, cancellationToken)`. Ver `references/reconciliation.md`.
+4. **Barrido** (`reconciliation.sweep`): los candidatos YA RECLAMADOS los da
+   `ClaimForPaymentSweep(paymentReconciliation.StaleBefore(DateTimeOffset.UtcNow), paymentReconciliation.BatchSize(), cancellationToken)`
+   en el repositorio del registro, que build generó; llama a `paymentReconciliation.Consult(reference, gatewayPaymentId,
+   cancellationToken)` con cada uno. No escribas otro reclamo. Ver `references/reconciliation.md`.
+
+En los escenarios, sin stubs a mano (la forma de la pasarela la pone el arnés, desde `FlowTest`):
+`GatewaySavesCard(marca, últimos4, mes, año)` y `GatewayRequiresAuthenticationToSave()` al guardar un medio;
+`GatewayReportsRefunded(referencia, total)` para una consulta que da el cobro devuelto por ese total;
+`GatewayCancelFails(referencia, "authenticationFailed")` para una anulación que vuelve como cobro fallido;
+`GatewayAnswersLate(GatewayCall.Capture, referencia, "CAPTURED", ms)` para la pasarela que retiene su respuesta
+mientras el aviso llega antes (envía el aviso sin esperar a la petición; el retardo, por debajo del read-timeout).
 
 ## Lo que nunca
 

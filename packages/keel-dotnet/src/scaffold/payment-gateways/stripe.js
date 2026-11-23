@@ -9,12 +9,15 @@
 //     rotación del secreto, y se compara en tiempo constante.
 
 import { gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
-import { paymentProbesFor } from '@keel-system/keel-core/gen/payment-probes';
+import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { csFile, csString, located, namespaceOf } from '../render.js';
-import { PAYMENT_GATEWAY_PORT, NOTICE_VERIFIER_PORT, paymentInfraNamespace, paymentNamespace, reasonMember } from '../payments.js';
+import { PAYMENT_GATEWAY_PORT, NOTICE_VERIFIER_PORT, paymentInfraNamespace, paymentNamespace, reasonMember, savedMethodCs } from '../payments.js';
 
 const TRANSLATION = gatewayTranslation('stripe');
 const PROBES = paymentProbesFor('stripe');
+
+/** Un JSON como literal crudo de C# (las pruebas emitidas lo pasan a la pasarela falsa). */
+const csRaw = (value) => `"""${JSON.stringify(value)}"""`;
 
 export const place = 'stripe';
 export const adapterClass = 'StripePaymentGateway';
@@ -162,7 +165,7 @@ function adapterBody(model) {
 
   if (p.savePaymentMethod) {
     const [customerStep, attachStep] = TRANSLATION.savedMethodSteps;
-    methods.push(`    public async Task<string> SavePaymentMethod(string token, string payerReference, ${ct})
+    methods.push(`    public async Task<SavedPaymentMethod> SavePaymentMethod(string token, string payerReference, ${ct})
     {
         ArgumentNullException.ThrowIfNull(token);
         ArgumentNullException.ThrowIfNull(payerReference);
@@ -177,7 +180,8 @@ function adapterBody(model) {
             new GatewayRequest("POST", $"/v1/payment_methods/{Uri.EscapeDataString(token)}/attach", GatewayJson.FormBody([new("customer", customerId)]), Key(GatewayKeys.SavedMethod(token, ${csString(attachStep)}))),
             cancellationToken);
         RejectedMethod(attach);
-        return GatewayKeys.Saved(customerId, token);
+        // El attach devuelve el PaymentMethod con su card: de ahí sale el resumen de la tarjeta.
+        return new SavedPaymentMethod(GatewayKeys.Saved(customerId, token), SavedCardOf(GatewayJson.Parse(attach.Text, Gateway)));
     }`);
   }
 
@@ -298,20 +302,7 @@ ${methods.join('\n\n')}
     private static PaymentGatewayUnavailableException Unavailable(string action, GatewayAnswer answer) =>
         new(string.Create(CultureInfo.InvariantCulture, $"{Gateway} no contestó a {action} (HTTP {answer.Status}): la acción queda en duda"));${
     p.savePaymentMethod
-      ? `
-
-    /// <summary>Guardar un medio: un 5xx deja la operación en duda; un 4xx es que la pasarela no acepta el medio.</summary>
-    private static void RejectedMethod(GatewayAnswer answer)
-    {
-        if (answer.Status >= 500)
-        {
-            throw Unavailable("savePaymentMethod", answer);
-        }
-        if (answer.Status >= 400)
-        {
-            throw new GatewayRejectedPaymentMethodException(answer.Status);
-        }
-    }`
+      ? `${savedMethodCs(TRANSLATION, 'Stripe')}`
       : ''
   }
 }`;
@@ -570,8 +561,11 @@ ${declineRows.join('\n')}
         var rejected = await Assert.ThrowsAsync<GatewayRejectedPaymentMethodException>(() => Gateway(FakeGateway.Json(HttpStatusCode.PaymentRequired, "{}")).SavePaymentMethod("tok", "payer-1", Token));
         Assert.Equal(402, rejected.Status);
         await Assert.ThrowsAsync<PaymentGatewayUnavailableException>(() => Gateway(FakeGateway.Json(HttpStatusCode.ServiceUnavailable, "{}")).SavePaymentMethod("tok", "payer-1", Token));
-        var fake = FakeGateway.Json(HttpStatusCode.OK, """{"id":"cus_1"}""");
-        Assert.Equal("cus_1|tok", await Gateway(fake).SavePaymentMethod("tok", "payer-1", Token));
+        var fake = FakeGateway.Json(HttpStatusCode.OK, ${csRaw(savedCardResponse('stripe', DEFAULT_SAVED_CARD, 'cus_1'))});
+        var saved = await Gateway(fake).SavePaymentMethod("tok", "payer-1", Token);
+        Assert.Equal("cus_1|tok", saved.Reference);
+        Assert.Equal(new SavedCard(${csString(DEFAULT_SAVED_CARD.brand)}, ${csString(DEFAULT_SAVED_CARD.last4)}, ${DEFAULT_SAVED_CARD.expMonth}, ${DEFAULT_SAVED_CARD.expYear}), saved.Card);
+        await Assert.ThrowsAsync<PaymentMethodAuthenticationRequiredException>(() => Gateway(FakeGateway.Json(HttpStatusCode.PaymentRequired, ${csRaw(saveAuthenticationRejection('stripe').body)})).SavePaymentMethod("tok", "payer-1", Token));
         Assert.Equal(2, fake.Requests.Count);
         Assert.Equal("/v1/payment_methods/tok/attach", fake.Requests[1].Request.RequestUri!.AbsolutePath);
         Assert.Equal(${csString(`save:tok:${TRANSLATION.savedMethodSteps[1]}`)}, fake.Requests[1].Request.Headers.GetValues(${header}).Single());

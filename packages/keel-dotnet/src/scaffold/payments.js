@@ -86,13 +86,19 @@ export function generate(model) {
     file('payment', 'PaymentSource', [], paymentSourceBody()),
     file('payment', 'ChargeRequest', [], chargeRequestBody(model)),
     file('payment', 'PaymentGatewayUnavailableException', [], unavailableBody()),
-    ...(p.savePaymentMethod ? [file('payment', 'GatewayRejectedPaymentMethodException', ['System.Globalization'], methodRejectedBody())] : []),
+    ...(p.savePaymentMethod
+      ? [
+          file('payment', 'GatewayRejectedPaymentMethodException', ['System.Globalization'], methodRejectedBody()),
+          file('payment', 'PaymentMethodAuthenticationRequiredException', ['System.Globalization'], authenticationRequiredBody()),
+          file('payment', 'SavedPaymentMethod', [], savedMethodBody())
+        ]
+      : []),
     file('ports', PAYMENT_GATEWAY_PORT, [domain], portBody(model)),
     outcomeApplierFile(model),
     file('paymentApp', 'PaymentNotices', [domain, ports], noticesBody()),
     file('paymentApp', 'PaymentReconciliationSettings', [], reconciliationSettingsBody(model)),
     file('paymentApp', 'PaymentReconciliation', [domain, enums, ports], reconciliationBody(model)),
-    file('paymentInfra', 'PaymentGatewaySettings', ['System.Globalization', 'System.Text.RegularExpressions', configNamespace(model)], settingsBody()),
+    file('paymentInfra', 'PaymentGatewaySettings', ['System.Globalization', 'System.Text.RegularExpressions', configNamespace(model)], settingsBody(model)),
     file('paymentInfra', 'PaymentGatewayHttp', ['System.Globalization', 'System.Net.Http.Headers', 'System.Net.Sockets', 'System.Runtime.CompilerServices', 'System.Text'], gatewayHttpBody()),
     file('paymentInfra', 'GatewayJson', ['System.Globalization', 'System.Text', 'System.Text.Encodings.Web', 'System.Text.Json', 'System.Text.Json.Nodes'], gatewayJsonBody()),
     file('paymentInfra', 'GatewayKeys', [], gatewayKeysBody()),
@@ -286,6 +292,36 @@ public sealed class GatewayRejectedPaymentMethodException(int status)
 }`;
 }
 
+/**
+ * La pasarela exige autenticar al cliente (3DS) para guardar la tarjeta (DSL 2.33, corrida payment de prueba-gelsa, G9): el
+ * mismo tipo que PaymentMethodAuthenticationRequiredException de keel-spring y keel-nest. Antes salía como un rechazo más.
+ */
+function authenticationRequiredBody() {
+  return `/// <summary>
+/// La pasarela exige autenticar al cliente (3DS) para guardar la tarjeta. No es un rechazo del medio: el cliente puede
+/// completar la autenticación al tokenizar y volver a pedir el guardado. No se guardó nada.
+/// </summary>
+public sealed class PaymentMethodAuthenticationRequiredException(int status)
+    : Exception(string.Create(CultureInfo.InvariantCulture, $"La pasarela exige autenticar al cliente para guardar el medio: HTTP {status}"))
+{
+    public int Status { get; } = status;
+}`;
+}
+
+/** Lo que devuelve guardar un medio (G9): la referencia opaca y el resumen de la tarjeta, los records de keel-spring. */
+function savedMethodBody() {
+  return `/// <summary>
+/// El resumen visible de la tarjeta guardada, tal como lo informa la pasarela: nunca el número completo. Un campo que la
+/// pasarela no informa llega null.
+/// </summary>
+public sealed record SavedCard(string? Brand, string? Last4, int? ExpMonth, int? ExpYear);
+
+/// <summary>Un medio de pago guardado en la pasarela.</summary>
+/// <param name="Reference">La referencia opaca de la pasarela: no sale nunca del servicio.</param>
+/// <param name="Card">El resumen de la tarjeta, o null si la pasarela no lo devolvió.</param>
+public sealed record SavedPaymentMethod(string Reference, SavedCard? Card);`;
+}
+
 function unavailableBody() {
   return `/// <summary>
 /// La pasarela no contestó, o contestó con un error suyo (5xx, timeout, conexión): NO se sabe si hizo lo que se le pidió.
@@ -333,10 +369,11 @@ function portBody(model) {
     Task<GatewayOutcome> Status(string? reference, string? gatewayPaymentId, ${ct});`);
   if (p.savePaymentMethod) {
     methods.push(`    /// <summary>Guarda un medio de pago para cobrarlo sin el cliente delante.</summary>
-    /// <returns>La referencia opaca de la pasarela; no sale nunca del servicio.</returns>
+    /// <returns>La referencia opaca de la pasarela (no sale nunca del servicio) y el resumen de la tarjeta.</returns>
     /// <exception cref="GatewayRejectedPaymentMethodException">Si la pasarela no acepta el medio (captura esta y solo esta).</exception>
+    /// <exception cref="PaymentMethodAuthenticationRequiredException">Si exige autenticar al cliente (3DS) para guardarlo.</exception>
     /// <exception cref="PaymentGatewayUnavailableException">Si no se sabe qué hizo la pasarela.</exception>
-    Task<string> SavePaymentMethod(string token, string payerReference, ${ct});`);
+    Task<SavedPaymentMethod> SavePaymentMethod(string token, string payerReference, ${ct});`);
   }
   return `/// <summary>
 /// La pasarela de pago, vista desde los casos de uso. No nombra ninguna: la implementación la eligió build con el stack
@@ -483,9 +520,12 @@ public sealed class PaymentNotices(${PAYMENT_GATEWAY_PORT} gateway, PaymentOutco
 function reconciliationSettingsBody(model) {
   return `/// <summary>
 /// El silencio tolerado antes de preguntar a la pasarela por un cobro que espera desenlace (${model.payments.reconciliation.sweep}). Lo declara
-/// el diseño (payments.reconciliation.unansweredAfterSeconds) y lo lee la configuración
+/// el diseño ${model.payments.reconciliation.unansweredParameter
+    ? `con el parámetro ${model.payments.reconciliation.unansweredParameter.name} (payments.reconciliation.unansweredAfter, en
+/// ${model.payments.reconciliation.unansweredParameter.unit}), y se lee de su propiedad: no hay otra clave para la misma espera.`
+    : `(payments.reconciliation.unansweredAfterSeconds) y lo lee la configuración
 /// (payments.reconciliation.unanswered-after-seconds); en local y test se acorta para que los escenarios del barrido no
-/// esperen un cuarto de hora.
+/// esperen un cuarto de hora.`}
 /// </summary>
 /// <param name="UnansweredAfterSeconds">El silencio tolerado, en segundos.</param>
 /// <param name="BatchSize">Cuántos cobros consulta una pasada como máximo (payments.reconciliation.batch-size): capacidad, no diseño.</param>
@@ -499,9 +539,11 @@ function reconciliationBody(model) {
 /// pasarela y aplica lo que diga.
 /// </summary>
 /// <remarks>
-/// Lo que no hace es elegir los candidatos ni reclamarlos: eso es del handler del barrido. Los candidatos son los cobros en
-/// ${p.awaitingStates.join(', ')} cuyo ${p.record.awaitingSince} es anterior a <see cref="StaleBefore()"/>; y el handler reclama cada uno volviendo a
-/// estampar ${p.record.awaitingSince} ANTES de llamar aquí, para que otra réplica no lo consulte en la misma pasada.
+/// Lo que no hace es elegir los candidatos ni reclamarlos: el handler del barrido los pide con
+/// <c>I${p.record.entity}Repository.ClaimForPaymentSweep(StaleBefore(now), BatchSize(), …)</c>, que build ya generó (G11 de la
+/// corrida payment de prueba-gelsa: lo escribía el agente). Ese método devuelve los cobros en ${p.awaitingStates.join(', ')}
+/// cuyo ${p.record.awaitingSince} es anterior a <see cref="StaleBefore()"/>, ya RECLAMADOS —con ${p.record.awaitingSince}
+/// renovado y confirmado—, y el handler llama aquí con cada uno.
 /// </remarks>
 public sealed class PaymentReconciliation(${PAYMENT_GATEWAY_PORT} gateway, PaymentOutcomeApplier applier, PaymentReconciliationSettings settings)
 {
@@ -541,7 +583,9 @@ public sealed class PaymentReconciliation(${PAYMENT_GATEWAY_PORT} gateway, Payme
 
 // ─── Infraestructura común ───────────────────────────────────────────────────────────────────────
 
-function settingsBody() {
+function settingsBody(model) {
+  // Con el umbral enlazado a un parámetro (DSL 2.33) se lee la propiedad del parámetro en segundos: no hay clave propia.
+  const linked = model.payments.reconciliation.unansweredParameter;
   return String.raw`/// <summary>
 /// La configuración de la pasarela (config/parameters/&lt;perfil&gt;/payments.yaml, las MISMAS claves y variables que
 /// keel-spring y keel-nest). En producción la credencial y el secreto de firma vienen del entorno sin default; en local
@@ -553,7 +597,7 @@ function settingsBody() {
 /// <param name="ConnectTimeout">Cuánto se espera para conectar.</param>
 /// <param name="ReadTimeout">Cuánto se espera la respuesta; superado, la acción queda EN DUDA.</param>
 /// <param name="NoticeToleranceSeconds">La antigüedad máxima de un aviso firmado (contra la repetición).</param>
-/// <param name="UnansweredAfterSeconds">El silencio tolerado antes de que el barrido pregunte por un cobro.</param>
+/// <param name="UnansweredAfterSeconds">El silencio tolerado antes de que el barrido pregunte por un cobro, en segundos.</param>
 /// <param name="BatchSize">Cuántos cobros consulta una pasada del barrido como máximo.</param>
 public sealed partial record PaymentGatewaySettings(
     string BaseUrl,
@@ -582,7 +626,7 @@ public sealed partial record PaymentGatewaySettings(
             Duration(configuration, "payments:gateway:connect-timeout", TimeSpan.FromSeconds(2)),
             Duration(configuration, "payments:gateway:read-timeout", TimeSpan.FromSeconds(10)),
             Positive(configuration, "payments:gateway:notice-tolerance-seconds", 300),
-            Positive(configuration, "PAYMENT_UNANSWERED_KEY", 900),
+            PAYMENT_UNANSWERED_READ,
             Positive(configuration, "PAYMENT_BATCH_KEY", PAYMENT_BATCH_DEFAULT));
     }
 
@@ -604,6 +648,7 @@ public sealed partial record PaymentGatewaySettings(
             : throw new InvalidOperationException($"{key.Replace(':', '.')} tiene que ser un entero positivo: '{value}'");
     }
 
+    PAYMENT_LINKED_HELPER
     /// <summary>
     /// Una duración con la sintaxis de keel-spring, para que el mismo .env valga para los tres servidores: <c>2s</c>,
     /// <c>500ms</c>, un número a secas (milisegundos) o ISO-8601 (<c>PT10S</c>).
@@ -645,7 +690,27 @@ public sealed partial record PaymentGatewaySettings(
     [GeneratedRegex(@"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$", RegexOptions.IgnoreCase)]
     private static partial Regex IsoDuration();
 }`
-    .replace('"PAYMENT_UNANSWERED_KEY"', csString(PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.key.replaceAll('.', ':')))
+    .replace(
+      'PAYMENT_UNANSWERED_READ',
+      linked
+        ? `Linked(configuration, ${csString(linked.property.replaceAll('.', ':'))}, ${linked.unitSeconds})`
+        : `Positive(configuration, ${csString(PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.key.replaceAll('.', ':'))}, 900)`
+    )
+    .replace(
+      '    PAYMENT_LINKED_HELPER\n',
+      linked
+        ? `    /// <summary>El umbral enlazado a un parámetro de despliegue (DSL 2.33): su valor en segundos, sin default propio.</summary>
+    private static int Linked(ServiceConfiguration configuration, string key, int unitSeconds)
+    {
+        var value = Positive(configuration, key, 0);
+        return value > 0
+            ? value * unitSeconds
+            : throw new InvalidOperationException($"{key.Replace(':', '.')} es obligatorio: es el umbral de silencio del barrido de pagos");
+    }
+
+`
+        : ''
+    )
     .replace('"PAYMENT_BATCH_KEY"', csString(PAYMENT_SWEEP_PARAMETERS.batchSize.key.replaceAll('.', ':')))
     .replaceAll('PAYMENT_BATCH_DEFAULT', String(PAYMENT_SWEEP_PARAMETERS.batchSize.default))
     .replace('"UNREACHABLE_URL"', csString(UNREACHABLE_BASE_URL))
@@ -1353,4 +1418,83 @@ export function paymentsProgram(model) {
 builder.Services.AddPayments(PaymentGatewaySettings.From(configuration));`,
     mapping: '\n// El aviso de la pasarela: fuera de la API versionada, sin credencial y protegido por su firma.\napp.MapPaymentNotice();'
   };
+}
+
+/**
+ * Lo que los dos adaptadores escriben igual al guardar un medio (DSL 2.33, G9), el gemelo de `savedMethodJava` de
+ * keel-spring y `savedMethodTsHelpers` de keel-nest: el resumen de la tarjeta leído de las rutas de su traducción
+ * (`savedCard` de keel-core/gen/payment-gateways.js) y la clasificación de un 4xx entre la autenticación que pide (3DS,
+ * `saveAuthenticationCodes`) y el rechazo del medio. Las rutas son DATOS de keel-core: el doble de prueba
+ * (`savedCardResponse`) las usa para escribir la respuesta, así que leen lo mismo.
+ */
+export function savedMethodCs(translation, gatewayName) {
+  const path = (route) => `At(saved, ${route.split('.').map((key) => csString(key)).join(', ')})`;
+  const { brand, last4, expMonth, expYear } = translation.savedCard;
+  const codes = translation.saveAuthenticationCodes;
+  const authentication = codes.length
+    ? `
+        if (answer.Status >= 400 && AsksAuthentication(answer))
+        {
+            throw new PaymentMethodAuthenticationRequiredException(answer.Status);
+        }`
+    : '';
+  const asks = codes.length
+    ? `
+
+    /// <summary>El 4xx al guardar que dice que la tarjeta exige autenticar (3DS): no es un rechazo del medio.</summary>
+    private static bool AsksAuthentication(GatewayAnswer answer)
+    {
+        JsonElement body;
+        try
+        {
+            body = JsonSerializer.Deserialize<JsonElement>(answer.Text);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        if (body.ValueKind != JsonValueKind.Object || GatewayJson.Get(body, "error") is not { ValueKind: JsonValueKind.Object } error)
+        {
+            return false;
+        }
+        var code = GatewayJson.Text(error, "decline_code") ?? GatewayJson.Text(error, "code");
+        return ${codes.map((code) => `code == ${csString(code)}`).join(' || ')};
+    }`
+    : '';
+  return `
+
+    /// <summary>Guardar un medio: un 5xx deja la operación en duda; un 4xx es que la pasarela no acepta el medio${codes.length ? ', salvo que pida autenticar (3DS)' : ''}.</summary>
+    private static void RejectedMethod(GatewayAnswer answer)
+    {
+        if (answer.Status >= 500)
+        {
+            throw Unavailable("savePaymentMethod", answer);
+        }${authentication}
+        if (answer.Status >= 400)
+        {
+            throw new GatewayRejectedPaymentMethodException(answer.Status);
+        }
+    }
+
+    /// <summary>El resumen de la tarjeta guardada, de donde lo trae ${gatewayName}; un campo que no informa llega null.</summary>
+    private static SavedCard SavedCardOf(JsonElement saved) =>
+        new(TextOrNull(${path(brand)}), TextOrNull(${path(last4)}), IntOrNull(${path(expMonth)}), IntOrNull(${path(expYear)}));
+
+    private static JsonElement? At(JsonElement node, params string[] keys)
+    {
+        JsonElement? current = node;
+        foreach (var key in keys)
+        {
+            current = current is { ValueKind: JsonValueKind.Object } parent ? GatewayJson.Get(parent, key) : null;
+        }
+        return current;
+    }
+
+    private static string? TextOrNull(JsonElement? value) =>
+        value is { ValueKind: JsonValueKind.String } text ? text.GetString()
+        : value is { ValueKind: JsonValueKind.Number } number ? number.GetRawText()
+        : null;
+
+    private static int? IntOrNull(JsonElement? value) =>
+        value is { ValueKind: JsonValueKind.Number } number && number.TryGetInt32(out var parsed) ? parsed : null;${asks}`;
 }

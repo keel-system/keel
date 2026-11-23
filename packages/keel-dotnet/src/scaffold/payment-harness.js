@@ -11,7 +11,7 @@
 // Support/HttpStub.cs, y lo ejecuta contra un WireMock real con el adaptador emitido. Los dos helpers que MANDAN el aviso
 // necesitan el Post del flujo, así que van en FlowTest.cs (`paymentNoticeMembers`).
 
-import { paymentProbesFor } from '@keel-system/keel-core/gen/payment-probes';
+import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
 import { paymentTestCurrency } from '@keel-system/keel-core/gen/payments-config';
 import { csFile, csString, solution } from './render.js';
@@ -71,6 +71,20 @@ function harnessBody(model) {
     .map(([call, route]) => `        [GatewayCall.${callMember(call)}] = (${csString(route.method)}, ${csString(route.path)}),`)
     .join('\n');
   const specific = gateway.id === 'stripe' ? stripeSpecific(probes) : mercadopagoSpecific(probes);
+  // La respuesta de guardar con el resumen en las rutas que lee el adaptador (keel-core: savedCardResponse), la MISMA que
+  // escriben el AbstractFlowIT de keel-spring y el payment-gateway.ts de keel-nest.
+  const cardNode = (node, indent) => {
+    const entries = Object.entries(node).map(([key, value]) => {
+      const literal =
+        value === '@B@' ? 'brand' : value === '@L@' ? 'last4' : value === -71 ? 'expMonth' : value === -72 ? 'expYear'
+        : typeof value === 'object' ? cardNode(value, indent) : csString(value);
+      return `[${csString(key)}] = ${literal}`;
+    });
+    return `new JsonObject { ${entries.join(', ')} }`;
+  };
+  const cardObject = cardNode(savedCardResponse(gateway.id, { brand: '@B@', last4: '@L@', expMonth: -71, expYear: -72 }));
+  const authentication = saveAuthenticationRejection(gateway.id);
+  const card = DEFAULT_SAVED_CARD;
   return `/// <summary>Las llamadas que el servidor le hace a la pasarela de pago.</summary>
 public enum GatewayCall
 {
@@ -138,8 +152,40 @@ public abstract partial class FlowTest
     /// </summary>
     protected static Task GatewayRejects(GatewayCall call) => PaymentGatewayHarness.Rejects(call);
 
-    /// <summary>La pasarela guarda el medio de pago que se le pase.</summary>
+    /// <summary>La pasarela guarda el medio de pago que se le pase, con una tarjeta ${card.brand} terminada en ${card.last4} (${card.expMonth}/${card.expYear}).</summary>
     protected static Task GatewaySavesPaymentMethod() => PaymentGatewayHarness.SavesPaymentMethod();
+
+    /// <summary>
+    /// La pasarela guarda el medio con ESTE resumen de tarjeta: lo que un escenario afirma en la respuesta o en la ficha del
+    /// medio guardado (savePaymentMethod.cardDetails).
+    /// </summary>
+    protected static Task GatewaySavesCard(string brand, string last4, int expMonth, int expYear) => PaymentGatewayHarness.SavesCard(brand, last4, expMonth, expYear);
+
+    /// <summary>
+    /// La pasarela exige autenticar al cliente (3DS) para guardar la tarjeta.${authentication ? '' : ` ${gateway.label} no lo pide al guardar (la
+    /// autenticación es del cobro), así que un escenario que lo use no se puede ejecutar con ella.`}
+    /// </summary>
+    protected static Task GatewayRequiresAuthenticationToSave() => PaymentGatewayHarness.RequiresAuthenticationToSave();
+
+    /// <summary>
+    /// Preguntada por el cobro de esa referencia, la pasarela lo da por devuelto con ESE total ("7.50"): lo que mide un
+    /// escenario de devolución parcial, o una devolución cuya respuesta no llegó y el barrido resuelve consultando.
+    /// </summary>
+    protected static Task GatewayReportsRefunded(string reference, string refundedTotal) => PaymentGatewayHarness.ReportsRefunded(reference, refundedTotal);
+
+    /// <summary>
+    /// La anulación del cobro de esa referencia vuelve como un cobro FALLIDO con un motivo del vocabulario neutro (la del 3DS
+    /// que el cliente no completó es "authenticationFailed"): el desenlace no es la anulación sino el fallo.
+    /// </summary>
+    protected static Task GatewayCancelFails(string reference, string reason) => PaymentGatewayHarness.CancelFails(reference, reason);
+
+    /// <summary>
+    /// La pasarela RETIENE su respuesta a esa llamada <paramref name="delayMs"/> milisegundos y después contesta con el cobro en
+    /// ese estado: lo que hace escribible un escenario en el que el aviso llega ANTES que la respuesta (envía el aviso sin
+    /// esperar a la petición). Vale para Charge, Capture y Cancel. El retardo tiene que quedar por debajo del read-timeout
+    /// del cliente de la pasarela (payments.gateway.read-timeout), o la acción quedará en duda.
+    /// </summary>
+    protected static Task GatewayAnswersLate(GatewayCall call, string reference, string status, int delayMs) => PaymentGatewayHarness.AnswersLate(call, reference, status, delayMs);
 
     /// <summary>La devolución del cobro de esa referencia se completa por ese importe ("5.00").</summary>
     protected static Task GatewayRefunds(string reference, string amount) => PaymentGatewayHarness.Refunds(reference, amount);
@@ -196,9 +242,32 @@ ${routes}
             await Stub(GatewayCall.Search, reference, null, 200, new JsonObject { ["data"] = new JsonArray() });
             return;
         }
-        await StubPath(GatewayCall.Status, IdFor(reference), 200, GatewayObject(reference, status, null, status == "REFUNDED" ? "10.00" : null));
-        await Stub(GatewayCall.Search, reference, null, 200, new JsonObject { ["data"] = new JsonArray(GatewayObject(reference, status, null, status == "REFUNDED" ? "10.00" : null)) });
+        if (status == "REFUNDED")
+        {
+            await ReportsRefunded(reference, "10.00");
+            return;
+        }
+        await ReportsObject(reference, () => GatewayObject(reference, status, null, null));
     }
+
+    public static Task ReportsRefunded(string reference, string refundedTotal) =>
+        ReportsObject(reference, () => GatewayObject(reference, "REFUNDED", null, refundedTotal));
+
+    private static async Task ReportsObject(string reference, Func<JsonObject> gatewayObject)
+    {
+        await StubPath(GatewayCall.Status, IdFor(reference), 200, gatewayObject());
+        await Stub(GatewayCall.Search, reference, null, 200, new JsonObject { ["data"] = new JsonArray(gatewayObject()) });
+    }
+
+    public static Task CancelFails(string reference, string reason) =>
+        StubPath(GatewayCall.Cancel, IdFor(reference), 200, GatewayObject(reference, "FAILED", DeclineFor(reason), null));
+
+    public static Task AnswersLate(GatewayCall call, string reference, string status, int delayMs) => call switch
+    {
+        GatewayCall.Charge => Stub(GatewayCall.Charge, null, reference, 200, GatewayObject(reference, status, null, null), delayMs),
+        GatewayCall.Capture or GatewayCall.Cancel => StubPath(call, IdFor(reference), 200, GatewayObject(reference, status, null, null), delayMs),
+        _ => throw new ArgumentException($"AnswersLate: {call} no devuelve el cobro; usa Charge, Capture o Cancel", nameof(call))
+    };
 
     public static Task Captures(string reference) => StubPath(GatewayCall.Capture, IdFor(reference), 200, GatewayObject(reference, "CAPTURED", null, null));
 
@@ -216,12 +285,24 @@ ${routes}
         return HttpStubHarness.MappingAsync(method, path, StubResponse.Ok(400, new JsonObject { ["error"] = new JsonObject { ["code"] = "rejected_by_test" } }.ToJsonString()));
     }
 
-    public static async Task SavesPaymentMethod()
+    public static Task SavesPaymentMethod() => SavesCard(${csString(card.brand)}, ${csString(card.last4)}, ${card.expMonth}, ${card.expYear});
+
+    public static async Task SavesCard(string brand, string last4, int expMonth, int expYear)
     {
         var (saveMethod, savePath) = Routes[GatewayCall.SaveMethod];
         var (attachMethod, attachPath) = Routes[GatewayCall.AttachMethod];
         await HttpStubHarness.MappingAsync(saveMethod, savePath, StubResponse.Ok(200, new JsonObject { ["id"] = "cus_keel_test" }.ToJsonString()));
-        await HttpStubHarness.MappingAsync(attachMethod, attachPath, StubResponse.Ok(200, new JsonObject { ["id"] = "card_keel_test" }.ToJsonString()));
+        await HttpStubHarness.MappingAsync(attachMethod, attachPath, StubResponse.Ok(200, ${cardObject}.ToJsonString()));
+    }
+
+    public static ${authentication ? 'async ' : ''}Task RequiresAuthenticationToSave()
+    {
+${authentication
+  ? `        var (saveMethod, savePath) = Routes[GatewayCall.SaveMethod];
+        var (attachMethod, attachPath) = Routes[GatewayCall.AttachMethod];
+        await HttpStubHarness.MappingAsync(saveMethod, savePath, StubResponse.Ok(200, new JsonObject { ["id"] = "cus_keel_test" }.ToJsonString()));
+        await HttpStubHarness.MappingAsync(attachMethod, attachPath, StubResponse.Ok(${authentication.status}, ${csString(JSON.stringify(authentication.body))}));`
+  : `        throw new NotSupportedException(${csString(`${gateway.id} no pide autenticar al guardar un medio: este escenario no aplica con ella`)});`}
     }
 
     public static Task<int> CallCount(GatewayCall call)
@@ -242,21 +323,22 @@ ${routes}
     /// Un mapping del doble para una llamada: con <paramref name="bodyContains"/> solo casa la petición cuyo cuerpo lo lleve (la
     /// referencia), con <paramref name="queryContains"/> la que lo lleve en su parámetro de búsqueda.
     /// </summary>
-    private static Task Stub(GatewayCall call, string? queryContains, string? bodyContains, int status, JsonNode body)
+    private static Task Stub(GatewayCall call, string? queryContains, string? bodyContains, int status, JsonNode body, int delayMs = 0)
     {
         var (method, path) = Routes[call];
-        return Mapping(method, path, queryContains, bodyContains, status, body);
+        return Mapping(method, path, queryContains, bodyContains, status, body, delayMs);
     }
 
     /// <summary>Igual, sobre la ruta concreta de un id (la de captura, anulación o consulta de ESE cobro).</summary>
-    private static Task StubPath(GatewayCall call, string gatewayId, int status, JsonNode body)
+    private static Task StubPath(GatewayCall call, string gatewayId, int status, JsonNode body, int delayMs = 0)
     {
         var (method, path) = Routes[call];
         var concrete = path.Replace("(?!search)[^/]+", gatewayId, StringComparison.Ordinal).Replace("[^/]+", gatewayId, StringComparison.Ordinal);
-        return Mapping(method, concrete, null, null, status, body);
+        return Mapping(method, concrete, null, null, status, body, delayMs);
     }
 
-    private static Task Mapping(string method, string pathPattern, string? queryContains, string? bodyContains, int status, JsonNode body)
+    // Con delayMs > 0, la respuesta llega tarde (fixedDelayMilliseconds de WireMock).
+    private static Task Mapping(string method, string pathPattern, string? queryContains, string? bodyContains, int status, JsonNode body, int delayMs = 0)
     {
         var request = new JsonObject { ["method"] = method, ["urlPathPattern"] = pathPattern };
         if (queryContains is not null)
@@ -267,7 +349,7 @@ ${routes}
         {
             request["bodyPatterns"] = new JsonArray(new JsonObject { ["contains"] = bodyContains });
         }
-        return HttpStubHarness.RawMappingAsync(request, HttpStubHarness.Response(status, body.ToJsonString()));
+        return HttpStubHarness.RawMappingAsync(request, HttpStubHarness.Response(status, body.ToJsonString(), delayMs));
     }
 
     private static string Hmac(string secret, string payload) =>
@@ -352,9 +434,11 @@ ${declines}
     /// Stripe rechaza un cobro confirmado con un 402 y el PaymentIntent dentro del error. El de autenticación no: un 402
     /// authentication_required es una ACCIÓN del cliente pendiente, así que ese motivo llega como el PaymentIntent fallido.
     /// </summary>
+    private static string DeclineFor(string reason) => Known(DeclineCodes, reason, "Motivo");
+
     public static Task Declines(string reference, string reason)
     {
-        var code = Known(DeclineCodes, reason, "Motivo");
+        var code = DeclineFor(reason);
         var failed = GatewayObject(reference, "FAILED", code, null);
         if (reason == "authenticationFailed")
         {
@@ -445,8 +529,10 @@ ${declines}
         };
     }
 
+    private static string DeclineFor(string reason) => Known(DeclineDetails, reason, "Motivo");
+
     public static Task Declines(string reference, string reason) =>
-        Stub(GatewayCall.Charge, null, reference, 200, GatewayObject(reference, "FAILED", Known(DeclineDetails, reason, "Motivo"), null));
+        Stub(GatewayCall.Charge, null, reference, 200, GatewayObject(reference, "FAILED", DeclineFor(reason), null));
 
     /// <summary>MercadoPago no documenta un código para la captura caducada: el adaptador consulta el estado.</summary>
     private static JsonObject ExpiredCapture() => new() { ["errors"] = new JsonArray(new JsonObject { ["code"] = "order_expired" }) };

@@ -133,10 +133,53 @@ public sealed class PaymentProbes : FlowTest, IAsyncLifetime
     public async Task GuardarUnMedioYSuRechazo()
     {
         await GatewaySavesPaymentMethod();
-        Assert.StartsWith("cus_keel_test|", await Gateway.SavePaymentMethod("tok_keel", "payer-1", Cancel), StringComparison.Ordinal);
+        Assert.StartsWith("cus_keel_test|", (await Gateway.SavePaymentMethod("tok_keel", "payer-1", Cancel)).Reference, StringComparison.Ordinal);
         await ResetStubs();
         await GatewayRejects(GatewayCall.SaveMethod);
         await Assert.ThrowsAsync<GatewayRejectedPaymentMethodException>(() => Gateway.SavePaymentMethod("tok_keel", "payer-1", Cancel));
+    }
+
+    // DSL 2.33 y G12 (inc. 6b de PLAN-CORRIDAS-GELSA.md): lo que programan los helpers nuevos, leído por el adaptador emitido.
+    [Fact]
+    public async Task GuardarConUnaTarjetaConcretaYEl3DSDondeLaPasarelaLoPide()
+    {
+        await GatewaySavesCard("amex", "0005", 3, 2029);
+        var saved = await Gateway.SavePaymentMethod("tok_keel", "payer-2", Cancel);
+        Assert.Equal(new SavedCard("amex", "0005", 3, 2029), saved.Card);
+        try
+        {
+            await GatewayRequiresAuthenticationToSave();
+        }
+        catch (NotSupportedException)
+        {
+            // La pasarela no pide 3DS al guardar (MercadoPago): el helper lo dice en vez de programar otra cosa.
+            return;
+        }
+        await Assert.ThrowsAsync<PaymentMethodAuthenticationRequiredException>(() => Gateway.SavePaymentMethod("tok_3ds", "payer-3", Cancel));
+    }
+
+    [Fact]
+    public async Task DevueltoPorUnTotalYAnulacionQueFallaConSuMotivo()
+    {
+        await GatewayReportsRefunded("ch-n", "7.50");
+        var refunded = await Gateway.Status("ch-n", GatewayIdFor("ch-n"), Cancel);
+        Assert.Equal(GatewayStatus.Refunded, refunded.Status);
+        Assert.Equal(7.50m, refunded.RefundedAmount);
+        await GatewayCancelFails("ch-o", "authenticationFailed");
+        var failed = await Gateway.VoidAuthorization("ch-o", GatewayIdFor("ch-o"), Cancel);
+        Assert.Equal(GatewayStatus.Failed, failed.Status);
+        Assert.Equal(PaymentFailureReason.AuthenticationFailed, failed.FailureReason);
+    }
+
+    [Fact]
+    public async Task LaPasarelaRetieneSuRespuestaYDespuesContesta()
+    {
+        await GatewayAnswersLate(GatewayCall.Charge, "ch-p", "AUTHORIZED", 400);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        Assert.Equal(GatewayStatus.Authorized, (await Gateway.Authorize(Charge("ch-p"), Cancel)).Status);
+        Assert.True(watch.ElapsedMilliseconds >= 350, $"la respuesta llegó en {watch.ElapsedMilliseconds} ms");
+        await GatewayAnswersLate(GatewayCall.Capture, "ch-q", "CAPTURED", 50);
+        Assert.Equal(GatewayStatus.Captured, (await Gateway.Capture("ch-q", GatewayIdFor("ch-q"), Cancel)).Status);
     }
 
     [Fact]

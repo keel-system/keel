@@ -1,6 +1,6 @@
 # Lo que destaparon las corridas de prueba-gelsa: cazarlo en diseño y corregir los generadores
 
-**Estado: ABIERTO (2026-11-20).** Inc. 0 a 5 y 6a hechos (2026-11-23). Se ejecuta en varias sesiones, un incremento por sesión
+**Estado: ABIERTO (2026-11-20).** Inc. 0 a 5, 6a y 6b hechos (2026-11-23). Se ejecuta en varias sesiones, un incremento por sesión
 como norma, y cada uno se cierra con «Para retomar» en § Estado y su commit.
 
 ## Contexto
@@ -194,7 +194,7 @@ Lo neutral en `keel-core/gen`, y cada generador con su test de paridad.
 | 3. nest, dotnet, go | hecho (2026-11-23) | 3a: suite de keel-nest, `ts-check --only=catalog-gelsa-order` 13/13, `stub-check` 28/28. 3b: suite de keel-dotnet 1076/1076, `cs-check --fixtures --only=catalog-gelsa-order` (falsado), `stub-check` 9/9. 3c: suite de keel-go, `go-check` de la silueta y de stock-reservation (G6 falsado), `stub-check` 12/12 |
 | 4. DSL 2.33 en keel-core | hecho (2026-11-23) | `npm test` de la raíz en verde (6 paquetes), `design-matrix` sin `sin-mutacion`, `--ready` en rojo con su id en las tres copias |
 | 5. keel-spring 2.33 y pagos | hecho (2026-11-23; G10 aceptado como está) | `payment-check` en las dos pasarelas, sabotaje `saved-card`; `claim-check` del barrido de pagos en PostgreSQL y MySQL, falsado |
-| 6. nest, dotnet, go 2.33 y pagos | 6a (keel-nest) hecho (2026-11-23); 6b y 6c pendientes | 6a: suite de keel-nest 1234; `ts-check --only=payment-checkout` 13/13; `stub-check` 37/37; `db-check --subject=payment-checkout` en PostgreSQL y MySQL, con los dos sabotajes del reclamo cayendo en sus casos PS |
+| 6. nest, dotnet, go 2.33 y pagos | 6a (keel-nest) y 6b (keel-dotnet) hechos (2026-11-23); 6c pendiente | 6a: suite de keel-nest 1234; `ts-check --only=payment-checkout` 13/13; `stub-check` 37/37; `db-check --subject=payment-checkout` en PostgreSQL y MySQL, con los dos sabotajes del reclamo cayendo en sus casos PS. 6b: suite de keel-dotnet 1087; `cs-check --fixtures` de payment-checkout, -mp, -233 y stock-reservation-233 sin warnings (748 pruebas emitidas), con `payment-saved-card` y `payment-save-3ds` en rojo; `stub-check` 9/9 (17 sondas por pasarela); `db-check --only=payment-checkout` en PostgreSQL y MySQL, con los dos sabotajes en sus casos PS |
 | 7. Corrida de control | pendiente | |
 
 **Para retomar:** inc. 0 y 1 hechos. El inc. 1 dejó en keel-core:
@@ -405,7 +405,28 @@ Cuando los cuatro lo generen, una fixture que declare `unansweredAfter` y `cardD
     dos réplicas incluida), con los sabotajes `payment-sweep-no-lease` (cae PS-1) y `payment-sweep-cutoff` (PS-1 y PS-2).
     La rama documental no se ha ejecutado (ninguna fixture con pagos sobre MongoDB); la mide `test/payment-sweep-claim.test.js`.
 
-**Siguiente: 6b (keel-dotnet).** Lo mismo con lo neutral ya hecho en keel-core: quitar la frontera (`generates`), D2 (los
-dos lectores de la configuración), D7+G9, G12 en el arnés (`Support/PaymentGateway.cs`), G11 con su red en `db-check`, y
-el `stub-check` con los casos nuevos.
+- **6b (keel-dotnet) hecho (2026-11-23):**
+  - Frontera abierta. Dos parches nuevos en `UNCOVERED_BRANCHES`, que compilan `cs-syntax` y `cs-check`:
+    `stock-reservation-233` (el umbral de la activación enlazado a un parámetro) y `payment-checkout-233` (el del barrido de
+    pagos y `cardDetails`); `capability-coverage` anota las tres formas `soloCadenas` con ellos.
+  - D2: `ReconciliationSettings` y `PaymentGatewaySettings` leen el parámetro con `Linked(...)` en segundos y sin default
+    propio. `ReconciliationSettings.Defaults` (sin configuración: las pruebas de build) usa el valor de prueba del parámetro,
+    como `ServiceParameters` (`testValueOf`, `reconciliation-claim.js`).
+  - D7 + G9: `SavedPaymentMethod`/`SavedCard` (records) y `PaymentMethodAuthenticationRequiredException` en Domain/Payment.
+    Lo común de los dos adaptadores sale de `savedMethodCs` (`payments.js`). Las pruebas emitidas `PaymentGatewayTests` leen
+    el resumen de `savedCardResponse` y el 3DS de `saveAuthenticationRejection`. Lo falsan los sabotajes de `cs-check`
+    `payment-saved-card` y `payment-save-3ds`. La nota del handler es `savedMethodNote`.
+  - G12: `GatewaySavesCard`, `GatewayRequiresAuthenticationToSave` (con MercadoPago lanza `NotSupportedException`),
+    `GatewayReportsRefunded`, `GatewayCancelFails` y `GatewayAnswersLate` en `Support/PaymentGateway.cs` y en la skill. Lo
+    mide `stub-check` con tres sondas nuevas por pasarela.
+  - G11: `src/scaffold/payment-sweep-claim.js` emite `ClaimForPaymentSweep(staleBefore, batchSize, ct)`. En EF Core, SQL
+    crudo con SKIP LOCKED + UPDATE por fila, en `ClaimIsolation`; en documental, `FindOneAndUpdate` por candidato. Los dos
+    con `RequireOwnTransaction` (el ayudante se emite una sola vez). Lo ejecuta `db-check` (PS1 a PS7, con
+    `paymentSweepProbes` en `scripts/lib/db-probes.js`), con dos sabotajes. Aquí `no-lease` y `cutoff` también tiran PS7:
+    la carrera remata con una pasada más (por el filesort de MySQL), y esa pasada depende de que se renueve el reloj.
+    `test/payment-sweep-claim.test.js` mide la forma de las tres ramas. La documental no se ha ejecutado.
+
+**Siguiente: 6c (keel-go).** Lo mismo: frontera, D2, D7+G9, G12 en el arnés de Go, G11 con su red en `db-check`, y
+`stub-check` con los casos nuevos. Después, la fixture que declare `unansweredAfter` y `cardDetails` sustituye a las
+siluetas de los cuatro.
 

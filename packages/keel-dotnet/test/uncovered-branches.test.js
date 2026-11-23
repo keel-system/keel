@@ -182,3 +182,22 @@ test('el historial de cambios entero (persistence audit.history y use-cases *.ou
     assert.ok(files.some((file) => /HistoryQuery\.cs$/.test(file.path) && file.content.includes('IQuery<PagedResponse<HistoryEntry>>')), `${name}: la query no devuelve la página de entradas`);
   }
 });
+
+// DSL 2.33 (inc. 6b de PLAN-CORRIDAS-GELSA.md): el umbral de silencio enlazado a un parámetro (activations.*.unansweredAfter
+// y reconciliation.unansweredAfter) se lee de la propiedad del parámetro en segundos, sin clave propia en los yaml; y la nota
+// de guardar un medio dice dónde va el resumen de la tarjeta (savePaymentMethod.cardDetails).
+test('stock-reservation-233: el reclamo de reconciliación lee el parámetro (activations.*.unansweredAfter)', async () => {
+  const files = await emitted('stock-reservation-233');
+  const settings = files.find((file) => file.path.endsWith('ReconciliationSettings.cs'));
+  assert.match(settings.content, /Linked\(configuration, "[^"]+:reserve-silence-minutes", 60, 1\)/);
+  for (const file of files.filter((candidate) => /parameters\/[^/]+\/reconciliation\.yaml$/.test(candidate.path))) assert.doesNotMatch(file.content, /unanswered-after-seconds/, file.path);
+});
+
+test('payment-checkout-233: el barrido lee el parámetro (reconciliation.unansweredAfter) y la nota guarda la tarjeta (savePaymentMethod.cardDetails)', async () => {
+  const files = await emitted('payment-checkout-233');
+  assert.match(files.find((file) => file.path.endsWith('PaymentGatewaySettings.cs')).content, /Linked\(configuration, "[^"]+:sweep-silence-minutes", 60\)/);
+  for (const file of files.filter((candidate) => /parameters\/[^/]+\/payments\.yaml$/.test(candidate.path))) assert.doesNotMatch(file.content, /unanswered-after-seconds/, file.path);
+  const handler = files.find((file) => file.path.endsWith('SavePaymentMethodCommandHandler.cs')).content.replace(/\s*\n\s*\/\/\s*/g, ' ');
+  assert.match(handler, /GUARDAR EL MEDIO: la pasarela devuelve SavedPaymentMethod/);
+  assert.match(handler, /guárdalo en el campo 'card'/);
+});

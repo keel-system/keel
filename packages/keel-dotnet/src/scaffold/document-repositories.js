@@ -25,6 +25,7 @@ import { bridgeClass, messagingNamespace, usesBridge } from './messaging.js';
 import { claimDependencies, guardClaimsFor, storedState } from './claim.js';
 import { documentArming, sweepPassNamespace, timerDependencies } from './timer.js';
 import { reconciliationDependencies } from './reconciliation-claim.js';
+import * as paymentSweepClaim from './payment-sweep-claim.js';
 import { documentGuardMethods, documentOwnTransactionHelper, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
 import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { defaultSortConstant, entityFinders, finderParameters, fixedValue, hasFilter, methodName, needsOrdering, resultType, sortConstants } from './finders.js';
@@ -515,6 +516,14 @@ export function renderDocumentAdapter(model, entity) {
   const sweeps = documentSweepClaimMethods(model, entity);
   const reconciliations = documentReconciliationMethods(model, entity);
   methods.push(...sweeps, ...reconciliations);
+  // El reclamo del barrido de pagos (G11 de la corrida payment de prueba-gelsa).
+  methods.push(
+    ...paymentSweepClaim.documentAdapterMethods(model, entity, {
+      keyOf: (member) => keyOf(model, entity, member),
+      stored: (state) => storedState(model, entity, state),
+      ownTransactionHelper: documentOwnTransactionHelper()
+    })
+  );
   // Las guardas de un efecto que no se deshace (mail.sentBy).
   methods.push(...documentGuardMethods(model, entity, guardClaimsFor(model, entity.name)));
   if (sweeps.length + reconciliations.length > 0) methods.push(documentOwnTransactionHelper());
