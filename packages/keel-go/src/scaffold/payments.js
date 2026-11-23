@@ -167,7 +167,7 @@ export function generate(model) {
       : []),
     { path: `${httpapi.dir}/payment_notice.go`, content: packageFile(model, httpapi, { imports: ['errors', 'io', 'net/http', 'internal/domain'], body: noticeEndpointBody() }) },
     { path: `${infra.dir}/doc.go`, content: packageFile(model, infra, { doc: PACKAGE_DOC(model), body: '' }) },
-    { path: `${infra.dir}/settings.go`, content: packageFile(model, infra, { imports: ['fmt', 'regexp', 'strconv', 'strings', 'time', 'internal/application', 'internal/platform/config'], body: settingsBody() }) },
+    { path: `${infra.dir}/settings.go`, content: packageFile(model, infra, { imports: ['fmt', 'regexp', 'strconv', 'strings', 'time', 'internal/application', 'internal/platform/config'], body: settingsBody(model) }) },
     { path: `${infra.dir}/http.go`, content: packageFile(model, infra, { imports: ['context', 'errors', 'fmt', 'io', 'net', 'net/http', 'strings'], body: HTTP_BODY }) },
     { path: `${infra.dir}/money.go`, content: packageFile(model, infra, { imports: ['fmt', 'strconv', 'strings', 'internal/platform/wire'], body: moneyBody() }) },
     { path: `${infra.dir}/json.go`, content: packageFile(model, infra, { imports: ['encoding/json/v2', 'fmt', 'strconv', 'strings'], body: JSON_BODY }) },
@@ -663,8 +663,9 @@ func (n *PaymentNotices) Receive(ctx context.Context, notice domain.PaymentNotic
 }
 
 // PaymentReconciliationSettings son los dos números del barrido de pagos (${sweep}): el silencio tolerado antes de
-// preguntar por un cobro que espera desenlace, que lo declara el diseño (payments.reconciliation.unansweredAfterSeconds;
-// en local y test se acorta), y cuántos consulta una pasada (${PAYMENT_SWEEP_PARAMETERS.batchSize.key}): capacidad, no diseño.
+// preguntar por un cobro que espera desenlace, que lo declara el diseño (${p.reconciliation.unansweredParameter
+       ? `el parámetro ${p.reconciliation.unansweredParameter.name}, payments.reconciliation.unansweredAfter`
+       : 'payments.reconciliation.unansweredAfterSeconds; en local y test se acorta'}), y cuántos consulta una pasada (${PAYMENT_SWEEP_PARAMETERS.batchSize.key}): capacidad, no diseño.
 type PaymentReconciliationSettings struct {
 	// UnansweredAfter es el silencio tolerado.
 	UnansweredAfter time.Duration
@@ -797,8 +798,10 @@ func (a *api) receivePaymentNotice(w http.ResponseWriter, r *http.Request) error
 
 // ─── La infraestructura común ────────────────────────────────────────────────────────────────────
 
-function settingsBody() {
+function settingsBody(model) {
   const unanswered = PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds;
+  // Con el umbral enlazado a un parámetro (DSL 2.33) se lee la propiedad del parámetro en segundos: no hay clave propia.
+  const linked = model.payments.reconciliation.unansweredParameter;
   const batch = PAYMENT_SWEEP_PARAMETERS.batchSize;
   return `
 // Settings es la configuración de la pasarela (config/parameters/<perfil>/payments.yaml, las MISMAS claves y variables que
@@ -870,11 +873,21 @@ func SettingsFrom(cfg *config.Config) (Settings, error) {
 		return Settings{}, err
 	}
 	s.NoticeTolerance = time.Duration(tolerance) * time.Second
-	unanswered, err := positive(${goString(unanswered.key)}, 900)
+${linked
+   ? `	// El silencio tolerado es el parámetro ${linked.name} (en ${linked.unit}): sin default propio, para que no haya dos.
+	unanswered, err := positive(${goString(linked.property)}, 0)
 	if err != nil {
 		return Settings{}, err
 	}
-	s.UnansweredAfter = time.Duration(unanswered) * time.Second
+	if unanswered == 0 {
+		return Settings{}, fmt.Errorf("%s es obligatorio: es el umbral de silencio del barrido de pagos", ${goString(linked.property)})
+	}
+	s.UnansweredAfter = time.Duration(unanswered) * ${linked.unitSeconds} * time.Second`
+   : `	unanswered, err := positive(${goString(unanswered.key)}, 900)
+	if err != nil {
+		return Settings{}, err
+	}
+	s.UnansweredAfter = time.Duration(unanswered) * time.Second`}
 	if s.BatchSize, err = positive(${goString(batch.key)}, ${batch.default}); err != nil {
 		return Settings{}, err
 	}

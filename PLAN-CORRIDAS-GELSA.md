@@ -426,7 +426,13 @@ Cuando los cuatro lo generen, una fixture que declare `unansweredAfter` y `cardD
     la carrera remata con una pasada más (por el filesort de MySQL), y esa pasada depende de que se renueve el reloj.
     `test/payment-sweep-claim.test.js` mide la forma de las tres ramas. La documental no se ha ejecutado.
 
-**Siguiente: 6c (keel-go).** Lo mismo: frontera, D2, D7+G9, G12 en el arnés de Go, G11 con su red en `db-check`, y
+**6c (keel-go), empezado (2026-11-23):** D2 hecho sin medir con Go: `ReconciliationSettingsFrom` lee el parámetro enlazado
+(`reconciliationLinks`, obligatorio; el default sin configuración es su valor de prueba) y `payment.SettingsFrom` lo mismo
+para el barrido de pagos. Pasan `reconciliation`, `payments` y `go-syntax`. La frontera sigue cerrada (`dsl233PendingErrors`
+sin `generates`). Falta: abrir la frontera, D7+G9, G12, G11 (en Go el reclamo de pagos hoy lo escribe el agente en
+`<raíz>_queries.go`), los parches de `UNCOVERED_BRANCHES`, la suite, `go-check`, `stub-check` y `db-check`.
+
+**Siguiente: 6c (keel-go), resto.** Lo mismo: frontera, D2, D7+G9, G12 en el arnés de Go, G11 con su red en `db-check`, y
 `stub-check` con los casos nuevos. Después, la fixture que declare `unansweredAfter` y `cardDetails` sustituye a las
 siluetas de los cuatro.
 

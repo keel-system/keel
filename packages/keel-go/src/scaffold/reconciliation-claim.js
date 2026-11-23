@@ -90,16 +90,50 @@ export function generate(model) {
 function settingsBody(model) {
   const entries = reconciledActivations(model).map(({ activation, sweeper }) => {
     const parameters = reconciliationParameters(activation, sweeper);
-    return { indent: '\t\t\t', cells: [`${goString(activation.name)}:`, `{UnansweredAfterSeconds: ${parameters.unansweredAfterSeconds.default}, ClaimTimeoutMs: ${parameters.claimTimeoutMs.default}, BatchSize: ${parameters.batchSize.default}},`] };
+    // Con el umbral enlazado a un parámetro (DSL 2.33), el default es su valor de prueba en segundos: el que leen las
+    // pruebas sin configuración, como ServiceParameters. Al arrancar se lee el parámetro, obligatorio.
+    const linked = parameters.unansweredAfterSeconds.parameter;
+    const unanswered = linked ? testValueOf(model, linked.name) * linked.unitSeconds : parameters.unansweredAfterSeconds.default;
+    return { indent: '\t\t\t', cells: [`${goString(activation.name)}:`, `{UnansweredAfterSeconds: ${unanswered}, ClaimTimeoutMs: ${parameters.claimTimeoutMs.default}, BatchSize: ${parameters.batchSize.default}},`] };
   });
   const keys = reconciledActivations(model).map(({ activation, sweeper }) => {
     const parameters = reconciliationParameters(activation, sweeper);
     const prefix = parameters.batchSize.key.replace(/\.batch-size$/, '');
     return { indent: '\t', cells: [`${goString(activation.name)}:`, `${goString(prefix)},`] };
   });
+  const links = reconciledActivations(model)
+    .filter(({ activation }) => activation.unansweredParameter)
+    .map(({ activation }) => ({ indent: '\t', cells: [`${goString(activation.name)}:`, `{key: ${goString(activation.unansweredParameter.property)}, unitSeconds: ${activation.unansweredParameter.unitSeconds}},`] }));
+  const linkBlock = links.length
+    ? `
+// reconciliationLink es el umbral de silencio enlazado a un parámetro de despliegue (DSL 2.33): su clave y cuántos segundos
+// vale una unidad.
+type reconciliationLink struct {
+	key         string
+	unitSeconds int
+}
+
+// reconciliationLinks son las activaciones cuyo umbral es un parámetro: sin clave propia, para que no haya dos umbrales.
+var reconciliationLinks = map[string]reconciliationLink{
+${alignRows(links).join('\n')}
+}
+`
+    : '';
+  const linkRead = links.length
+    ? `		if link, linked := reconciliationLinks[activation]; linked {
+			value, _ := cfg.Value(link.key)
+			n, err := strconv.Atoi(strings.TrimSpace(value))
+			if err != nil || n <= 0 {
+				return ReconciliationSettings{}, fmt.Errorf("%s es obligatorio y entero positivo: es el umbral de silencio de un barrido: %q", link.key, value)
+			}
+			window.UnansweredAfterSeconds = n * link.unitSeconds
+			fields = fields[1:]
+		}
+`
+    : '';
   return `
 // ReconciliationWindow son los tres números de un barrido de reconciliación, y NO son la misma clase de decisión: el
-// silencio tolerado lo declara el diseño (unansweredAfterSeconds de la activación); la caducidad del reclamo y la cota del
+// silencio tolerado lo declara el diseño (unansweredAfterSeconds de la activación, o su parámetro con unansweredAfter); la caducidad del reclamo y la cota del
 // lote son del generador (mecánica y capacidad).
 type ReconciliationWindow struct {
 	// UnansweredAfterSeconds es cuánto silencio del proveedor se tolera antes de que el encargo sea candidato.
@@ -132,7 +166,7 @@ type ReconciliationSettings struct {
 var reconciliationKeys = map[string]string{
 ${alignRows(keys).join('\n')}
 }
-
+${linkBlock}
 // DefaultReconciliationSettings son los barridos sin configuración: los defaults de los cuatro servidores.
 func DefaultReconciliationSettings() ReconciliationSettings {
 	return ReconciliationSettings{
@@ -156,7 +190,7 @@ func ReconciliationSettingsFrom(cfg *config.Config) (ReconciliationSettings, err
 			{"claim-timeout-ms", &window.ClaimTimeoutMs},
 			{"batch-size", &window.BatchSize},
 		}
-		for _, field := range fields {
+${linkRead}		for _, field := range fields {
 			name := prefix + "." + field.leaf
 			value, ok := cfg.Value(name)
 			if !ok || strings.TrimSpace(value) == "" {
@@ -520,4 +554,10 @@ ${sweepPassSignal(model, claim, 'len(ids)', 'window.BatchSize', '		')}		return n
 	return claimed, nil
 }`;
   });
+}
+
+/** El valor de prueba de un parámetro del servicio (el que usan las pruebas sin configuración). */
+function testValueOf(model, name) {
+  const parameter = (model.service.parameters ?? []).find((candidate) => candidate.name === name);
+  return Number(parameter?.testValue ?? parameter?.default ?? 1);
 }
