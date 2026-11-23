@@ -31,9 +31,13 @@ export function paymentsYaml(model, profile) {
     `    read-timeout: ${envFor('PAYMENT_GATEWAY_READ_TIMEOUT', profile)}`,
     `    notice-tolerance-seconds: ${envFor('PAYMENT_NOTICE_TOLERANCE_SECONDS', profile, gateway.webhook.toleranceSeconds)}`,
     '  reconciliation:',
-    '    # Lo decide el diseño (payments.reconciliation.unansweredAfterSeconds); en local y test se acorta',
-    '    # para que los escenarios del barrido no esperen un cuarto de hora.',
-    `    unanswered-after-seconds: ${isLocalish ? PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.local : envWithDefault(profile, PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.env, model.payments.reconciliation.unansweredAfterSeconds)}`,
+    ...(model.payments.reconciliation.unansweredParameter
+      ? [`    # El silencio tolerado es el parámetro ${model.payments.reconciliation.unansweredParameter.name} (en ${model.payments.reconciliation.unansweredParameter.unit}): sin clave propia (DSL 2.33).`]
+      : [
+          '    # Lo decide el diseño (payments.reconciliation.unansweredAfterSeconds); en local y test se acorta',
+          '    # para que los escenarios del barrido no esperen un cuarto de hora.',
+          `    unanswered-after-seconds: ${isLocalish ? PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.local : envWithDefault(profile, PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.env, model.payments.reconciliation.unansweredAfterSeconds)}`
+        ]),
     '    # Cuántos cobros consulta una pasada como máximo: capacidad, no diseño. Se ajusta con datos de producción.',
     `    batch-size: ${envWithDefault(profile, PAYMENT_SWEEP_PARAMETERS.batchSize.env, PAYMENT_SWEEP_PARAMETERS.batchSize.default)}`
   ];

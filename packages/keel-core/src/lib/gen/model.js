@@ -190,6 +190,8 @@ function interpret({ manifest, layers, stack = null }) {
   const storage = collectStorage(layers);
   const mail = collectMail(layers);
   const payments = collectPayments(layers, stack, services, entities, warnings, P);
+  // El umbral del barrido enlazado a un parámetro (DSL 2.33), resuelto como el de un rescate: su clave deja de emitirse.
+  if (payments) payments.reconciliation.unansweredParameter = stalledParameter(payments.reconciliation.unansweredAfter, service);
 
   const hasFileUploads = services.some((group) => group.operations.some((operation) => operation.multipart));
 
@@ -203,7 +205,8 @@ function interpret({ manifest, layers, stack = null }) {
     errors,
     events,
     services,
-    warnings
+    warnings,
+    service
   );
 
   // Los `need` que el diseño expone (`exposedAs`) pasan a ser un campo más de la
@@ -1646,7 +1649,7 @@ function rescueClaim({ operation, transition, entity, inFlight, base, warnings, 
   };
 }
 
-/** Segundos por unidad de `stalledAfter.unit`. */
+/** Segundos por unidad de `stalledAfter.unit` (y de `unansweredAfter.unit`, DSL 2.33). */
 const STALLED_UNIT_SECONDS = { seconds: 1, minutes: 60, hours: 3600 };
 
 /**
@@ -2553,7 +2556,9 @@ function reconciliationClaim({ depId, activation, sweeper, waitingByEntity, enti
     // @Value del adaptador: el valor vive en parameters/<perfil>/reconciliation.yaml, y
     // el default tiene que ser el mismo número o el diseño diría una cosa y el binario
     // otra en cuanto falte el fichero.
-    unansweredAfterSeconds: activation.unansweredAfterSeconds ?? DEFAULT_UNANSWERED_AFTER_SECONDS,
+    unansweredAfterSeconds: activation.unansweredParameter ? null : (activation.unansweredAfterSeconds ?? DEFAULT_UNANSWERED_AFTER_SECONDS),
+    // El umbral enlazado a un parámetro (DSL 2.33): se lee de su propiedad, en segundos con unitSeconds.
+    unansweredParameter: activation.unansweredParameter ?? null,
     suffix,
     method: `claimFor${suffix}`,
     // La rama de `parameters/<perfil>/reconciliation.yaml` que config.js ya emite para
@@ -2569,7 +2574,7 @@ function reconciliationClaim({ depId, activation, sweeper, waitingByEntity, enti
 // se reexportan aquí porque keel-spring los importa del modelo.
 export { RECONCILIATION_BATCH_SIZE, reconciliationClaimTimeoutMs };
 
-function collectDependencies(layers, entities, httpClients, subscriptions, errors, events, services, warnings) {
+function collectDependencies(layers, entities, httpClients, subscriptions, errors, events, services, warnings, service = null) {
   const declared = layers.dependencies?.dependencies;
   if (!declared) return null;
 
@@ -2639,6 +2644,11 @@ function collectDependencies(layers, entities, httpClients, subscriptions, error
         // que el barrido usa para elegir candidatos. Va por activación porque un mismo
         // barrido puede reconciliar varias y cada proveedor tarda lo suyo.
         unansweredAfterSeconds: spec.unansweredAfterSeconds ?? null,
+        // O el mismo umbral desde un service.parameters (DSL 2.33): entonces es ese parámetro, resuelto como el plazo de
+        // un rescate (stalledAfter), y su clave propia no se emite. Dos umbrales para la misma espera es lo que dejó la
+        // corrida order de prueba-gelsa.
+        unansweredAfter: spec.unansweredAfter ?? null,
+        unansweredParameter: stalledParameter(spec.unansweredAfter, service),
         // Y desde cuándo se cuenta ese silencio: el campo de la entidad que estampa la
         // operación que encarga. Lo declara el diseño (DSL 2.10) porque el nombre depende
         // de lo que la marca signifique —una espera o la última revalidación— y adivinarlo

@@ -87,7 +87,7 @@ if (!result.ok) {
 
 | Paquete | DSL Keel |
 |---------|----------|
-| keel-core 0.7.x | `keel: "2.32"` |
+| keel-core 0.7.x | `keel: "2.33"` |
 | keel-core 0.6.x | `keel: "2.24"` |
 | keel-core 0.5.x | `keel: "2.23"` |
 

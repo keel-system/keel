@@ -159,7 +159,9 @@ export function collectPayments(layers, stack, services, entities, warnings, pro
     outcomeCommands,
     reconciliation: {
       sweep: payments.reconciliation?.sweep,
-      unansweredAfterSeconds: payments.reconciliation?.unansweredAfterSeconds
+      unansweredAfterSeconds: payments.reconciliation?.unansweredAfterSeconds ?? null,
+      // DSL 2.33: el umbral desde un service.parameters. buildModel lo resuelve en `unansweredParameter`.
+      unansweredAfter: payments.reconciliation?.unansweredAfter ?? null
     },
     // Los estados que esperan un desenlace de la pasarela: lo que el barrido mira.
     awaitingStates: awaitingStates(payments, entities)

@@ -18,3 +18,8 @@ export const FAILURE_REASONS = Object.freeze([
   'notReceived', // la pasarela no conoce el cobro: la petición no llegó nunca
   'processingError' // fallo de la pasarela o de la red de tarjetas, no del medio
 ]);
+
+// El resumen de una tarjeta guardada que informa la pasarela (DSL 2.33, `savePaymentMethod.cardDetails`): lo que las
+// dos pasarelas devuelven al guardar un medio, con el mismo nombre en las dos. El value object del diseño lleva algunos
+// de estos y ninguno más (CHK-PAYMENTS-FIELD-UNKNOWN); cada generador traduce a ellos los campos de cada pasarela.
+export const SAVED_CARD_FIELDS = Object.freeze(['brand', 'last4', 'expMonth', 'expYear']);

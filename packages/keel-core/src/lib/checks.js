@@ -1246,7 +1246,21 @@ export const CHECKS = {
     severity: 'warning',
     nature: 'undecided',
     title: 'una reconciliación sin unansweredAfterSeconds: el umbral de silencio no está decidido',
-    closes: 'declarar unansweredAfterSeconds'
+    closes: 'declarar unansweredAfterSeconds, o unansweredAfter enlazado a un service.parameters'
+  },
+  'CHK-DEPS-UNANSWERED-AFTER-INVALID': {
+    layer: 'dependencies',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'unansweredAfter nombra un parámetro que no existe o que no es un entero',
+    closes: 'nombrar en unansweredAfter.parameter un service.parameters de tipo int'
+  },
+  'CHK-DEPS-UNANSWERED-DUPLICATES-PARAMETER': {
+    layer: 'dependencies',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'el umbral de silencio está en segundos en la activación y en un parámetro en las reglas del barrido',
+    closes: 'enlazar el parámetro con unansweredAfter: { parameter, unit } en vez de unansweredAfterSeconds'
   },
   'CHK-DEPS-RECONCILE-NO-WAIT-STATE': {
     layer: 'dependencies',
@@ -1711,6 +1725,13 @@ export const CHECKS = {
     nature: 'incoherence',
     title: 'un campo de la capa payments no está en el input de su operación, o no tiene el tipo que exige',
     closes: 'declarar el campo en el input con el tipo correcto, o corregir el nombre'
+  },
+  'CHK-PAYMENTS-SAVED-CARD-UNSOURCED': {
+    layer: 'payments',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'el medio guardado lleva un resumen obligatorio que no informa nadie: ni el input ni savePaymentMethod.cardDetails',
+    closes: 'declarar savePaymentMethod.cardDetails: <campo>, o hacer el campo opcional si la pasarela no lo informa'
   },
   'CHK-PAYMENTS-RECORD-UNKNOWN': {
     layer: 'payments',

@@ -3301,6 +3301,44 @@ export const MUTATIONS = [
     },
     expect: ['CHK-DEPS-NO-UNANSWERED-AFTER']
   },
+  // ─── DSL 2.33: el umbral de silencio, enlazado a un parámetro (corrida order de prueba-gelsa, D2) ────
+  {
+    id: 'M-DEPS-UNANSWERED-AFTER-UNKNOWN-PARAM',
+    title: 'el umbral de silencio nombra un parámetro que el manifiesto no declara',
+    extends: 'escalation',
+    mutate: (d) => {
+      const activation = d.layers.dependencies.dependencies.pager.activations.pageOncall;
+      delete activation.unansweredAfterSeconds;
+      activation.unansweredAfter = { parameter: 'noExiste', unit: 'minutes' };
+    },
+    expect: ['CHK-DEPS-UNANSWERED-AFTER-INVALID']
+  },
+  {
+    id: 'M-DEPS-UNANSWERED-AFTER-NOT-INT',
+    title: 'el umbral de silencio nombra un parámetro que no es entero',
+    extends: 'escalation',
+    mutate: (d) => {
+      d.manifest.parameters = {
+        pageTimeout: { type: 'string', description: 'Un texto cualquiera.', default: 'x', testValue: 'x', requiredInProduction: false }
+      };
+      const activation = d.layers.dependencies.dependencies.pager.activations.pageOncall;
+      delete activation.unansweredAfterSeconds;
+      activation.unansweredAfter = { parameter: 'pageTimeout', unit: 'minutes' };
+    },
+    expect: ['CHK-DEPS-UNANSWERED-AFTER-INVALID']
+  },
+  {
+    id: 'M-DEPS-UNANSWERED-DUPLICATES-PARAMETER',
+    title: 'la activación fija el umbral en segundos y la regla del barrido lo mide contra un parámetro',
+    extends: 'escalation',
+    mutate: (d) => {
+      d.manifest.parameters = {
+        pageTimeoutMinutes: { type: 'int', description: 'Minutos sin respuesta de la guardia.', default: 10, testValue: 1, requiredInProduction: false }
+      };
+      ops(d).sweepPages.rules = ['Un ticket en awaitingAck con pageAwaitingSince de más de pageTimeoutMinutes vuelve a la cola.'];
+    },
+    expect: ['CHK-DEPS-UNANSWERED-DUPLICATES-PARAMETER']
+  },
   {
     id: 'M-DEPS-RECONCILE-NO-WAIT-STATE',
     title: 'una reconciliación de un encargo que no deja nada esperando',
@@ -3517,6 +3555,25 @@ export const MUTATIONS = [
       d.layers.messaging.subscriptions.PriorityChargeRequested.payload.amount.type = 'long';
     },
     expect: ['CHK-PAYMENTS-FIELD-UNKNOWN']
+  },
+  // DSL 2.33 (corrida payment de prueba-gelsa, D7): el medio guardado lleva un resumen de tarjeta obligatorio que el
+  // input no trae y que el diseño no atribuye a la pasarela.
+  {
+    id: 'M-PAYMENTS-SAVED-CARD-UNSOURCED',
+    title: 'el medio guardado lleva un resumen de tarjeta obligatorio que no informa nadie',
+    extends: 'payments',
+    mutate: (d) => {
+      d.layers.domain.types.CardSummary = {
+        description: 'Resumen visible de una tarjeta guardada.',
+        fields: {
+          brand: { type: 'string', required: true, constraints: { maxLength: 30 } },
+          last4: { type: 'string', required: true, constraints: { pattern: '^[0-9]{4}$' } }
+        }
+      };
+      d.layers.domain.entities.Payment.fields.card = { type: 'CardSummary', required: true };
+      ops(d).savePaymentMethod.output = { entity: 'Payment' };
+    },
+    expect: ['CHK-PAYMENTS-SAVED-CARD-UNSOURCED']
   },
   {
     id: 'M-PAYMENTS-RECORD-UNKNOWN',

@@ -147,7 +147,7 @@ Las acciones:
 - **`capture`**: obligatoria con `authorize-capture`. Con `amount` captura un importe menor (exige `partial-capture`), y el resto se libera.
 - **`void`**: anula una autorización que no se va a capturar. Exige `outcomes.canceled`.
 - **`refund`**: devuelve lo cobrado. Con `amount` devuelve una parte (exige `partial-refund`). Exige `outcomes.refunded`.
-- **`savePaymentMethod`**: guarda un medio de pago para cobrar sin el cliente. Es una operación propia, y no un efecto lateral del cobro, porque cada pasarela lo hace de una forma distinta. `exposedAs` es el campo de la respuesta con el que sale la referencia guardada; es lo que después llega a `charge.source.saved`.
+- **`savePaymentMethod`**: guarda un medio de pago para cobrar sin el cliente. Es una operación propia, y no un efecto lateral del cobro, porque cada pasarela lo hace de una forma distinta. `exposedAs` es el campo de la respuesta con el que sale la referencia guardada; es lo que después llega a `charge.source.saved`. `cardDetails` (DSL 2.33, opcional) nombra el campo de la entidad que devuelve la operación con el **resumen de la tarjeta** que informa la pasarela al guardar: un value object compuesto con algunos de `brand`, `last4`, `expMonth` y `expYear`, y ninguno más (`CHK-PAYMENTS-FIELD-UNKNOWN`). El input solo trae el token, así que un compuesto obligatorio de esa entidad que el input no trae lo puede informar solo la pasarela: sin `cardDetails` no lo informa nadie (`CHK-PAYMENTS-SAVED-CARD-UNSOURCED`).
 
 ### Cuando la pasarela contesta que NO (`onRejected`)
 
@@ -186,7 +186,7 @@ Reglas de los desenlaces:
 
 ## La reconciliación (obligatoria)
 
-`reconciliation.sweep` es una operación con `schedule` (`CHK-PAYMENTS-SWEEP-INVALID`) que consulta a la pasarela todo lo que lleva más de `unansweredAfterSeconds` esperando un desenlace, según `record.awaitingSince`:
+`reconciliation.sweep` es una operación con `schedule` (`CHK-PAYMENTS-SWEEP-INVALID`) que consulta a la pasarela todo lo que lleva más de `unansweredAfterSeconds` esperando un desenlace, según `record.awaitingSince`. Si el umbral lo fija un `service.parameters` de tipo `int`, se escribe `unansweredAfter: { parameter, unit }` en su lugar (DSL 2.33, excluyente con los segundos):
 
 - el cobro en `pending`;
 - el que espera al cliente en `actionRequired`;

@@ -1,7 +1,7 @@
 import { FRAMEWORK_ERRORS, overrideFor, conditionalUniquenessToken } from './framework-errors.js';
 import { obligationFor } from './obligations.js';
 import { checkFor } from './checks.js';
-import { FAILURE_REASONS } from './payment-vocabulary.js';
+import { FAILURE_REASONS, SAVED_CARD_FIELDS } from './payment-vocabulary.js';
 import { implicitDefaults } from './structural-defaults.js';
 import { splitScenarioBlocks, scenarioFamilyOf, scenarioIdOf, scenarioBody, parseCoverageMatrix, conventionsText } from './scenario-blocks.js';
 import { versionedRouteBase, operationTargetEntity } from './gen/model.js';
@@ -3786,12 +3786,42 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           // insistencia es trabajo repetido contra él; por encima, un encargo perdido tarda
           // de más en detectarse— y cuál es el correcto depende del proveedor, que es justo
           // lo que el diseñador sabe y el generador no.
-          if (spec.unansweredAfterSeconds == null) {
+          if (spec.unansweredAfterSeconds == null && !spec.unansweredAfter) {
             warnIn(`${scopeOf(where)}.reconciledBy`, 'CHK-DEPS-NO-UNANSWERED-AFTER',
-              `${where}.reconciledBy: no declara 'unansweredAfterSeconds', así que el diseño no dice cuánto ` +
+              `${where}.reconciledBy: no declara 'unansweredAfterSeconds' (ni 'unansweredAfter'), así que el diseño no dice cuánto ` +
                 `silencio de ${depName} se tolera antes de volver a insistir. El barrido necesita ese umbral para ` +
                 `elegir candidatos: sin declararlo lo fija quien construya, y deja de ser una decisión revisable`
             );
+          }
+          // El umbral enlazado a un parámetro del servicio (DSL 2.33): que exista y sea un entero, como stalledAfter.
+          const unansweredLink = spec.unansweredAfter;
+          if (unansweredLink && manifest) {
+            const parameter = manifest.parameters?.[unansweredLink.parameter];
+            if (!parameter) {
+              error('CHK-DEPS-UNANSWERED-AFTER-INVALID',
+                `${where}.unansweredAfter: nombra el parámetro '${unansweredLink.parameter}', que service.keel.yaml § parameters no declara`);
+            } else if (parameter.type !== 'int') {
+              error('CHK-DEPS-UNANSWERED-AFTER-INVALID',
+                `${where}.unansweredAfter: el parámetro '${unansweredLink.parameter}' es de tipo ${parameter.type}, y un umbral es un número entero de ${unansweredLink.unit}`);
+            }
+          }
+          // Dos fuentes para el mismo umbral (corrida order de prueba-gelsa, D2): la activación fija segundos y una regla
+          // del barrido mide la MISMA marca contra un parámetro del servicio. El agente lee uno de los dos y el otro queda
+          // como configuración muerta. La señal es mecánica: la regla nombra la marca y un parámetro int.
+          if (spec.unansweredAfterSeconds != null && spec.awaitingSince && manifest) {
+            const integers = Object.entries(manifest.parameters ?? {}).filter(([, p]) => p?.type === 'int').map(([n]) => n);
+            const names = (text, name) => new RegExp(`(^|[^A-Za-z0-9_])${name}([^A-Za-z0-9_]|$)`).test(text);
+            const duplicated = (operations[spec.reconciledBy]?.rules ?? [])
+              .map(String)
+              .filter((rule) => names(rule, spec.awaitingSince))
+              .map((rule) => integers.find((n) => names(rule, n)))
+              .find(Boolean);
+            if (duplicated) {
+              warn('CHK-DEPS-UNANSWERED-DUPLICATES-PARAMETER',
+                `${where}: declara unansweredAfterSeconds: ${spec.unansweredAfterSeconds} y una regla de '${spec.reconciledBy}' mide ` +
+                  `${spec.awaitingSince} contra el parámetro '${duplicated}': dos umbrales para la misma espera, y quien construya ` +
+                  `solo puede leer uno. Enlaza el parámetro con unansweredAfter: { parameter: ${duplicated}, unit: … } en vez de los segundos`);
+            }
           }
           const sweeper = operations[spec.reconciledBy];
           if (!sweeper) {
@@ -5073,6 +5103,49 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     if (currencyParameter && manifest && !Object.hasOwn(manifest.parameters ?? {}, currencyParameter)) {
       error('CHK-PAYMENTS-FIELD-UNKNOWN',
         `payments: charge.currency.parameter: '${currencyParameter}' no está declarado en service.parameters`);
+    }
+    // El umbral del barrido enlazado a un parámetro (DSL 2.33): que exista y sea un entero.
+    const unansweredLink = payments.reconciliation?.unansweredAfter;
+    if (unansweredLink && manifest) {
+      const parameter = manifest.parameters?.[unansweredLink.parameter];
+      if (!parameter) {
+        error('CHK-PAYMENTS-FIELD-UNKNOWN',
+          `payments: reconciliation.unansweredAfter.parameter: '${unansweredLink.parameter}' no está declarado en service.parameters`);
+      } else if (parameter.type !== 'int') {
+        error('CHK-PAYMENTS-FIELD-UNKNOWN',
+          `payments: reconciliation.unansweredAfter.parameter: '${unansweredLink.parameter}' es de tipo ${parameter.type}, y un umbral es un número entero de ${unansweredLink.unit}`);
+      }
+    }
+
+    // El resumen de la tarjeta al guardar un medio (DSL 2.33, corrida payment de prueba-gelsa, D7). Solo lo puede
+    // informar la pasarela: el input trae el token, nunca la tarjeta. Si la entidad que devuelve la operación lleva un
+    // value object compuesto obligatorio que el input no trae, nadie lo informa salvo que el diseño diga que es ese.
+    const saving = payments.savePaymentMethod;
+    const savedEntityName = saving && operations[saving.operation]?.output?.entity;
+    const savedFields = savedEntityName ? domain.entities?.[savedEntityName]?.fields : null;
+    if (saving && savedFields) {
+      const composite = (type) => Boolean(domain.types?.[type]?.fields);
+      if (saving.cardDetails) {
+        const field = savedFields[saving.cardDetails];
+        const unreported = Object.keys(domain.types?.[field?.type]?.fields ?? {}).filter((name) => !SAVED_CARD_FIELDS.includes(name));
+        if (!field || !composite(field.type)) {
+          error('CHK-PAYMENTS-FIELD-UNKNOWN',
+            `payments: savePaymentMethod.cardDetails: '${saving.cardDetails}' tiene que ser un campo de ${savedEntityName} de tipo value object compuesto`);
+        } else if (unreported.length > 0) {
+          error('CHK-PAYMENTS-FIELD-UNKNOWN',
+            `payments: savePaymentMethod.cardDetails: ${field.type} lleva ${unreported.join(', ')}, que la pasarela no informa ` +
+              `(solo ${SAVED_CARD_FIELDS.join(', ')})`);
+        }
+      }
+      const inputs = inputFieldsOf(saving.operation);
+      for (const [name, field] of Object.entries(savedFields)) {
+        if (name === saving.cardDetails || !field?.required || field.id || field.generated || field.computed || field.default !== undefined) continue;
+        if (!composite(field.type) || Object.hasOwn(inputs, name)) continue;
+        warn('CHK-PAYMENTS-SAVED-CARD-UNSOURCED',
+          `payments: savePaymentMethod: ${savedEntityName}.${name} (${field.type}) es obligatorio y el input de '${saving.operation}' ` +
+            `no lo trae: solo lo puede informar la pasarela al guardar. Si es el resumen de la tarjeta, declara ` +
+            `savePaymentMethod.cardDetails: ${name}`);
+      }
     }
 
     // El registro: la memoria del servicio frente a la pasarela.

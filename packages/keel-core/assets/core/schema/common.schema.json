@@ -523,6 +523,22 @@
         }
       ]
     },
+    "parameterDuration": {
+      "type": "object",
+      "required": ["parameter", "unit"],
+      "additionalProperties": false,
+      "description": "Un plazo que no es un número del diseño sino un service.parameters de tipo int con su unidad (DSL 2.33): la forma de stalledAfter, para cuando cada despliegue puede querer otro valor y el mismo plazo ya lo usa otra pieza del diseño.",
+      "properties": {
+        "parameter": {
+          "type": "string",
+          "description": "Nombre de un service.parameters de tipo int: el valor del plazo."
+        },
+        "unit": {
+          "enum": ["seconds", "minutes", "hours"],
+          "description": "Unidad en la que el parámetro expresa el plazo."
+        }
+      }
+    },
     "scheduleTrigger": {
       "type": "object",
       "required": ["cron"],

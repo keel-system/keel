@@ -1,6 +1,6 @@
 # Lo que destaparon las corridas de prueba-gelsa: cazarlo en diseño y corregir los generadores
 
-**Estado: ABIERTO (2026-11-20).** Inc. 0 a 3 hechos (2026-11-23). Se ejecuta en varias sesiones, un incremento por sesión
+**Estado: ABIERTO (2026-11-20).** Inc. 0 a 4 hechos (2026-11-23). Se ejecuta en varias sesiones, un incremento por sesión
 como norma, y cada uno se cierra con «Para retomar» en § Estado y su commit.
 
 ## Contexto
@@ -179,11 +179,10 @@ Lo neutral en `keel-core/gen`, y cada generador con su test de paridad.
   nest, dotnet y go, y `npm run matrix` en los cuatro.
 - Lo emitido para las fixtures que no tienen las formas nuevas, idéntico byte a byte antes y después.
 
-## Decisiones pendientes del usuario
+## Decisiones del usuario (2026-11-23)
 
-1. ¿Entran D2 y D7 en una misma DSL 2.33, o D7 se queda en `REV-*` sin cambiar el DSL?
-2. ¿Se cierra la corrida de notifications ahora, corrigiendo su diseño con `/keel-evolve` (patch), o se espera a la
-   corrida de control del inc. 7?
+1. D2 y D7 entran juntas en la DSL 2.33.
+2. La corrida de notifications espera a la corrida de control del inc. 7: su diseño no se corrige antes.
 
 ## Estado
 
@@ -193,7 +192,7 @@ Lo neutral en `keel-core/gen`, y cada generador con su test de paridad.
 | 1. keel-core: puerta sin DSL | hecho (2026-11-23) | suite de keel-core 1684/1684, `design-matrix` sin `sin-mutacion` (246 falsados), `--ready` sobre las copias |
 | 2. keel-core/gen + keel-spring | hecho (2026-11-23) | `npm test` de la raíz en verde (6 paquetes); `compile-check` de catalog-extended en 4 combos; el arnés de la copia de order y el `main` de job-dispatch con `naturalKey: [id]` compilados, y G6 falsado |
 | 3. nest, dotnet, go | hecho (2026-11-23) | 3a: suite de keel-nest, `ts-check --only=catalog-gelsa-order` 13/13, `stub-check` 28/28. 3b: suite de keel-dotnet 1076/1076, `cs-check --fixtures --only=catalog-gelsa-order` (falsado), `stub-check` 9/9. 3c: suite de keel-go, `go-check` de la silueta y de stock-reservation (G6 falsado), `stub-check` 12/12 |
-| 4. DSL 2.33 en keel-core | pendiente | |
+| 4. DSL 2.33 en keel-core | hecho (2026-11-23) | `npm test` de la raíz en verde (6 paquetes), `design-matrix` sin `sin-mutacion`, `--ready` en rojo con su id en las tres copias |
 | 5. keel-spring 2.33 y pagos | pendiente | |
 | 6. nest, dotnet, go 2.33 y pagos | pendiente | |
 | 7. Corrida de control | pendiente | |
@@ -289,5 +288,34 @@ y payment sigue en verde hasta el inc. 4 (D7). D2 también es del inc. 4. `CHK-D
     sobre `catalog-gelsa-order` (PostgreSQL y MySQL) y stock-reservation. El `--fixtures` entero no se terminó: tenía 121
     variantes que comprobar una a una (memoria libre baja, horas), y el cambio solo toca esas formas.
 
-**Inc. 3 cerrado.** Siguiente: inc. 4 (DSL 2.33 en keel-core). Antes hay que contestar las dos decisiones pendientes del
-usuario (§ Decisiones pendientes), sobre todo la 1: si D7 entra en la 2.33.
+**Inc. 3 cerrado.**
+
+**Inc. 4 hecho (2026-11-23): DSL 2.33 en keel-core.**
+- D2: `unansweredAfter: { parameter, unit }` (`$defs/parameterDuration` de `common.schema.json`), excluyente con
+  `unansweredAfterSeconds`, en la activación y en `payments.reconciliation` (que pasa a `oneOf`). Lo acompañan
+  `CHK-DEPS-UNANSWERED-AFTER-INVALID` (error) y `CHK-DEPS-UNANSWERED-DUPLICATES-PARAMETER` (aviso, `incoherence`): la
+  activación fija segundos y una `rule` del `reconciledBy` nombra su `awaitingSince` junto a un parámetro `int`. En
+  pagos, un parámetro que falta o no es entero es `CHK-PAYMENTS-FIELD-UNKNOWN`. En el modelo neutral el enlace se
+  resuelve como `stalledAfter` (`unansweredParameter`, con `stalledParameter`): el descriptor del reclamo lleva
+  `unansweredAfterSeconds: null`, `reconciliationParameters` da `{ key: null, parameter }` y ni
+  `reconciliation.yaml` ni `payments.yaml` emiten la clave.
+- D7: `payments.savePaymentMethod.cardDetails` y `SAVED_CARD_FIELDS` (`payment-vocabulary.js`: brand, last4,
+  expMonth, expYear). `CHK-PAYMENTS-SAVED-CARD-UNSOURCED` (aviso): un value object compuesto obligatorio de la
+  entidad que devuelve la operación, que el input no trae y que no es `cardDetails`. `cardDetails` sobre algo que no
+  es un compuesto, o con un campo que la pasarela no informa, es `CHK-PAYMENTS-FIELD-UNKNOWN`.
+  `REV-PAYMENTS-CARD-DATA` no lo cubría: es la tarjeta que ENTRA por un input (PCI).
+- La frontera: `dsl233PendingErrors` (`gen/reconciliation-stores.js`) rechaza las dos formas con el mismo mensaje en
+  los cuatro, hasta el inc. 5 en keel-spring y el 6 en los otros tres (fila en `keel-go/README.md` y en
+  `EXCEPCIONES` de los cuatro `capability-coverage.test.js`). Quitarla es lo primero del inc. 5/6, y la fixture que
+  declare las formas también (candidatas: `stock-reservation` y `payment-checkout`).
+- Mutaciones: `M-DEPS-UNANSWERED-AFTER-UNKNOWN-PARAM`, `-NOT-INT`, `M-DEPS-UNANSWERED-DUPLICATES-PARAMETER` (extensión
+  `escalation`) y `M-PAYMENTS-SAVED-CARD-UNSOURCED` (extensión `payments`). Lo que no ven, en
+  `keel-core/test/dsl-233.test.js`.
+- Subida: schema del manifiesto, plantilla, base del corpus, 21 fixtures, `SUPPORTED_DSL` y `keel.dsl` de los cuatro,
+  READMEs; docs en `dsl/dependencies.md`, `dsl/payments.md` y la fila 2.33 de `dsl-reference.md`.
+- Medido: las copias de `D:\keel-gelsa` declaran 2.32 y ya no validan (una sola versión), así que la puerta se mide
+  sobre `D:\keel-gelsa-233`, que solo cambia `keel:`. `--ready` en rojo: order con D2 (×3), D3, D4 y D5; payment con
+  D7 (y `review` por `REV-PAYMENTS-RECONCILE-INFLIGHT-NOTFOUND`, de G13); notifications con D1 (×3).
+
+**Siguiente: inc. 5 (keel-spring: 2.33 y pagos).** Quitar `dsl233PendingErrors` de keel-spring y generar D2 (el reclamo
+y el gate `reconciliation` leen el parámetro) y D7 (`SavedPaymentMethod` con el resumen), y después G9, G10, G11 y G12.

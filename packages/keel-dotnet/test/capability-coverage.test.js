@@ -33,6 +33,18 @@ const MOTIVOS = {
 
 const EXCEPCIONES = new Map([
   [
+    'dependencies.dependencies.*.activations.*.unansweredAfter',
+    { motivo: MOTIVOS.hueco, porque: 'DSL 2.33: la frontera la rechaza (dsl233PendingErrors) hasta el incremento 6 de PLAN-CORRIDAS-GELSA.md, que trae la fixture que la declara.' }
+  ],
+  [
+    'payments.reconciliation.unansweredAfter',
+    { motivo: MOTIVOS.hueco, porque: 'DSL 2.33: la frontera la rechaza (dsl233PendingErrors) hasta el incremento 6 de PLAN-CORRIDAS-GELSA.md, que trae la fixture que la declara.' }
+  ],
+  [
+    'payments.savePaymentMethod.cardDetails',
+    { motivo: MOTIVOS.hueco, porque: 'DSL 2.33: la frontera la rechaza (dsl233PendingErrors) hasta el incremento 6 de PLAN-CORRIDAS-GELSA.md, que trae la fixture que la declara.' }
+  ],
+  [
     'messaging.subscriptions.*.contract.schemaRef',
     { motivo: MOTIVOS.informativo, porque: 'solo entra en la línea «Formato: …» del comentario de la clase del mensaje (messaging.js): ningún lector depende de él.' }
   ],

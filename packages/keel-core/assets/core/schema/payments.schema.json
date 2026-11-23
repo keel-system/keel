@@ -201,6 +201,11 @@
           "type": "string",
           "pattern": "^[a-z][A-Za-z0-9]*$",
           "description": "Nombre del campo opaco con el que la referencia guardada sale en la respuesta. Es lo que después llega a charge.source.saved."
+        },
+        "cardDetails": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "Campo de la entidad que devuelve la operación con el resumen de la tarjeta que informa la pasarela al guardar (DSL 2.33): un value object compuesto con algunos de brand, last4, expMonth y expYear. Sin él, un resumen obligatorio no lo informa nadie: ni el input, que solo trae el token, ni el diseño (corrida payment de prueba-gelsa)."
         }
       }
     },
@@ -236,8 +241,11 @@
     "reconciliation": {
       "type": "object",
       "required": [
-        "sweep",
-        "unansweredAfterSeconds"
+        "sweep"
+      ],
+      "oneOf": [
+        { "required": ["unansweredAfterSeconds"] },
+        { "required": ["unansweredAfter"] }
       ],
       "additionalProperties": false,
       "description": "El barrido de lo que espera un desenlace. Obligatorio, y no por prudencia: la idempotencia de la pasarela no basta contra el doble cargo —guarda también los errores con su clave y la olvida pasado un tiempo—, así que una acción cuya respuesta no llegó nunca se repite a ciegas: se queda en su estado en vuelo y el barrido le pregunta a la pasarela. Cubre el cobro en pending, el que espera al cliente en actionRequired y el estado en vuelo de cada acción de seguimiento.",
@@ -249,6 +257,10 @@
           "type": "integer",
           "minimum": 60,
           "description": "Cuánto silencio se tolera antes de que el barrido consulte un cobro que espera desenlace."
+        },
+        "unansweredAfter": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/parameterDuration",
+          "description": "El mismo umbral, y excluyente con unansweredAfterSeconds, cuando lo fija un service.parameters (DSL 2.33)."
         }
       }
     }

@@ -66,7 +66,7 @@ Para completar y validar el proyecto hace falta un **JDK 25** y Docker o Podman.
 
 | Paquete | DSL Keel | Proyecto generado |
 |---------|----------|-------------------|
-| keel-spring 0.4.x | `keel: "2.32"` | Spring Boot 4.1.2 · Java 25 · Gradle 9.8.2 |
+| keel-spring 0.4.x | `keel: "2.33"` | Spring Boot 4.1.2 · Java 25 · Gradle 9.8.2 |
 | keel-spring 0.3.x | `keel: "2.24"` | Spring Boot 4.1.2 · Java 25 · Gradle 9.8.2 |
 | keel-spring 0.2.x | `keel: "2.23"` | Spring Boot 4.1.2 · Java 21 |
 

@@ -1,4 +1,4 @@
-keel: "2.32"
+keel: "2.33"
 service:
   name: notification-mailer-mongo
   version: 2.1.2

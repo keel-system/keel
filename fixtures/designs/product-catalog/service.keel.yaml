@@ -1,4 +1,4 @@
-keel: "2.32"
+keel: "2.33"
 service:
   name: product-catalog
   version: 1.2.0

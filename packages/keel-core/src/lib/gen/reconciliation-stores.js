@@ -56,7 +56,8 @@ export const RECONCILIATION_PURGE = Object.freeze({
 // NO son la misma clase de decisión, y por eso solo uno lo declara el diseño:
 //
 //   · unansweredAfterSeconds — CUÁNTO SILENCIO SE TOLERA. Es del diseño: depende de cuánto tarda ESE
-//     proveedor en contestar, que es conocimiento de negocio. Por activación.
+//     proveedor en contestar, que es conocimiento de negocio. Por activación. Desde la 2.33 puede ser un
+//     service.parameters (`unansweredAfter`), y entonces no tiene clave propia.
 //   · claimTimeoutMs — CUÁNTO RETIENE UN CANDIDATO la réplica que lo reclamó. Mecánica de
 //     multi-réplica: el generador la resuelve igual que la del relay del outbox.
 //   · batchSize — CUÁNTO TRABAJO CABE EN UNA PASADA. Capacidad: se ajusta con datos de producción.
@@ -92,11 +93,14 @@ export function reconciliationParameters(activation, sweeper) {
   const key = `reconciliation.${kebabCase(activation.name)}`;
   const env = `RECONCILIATION_${screamingSnake(activation.name)}`;
   return Object.freeze({
-    unansweredAfterSeconds: Object.freeze({
-      key: `${key}.unanswered-after-seconds`,
-      env: `${env}_UNANSWERED_AFTER_SECONDS`,
-      default: activation.unansweredAfterSeconds ?? DEFAULT_UNANSWERED_AFTER_SECONDS
-    }),
+    // Con el umbral enlazado a un parámetro (DSL 2.33) no hay clave propia: se lee la del parámetro.
+    unansweredAfterSeconds: activation.unansweredParameter
+      ? Object.freeze({ key: null, env: null, default: null, parameter: activation.unansweredParameter })
+      : Object.freeze({
+          key: `${key}.unanswered-after-seconds`,
+          env: `${env}_UNANSWERED_AFTER_SECONDS`,
+          default: activation.unansweredAfterSeconds ?? DEFAULT_UNANSWERED_AFTER_SECONDS
+        }),
     claimTimeoutMs: Object.freeze({
       key: `${key}.claim-timeout-ms`,
       env: `${env}_CLAIM_TIMEOUT_MS`,
@@ -116,11 +120,16 @@ export function reconciliationYaml(model, profile) {
   const lines = ['reconciliation:'];
   for (const { dependency, activation, sweeper } of reconciledActivations(model)) {
     const parameters = reconciliationParameters(activation, sweeper);
+    const linked = parameters.unansweredAfterSeconds.parameter;
     lines.push(
       `  ${kebabCase(activation.name)}:`,
-      `    # Encargos a ${dependency} sin desenlace pasado este tiempo: candidatos del barrido.`,
-      '    # Lo declara el DISEÑO; aquí solo se parametriza para poder moverlo por entorno.',
-      `    unanswered-after-seconds: ${envWithDefault(profile, parameters.unansweredAfterSeconds.env, parameters.unansweredAfterSeconds.default)}`,
+      ...(linked
+        ? [`    # El silencio tolerado es el parámetro ${linked.name} (en ${linked.unit}): sin clave propia, para que no haya dos.`]
+        : [
+            `    # Encargos a ${dependency} sin desenlace pasado este tiempo: candidatos del barrido.`,
+            '    # Lo declara el DISEÑO; aquí solo se parametriza para poder moverlo por entorno.',
+            `    unanswered-after-seconds: ${envWithDefault(profile, parameters.unansweredAfterSeconds.env, parameters.unansweredAfterSeconds.default)}`
+          ]),
       '    # Caducidad del reclamo: una réplica que muere con el lote en vuelo retiene sus',
       '    # candidatos hasta que pasa esto. Del generador, no del diseño: cubre el lote entero',
       '    # (lote × timeout de la llamada con sus reintentos) y al menos dos ticks del cron.',
@@ -178,4 +187,32 @@ export function reconciliationWindow({ now, unansweredAfterSeconds, claimTimeout
  */
 export function reconciliationClaimReference(claimedAt, claimExpiredBefore) {
   return claimedAt == null || claimedAt.getTime() <= claimExpiredBefore.getTime();
+}
+
+/**
+ * La frontera mientras un generador no lee el umbral de silencio desde un service.parameters (`unansweredAfter`, DSL 2.33,
+ * en una activación o en `payments.reconciliation`) ni el resumen de la tarjeta guardada (`savePaymentMethod.cardDetails`):
+ * se rechaza con el mismo mensaje en los cuatro, porque a medias fallaría en silencio —el barrido usaría el umbral por
+ * defecto, o el medio se guardaría sin su resumen—. Cada generador la quita en su incremento de PLAN-CORRIDAS-GELSA.md
+ * (keel-spring en el 5, los otros tres en el 6).
+ */
+export function dsl233PendingErrors(layers, generator, increment) {
+  const pending = (what, fix) =>
+    `${what} (DSL 2.33): ${generator} todavía no lo genera — llega en el incremento ${increment} de PLAN-CORRIDAS-GELSA.md, ` +
+    `y a medias fallaría en silencio. ${fix} para generar este diseño.`;
+  const errors = [];
+  for (const [depName, dependency] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
+    for (const [name, activation] of Object.entries(dependency?.activations ?? {})) {
+      if (activation?.unansweredAfter) {
+        errors.push(pending(`dependencies: ${depName}.activations.${name}.unansweredAfter`, 'Escribe el umbral con unansweredAfterSeconds'));
+      }
+    }
+  }
+  if (layers?.payments?.reconciliation?.unansweredAfter) {
+    errors.push(pending('payments: reconciliation.unansweredAfter', 'Escribe el umbral con unansweredAfterSeconds'));
+  }
+  if (layers?.payments?.savePaymentMethod?.cardDetails) {
+    errors.push(pending('payments: savePaymentMethod.cardDetails', 'Quita cardDetails'));
+  }
+  return errors;
 }
