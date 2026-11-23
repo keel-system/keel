@@ -74,7 +74,13 @@ defensa:
    cliente, 3DS: puede completarla y volver a pedirlo) y `PaymentMethodRejectedException` (el medio no
    vale). Sin respuesta, `PaymentGatewayUnavailableException`: aquí no se guardó nada.
 
-En los escenarios, `gatewayExpiresAuthorization(referencia)` simula la autorización que caducó
+En los escenarios, sin stubs a mano (la forma de la pasarela la pone el arnés):
+`gatewaySavesCard(marca, últimos4, mes, año)` y `gatewayRequiresAuthenticationToSave()` al guardar un medio;
+`gatewayReportsRefunded(referencia, total)` para una consulta que da el cobro devuelto por ese total;
+`gatewayCancelFails(referencia, "authenticationFailed")` para una anulación que vuelve como cobro fallido;
+`gatewayAnswersLate(GatewayCall.CAPTURE, referencia, "CAPTURED", ms)` para la pasarela que retiene su respuesta
+mientras el aviso llega antes (envía el aviso desde otro hilo).
+`gatewayExpiresAuthorization(referencia)` simula la autorización que caducó
 antes de capturarse, y `ageForReconciliation("<barrido>", id)` deja rancia la marca de espera de
 un cobro para que lo tome la próxima pasada del barrido; `holdFromReconciliation("<barrido>", id)` hace lo
 contrario —deja la marca en el futuro, para que el barrido NO toque un cobro que acaba de entrar en vuelo—. No

@@ -75,3 +75,15 @@ test('con cardDetails el handler sabe dónde va el resumen, y keel-spring lo gen
   // Sin cardDetails, la nota dice que el diseño no lo decidió.
   assert.match(flat(plan('stripe').read('/SavePaymentMethodCommandHandler.java')), /el diseño no dice dónde guardarlo/);
 });
+
+// El resto de G12: las primitivas que la corrida payment escribió a mano en sus flujos.
+for (const gateway of ['stripe', 'mercadopago']) {
+  test(`${gateway}: el arnés da la devolución por un total, la anulación fallida y la respuesta retenida`, () => {
+    const flow = plan(gateway).read('AbstractFlowIT.java');
+    assert.match(flow, /protected static void gatewayReportsRefunded\(String reference, BigDecimal refundedTotal\) \{\n\s+gatewayReportsObject\(reference, gatewayObject\(reference, "REFUNDED", null, refundedTotal\)\);/);
+    assert.match(flow, /if \("REFUNDED"\.equals\(status\)\) \{\n\s+gatewayReportsRefunded\(reference, new BigDecimal\("10\.00"\)\);/);
+    assert.match(flow, /protected static void gatewayCancelFails\(String reference, String reason\) \{\n\s+gatewayStubPath\(GatewayCall\.CANCEL, gatewayIdFor\(reference\), null, 200,\n\s+gatewayObject\(reference, "FAILED", GATEWAY_DECLINES\.get\(reason\), null\)\);/);
+    assert.match(flow, /protected static void gatewayAnswersLate\(GatewayCall call, String reference, String status, int delayMs\)/);
+    assert.match(flow, /quote\("fixedDelayMilliseconds"\) \+ ": " \+ delayMs/);
+  });
+}

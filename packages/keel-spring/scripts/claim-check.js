@@ -42,7 +42,7 @@
 //
 // Y el reclamo del BARRIDO DE PAGOS (G11 de la corrida payment de prueba-gelsa), que build genera fuera de
 // `operation.claim`: con `payment-checkout` (`--database=postgresql|mysql`) se ejercitan sus seis casos, y dos sabotajes
-// lo falsan: `payment-sweep-no-lease` (el UPDATE no renueva el reloj) y `payment-sweep-cutoff` (la cota al revés).
+// lo falsan: `payment-sweep-no-lease` (la escritura del reclamo no renueva el reloj) y `payment-sweep-cutoff` (la cota al revés).
 //
 // Necesita podman o docker, y JDK (Gradle compila el proyecto entero, `main` incluido).
 

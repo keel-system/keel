@@ -193,7 +193,7 @@ Lo neutral en `keel-core/gen`, y cada generador con su test de paridad.
 | 2. keel-core/gen + keel-spring | hecho (2026-11-23) | `npm test` de la raíz en verde (6 paquetes); `compile-check` de catalog-extended en 4 combos; el arnés de la copia de order y el `main` de job-dispatch con `naturalKey: [id]` compilados, y G6 falsado |
 | 3. nest, dotnet, go | hecho (2026-11-23) | 3a: suite de keel-nest, `ts-check --only=catalog-gelsa-order` 13/13, `stub-check` 28/28. 3b: suite de keel-dotnet 1076/1076, `cs-check --fixtures --only=catalog-gelsa-order` (falsado), `stub-check` 9/9. 3c: suite de keel-go, `go-check` de la silueta y de stock-reservation (G6 falsado), `stub-check` 12/12 |
 | 4. DSL 2.33 en keel-core | hecho (2026-11-23) | `npm test` de la raíz en verde (6 paquetes), `design-matrix` sin `sin-mutacion`, `--ready` en rojo con su id en las tres copias |
-| 5. keel-spring 2.33 y pagos | en curso (D2, D7+G9, G11 y G12 de guardar hechos; G10 aceptado; falta el resto de G12) | `payment-check` en las dos pasarelas, sabotaje `saved-card`; `claim-check` del barrido de pagos en PostgreSQL y MySQL, falsado |
+| 5. keel-spring 2.33 y pagos | hecho (2026-11-23; G10 aceptado como está) | `payment-check` en las dos pasarelas, sabotaje `saved-card`; `claim-check` del barrido de pagos en PostgreSQL y MySQL, falsado |
 | 6. nest, dotnet, go 2.33 y pagos | pendiente | |
 | 7. Corrida de control | pendiente | |
 
@@ -364,6 +364,18 @@ y el gate `reconciliation` leen el parámetro) y D7 (`SavedPaymentMethod` con el
   reloj y `--sabotage=payment-sweep-cutoff` en sus cuatro casos, exactamente. El primer intento de `no-lease` dejaba
   el reloj en el corte y no caía: PostgreSQL redondea a microsegundos y el reloj podía quedar por encima. **La rama
   documental no se ha ejecutado**: ninguna fixture tiene pagos sobre MongoDB.
-- Falta: el resto de G12 (devolución de un importe concreto, anulación con «autenticación fallida», la pasarela que
-  retiene la respuesta hasta el aviso).
+- **El resto de G12 hecho**: `gatewayReportsRefunded(referencia, total)` (la consulta da el cobro devuelto por ese
+  total; `gatewayReports(…, "REFUNDED")` la usa con 10.00), `gatewayCancelFails(referencia, motivo)` (la anulación
+  vuelve como cobro fallido con el motivo neutro, que los dos adaptadores leen con `outcomeOf`) y
+  `gatewayAnswersLate(llamada, referencia, estado, ms)` (la respuesta retenida de FL-STL-009, para CHARGE, CAPTURE y
+  CANCEL, con `fixedDelayMilliseconds`). Van en la parte común del arnés: las dos pasarelas tienen `gatewayObject` y
+  `GATEWAY_DECLINES`. La skill `keel-spring-payments` las enseña. Medido: `test/saved-card.test.js` en las dos pasarelas y
+  `compile-check` de payment-checkout con las dos. **Sin red en vivo propia**: el arnés solo se ejecuta dentro de una
+  corrida; las formas son las de `gatewayObject`, que ya usaban las primitivas medidas en corridas anteriores.
+
+**Inc. 5 cerrado (2026-11-23).** Siguiente: inc. 6, lo mismo en keel-nest, keel-dotnet y keel-go (partido en 6a, 6b y
+6c): quitar `dsl233PendingErrors`, D2, D7+G9 (con lo neutral de keel-core ya hecho: `savedCard`,
+`saveAuthenticationCodes`, `savedCardResponse`, `saveAuthenticationRejection`, `savedMethodNote`), G11 (su reclamo del
+barrido de pagos y la red que lo ejecute contra el motor) y las primitivas de G12, con su paridad contra keel-spring.
+Cuando los cuatro lo generen, una fixture que declare `unansweredAfter` y `cardDetails` sustituye a las siluetas.
   y el resto de G12.

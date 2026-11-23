@@ -116,9 +116,48 @@ ${routes});
             gatewayStub(GatewayCall.SEARCH, reference, null, 200, "{\\"data\\": []}");
             return;
         }
-        String object = gatewayObject(reference, status, null, "REFUNDED".equals(status) ? new BigDecimal("10.00") : null);
+        if ("REFUNDED".equals(status)) {
+            gatewayReportsRefunded(reference, new BigDecimal("10.00"));
+            return;
+        }
+        gatewayReportsObject(reference, gatewayObject(reference, status, null, null));
+    }
+
+    /**
+     * Preguntada por el cobro de esa referencia, la pasarela lo da por devuelto con ESE total: lo que mide un escenario
+     * de devolución parcial, o una devolución cuya respuesta no llegó y el barrido resuelve consultando.
+     */
+    protected static void gatewayReportsRefunded(String reference, BigDecimal refundedTotal) {
+        gatewayReportsObject(reference, gatewayObject(reference, "REFUNDED", null, refundedTotal));
+    }
+
+    private static void gatewayReportsObject(String reference, String object) {
         gatewayStubPath(GatewayCall.STATUS, gatewayIdFor(reference), null, 200, object);
         gatewayStub(GatewayCall.SEARCH, reference, null, 200, "{\\"data\\": [" + object + "]}");
+    }
+
+    /**
+     * La anulación del cobro de esa referencia vuelve como un cobro FALLIDO con un motivo del vocabulario neutro (la del
+     * 3DS que el cliente no completó es "authenticationFailed"): el desenlace no es la anulación sino el fallo.
+     */
+    protected static void gatewayCancelFails(String reference, String reason) {
+        gatewayStubPath(GatewayCall.CANCEL, gatewayIdFor(reference), null, 200,
+                gatewayObject(reference, "FAILED", GATEWAY_DECLINES.get(reason), null));
+    }
+
+    /**
+     * La pasarela RETIENE su respuesta a esa llamada {@code delayMs} milisegundos y después contesta con el cobro en ese
+     * estado: lo que hace escribible un escenario en el que el aviso llega ANTES que la respuesta (envía el aviso
+     * mientras tanto, desde otro hilo). Vale para CHARGE, CAPTURE y CANCEL. El retardo tiene que quedar por debajo del
+     * read-timeout del cliente de la pasarela (payments.gateway.read-timeout), o la acción quedará en duda.
+     */
+    protected static void gatewayAnswersLate(GatewayCall call, String reference, String status, int delayMs) {
+        String object = gatewayObject(reference, status, null, null);
+        switch (call) {
+            case CHARGE -> gatewayStub(GatewayCall.CHARGE, null, reference, 200, object, delayMs);
+            case CAPTURE, CANCEL -> gatewayStubPath(call, gatewayIdFor(reference), null, 200, object, delayMs);
+            default -> throw new IllegalArgumentException("gatewayAnswersLate: " + call + " no devuelve el cobro; usa CHARGE, CAPTURE o CANCEL");
+        }
     }
 
     /** La pasarela captura el cobro de esa referencia en el acto. */
@@ -206,19 +245,28 @@ ${authentication
     // Un mapping del doble para una llamada: con \`bodyContains\` solo casa la petición cuyo cuerpo lo
     // lleve (la referencia), con \`queryContains\` la que lo lleve en su parámetro de búsqueda.
     private static void gatewayStub(GatewayCall call, String queryContains, String bodyContains, int status, String json) {
+        gatewayStub(call, queryContains, bodyContains, status, json, 0);
+    }
+
+    // Con delayMs > 0, la respuesta llega tarde (fixedDelayMilliseconds de WireMock).
+    private static void gatewayStub(GatewayCall call, String queryContains, String bodyContains, int status, String json, int delayMs) {
         String[] route = GATEWAY_ROUTES.get(call);
-        gatewayMapping(route[0], route[1], queryContains, bodyContains, status, json);
+        gatewayMapping(route[0], route[1], queryContains, bodyContains, status, json, delayMs);
     }
 
     // Igual, sobre la ruta concreta de un id (la de captura, anulación o consulta de ESE cobro).
     private static void gatewayStubPath(GatewayCall call, String gatewayId, String bodyContains, int status, String json) {
+        gatewayStubPath(call, gatewayId, bodyContains, status, json, 0);
+    }
+
+    private static void gatewayStubPath(GatewayCall call, String gatewayId, String bodyContains, int status, String json, int delayMs) {
         String[] route = GATEWAY_ROUTES.get(call);
         gatewayMapping(route[0], route[1].replace("(?!search)[^/]+", gatewayId).replace("[^/]+", gatewayId), null,
-                bodyContains, status, json);
+                bodyContains, status, json, delayMs);
     }
 
     private static void gatewayMapping(String method, String pathPattern, String queryContains, String bodyContains,
-            int status, String json) {
+            int status, String json, int delayMs) {
         StringBuilder request = new StringBuilder("{")
                 .append(quote("method")).append(": ").append(quote(method)).append(", ")
                 .append(quote("urlPathPattern")).append(": ").append(quote(pathPattern));
@@ -232,7 +280,8 @@ ${authentication
                     .append(quote(bodyContains)).append("}]");
         }
         request.append("}");
-        String response = "{" + quote("status") + ": " + status + ", " + quote("headers") + ": {"
+        String response = "{" + quote("status") + ": " + status + (delayMs > 0 ? ", " + quote("fixedDelayMilliseconds") + ": " + delayMs : "")
+                + ", " + quote("headers") + ": {"
                 + quote("Content-Type") + ": " + quote("application/json") + "}, " + quote("body") + ": " + quote(json) + "}";
         stubAdmin("/mappings", "{" + quote("request") + ": " + request + ", " + quote("response") + ": " + response + "}");
     }
