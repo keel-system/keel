@@ -670,6 +670,17 @@ function renderHandler(model, service, operation) {
     unavailable: 'PaymentGatewayUnavailableException'
   });
   if (saving) notes.push(saving);
+  // El barrido de pagos (G11 de la corrida payment de prueba-gelsa): el reclamo lo genera build en el puerto del registro.
+  if (model.payments?.reconciliation?.sweep === operation.name) {
+    const record = model.payments.record.entity;
+    notes.push(
+      `BARRIDO DE PAGOS: los candidatos ya RECLAMADOS los da ${record.charAt(0).toLowerCase()}${record.slice(1)}Repository.claimForPaymentSweep(paymentReconciliation.staleBefore(Instant.now()), paymentReconciliation.batchSize()), ` +
+        'que build generó (renueva awaitingSince con una escritura condicional en su propia transacción y la confirma antes de volver). ' +
+        'Inyecta PaymentReconciliation (application.payment) y llama a paymentReconciliation.consult(reference, gatewayPaymentId) con cada uno, ' +
+        'fuera de toda transacción, y aplica lo que devuelva según las reglas. No escribas otro reclamo: un @Modifying en el adaptador hereda su ' +
+        '@Transactional(readOnly = true) y el motor lo rechaza.'
+    );
+  }
   for (const code of operation.errors) {
     const error = operationError(model, operation.name, code);
     notes.push(`Error: lanzar ${error?.exceptionClass ?? code} (${code}, HTTP ${error?.http ?? 400})${error?.when ? ` cuando: ${error.when}` : ''}`);

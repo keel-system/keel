@@ -62,12 +62,10 @@ defensa:
      `actionRequired` no es salir, porque el cobro sigue esperando.
    - Un cobro que rechazas **antes** de llamar a la pasarela (un medio ajeno por la puerta del
      evento) nace sin el medio y sin `gatewayPaymentId`: lo que no llegó a existir no se anota.
-4. **Barrido** (`reconciliation.sweep`): candidatos en los estados que esperan desenlace con
-   `awaitingSince` más antiguo que el corte de `PaymentReconciliation.staleBefore(now)`, que lee el umbral
-   del diseño (`payments.reconciliation.unanswered-after-seconds`, o el parámetro de `unansweredAfter`); **reclama**
-   cada uno volviendo a estampar `awaitingSince` en una actualización condicional, y llama a
-   `paymentReconciliation.consult(reference, gatewayPaymentId)`. Ver `references/reconciliation.md`.
-
+4. **Barrido** (`reconciliation.sweep`): pide los candidatos ya RECLAMADOS con
+   `<Registro>Repository.claimForPaymentSweep(paymentReconciliation.staleBefore(now), paymentReconciliation.batchSize())`
+   —lo genera build: no escribas otro reclamo— y llama a `paymentReconciliation.consult(reference, gatewayPaymentId)`
+   con cada uno, fuera de toda transacción. Ver `references/reconciliation.md`.
 5. **Guardar un medio** (`savePaymentMethod`): el puerto devuelve un `SavedPaymentMethod` con la referencia
    opaca (se guarda y no sale nunca) y el resumen de la tarjeta, `SavedCard`. Si el diseño declara
    `savePaymentMethod.cardDetails`, ese campo de la entidad se rellena con el resumen, campo a campo; un

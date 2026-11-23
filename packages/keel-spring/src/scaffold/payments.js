@@ -467,19 +467,17 @@ function renderReconciliation(model) {
  * La consulta del barrido de reconciliación (${payments.reconciliation.sweep}) para UN cobro que espera
  * desenlace: le pregunta a la pasarela y aplica lo que diga.
  *
- * <p>Lo que no hace es elegir los candidatos ni reclamarlos: eso es del handler del barrido. Los
- * candidatos son los cobros en ${payments.awaitingStates.join(', ')} cuyo ${payments.record.awaitingSince} es
- * anterior a {@link #staleBefore}, en lotes de {@link #batchSize}; y el handler reclama cada uno
- * volviendo a estampar ${payments.record.awaitingSince} ANTES de llamar aquí, para que otra réplica no lo
- * consulte en la misma pasada. Ese reclamo es una ESCRITURA en el adaptador de persistencia, cuya clase lleva
- * {@code @Transactional(readOnly = true)}: el método lleva su propio {@code @Transactional}, o el motor lo rechaza
- * por transacción de solo lectura (el barrido corre sin transacción abarcadora).${
+ * <p>Lo que no hace es elegir los candidatos ni reclamarlos: el handler del barrido los pide con
+ * {@code ${payments.record.entity}Repository.claimForPaymentSweep(staleBefore(now), batchSize())}, que build ya generó
+ * (G11 de la corrida payment de prueba-gelsa: lo escribía el agente, y un {@code @Modifying} bajo el
+ * {@code @Transactional(readOnly = true)} de la clase fallaba). Ese método devuelve los cobros en
+ * ${payments.awaitingStates.join(', ')} cuyo ${payments.record.awaitingSince} es anterior a {@link #staleBefore},
+ * ya RECLAMADOS —con ${payments.record.awaitingSince} renovado y confirmado—, y el handler llama aquí con cada uno.${
    scheduledByTimer(model, payments.reconciliation.sweep)
      ? `
  *
- * <p>El barrido lo dispara el cronómetro en una réplica por tick, y el tick DRENA: si el handler reclamó un lote
- * lleno ({@link #batchSize} cobros), que lo avise con {@code SweepPass.claimed(reclamados, batchSize())}
- * (application/support) y el tick repetirá la pasada.`
+ * <p>El barrido lo dispara el cronómetro en una réplica por tick, y el tick DRENA: el reclamo generado ya avisa del
+ * lote lleno con {@code SweepPass.claimed(...)}, así que el tick repetirá la pasada sin que el handler haga nada.`
      : ''
  }
  */

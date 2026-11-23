@@ -193,7 +193,7 @@ Lo neutral en `keel-core/gen`, y cada generador con su test de paridad.
 | 2. keel-core/gen + keel-spring | hecho (2026-11-23) | `npm test` de la raíz en verde (6 paquetes); `compile-check` de catalog-extended en 4 combos; el arnés de la copia de order y el `main` de job-dispatch con `naturalKey: [id]` compilados, y G6 falsado |
 | 3. nest, dotnet, go | hecho (2026-11-23) | 3a: suite de keel-nest, `ts-check --only=catalog-gelsa-order` 13/13, `stub-check` 28/28. 3b: suite de keel-dotnet 1076/1076, `cs-check --fixtures --only=catalog-gelsa-order` (falsado), `stub-check` 9/9. 3c: suite de keel-go, `go-check` de la silueta y de stock-reservation (G6 falsado), `stub-check` 12/12 |
 | 4. DSL 2.33 en keel-core | hecho (2026-11-23) | `npm test` de la raíz en verde (6 paquetes), `design-matrix` sin `sin-mutacion`, `--ready` en rojo con su id en las tres copias |
-| 5. keel-spring 2.33 y pagos | en curso (D2, D7+G9 y G12 de guardar hechos; G10 medido; faltan G11 y el resto de G12) | `payment-check` en las dos pasarelas, sabotaje `saved-card` |
+| 5. keel-spring 2.33 y pagos | en curso (D2, D7+G9, G11 estático y G12 de guardar hechos; G10 aceptado; faltan G11 en vivo y el resto de G12) | `payment-check` en las dos pasarelas, sabotaje `saved-card` |
 | 6. nest, dotnet, go 2.33 y pagos | pendiente | |
 | 7. Corrida de control | pendiente | |
 
@@ -345,9 +345,20 @@ y el gate `reconciliation` leen el parámetro) y D7 (`SavedPaymentMethod` con el
   un cliente nuevo (sin conexión reutilizada). Es el reintento de peticiones idempotentes de `MultiExchange`, y en el
   JDK solo se apaga con una propiedad GLOBAL del proceso (`jdk.httpclient.redirects.retrylimit`), que es lo que hizo
   el agente. No hay interruptor por cliente, y volver a otro cliente choca con el filtro anti-SSRF, que exige el del
-  JDK (`outbound-address.js`). **Decisión del usuario**: la propiedad global (afecta también a los clientes de
-  `http-clients`, que tienen su propio retry), o aceptar la consulta repetida (es un GET: no cobra dos veces). El caso
+  JDK (`outbound-address.js`). **Decidido por el usuario (2026-11-23): se acepta la consulta repetida** (es un GET: no cobra dos veces), y no se
+  toca la propiedad global. El caso
   de `payment-check` se escribió, dio 2 en las dos pasarelas y se retiró para no dejar la red en rojo.
 - `compile-check` de payment-checkout en verde con las dos pasarelas (el arnés nuevo y el main).
-- Falta: G11 (el reclamo del barrido de pagos generado por build)
+- **G11 hecho (estático)**: build genera el reclamo del barrido de pagos (`src/scaffold/payment-sweep-claim.js`):
+  `<Registro>Repository.claimForPaymentSweep(staleBefore, batchSize)` en el puerto, el SELECT de candidatos (con la
+  selección de `claim-sql.js`) y el UPDATE condicional que renueva `awaitingSince` sin mover el estado en la interfaz
+  JPA, y el adaptador con su `@Transactional(REQUIRES_NEW)` de método, o un `findAndModify` por candidato en
+  documental. Con cronómetro avisa él mismo del lote lleno (`SweepPass.claimed`). Va fuera de `operation.claim` del
+  modelo neutral a propósito: los otros tres lo emitirían como un rescate con las claves de `sweep.yaml`. La nota del
+  handler del barrido, el javadoc de `PaymentReconciliation` y la skill `keel-spring-payments` dicen que ya está
+  generado. Lo mide `test/payment-sweep-claim.test.js` (las dos ramas) y compila en `compile-check` de
+  payment-checkout. **Falta ejecutarlo contra el motor**: `claim-check` no tiene este sujeto (siembra del registro y
+  un método con argumentos); es lo primero que hay que medir al retomar, porque javac no ve un JPQL que no casa.
+- Falta: el resto de G12 (devolución de un importe concreto, anulación con «autenticación fallida», la pasarela que
+  retiene la respuesta hasta el aviso).
   y el resto de G12.

@@ -1,20 +1,19 @@
 # El barrido de lo que espera desenlace
 
-## Candidatos
+## Candidatos y reclamo
 
-Los cobros en los estados que esperan a la pasarela —`pending`, `actionRequired` si hay acción del
-cliente, y el `inFlight` de cada acción de seguimiento— cuyo `awaitingSince` es más antiguo que
-`payments.reconciliation.unanswered-after-seconds` (`paymentReconciliation.staleBefore(now)`). Un lote acotado por pasada:
-`paymentReconciliation.batchSize()`, que lee `payments.reconciliation.batch-size` —no lo escribas como constante—.
+Los genera build: `<Registro>Repository.claimForPaymentSweep(staleBefore, batchSize)` devuelve los cobros en los estados
+que esperan a la pasarela —`pending`, `actionRequired` si hay acción del cliente, y el `inFlight` de cada acción de
+seguimiento— cuyo `awaitingSince` es anterior a `staleBefore`, ya RECLAMADOS. Pásale
+`paymentReconciliation.staleBefore(now)` (el umbral del diseño) y `paymentReconciliation.batchSize()` (la cota del lote,
+`payments.reconciliation.batch-size`): no los escribas como constantes.
 
-## El reclamo
-
-El barrido puede correr en varias réplicas a la vez (el tick del cronómetro es al menos una vez; sin
-cronómetro, `@Scheduled` corre en todas). Si tu lote sale lleno (`batchSize()` cobros), avísalo con
-`SweepPass.claimed(reclamados, paymentReconciliation.batchSize())` y el tick repetirá la pasada. Antes de consultar, cada candidato se reclama con una
-actualización CONDICIONAL que vuelve a estampar `awaitingSince` (`... where id = ? and
-awaiting_since = ?`): la réplica que pierde ve 0 filas y lo salta. Sin reclamo, las N réplicas
-consultan el mismo cobro, y si la consulta desencadena una escritura, la hacen N veces.
+El barrido puede correr en varias réplicas a la vez (el tick del cronómetro es al menos una vez; sin cronómetro,
+`@Scheduled` corre en todas), y el método reclama cada candidato con una escritura condicional que renueva
+`awaitingSince` solo si sigue esperando y rancio: la réplica que pierde no lo ve. Lo hace en su propia transacción y la
+confirma antes de volver. Con el cronómetro, avisa él mismo del lote lleno (`SweepPass.claimed`) y el tick repite la
+pasada. **No escribas otro reclamo**: un `@Modifying` en el adaptador hereda el `@Transactional(readOnly = true)` de la
+clase y el motor lo rechaza.
 
 ## Qué hacer con lo que diga la pasarela
 

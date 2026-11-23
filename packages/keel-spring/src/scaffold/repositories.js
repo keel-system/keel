@@ -16,6 +16,7 @@ import * as claim from './claim.js';
 import { adapterArming } from './timer.js';
 import { saveGuardLine } from './entity-checks.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
+import * as paymentSweepClaim from './payment-sweep-claim.js';
 import * as conditionalUniqueness from './conditional-uniqueness.js';
 import { textFoldImport } from './text-fold.js';
 import { entityFinders, finderFields, jpaFinderMethods, likePatternHelper, portFinderMethods } from './finders.js';
@@ -425,6 +426,8 @@ export function renderPort(model, entity, paginated, batchLookup) {
   // El del barrido de reconciliación es otro reclamo distinto —marca persistida con
   // caducidad, no transición del lifecycle— y por eso vive en su propio módulo.
   methods.push(...reconciliationClaim.portMethods(model, entity, imports));
+  // El reclamo del barrido de pagos (G11 de la corrida payment de prueba-gelsa): lo escribía el agente.
+  methods.push(...paymentSweepClaim.portMethods(model, entity, imports));
   // Y el drenaje explícito que exige un índice único condicionado: no es una consulta, es la
   // única forma de ORDENAR dos escrituras sobre la misma clave desde `application`, que no puede
   // importar Spring. Ver conditional-uniqueness.js.
@@ -540,7 +543,8 @@ ${graph}    @Override
   const claimMethods = [
     ...claim.jpaRepositoryMethods(model, entity, imports),
     ...claim.guardJpaRepositoryMethods(model, entity, imports),
-    ...reconciliationClaim.jpaRepositoryMethods(model, entity, imports)
+    ...reconciliationClaim.jpaRepositoryMethods(model, entity, imports),
+    ...paymentSweepClaim.jpaRepositoryMethods(model, entity, imports)
   ];
   if (claimMethods.length > 0) methods += `\n\n${claimMethods.join('\n\n')}`;
 
@@ -670,6 +674,7 @@ function renderAdapter(model, entity, paginated, batchLookup, listed = paginated
   methods.push(...claim.adapterMethods(model, entity, imports, jpaField));
   methods.push(...claim.guardAdapterMethods(model, entity, imports, jpaField));
   methods.push(...reconciliationClaim.adapterMethods(model, entity, imports, jpaField));
+  methods.push(...paymentSweepClaim.adapterMethods(model, entity, imports, jpaField));
   methods.push(...conditionalUniqueness.adapterMethods(model, entity, jpaField));
   // Drenaje de eventos de dominio: save() es el único punto por el que pasa
   // todo cambio persistido del agregado, así que aquí se publican los eventos

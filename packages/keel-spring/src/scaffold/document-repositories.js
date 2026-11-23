@@ -33,6 +33,7 @@ import * as claim from './claim.js';
 import { adapterArming } from './timer.js';
 import { saveGuardLine } from './entity-checks.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
+import * as paymentSweepClaim from './payment-sweep-claim.js';
 import { DOC_PKG } from './document-entities.js';
 import { documentValueObjects } from './document-embeddables.js';
 import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
@@ -305,7 +306,8 @@ ${arming ? `${arming.after}\n` : ''}${emitsEvents ? '        entity.pullDomainEv
   const claimMethods = [
     ...claim.documentAdapterMethods(model, entity, imports),
     ...claim.guardDocumentAdapterMethods(model, entity, imports),
-    ...reconciliationClaim.documentAdapterMethods(model, entity, imports)
+    ...reconciliationClaim.documentAdapterMethods(model, entity, imports),
+    ...paymentSweepClaim.documentAdapterMethods(model, entity, imports)
   ];
   methods.push(...claimMethods);
 
