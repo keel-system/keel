@@ -12,6 +12,7 @@
 
 import { gatewayTranslation, paymentIdempotencyKey, savedMethodIdempotencyKey, SAVED_METHOD_SEPARATOR } from '@keel-system/keel-core/gen/payment-gateways';
 import { DIRS, classPath, tsModule, tsString } from '../render.js';
+import { savedMethodTsHelpers } from '../payments.js';
 
 const TRANSLATION = gatewayTranslation('mercadopago');
 const DIR = 'infrastructure/payment/mercadopago';
@@ -48,6 +49,8 @@ export function generate(model) {
 
 function adapterTs(model) {
   const p = model.payments;
+  // Se arma aquí y no al cargar: payments.js importa este módulo, y sus constantes aún no existen entonces.
+  const SAVED = savedMethodTsHelpers(TRANSLATION, 'MercadoPago');
   const F = p.record.failureReasonType;
   const constant = (literal) => p.failureReasons.find((entry) => entry.literal === literal).constant;
   const details = TRANSLATION.declines.map(([code, literal]) => `  [${tsString(code)}, ${F}.${constant(literal)}]`).join(',\n');
@@ -137,7 +140,7 @@ function adapterTs(model) {
 
   if (p.savePaymentMethod) {
     const [customerStep, cardStep] = TRANSLATION.savedMethodSteps;
-    methods.push(`  async savePaymentMethod(token: string, payerReference: string): Promise<string> {
+    methods.push(`  async savePaymentMethod(token: string, payerReference: string): Promise<SavedPaymentMethod> {
     const customer = await this.send('savePaymentMethod', {
       method: 'POST',
       path: '/v1/customers',
@@ -153,7 +156,8 @@ function adapterTs(model) {
       idempotency: this.key(savedKey(token, ${tsString(cardStep)}))
     });
     rejectedMethod(card);
-    return \`\${customerId}${SAVED_METHOD_SEPARATOR}\${text(json(card.text)['id']) ?? ''}\`;
+    const saved = json(card.text);
+    return { reference: \`\${customerId}${SAVED_METHOD_SEPARATOR}\${text(saved['id']) ?? ''}\`, card: savedCardOf(saved) };
   }`);
   }
 
@@ -166,7 +170,7 @@ function adapterTs(model) {
     { symbol: 'GatewayOutcome', from: NEUTRAL.outcome },
     { symbol: 'GatewayStatus', from: NEUTRAL.status },
     { symbol: 'PaymentGatewayUnavailableException', from: NEUTRAL.unavailable },
-    ...(p.savePaymentMethod ? [{ symbol: 'GatewayRejectedPaymentMethodException', from: 'src/domain/payment/gateway-rejected-payment-method-exception.ts' }] : []),
+    ...(p.savePaymentMethod ? SAVED.imports : []),
     { symbol: 'PaymentGateway', from: NEUTRAL.port },
     { symbol: 'MoneyAmounts', from: NEUTRAL.money },
     { symbol: 'GatewayNoAnswer', from: NEUTRAL.http },
@@ -317,13 +321,7 @@ function requiredCurrency(currency: string | null): string {
 
 function unavailable(action: string, answer: GatewayAnswer): PaymentGatewayUnavailableException {
   return new PaymentGatewayUnavailableException(\`MercadoPago no contestó a \${action} (HTTP \${answer.status}): la acción queda en duda\`);
-}${p.savePaymentMethod ? `
-
-/** Guardar un medio: un 5xx deja la operación en duda; un 4xx es que la pasarela no acepta el medio. */
-function rejectedMethod(answer: GatewayAnswer): void {
-  if (answer.status >= 500) throw unavailable('savePaymentMethod', answer);
-  if (answer.status >= 400) throw new GatewayRejectedPaymentMethodException(answer.status);
-}` : ''}`;
+}${p.savePaymentMethod ? SAVED.helpers : ''}`;
   return tsModule(ADAPTER_TS, imports, body);
 }
 

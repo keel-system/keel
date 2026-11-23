@@ -163,7 +163,18 @@ const SABOTAGES = {
   ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.relational])),
   // La búsqueda de 2.32: con --subject=catalog-search, cada uno cae en exactamente sus casos FS/SO (order-collation, solo
   // en MySQL).
-  ...Object.fromEntries(Object.entries(SEARCH_SABOTAGE_SPECS).filter(([, specs]) => specs.relational).map(([id, specs]) => [id, specs.relational]))
+  ...Object.fromEntries(Object.entries(SEARCH_SABOTAGE_SPECS).filter(([, specs]) => specs.relational).map(([id, specs]) => [id, specs.relational])),
+  // El reclamo del barrido de pagos (G11 de PLAN-CORRIDAS-GELSA.md): con --subject=payment-checkout, cada uno cae en
+  // exactamente sus casos PS (PAYMENT_SWEEP_SABOTAGE_CASES).
+  'payment-sweep-no-lease': ['payment-repository-impl.ts', '.set({ awaitingSince: leasedAt })', '.set({ awaitingSince: new Date(staleBefore.getTime() - 1000) })'],
+  'payment-sweep-cutoff': ['payment-repository-impl.ts', 'awaitingSince: LessThan(staleBefore)', 'awaitingSince: LessThan(new Date(Date.now() + 86_400_000))']
+};
+// Los casos PS que tiene que tirar cada sabotaje del barrido de pagos, y solo esos.
+const PAYMENT_SWEEP_SABOTAGE_CASES = {
+  // El reclamo no renueva el reloj: se lleva la fila, pero una segunda pasada inmediata la vuelve a tomar.
+  'payment-sweep-no-lease': ['PS-1'],
+  // La cota se va al futuro: se lleva lo reciente, y una segunda pasada vuelve a tomar lo ya reclamado.
+  'payment-sweep-cutoff': ['PS-1', 'PS-2']
 };
 const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -187,7 +198,7 @@ const only = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ??
 const onlySubject = args.find((arg) => arg.startsWith('--subject='))?.split('=')[1] ?? null;
 const ENGINES = (only ? [only] : ['postgresql', 'mysql']).filter((engine) => DATABASES[engine]);
 // Las formas del esquema que cubre cada sujeto (ver la cabecera).
-const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional', 'verification-codes', 'vault-scoped', 'shop-scoped', 'cards-logical', 'codes-anonymize', 'codes-delete', 'vault-logical-scoped', 'cards-history', 'cards-history-anonymize', 'vault-history-scoped', 'catalog-batch', 'catalog-batch-atomic', 'catalog-batch-async', 'catalog-batch-keyed', 'catalog-batch-atomic-keyed', 'catalog-invariants', 'catalog-search'];
+const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional', 'verification-codes', 'vault-scoped', 'shop-scoped', 'cards-logical', 'codes-anonymize', 'codes-delete', 'vault-logical-scoped', 'cards-history', 'cards-history-anonymize', 'vault-history-scoped', 'catalog-batch', 'catalog-batch-atomic', 'catalog-batch-async', 'catalog-batch-keyed', 'catalog-batch-atomic-keyed', 'catalog-invariants', 'catalog-search', 'payment-checkout'];
 // Los sujetos DERIVADOS, por nombre: los finders de las búsquedas (DSL 2.22) en la forma de lista con un subcampo de value
 // object, el MISMO diseño que mide keel-dotnet (keel-core/test/helpers/finder-designs.js); y la autoría, que ninguna
 // fixture relacional declara: por política sobre product-catalog y DECLARADA sobre notification-mailer (raíz e hija),
@@ -357,6 +368,7 @@ function probeScript(model, engine, db, expected) {
   const messagingCode = messagingBlock(model, engine, ctx);
   const claimCode = claimBlock(model, engine, ctx);
   const reconciliationCode = reconciliationBlock(model, ctx);
+  const paymentSweepCode = paymentSweepBlock(model, ctx);
   // El cronómetro (DSL 2.26): antes de listar los imports, que el bloque también añade.
   const timerCode = timerBlock(model, ctx, { adapterArgs: adapterCtorArgs(model, modelDeadlines(model)[0]?.entity, ctx), replicaTx: 'new TransactionContext(dataSource, settings)' });
   // El ciclo de vida del dato (DSL 2.28), también antes de los imports.
@@ -476,7 +488,7 @@ ${invariantCode
     // El sujeto de la búsqueda (DSL 2.32) solo mide sus casos: FS-9 cuenta las filas de la tabla, y el resto de
     // product-catalog ya lo mide su propio sujeto.
     ? searchCode
-    : [blocks.join('\n'), concurrencyBlock(model, engine, roots[0], ctx), idempotencyBlock(model, engine), messagingCode, claimCode, reconciliationCode, timerCode, purgeBlock(model), purgeTimerBlock(model), lifecycleCode, historyCode, batchCode, batchJobCode, batchKeyCode].join('\n')}
+    : [blocks.join('\n'), concurrencyBlock(model, engine, roots[0], ctx), idempotencyBlock(model, engine), messagingCode, claimCode, reconciliationCode, paymentSweepCode, timerCode, purgeBlock(model), purgeTimerBlock(model), lifecycleCode, historyCode, batchCode, batchJobCode, batchKeyCode].join('\n')}
 
 await dataSource.destroy();
 console.log('@@RESULTS@@' + JSON.stringify(results));
@@ -1272,6 +1284,99 @@ function reconciliationBlock(model, ctx) {
 }
 
 /**
+ * El reclamo del barrido de pagos (G11 de PLAN-CORRIDAS-GELSA.md), que build genera fuera de `operation.claim`: los
+ * casos de claim-check de keel-spring, contra el motor. Lo rancio de CADA estado en espera entra sin mover el estado y
+ * con el reloj renovado (una segunda pasada inmediata no lo vuelve a tomar); lo reciente, lo de otro estado y una fila
+ * sin reloj no; el lote va acotado por el argumento; y dos réplicas a la vez no se llevan el mismo cobro. El corte lo
+ * pasa el handler, así que aquí es un instante cualquiera: lo que se mide es el predicado.
+ */
+function paymentSweepBlock(model, ctx) {
+  const payments = model.payments;
+  if (!payments?.reconciliation?.sweep) return '';
+  const root = repositoryRoots(model).find((entity) => entity.name === payments.record.entity);
+  if (!root?.lifecycle) return '';
+  const { enumType, field } = root.lifecycle;
+  const stamp = payments.record.awaitingSince;
+  const awaiting = new Set(payments.awaitingStates);
+  const enumDef = model.enums.find((candidate) => candidate.name === enumType);
+  const constant = (literal) => `${enumType}.${enumDef.values.find((value) => value.literal === literal)?.constant ?? screamingSnake(literal)}`;
+  const other = enumDef.values.find((value) => !awaiting.has(value.literal));
+  const waiting = payments.awaitingStates.map(constant);
+  ctx.imports.add(`${enumType}|${classPath(DIRS.enums, enumType)}`);
+  ctx.imports.add(`${ormClass(root.name)}|${ormPath(root.name)}`);
+  const orm = ormClass(root.name);
+  const samples = Array.from({ length: 24 }, (_, i) => `() => ${sampleEntity(model, root, ctx, `sweep${i}`)}`);
+  const args = adapterCtorArgs(model, root, ctx);
+  return `
+// ═══ Reclamo del barrido de pagos (G11): ${root.name}.claimForPaymentSweep ═══
+{
+  const SAMPLES = [
+    ${samples.join(',\n    ')}
+  ];
+  let next = 0;
+  const adapter = () => new ${adapterClass(root)}(${args});
+  const replica = () => new ${adapterClass(root)}(${args.replace(/^tx\b/, 'new TransactionContext(dataSource, settings)')});
+  const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60_000);
+  // Aparca toda fila en un estado que el barrido no busca: cada caso empieza limpio.
+  const park = () => dataSource.createQueryBuilder().update(${orm}).set({ ${field}: ${other ? constant(other.literal) : waiting[0]} }).where('1 = 1').execute();
+  const row = async (state, at) => {
+    const saved = await adapter().save(SAMPLES[next++]());
+    await dataSource.createQueryBuilder().update(${orm}).set({ ${field}: state, ${stamp}: at }).where({ id: saved.id }).execute();
+    return saved.id;
+  };
+  const stampOf = async (id) => (await dataSource.getRepository(${orm}).findOneByOrFail({ id })).${stamp};
+  {
+    await park();
+    const stale = await row(${waiting[0]}, minutesAgo(60));
+    const cutoff = minutesAgo(10);
+    const claimed = await adapter().claimForPaymentSweep(cutoff, 10);
+    const after = await dataSource.getRepository(${orm}).findOneByOrFail({ id: stale });
+    check('PS-1: el reclamo se lleva lo rancio, sin mover el estado y con el reloj renovado',
+      claimed.length === 1 && claimed[0].id === stale && after.${field} === ${waiting[0]} && new Date(after.${stamp}).getTime() > cutoff.getTime() &&
+        (await adapter().claimForPaymentSweep(cutoff, 10)).length === 0,
+      JSON.stringify({ claimed: claimed.map((e) => e.id), state: after.${field}, stamp: after.${stamp} }));
+  }
+  {
+    await park();
+    await row(${waiting[0]}, new Date());
+    check('PS-2: no se lleva lo recién puesto en espera', (await adapter().claimForPaymentSweep(minutesAgo(10), 10)).length === 0);
+  }
+${other ? `  {
+    await park();
+    await row(${constant(other.literal)}, minutesAgo(60));
+    check('PS-3: no toca un cobro que no espera a la pasarela', (await adapter().claimForPaymentSweep(minutesAgo(10), 10)).length === 0);
+  }
+` : ''}  {
+    await park();
+    for (const state of [${waiting.join(', ')}]) await row(state, minutesAgo(60));
+    const claimed = await adapter().claimForPaymentSweep(minutesAgo(10), 50);
+    check('PS-4: cubre cada estado en espera', claimed.length === ${waiting.length}, claimed.map((e) => e.${field}).join(','));
+  }
+  {
+    await park();
+    for (let i = 0; i < 3; i++) await row(${waiting[0]}, minutesAgo(60 + i));
+    check('PS-5: el lote va acotado por su argumento', (await adapter().claimForPaymentSweep(minutesAgo(10), 2)).length === 2);
+  }
+  {
+    await park();
+    // NULL < staleBefore no es falso, es UNKNOWN: la fila no entra en ningún lote.
+    await row(${waiting[0]}, null);
+    check('PS-6: un cobro en espera sin reloj no lo recoge nadie', (await adapter().claimForPaymentSweep(minutesAgo(10), 10)).length === 0);
+  }
+  {
+    await park();
+    const raced = [];
+    for (let i = 0; i < 6; i++) raced.push(await row(${waiting[0]}, minutesAgo(60 + i)));
+    const [a, b] = await Promise.all([replica().claimForPaymentSweep(minutesAgo(10), 6), replica().claimForPaymentSweep(minutesAgo(10), 6)]);
+    const both = [...a, ...b].map((e) => e.id);
+    check('PS-7: dos réplicas a la vez no se llevan el mismo cobro, y entre las dos se llevan todos',
+      new Set(both).size === both.length && [...both].sort().join() === [...raced].sort().join(), \`\${a.length} + \${b.length}\`);
+    void stampOf;
+  }
+}`;
+}
+
+/**
  * Las PURGAS por lotes de las tablas del generador (incremento 10b), lo que en keel-spring mide store-check
  * con BatchedPurge: borran lo caducado y solo eso (lo pendiente del outbox nunca), en lotes —con lotes de
  * DOS filas e instantes repetidos en la frontera—, y con el tope alcanzado dejan el resto a la pasada
@@ -1695,7 +1800,8 @@ for (const engine of ENGINES) {
       const { manifest, layers } = loadService(path.join(FIXTURES_DIR, DERIVED[subject]?.from ?? subject));
       DERIVED[subject]?.mutate(layers);
       // Con mensajería, sobre RabbitMQ: el broker que keel-nest genera.
-      const { files, model } = planService({ manifest, layers, workspace, stack: { database: engine, ...(layers.messaging ? { broker: 'rabbitmq' } : {}) } });
+      // Con pagos, una pasarela: el reclamo del barrido de pagos (G11) no depende de cuál.
+      const { files, model } = planService({ manifest, layers, workspace, stack: { database: engine, ...(layers.messaging ? { broker: 'rabbitmq' } : {}), ...(layers.payments ? { paymentGateway: 'stripe' } : {}) } });
       if (repositoryRoots(model).length === 0) continue;
       const dir = path.join(workspace, 'db-check', engine, subject);
       for (const file of files) {
@@ -1788,6 +1894,14 @@ for (const engine of ENGINES) {
         const verdict = historySabotageVerdict(checks, sabotage, model);
         for (const check of checks.filter((entry) => !entry.ok && /^HI-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
         step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);
+        continue;
+      }
+      // El del barrido de pagos (G11): verde si caen EXACTAMENTE sus casos PS (y ningún otro PS).
+      if (PAYMENT_SWEEP_SABOTAGE_CASES[sabotage] && model.payments?.reconciliation?.sweep) {
+        const failed = checks.filter((entry) => !entry.ok && /^PS-\d+:/.test(entry.name)).map((entry) => entry.name.split(':')[0]);
+        const want = PAYMENT_SWEEP_SABOTAGE_CASES[sabotage];
+        for (const check of checks.filter((entry) => !entry.ok && /^PS-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
+        step(`${engine} · ${subject}: sabotaje ${sabotage} cae en exactamente sus casos`, [...new Set(failed)].sort().join() === [...want].sort().join(), `esperaba [${want.join(', ')}], cayeron [${[...new Set(failed)].join(', ')}]`);
         continue;
       }
       // Un sabotaje del cronómetro se juzga al revés: verde si caen EXACTAMENTE sus casos DL (y ningún otro).

@@ -41,6 +41,8 @@ export const PAYMENT_SOURCE_TS = classPath(DOMAIN_DIR, 'PaymentSource');
 export const CHARGE_REQUEST_TS = classPath(DOMAIN_DIR, 'ChargeRequest');
 export const UNAVAILABLE_TS = classPath(DOMAIN_DIR, 'PaymentGatewayUnavailableException');
 export const METHOD_REJECTED_TS = classPath(DOMAIN_DIR, 'GatewayRejectedPaymentMethodException');
+export const AUTHENTICATION_REQUIRED_TS = classPath(DOMAIN_DIR, 'PaymentMethodAuthenticationRequiredException');
+export const SAVED_METHOD_TS = classPath(DOMAIN_DIR, 'SavedPaymentMethod');
 export const PAYMENT_GATEWAY_TS = classPath(DIRS.portOut, 'PaymentGateway');
 export const OUTCOME_APPLIER_TS = classPath(APP_DIR, 'PaymentOutcomeApplier');
 export const PAYMENT_NOTICES_TS = classPath(APP_DIR, 'PaymentNotices');
@@ -86,13 +88,19 @@ export function generate(model) {
     { path: PAYMENT_SOURCE_TS, content: paymentSourceTs() },
     { path: CHARGE_REQUEST_TS, content: chargeRequestTs(model) },
     { path: UNAVAILABLE_TS, content: unavailableTs() },
-    ...(model.payments.savePaymentMethod ? [{ path: METHOD_REJECTED_TS, content: methodRejectedTs() }] : []),
+    ...(model.payments.savePaymentMethod
+      ? [
+          { path: METHOD_REJECTED_TS, content: methodRejectedTs() },
+          { path: AUTHENTICATION_REQUIRED_TS, content: authenticationRequiredTs() },
+          { path: SAVED_METHOD_TS, content: savedMethodTs() }
+        ]
+      : []),
     { path: PAYMENT_GATEWAY_TS, content: portTs(model) },
     { path: OUTCOME_APPLIER_TS, content: outcomeApplierTs(model) },
     { path: PAYMENT_NOTICES_TS, content: noticesTs() },
     { path: RECONCILIATION_SETTINGS_TS, content: reconciliationSettingsTs(model) },
     { path: PAYMENT_RECONCILIATION_TS, content: reconciliationTs(model) },
-    { path: SETTINGS_TS, content: settingsTs() },
+    { path: SETTINGS_TS, content: settingsTs(model) },
     { path: GATEWAY_HTTP_TS, content: gatewayHttpTs() },
     { path: MONEY_AMOUNTS_TS, content: moneyAmountsTs() },
     { path: NOTICE_VERIFIER_TS, content: noticeVerifierTs() },
@@ -271,6 +279,53 @@ export class GatewayRejectedPaymentMethodException extends Error {
   );
 }
 
+/**
+ * La pasarela exige autenticar al cliente (3DS) para guardar la tarjeta (DSL 2.33, corrida payment de prueba-gelsa, G9):
+ * el mismo tipo que PaymentMethodAuthenticationRequiredException de keel-spring. Antes salía como un rechazo más.
+ */
+function authenticationRequiredTs() {
+  return tsModule(
+    AUTHENTICATION_REQUIRED_TS,
+    [],
+    `/**
+ * La pasarela exige autenticar al cliente (3DS) para guardar la tarjeta. No es un rechazo del medio: el cliente puede
+ * completar la autenticación al tokenizar y volver a pedir el guardado. No se guardó nada.
+ */
+export class PaymentMethodAuthenticationRequiredException extends Error {
+  constructor(readonly status: number) {
+    super(\`La pasarela exige autenticar al cliente para guardar el medio: HTTP \${status}\`);
+    this.name = 'PaymentMethodAuthenticationRequiredException';
+  }
+}`
+  );
+}
+
+/** Lo que devuelve guardar un medio (G9): la referencia opaca y el resumen de la tarjeta, los records de keel-spring. */
+function savedMethodTs() {
+  return tsModule(
+    SAVED_METHOD_TS,
+    [],
+    `/**
+ * El resumen visible de la tarjeta guardada, tal como lo informa la pasarela: nunca el número completo. Un campo que la
+ * pasarela no informa llega null.
+ */
+export interface SavedCard {
+  readonly brand: string | null;
+  readonly last4: string | null;
+  readonly expMonth: number | null;
+  readonly expYear: number | null;
+}
+
+/** Un medio de pago guardado en la pasarela. */
+export interface SavedPaymentMethod {
+  /** La referencia opaca de la pasarela: no sale nunca del servicio. */
+  readonly reference: string;
+  /** El resumen de la tarjeta, o null si la pasarela no lo devolvió. */
+  readonly card: SavedCard | null;
+}`
+  );
+}
+
 function unavailableTs() {
   return tsModule(
     UNAVAILABLE_TS,
@@ -329,17 +384,19 @@ function portTs(model) {
     methods.push(`  /**
    * Guarda un medio de pago para cobrarlo sin el cliente delante.
    *
-   * @return la referencia opaca de la pasarela; no sale nunca del servicio
+   * @return la referencia opaca de la pasarela (no sale nunca del servicio) y el resumen de la tarjeta
    * @throws GatewayRejectedPaymentMethodException si la pasarela no acepta el medio (captura esta y solo esta)
+   * @throws PaymentMethodAuthenticationRequiredException si exige autenticar al cliente (3DS) para guardarlo
    * @throws PaymentGatewayUnavailableException si no se sabe qué hizo la pasarela
    */
-  abstract savePaymentMethod(token: string, payerReference: string): Promise<string>;`);
+  abstract savePaymentMethod(token: string, payerReference: string): Promise<SavedPaymentMethod>;`);
   }
   const imports = [
     { symbol: 'ChargeRequest', from: CHARGE_REQUEST_TS, type: true },
     { symbol: 'GatewayOutcome', from: GATEWAY_OUTCOME_TS, type: true }
   ];
   if (p.capture?.amount || p.refund?.amount) imports.push({ symbol: 'Decimal', from: DECIMAL_TS, type: true });
+  if (p.savePaymentMethod) imports.push({ symbol: 'SavedPaymentMethod', from: SAVED_METHOD_TS, type: true });
   return tsModule(
     PAYMENT_GATEWAY_TS,
     imports,
@@ -495,9 +552,12 @@ export const PAYMENT_RECONCILIATION_SETTINGS = Symbol('PAYMENT_RECONCILIATION_SE
 
 /**
  * El silencio tolerado antes de preguntar a la pasarela por un cobro que espera desenlace. Lo declara el
- * diseño (payments.reconciliation.unansweredAfterSeconds) y lo lee la configuración
+ * diseño ${model.payments.reconciliation.unansweredParameter
+   ? `con el parámetro ${model.payments.reconciliation.unansweredParameter.name} (payments.reconciliation.unansweredAfter, en
+ * ${model.payments.reconciliation.unansweredParameter.unit}), y se lee de su propiedad: no hay otra clave para la misma espera.`
+   : `(payments.reconciliation.unansweredAfterSeconds) y lo lee la configuración
  * (payments.reconciliation.unanswered-after-seconds); en local y test se acorta para que los escenarios del
- * barrido no esperen un cuarto de hora.
+ * barrido no esperen un cuarto de hora.`}
  */
 export interface PaymentReconciliationSettings {
   readonly unansweredAfterSeconds: number;
@@ -526,16 +586,16 @@ function reconciliationTs(model) {
  * La consulta del barrido de reconciliación (${p.reconciliation.sweep}) para UN cobro que espera desenlace: le
  * pregunta a la pasarela y aplica lo que diga.
  *
- * Lo que no hace es elegir los candidatos ni reclamarlos: eso es del handler del barrido. Los candidatos son los
- * cobros en ${p.awaitingStates.join(', ')} cuyo ${p.record.awaitingSince} es anterior a \`staleBefore()\`; y el
- * handler reclama cada uno volviendo a estampar ${p.record.awaitingSince} ANTES de llamar aquí, para que otra
- * réplica no lo consulte en la misma pasada.${
+ * Lo que no hace es elegir los candidatos ni reclamarlos: el handler del barrido los pide con
+ * \`${p.record.entity}Repository.claimForPaymentSweep(staleBefore(now), batchSize())\`, que build ya generó (G11 de la
+ * corrida payment de prueba-gelsa: lo escribía el agente). Ese método devuelve los cobros en
+ * ${p.awaitingStates.join(', ')} cuyo ${p.record.awaitingSince} es anterior a \`staleBefore()\`, ya RECLAMADOS —con
+ * ${p.record.awaitingSince} renovado y confirmado—, y el handler llama aquí con cada uno.${
    scheduledByTimer(model, p.reconciliation.sweep)
      ? `
  *
- * El barrido lo dispara el cronómetro en una réplica por tick, y el tick DRENA: si el handler reclamó un lote lleno
- * (\`batchSize()\` cobros), que lo avise con \`SweepPass.claimed(reclamados, batchSize())\` (application/support) y el
- * tick repetirá la pasada.`
+ * El barrido lo dispara el cronómetro en una réplica por tick, y el tick DRENA: el reclamo generado ya avisa del lote
+ * lleno con \`SweepPass.claimed(...)\`, así que el tick repetirá la pasada sin que el handler haga nada.`
      : ''
  }
  */
@@ -583,7 +643,12 @@ export class PaymentReconciliation {
 
 // ─── Infraestructura común ───────────────────────────────────────────────────
 
-function settingsTs() {
+function settingsTs(model) {
+  // Con el umbral enlazado a un parámetro (DSL 2.33) se lee la propiedad del parámetro en segundos: no hay clave propia.
+  const linked = model.payments.reconciliation.unansweredParameter;
+  const unanswered = linked
+    ? `linked(configuration, ${tsString(linked.property)}, ${linked.unitSeconds})`
+    : `positive(configuration, ${tsString(PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.key)}, 900)`;
   return tsModule(
     SETTINGS_TS,
     [{ symbol: 'Configuration', from: CONFIG_TS, type: true }],
@@ -608,7 +673,7 @@ export interface PaymentGatewaySettings {
   readonly readTimeoutMs: number;
   /** La antigüedad máxima de un aviso firmado (contra la repetición). */
   readonly noticeToleranceSeconds: number;
-  /** El silencio tolerado antes de que el barrido pregunte por un cobro. */
+  /** El silencio tolerado antes de que el barrido pregunte por un cobro, en segundos. */
   readonly unansweredAfterSeconds: number;
   /** Cuántos cobros consulta una pasada del barrido como máximo. */
   readonly batchSize: number;
@@ -622,7 +687,7 @@ export function paymentGatewaySettings(configuration: Configuration): PaymentGat
     connectTimeoutMs: duration(configuration, 'payments.gateway.connect-timeout', 2000),
     readTimeoutMs: duration(configuration, 'payments.gateway.read-timeout', 10000),
     noticeToleranceSeconds: positive(configuration, 'payments.gateway.notice-tolerance-seconds', 300),
-    unansweredAfterSeconds: positive(configuration, ${tsString(PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.key)}, 900),
+    unansweredAfterSeconds: ${unanswered},
     batchSize: positive(configuration, ${tsString(PAYMENT_SWEEP_PARAMETERS.batchSize.key)}, ${PAYMENT_SWEEP_PARAMETERS.batchSize.default})
   };
 }
@@ -645,7 +710,14 @@ function positive(configuration: Configuration, key: string, fallback: number): 
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(\`\${key} tiene que ser un entero positivo: '\${value}'\`);
   return parsed;
 }
-
+${linked ? `
+/** El umbral enlazado a un parámetro de despliegue (DSL 2.33): su valor en segundos, sin default propio. */
+function linked(configuration: Configuration, key: string, unitSeconds: number): number {
+  const seconds = positive(configuration, key, 0) * unitSeconds;
+  if (seconds <= 0) throw new Error(\`\${key} es obligatorio: es el umbral de silencio del barrido de pagos\`);
+  return seconds;
+}
+` : ''}
 const UNITS_MS: Record<string, number> = { ns: 1e-6, us: 1e-3, ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
 
 /**
@@ -969,3 +1041,75 @@ export class PaymentsModule {
 
 // config/parameters/<perfil>/payments.yaml: el NEUTRAL de keel-core (keel-core/gen/payments-config.js), el mismo que keel-dotnet.
 export { paymentsYaml };
+
+/**
+ * Lo que los dos adaptadores escriben igual al guardar un medio (DSL 2.33, G9), el gemelo de `savedMethodJava` de
+ * keel-spring: el resumen de la tarjeta leído de las rutas de su traducción (`savedCard` de
+ * keel-core/gen/payment-gateways.js) y la clasificación de un 4xx entre la autenticación que pide (3DS,
+ * `saveAuthenticationCodes`) y el rechazo del medio. Las rutas son DATOS de keel-core: el doble de prueba
+ * (`savedCardResponse`) las usa para escribir la respuesta, así que leen lo mismo.
+ */
+export function savedMethodTsHelpers(translation, gatewayName) {
+  const path = (route) => `at(saved, ${route.split('.').map((key) => tsString(key)).join(', ')})`;
+  const { brand, last4, expMonth, expYear } = translation.savedCard;
+  const codes = translation.saveAuthenticationCodes;
+  const authentication = codes.length
+    ? `
+  if (answer.status >= 400 && asksAuthentication(answer)) throw new PaymentMethodAuthenticationRequiredException(answer.status);`
+    : '';
+  const asks = codes.length
+    ? `
+
+/** El 4xx al guardar que dice que la tarjeta exige autenticar (3DS): no es un rechazo del medio. */
+function asksAuthentication(answer: GatewayAnswer): boolean {
+  let error: unknown;
+  try {
+    error = (JSON.parse(answer.text) as Record<string, unknown>)['error'];
+  } catch {
+    return false;
+  }
+  if (!isObject(error)) return false;
+  const code = text(error['decline_code']) ?? text(error['code']);
+  return ${codes.map((code) => `code === ${tsString(code)}`).join(' || ')};
+}`
+    : '';
+  return {
+    helpers: `
+
+/** Guardar un medio: un 5xx deja la operación en duda; un 4xx es que la pasarela no acepta el medio${codes.length ? ', salvo que pida autenticar (3DS)' : ''}. */
+function rejectedMethod(answer: GatewayAnswer): void {
+  if (answer.status >= 500) throw unavailable('savePaymentMethod', answer);${authentication}
+  if (answer.status >= 400) throw new GatewayRejectedPaymentMethodException(answer.status);
+}
+
+/** El resumen de la tarjeta guardada, de donde lo trae ${gatewayName}; un campo que no informa llega null. */
+function savedCardOf(saved: unknown): SavedCard {
+  return {
+    brand: textOrNull(${path(brand)}),
+    last4: textOrNull(${path(last4)}),
+    expMonth: integerOrNull(${path(expMonth)}),
+    expYear: integerOrNull(${path(expYear)})
+  };
+}
+
+function at(node: unknown, ...keys: string[]): unknown {
+  let current = node;
+  for (const key of keys) current = isObject(current) ? current[key] : undefined;
+  return current;
+}
+
+function textOrNull(value: unknown): string | null {
+  return typeof value === 'string' || typeof value === 'number' ? String(value) : null;
+}
+
+function integerOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) ? value : null;
+}${asks}`,
+    imports: [
+      { symbol: 'GatewayRejectedPaymentMethodException', from: METHOD_REJECTED_TS },
+      { symbol: 'SavedCard', from: SAVED_METHOD_TS, type: true },
+      { symbol: 'SavedPaymentMethod', from: SAVED_METHOD_TS, type: true },
+      ...(codes.length ? [{ symbol: 'PaymentMethodAuthenticationRequiredException', from: AUTHENTICATION_REQUIRED_TS }] : [])
+    ]
+  };
+}

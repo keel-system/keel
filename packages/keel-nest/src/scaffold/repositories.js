@@ -43,6 +43,7 @@ import { readScopePortMethods, readScopeRelationalHelpers, readScopeRelationalMe
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import * as lifecycle from './data-lifecycle.js';
 import * as history from './history.js';
+import * as paymentSweepClaim from './payment-sweep-claim.js';
 import { saveGuardLine, DERIVED_MARK } from './entity-checks.js';
 import { parametersClass, parametersPath } from './service-parameters.js';
 import { repositoryRoots, isPaginated, resolvedByOf } from '@keel-system/keel-core/gen/features';
@@ -374,6 +375,8 @@ function renderPort(model, entity) {
   methods.push(...portGuardMethods(model, entity, idType, id?.name ?? 'id'));
   // Los reclamos de los barridos de reconciliación que la esperan (incremento 11c).
   methods.push(...portReconciliationMethods(model, entity));
+  // El reclamo del barrido de pagos (G11 de la corrida payment de prueba-gelsa): lo escribía el agente.
+  methods.push(...paymentSweepClaim.portMethods(model, entity));
   methods.push(
     `  /**\n   * Guarda el agregado entero (sus entidades internas y sus listas) y devuelve lo guardado. Con\n   * bloqueo optimista, una versión obsoleta sale como conflicto de concurrencia.\n   */\n  abstract save(entity: ${entity.name}): Promise<${entity.name}>;`,
     lifecycle.deletePortMethod(model, entity, id?.name ?? 'id', idType)
@@ -540,6 +543,7 @@ function renderAdapter(model, entity) {
   methods.push(...adapterClaimMethods(model, entity, imports, findOptions));
   methods.push(...adapterGuardMethods(model, entity, imports, findOptions, idType, idName));
   methods.push(...adapterReconciliationMethods(model, entity, imports, findOptions));
+  methods.push(...paymentSweepClaim.adapterMethods(model, entity, imports, findOptions));
   methods.push(saveMethod(model, entity, imports));
   // Con borrado lógico (DSL 2.28), deleteById MARCA, y la restauración y la carga de la borrada van con él.
   const keyWhere = finder ? `{ ${finder.params.flatMap((param) => param.where.map(([prop, expr]) => (prop === expr ? prop : `${prop}: ${expr}`))).join(', ')} }` : null;

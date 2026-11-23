@@ -222,7 +222,7 @@ function reconciliationChecks(model) {
         exclude: '/(reconciliation-settings|reconciliation-claim-store)[.]ts',
         why:
           `el umbral de espera de ${dependency}.${activation.name} no se lee en ninguna parte: build lo dejó en ` +
-          `RECONCILIATION_SETTINGS (reconciliation.${kebabCase(activation.name)}.unanswered-after-seconds), y el de OTRO barrido no vale`
+          `RECONCILIATION_SETTINGS (${activation.unansweredParameter ? `el parámetro ${activation.unansweredParameter.name}, que el diseño enlaza en unansweredAfter` : `reconciliation.${kebabCase(activation.name)}.unanswered-after-seconds`}), y el de OTRO barrido no vale`
       });
     }
   }

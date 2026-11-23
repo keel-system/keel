@@ -98,8 +98,13 @@ function settingsFile(model) {
   const entries = reconciledActivations(model).map(({ activation, sweeper }) => {
     const parameters = reconciliationParameters(activation, sweeper);
     const read = (parameter) => `positive(configuration, ${tsString(parameter.key)}, ${parameter.default})`;
+    // Con el umbral enlazado a un parámetro (DSL 2.33), la propiedad del parámetro en segundos: la forma de stalledAfter.
+    const linked = parameters.unansweredAfterSeconds.parameter;
+    const unanswered = linked
+      ? `linked(configuration, ${tsString(linked.property)}, ${linked.unitSeconds})`
+      : read(parameters.unansweredAfterSeconds);
     return `    ${tsString(activation.name)}: {
-      unansweredAfterSeconds: ${read(parameters.unansweredAfterSeconds)},
+      unansweredAfterSeconds: ${unanswered},
       claimTimeoutMs: ${read(parameters.claimTimeoutMs)},
       batchSize: ${read(parameters.batchSize)}
     }`;
@@ -112,7 +117,7 @@ export const RECONCILIATION_SETTINGS = Symbol('RECONCILIATION_SETTINGS');
 
 /**
  * Los tres números de un barrido, y NO son la misma clase de decisión: el silencio tolerado lo declara el
- * diseño (unansweredAfterSeconds de la activación); la caducidad del reclamo y la cota del lote son del
+ * diseño (unansweredAfterSeconds de la activación, o su parámetro con unansweredAfter); la caducidad del reclamo y la cota del lote son del
  * generador (mecánica y capacidad). Los tres se leen de config/parameters/<perfil>/reconciliation.yaml.
  */
 export interface ReconciliationWindow {
@@ -137,7 +142,14 @@ function positive(configuration: Configuration, key: string, fallback: number): 
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(\`\${key} tiene que ser un entero positivo: '\${String(value)}'\`);
   return parsed;
-}`
+}${reconciledActivations(model).some(({ activation }) => activation.unansweredParameter) ? `
+
+/** Un umbral enlazado a un parámetro de despliegue (DSL 2.33): su valor en segundos, sin default propio. */
+function linked(configuration: Configuration, key: string, unitSeconds: number): number {
+  const seconds = positive(configuration, key, 0) * unitSeconds;
+  if (seconds <= 0) throw new Error(\`\${key} es obligatorio: es el umbral de silencio de un barrido\`);
+  return seconds;
+}` : ''}`
   );
 }
 

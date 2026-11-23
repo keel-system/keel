@@ -51,7 +51,7 @@ import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from '@keel-system/keel-core/gen/requ
 import { IDEMPOTENCY_STORE_TS, usesRequestIdempotency } from './request-idempotency.js';
 import { CALLER_SCOPE_TS, scopedOperation, CALLER_ROLES_TS, roleCheckedOperation } from './security.js';
 import { schedulerPath } from './scheduling.js';
-import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
+import { followUpRejectionNote, savedMethodNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { portPath as clientPortPath } from './http-clients.js';
 import { projectorPath, readerPath, replicaBatchFinder, replicas } from './projections.js';
@@ -553,6 +553,23 @@ function handlerNotes(model, operation) {
   // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la misma en los dos generadores.
   const rejection = followUpRejectionNote(model.payments, operation.name);
   if (rejection) notes.push(rejection);
+  const saving = savedMethodNote(model.payments, operation.name, {
+    saved: 'SavedPaymentMethod',
+    rejected: 'GatewayRejectedPaymentMethodException',
+    authentication: 'PaymentMethodAuthenticationRequiredException',
+    unavailable: 'PaymentGatewayUnavailableException'
+  });
+  if (saving) notes.push(saving);
+  // El barrido de pagos (G11 de la corrida payment de prueba-gelsa): el reclamo lo genera build en el puerto del registro.
+  if (model.payments?.reconciliation?.sweep === operation.name) {
+    const record = model.payments.record.entity;
+    notes.push(
+      `BARRIDO DE PAGOS: los candidatos ya RECLAMADOS los da this.${record.charAt(0).toLowerCase()}${record.slice(1)}Repository.claimForPaymentSweep(this.paymentReconciliation.staleBefore(new Date()), this.paymentReconciliation.batchSize()), ` +
+        'que build generó (renueva awaitingSince con una escritura condicional en su propia transacción y la confirma antes de volver). ' +
+        'Inyecta PaymentReconciliation (application/payment) y llama a paymentReconciliation.consult(reference, gatewayPaymentId) con cada uno, ' +
+        'fuera de toda transacción, y aplica lo que devuelva según las reglas. No escribas otro reclamo: un segundo mecanismo en paralelo al generado no reclama nada, solo reparte peor.'
+    );
+  }
   for (const code of operation.errors ?? []) {
     const error = operationError(model, operation.name, code);
     notes.push(
@@ -649,7 +666,7 @@ function reconciliationNotes(model, operation) {
       head +
       (waiting.length > 0 ? `Los candidatos son ${waiting.join(', ')} que llevan demasiado tiempo ahí. ` : 'Los candidatos son las entidades que quedaron esperando el desenlace. ') +
       `build NO pudo generar el reclamo (su aviso dice por qué), así que lo escribes tú, en el adaptador del repositorio y no aquí. DESDE CUÁNDO: la marca temporal la declara el diseño en awaitingSince${activation.awaitingSince ? ` (${activation.awaitingSince})` : ''}; NO uses createdAt ni un updatedAt de auditoría. ` +
-      `Los tres números —umbral (${key}.unanswered-after-seconds, del diseño), caducidad del reclamo y cota del lote— están en RECONCILIATION_SETTINGS[${JSON.stringify(activation.name)}] (infrastructure/persistence/reconciliation/reconciliation-settings.ts): léelos de ahí, no de una constante. ` +
+      `Los tres números —umbral (${activation.unansweredParameter ? `el parámetro ${activation.unansweredParameter.name}, en ${activation.unansweredParameter.unit}: no hay ${key}.unanswered-after-seconds` : `${key}.unanswered-after-seconds`}, del diseño), caducidad del reclamo y cota del lote— están en RECONCILIATION_SETTINGS[${JSON.stringify(activation.name)}] (infrastructure/persistence/reconciliation/reconciliation-settings.ts): léelos de ahí, no de una constante. ` +
       'CÓMO reclamar: con la MISMA tienda que build genera para los reclamos que sí puede (ReconciliationClaimStore.claim, una marca persistida que caduca), confirmada ANTES de llamar al proveedor; no con un lock, que solo aísla mientras dura su transacción. ' +
       decide +
       noTransaction +

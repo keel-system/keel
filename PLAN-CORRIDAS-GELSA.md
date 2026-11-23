@@ -1,6 +1,6 @@
 # Lo que destaparon las corridas de prueba-gelsa: cazarlo en diseño y corregir los generadores
 
-**Estado: ABIERTO (2026-11-20).** Inc. 0 a 4 hechos (2026-11-23). Se ejecuta en varias sesiones, un incremento por sesión
+**Estado: ABIERTO (2026-11-20).** Inc. 0 a 5 y 6a hechos (2026-11-23). Se ejecuta en varias sesiones, un incremento por sesión
 como norma, y cada uno se cierra con «Para retomar» en § Estado y su commit.
 
 ## Contexto
@@ -194,7 +194,7 @@ Lo neutral en `keel-core/gen`, y cada generador con su test de paridad.
 | 3. nest, dotnet, go | hecho (2026-11-23) | 3a: suite de keel-nest, `ts-check --only=catalog-gelsa-order` 13/13, `stub-check` 28/28. 3b: suite de keel-dotnet 1076/1076, `cs-check --fixtures --only=catalog-gelsa-order` (falsado), `stub-check` 9/9. 3c: suite de keel-go, `go-check` de la silueta y de stock-reservation (G6 falsado), `stub-check` 12/12 |
 | 4. DSL 2.33 en keel-core | hecho (2026-11-23) | `npm test` de la raíz en verde (6 paquetes), `design-matrix` sin `sin-mutacion`, `--ready` en rojo con su id en las tres copias |
 | 5. keel-spring 2.33 y pagos | hecho (2026-11-23; G10 aceptado como está) | `payment-check` en las dos pasarelas, sabotaje `saved-card`; `claim-check` del barrido de pagos en PostgreSQL y MySQL, falsado |
-| 6. nest, dotnet, go 2.33 y pagos | pendiente | |
+| 6. nest, dotnet, go 2.33 y pagos | 6a (keel-nest) hecho (2026-11-23); 6b y 6c pendientes | 6a: suite de keel-nest 1234; `ts-check --only=payment-checkout` 13/13; `stub-check` 37/37; `db-check --subject=payment-checkout` en PostgreSQL y MySQL, con los dos sabotajes del reclamo cayendo en sus casos PS |
 | 7. Corrida de control | pendiente | |
 
 **Para retomar:** inc. 0 y 1 hechos. El inc. 1 dejó en keel-core:
@@ -379,3 +379,33 @@ y el gate `reconciliation` leen el parámetro) y D7 (`SavedPaymentMethod` con el
 barrido de pagos y la red que lo ejecute contra el motor) y las primitivas de G12, con su paridad contra keel-spring.
 Cuando los cuatro lo generen, una fixture que declare `unansweredAfter` y `cardDetails` sustituye a las siluetas.
   y el resto de G12.
+
+**Inc. 6, en curso.** Se parte en 6a (keel-nest), 6b (keel-dotnet) y 6c (keel-go).
+- **6a (keel-nest) hecho (2026-11-23):**
+  - La frontera abre las dos formas (`dsl233PendingErrors` con `generates`); `capability-coverage` las anota `soloCadenas`,
+    con su rama en `uncovered-branches.test.js` (árbol entero parseado, imports que llegan).
+  - D2: `reconciliation-settings.ts` (`reconciliation-claim.js`) y `payment-gateway-settings.ts` (`payments.js`) leen el
+    parámetro enlazado en segundos con `linked(configuration, propiedad, unitSeconds)`, SIN default propio (falta = no
+    arranca). Los yaml ya eran los neutrales de keel-core, sin la clave. La nota del barrido escrito por el agente y el
+    `why` del gate nombran el parámetro. `test/dsl-233.test.js` EJECUTA los dos lectores.
+  - D7 + G9: el puerto devuelve `SavedPaymentMethod` (`{ reference, card: SavedCard | null }`, interfaces en
+    `domain/payment/saved-payment-method.ts`) y el 3DS al guardar es `PaymentMethodAuthenticationRequiredException`; el
+    rechazo conserva su nombre de keel-nest, `GatewayRejectedPaymentMethodException`. Lo común de los dos adaptadores sale
+    de `savedMethodTsHelpers` (`payments.js`, el gemelo de `savedMethodJava`), que se arma DENTRO de `adapterTs`: payments.js
+    importa los módulos de las pasarelas y sus constantes no existen al cargarlos. `savedMethodNote` en `services.js`.
+    `test/payments.test.js` EJECUTA el adaptador contra la pasarela falsa (resumen y 3DS), falsado.
+  - G12: `gatewaySavesCard`, `gatewayRequiresAuthenticationToSave`, `gatewayReportsRefunded`, `gatewayCancelFails` y
+    `gatewayAnswersLate` en `payment-harness.js`, exportados por `flow.ts`, y en la skill `keel-nest-payments`. Los ejecutan
+    `test/payment-harness.test.js` (WireMock falso, que ahora honra `fixedDelayMilliseconds`) y `stub-check` (real).
+  - G11: `src/scaffold/payment-sweep-claim.js` emite `claimForPaymentSweep(staleBefore, batchSize)` en el puerto, el
+    adaptador TypeORM (SKIP LOCKED + UPDATE condicional por fila en `inNewTransaction`, READ COMMITTED en MySQL) y el
+    documental (`findOneAndUpdate` por candidato), con la señal de lote lleno si lo dispara el cronómetro. La nota del
+    handler, el doc de `PaymentReconciliation` y la skill (`references/reconciliation.md`) dicen que ya está generado.
+    `db-check` gana el sujeto `payment-checkout` (con pasarela) y el bloque `paymentSweepBlock` (PS-1 a PS-7, la carrera de
+    dos réplicas incluida), con los sabotajes `payment-sweep-no-lease` (cae PS-1) y `payment-sweep-cutoff` (PS-1 y PS-2).
+    La rama documental no se ha ejecutado (ninguna fixture con pagos sobre MongoDB); la mide `test/payment-sweep-claim.test.js`.
+
+**Siguiente: 6b (keel-dotnet).** Lo mismo con lo neutral ya hecho en keel-core: quitar la frontera (`generates`), D2 (los
+dos lectores de la configuración), D7+G9, G12 en el arnés (`Support/PaymentGateway.cs`), G11 con su red en `db-check`, y
+el `stub-check` con los casos nuevos.
+

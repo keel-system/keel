@@ -424,7 +424,7 @@ export class ReconciliationClaimStore {
 // ─── Los reclamos del adaptador de una raíz ──────────────────────────────────
 
 /** El valor GUARDADO de un estado del ciclo de vida: la constante del enum, no el literal del diseño. */
-function storedState(model, entity, state) {
+export function storedState(model, entity, state) {
   const enumDef = (model.enums ?? []).find((candidate) => candidate.name === entity.lifecycle.enumType);
   return enumDef?.values.find((value) => value.literal === state)?.constant ?? screamingSnake(state);
 }

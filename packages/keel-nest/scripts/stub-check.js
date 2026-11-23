@@ -196,6 +196,28 @@ try {
     await harness.gatewayDoesNotAnswer(harness.GatewayCall.CHARGE);
     const unanswered = await gatewayAdapter.authorize(charge('pay-7')).then(() => null, (error) => error);
     step(`${gateway}: sin respuesta, en duda y sin reintento`, unanswered?.name === 'PaymentGatewayUnavailableException' && (await harness.gatewayCallCount(harness.GatewayCall.CHARGE)) === 1, unanswered?.message);
+
+    // DSL 2.33 y G12 (PLAN-CORRIDAS-GELSA.md, inc. 6a): el medio guardado con su tarjeta, el 3DS al guardar, la
+    // devolución por un total, la anulación que falla y la respuesta retenida (fixedDelayMilliseconds del stub real).
+    await http.resetStubs();
+    await harness.gatewaySavesCard('amex', '0005', 3, 2029);
+    const saved = await gatewayAdapter.savePaymentMethod('tok_y', 'payer-2');
+    step(`${gateway}: guardar un medio devuelve la referencia y el resumen de la tarjeta`, /\|/.test(saved.reference) && JSON.stringify(saved.card) === JSON.stringify({ brand: 'amex', last4: '0005', expMonth: 3, expYear: 2029 }), JSON.stringify(saved));
+    if (gateway === 'stripe') {
+      await harness.gatewayRequiresAuthenticationToSave();
+      const asked = await gatewayAdapter.savePaymentMethod('tok_z', 'payer-3').then(() => null, (error) => error);
+      step(`${gateway}: el 3DS al guardar es SU excepción, no un rechazo`, asked?.name === 'PaymentMethodAuthenticationRequiredException', asked?.name);
+    }
+    await harness.gatewayReportsRefunded('pay-8', '7.50');
+    const refundedTotal = await gatewayAdapter.status('pay-8', harness.gatewayIdFor('pay-8'));
+    step(`${gateway}: devuelto por un total concreto`, refundedTotal.status === 'REFUNDED' && refundedTotal.refundedAmount?.toString() === '7.50', `${refundedTotal.status} ${refundedTotal.refundedAmount}`);
+    await harness.gatewayCancelFails('pay-9', 'authenticationFailed');
+    const cancelFailed = await gatewayAdapter.voidAuthorization('pay-9', harness.gatewayIdFor('pay-9'));
+    step(`${gateway}: la anulación vuelve como cobro fallido con su motivo`, cancelFailed.status === 'FAILED' && cancelFailed.failureReason === 'authenticationFailed', `${cancelFailed.status} ${cancelFailed.failureReason}`);
+    await harness.gatewayAnswersLate(harness.GatewayCall.CHARGE, 'pay-10', 'AUTHORIZED', 400);
+    const started = Date.now();
+    const late = await gatewayAdapter.authorize(charge('pay-10'));
+    step(`${gateway}: la pasarela retiene su respuesta y después contesta`, late.status === 'AUTHORIZED' && Date.now() - started >= 350, `${late.status} en ${Date.now() - started} ms`);
   }
 } catch (error) {
   step(`${current}: el paso no llegó a terminar`, false, error instanceof Error ? error.message : String(error));

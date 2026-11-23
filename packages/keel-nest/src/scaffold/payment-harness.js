@@ -11,7 +11,7 @@
 // stub): por eso se puede EJECUTAR en las pruebas de keel-nest contra un admin falso. `flow.ts` lo reexporta, y los
 // flujos siguen importando solo de `flow.ts`.
 
-import { paymentProbesFor } from '@keel-system/keel-core/gen/payment-probes';
+import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
 import { tsString } from './render.js';
 import { paymentTestCurrency } from '@keel-system/keel-core/gen/payments-config';
@@ -32,11 +32,16 @@ export const PAYMENT_HARNESS_EXPORTS = [
   'gatewayDeclines',
   'gatewayDoesNotAnswer',
   'gatewayReports',
+  'gatewayReportsRefunded',
+  'gatewayCancelFails',
+  'gatewayAnswersLate',
   'gatewayCaptures',
   'gatewayCancels',
   'gatewayExpiresAuthorization',
   'gatewayRejects',
   'gatewaySavesPaymentMethod',
+  'gatewaySavesCard',
+  'gatewayRequiresAuthenticationToSave',
   'gatewayRefunds',
   'gatewayCallCount',
   'gatewayRequests',
@@ -55,6 +60,12 @@ function paymentGatewayTs(model) {
   const gateway = model.payments.gateway;
   const probes = paymentProbesFor(gateway.id);
   const currency = testCurrency(model);
+  // La respuesta de guardar con el resumen en las rutas que lee el adaptador (keel-core: savedCardResponse): la MISMA
+  // que escribe el AbstractFlowIT de keel-spring.
+  const cardTemplate = JSON.stringify(savedCardResponse(gateway.id, { brand: '@B@', last4: '@L@', expMonth: -71, expYear: -72 }))
+    .replace('"@B@"', 'brand').replace('"@L@"', 'last4').replace('-71', 'expMonth').replace('-72', 'expYear');
+  const authentication = saveAuthenticationRejection(gateway.id);
+  const card = DEFAULT_SAVED_CARD;
   const routes = Object.entries(probes.calls)
     .map(([call, route]) => `  ${call}: { method: ${tsString(route.method)}, path: ${tsString(route.path)} }`)
     .join(',\n');
@@ -140,9 +151,45 @@ export async function gatewayReports(reference: string, status: string): Promise
     await gatewayStub('SEARCH', reference, null, 200, { data: [] });
     return;
   }
-  const object = gatewayObject(reference, status, null, status === 'REFUNDED' ? '10.00' : null);
+  if (status === 'REFUNDED') {
+    await gatewayReportsRefunded(reference, '10.00');
+    return;
+  }
+  await gatewayReportsObject(reference, gatewayObject(reference, status, null, null));
+}
+
+/**
+ * Preguntada por el cobro de esa referencia, la pasarela lo da por devuelto con ESE total: lo que mide un escenario
+ * de devolución parcial, o una devolución cuya respuesta no llegó y el barrido resuelve consultando.
+ */
+export async function gatewayReportsRefunded(reference: string, refundedTotal: string): Promise<void> {
+  await gatewayReportsObject(reference, gatewayObject(reference, 'REFUNDED', null, refundedTotal));
+}
+
+async function gatewayReportsObject(reference: string, object: Record<string, unknown>): Promise<void> {
   await gatewayStubPath('STATUS', gatewayIdFor(reference), 200, object);
   await gatewayStub('SEARCH', reference, null, 200, { data: [object] });
+}
+
+/**
+ * La anulación del cobro de esa referencia vuelve como un cobro FALLIDO con un motivo del vocabulario neutro (la del
+ * 3DS que el cliente no completó es 'authenticationFailed'): el desenlace no es la anulación sino el fallo.
+ */
+export async function gatewayCancelFails(reference: string, reason: string): Promise<void> {
+  await gatewayStubPath('CANCEL', gatewayIdFor(reference), 200, gatewayObject(reference, 'FAILED', GATEWAY_DECLINES[reason] ?? null, null));
+}
+
+/**
+ * La pasarela RETIENE su respuesta a esa llamada \`delayMs\` milisegundos y después contesta con el cobro en ese estado:
+ * lo que hace escribible un escenario en el que el aviso llega ANTES que la respuesta (envía el aviso mientras tanto,
+ * sin esperar a la petición). Vale para CHARGE, CAPTURE y CANCEL. El retardo tiene que quedar por debajo del
+ * read-timeout del cliente de la pasarela (payments.gateway.read-timeout), o la acción quedará en duda.
+ */
+export async function gatewayAnswersLate(call: GatewayCall, reference: string, status: string, delayMs: number): Promise<void> {
+  const object = gatewayObject(reference, status, null, null);
+  if (call === 'CHARGE') return gatewayStub('CHARGE', null, reference, 200, object, delayMs);
+  if (call === 'CAPTURE' || call === 'CANCEL') return gatewayStubPath(call, gatewayIdFor(reference), 200, object, delayMs);
+  throw new Error(\`gatewayAnswersLate: \${call} no devuelve el cobro; usa CHARGE, CAPTURE o CANCEL\`);
 }
 
 /** La pasarela captura el cobro de esa referencia en el acto. */
@@ -176,12 +223,33 @@ export async function gatewayRejects(call: GatewayCall): Promise<void> {
   await stubFor(route.method, route.path, 400, { error: { code: 'rejected_by_test' } });
 }
 
-/** La pasarela guarda el medio de pago que se le pase. */
+/** La pasarela guarda el medio de pago que se le pase, con una tarjeta ${card.brand} terminada en ${card.last4} (${card.expMonth}/${card.expYear}). */
 export async function gatewaySavesPaymentMethod(): Promise<void> {
+  await gatewaySavesCard(${tsString(card.brand)}, ${tsString(card.last4)}, ${card.expMonth}, ${card.expYear});
+}
+
+/**
+ * La pasarela guarda el medio con ESTE resumen de tarjeta: lo que un escenario afirma en la respuesta o en la ficha
+ * del medio guardado (savePaymentMethod.cardDetails).
+ */
+export async function gatewaySavesCard(brand: string, last4: string, expMonth: number, expYear: number): Promise<void> {
   const save = GATEWAY_ROUTES.SAVE_METHOD;
   const attach = GATEWAY_ROUTES.ATTACH_METHOD;
   await stubFor(save.method, save.path, 200, { id: 'cus_keel_test' });
-  await stubFor(attach.method, attach.path, 200, { id: 'card_keel_test' });
+  await stubFor(attach.method, attach.path, 200, ${cardTemplate});
+}
+
+/**
+ * La pasarela exige autenticar al cliente (3DS) para guardar la tarjeta.${authentication ? '' : ` ${gateway.name ?? gateway.id} no lo pide al
+ * guardar (la autenticación es del cobro), así que un escenario que lo use no se puede ejecutar con ella.`}
+ */
+export async function gatewayRequiresAuthenticationToSave(): Promise<void> {
+${authentication
+  ? `  const save = GATEWAY_ROUTES.SAVE_METHOD;
+  const attach = GATEWAY_ROUTES.ATTACH_METHOD;
+  await stubFor(save.method, save.path, 200, { id: 'cus_keel_test' });
+  await stubFor(attach.method, attach.path, ${authentication.status}, ${JSON.stringify(authentication.body)});`
+  : `  throw new Error(${tsString(`${gateway.id} no pide autenticar al guardar un medio: este escenario no aplica con ella`)});`}
 }
 
 /** Cuántas veces llamó el servidor a la pasarela por esa llamada. */
@@ -210,22 +278,24 @@ export function sendForgedGatewayNotice<R>(flow: NoticeSender<R>, reference: str
 
 // Un mapping del doble para una llamada: con \`bodyContains\` solo casa la petición cuyo cuerpo lo lleve (la
 // referencia), con \`queryContains\` la que lo lleve en su parámetro de búsqueda.
-async function gatewayStub(call: GatewayCall, queryContains: string | null, bodyContains: string | null, status: number, body: unknown): Promise<void> {
+async function gatewayStub(call: GatewayCall, queryContains: string | null, bodyContains: string | null, status: number, body: unknown, delayMs = 0): Promise<void> {
   const route = GATEWAY_ROUTES[call];
-  await gatewayMapping(route.method, route.path, queryContains, bodyContains, status, body);
+  await gatewayMapping(route.method, route.path, queryContains, bodyContains, status, body, delayMs);
 }
 
 // Igual, sobre la ruta concreta de un id (la de captura, anulación o consulta de ESE cobro).
-async function gatewayStubPath(call: GatewayCall, gatewayId: string, status: number, body: unknown): Promise<void> {
+async function gatewayStubPath(call: GatewayCall, gatewayId: string, status: number, body: unknown, delayMs = 0): Promise<void> {
   const route = GATEWAY_ROUTES[call];
-  await gatewayMapping(route.method, route.path.replace('(?!search)[^/]+', gatewayId).replace('[^/]+', gatewayId), null, null, status, body);
+  await gatewayMapping(route.method, route.path.replace('(?!search)[^/]+', gatewayId).replace('[^/]+', gatewayId), null, null, status, body, delayMs);
 }
 
-async function gatewayMapping(method: string, pathPattern: string, queryContains: string | null, bodyContains: string | null, status: number, body: unknown): Promise<void> {
+// Con delayMs > 0, la respuesta llega tarde (fixedDelayMilliseconds de WireMock).
+async function gatewayMapping(method: string, pathPattern: string, queryContains: string | null, bodyContains: string | null, status: number, body: unknown, delayMs = 0): Promise<void> {
   const request: Record<string, unknown> = { method, urlPathPattern: pathPattern };
   if (queryContains != null) request.queryParameters = { ${tsString(probes.calls.SEARCH.query)}: { contains: queryContains } };
   if (bodyContains != null) request.bodyPatterns = [{ contains: bodyContains }];
-  const response = { status, headers: { 'Content-Type': 'application/json' }, body: typeof body === 'string' ? body : JSON.stringify(body) };
+  const response: Record<string, unknown> = { status, headers: { 'Content-Type': 'application/json' }, body: typeof body === 'string' ? body : JSON.stringify(body) };
+  if (delayMs > 0) response.fixedDelayMilliseconds = delayMs;
   await stubRawMapping(request, response);
 }
 

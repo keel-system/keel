@@ -1,42 +1,30 @@
 # El barrido de lo que espera desenlace
 
-## Candidatos
+## Candidatos y reclamo: ya generados
 
 Los cobros en los estados que esperan a la pasarela —`pending`, `actionRequired` si hay acción del cliente, y el
 `inFlight` de cada acción de seguimiento— cuyo `awaitingSince` es anterior a
-`this.paymentReconciliation.staleBefore()` (el umbral es `payments.reconciliation.unanswered-after-seconds`; en
-local y test, 5 segundos). Un lote acotado por pasada —`this.paymentReconciliation.batchSize()`, que lee
-`payments.reconciliation.batch-size`: no lo escribas como constante—, el que más lleva esperando primero.
+`this.paymentReconciliation.staleBefore(now)` (el umbral es `payments.reconciliation.unanswered-after-seconds`, o el
+parámetro que enlaza `payments.reconciliation.unansweredAfter`; en local y test, 5 segundos), en un lote acotado
+—`this.paymentReconciliation.batchSize()`—, el que más lleva esperando primero.
 
-## El reclamo
-
-El barrido lo dispara el cronómetro en una réplica por tick, pero al menos una vez (si la réplica muere a mitad, otra
-repite el tick), y el scheduler lo despacha **sin transacción abarcadora**. Si tu lote sale lleno
-(`batchSize()` cobros), avísalo con `SweepPass.claimed(reclamados, reconciliation.batchSize())` y el tick repetirá la
-pasada. Antes de consultar,
-cada candidato se reclama con una escritura CONDICIONAL que vuelve a estampar `awaitingSince`, con su propia
-transacción; la réplica que pierde ve 0 filas y lo salta. Sin reclamo, las N réplicas consultan el mismo cobro, y si
-la consulta desencadena una escritura, la hacen N veces.
-
-Las dos mitades, en el puerto y en el adaptador del repositorio (la skill de la base explica cómo ampliarlos):
+No los busques tú: build generó el reclamo en el repositorio del registro (G11 de la corrida payment de prueba-gelsa):
 
 ```ts
-// src/domain/repository/payment-repository.ts
-/** Re-estampa awaitingSince si sigue siendo `seen`; true si este proceso se quedó el cobro. */
-abstract claimForReconciliation(id: string, seen: Date, now: Date): Promise<boolean>;
-```
-
-```ts
-// src/infrastructure/persistence/repositories/payment-repository-impl.ts
-async claimForReconciliation(id: string, seen: Date, now: Date): Promise<boolean> {
-  const result = await this.transactions.inNewTransaction((manager) =>
-    manager.createQueryBuilder().update(PaymentOrm).set({ awaitingSince: now }).where({ id, awaitingSince: seen }).execute()
-  );
-  return Boolean(result.affected);
+const claimed = await this.paymentRepository.claimForPaymentSweep(
+  this.paymentReconciliation.staleBefore(new Date()),
+  this.paymentReconciliation.batchSize()
+);
+for (const payment of claimed) {
+  // fuera de toda transacción: la llamada a la pasarela no puede ir dentro de ninguna
+  await this.paymentReconciliation.consult(payment.reference, payment.gatewayPaymentId);
 }
 ```
 
-Es la única escritura que va sin `save`, a propósito: no cambia el estado del agregado, solo arrienda el cobro.
+Devuelve los cobros SIGUIENDO en su estado y con `awaitingSince` renovado: una escritura condicional por cobro, en su
+propia transacción y confirmada antes de volver, así que la réplica que llega tarde no lo ve. Con el cronómetro, ya
+avisa del lote lleno (`SweepPass.claimed`) y el tick repetirá la pasada. El barrido corre **sin transacción
+abarcadora**. Un segundo reclamo escrito a mano en paralelo al generado no reclama nada, solo reparte peor.
 
 ## Qué hacer con lo que diga la pasarela
 

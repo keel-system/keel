@@ -11,7 +11,7 @@ import http from 'node:http';
 import { createHmac } from 'node:crypto';
 import { loadService } from '@keel-system/keel-core';
 import path from 'node:path';
-import { paymentProbesFor } from '@keel-system/keel-core/gen/payment-probes';
+import { paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, paymentIdempotencyKey } from '@keel-system/keel-core/gen/payment-gateways';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { planFixture, transpileTree } from './helpers/emitted.js';
@@ -273,6 +273,29 @@ for (const gateway of GATEWAYS) {
     fake.reset();
     fake.route(calls.SAVE_METHOD, 503, {});
     await assert.rejects((await gatewayAt(fake.baseUrl)).savePaymentMethod('tok_x', 'cli-1'), PaymentGatewayUnavailableException);
+  });
+
+  test(`${gateway}: guardar un medio devuelve la referencia Y el resumen de la tarjeta, de las rutas de keel-core (G9)`, async () => {
+    // Corrida payment de prueba-gelsa: el puerto devolvía un texto y el resumen que la entidad exigía no lo informaba nadie.
+    fake.reset();
+    fake.route(calls.SAVE_METHOD, 200, { id: 'cus_keel_test' });
+    fake.route(calls.ATTACH_METHOD, 200, savedCardResponse(gateway, { brand: 'mastercard', last4: '4444', expMonth: 7, expYear: 2031 }));
+    const saved = await (await gatewayAt(fake.baseUrl)).savePaymentMethod('tok_x', 'cli-1');
+    assert.match(saved.reference, /^cus_keel_test\|/);
+    assert.deepEqual({ ...saved.card }, { brand: 'mastercard', last4: '4444', expMonth: 7, expYear: 2031 });
+  });
+
+  test(`${gateway}: guardar con 3DS es SU excepción donde la pasarela lo pide, y un rechazo donde no`, async () => {
+    const { PaymentMethodAuthenticationRequiredException } = await tree.load('src/domain/payment/payment-method-authentication-required-exception.ts');
+    const { GatewayRejectedPaymentMethodException } = await tree.load('src/domain/payment/gateway-rejected-payment-method-exception.ts');
+    // Con MercadoPago el doble no tiene 3DS al guardar: se le manda el de Stripe y tiene que ser un rechazo más.
+    const authentication = saveAuthenticationRejection(gateway) ?? saveAuthenticationRejection('stripe');
+    fake.reset();
+    fake.route(calls.SAVE_METHOD, 200, { id: 'cus_keel_test' });
+    fake.route(calls.ATTACH_METHOD, authentication.status, authentication.body);
+    const error = await (await gatewayAt(fake.baseUrl)).savePaymentMethod('tok_x', 'cli-1').then(() => null, (failure) => failure);
+    const expected = saveAuthenticationRejection(gateway) ? PaymentMethodAuthenticationRequiredException : GatewayRejectedPaymentMethodException;
+    assert.ok(error instanceof expected, String(error));
   });
 
   test(`${gateway}: capturar una autorización caducada es un cobro anulado`, async () => {

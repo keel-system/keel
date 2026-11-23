@@ -14,6 +14,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
 import { HTTP_STUB_ENDPOINTS } from '@keel-system/keel-core/gen/http-stub-probes';
+import { DEFAULT_SAVED_CARD } from '@keel-system/keel-core/gen/payment-probes';
 import { PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS } from '@keel-system/keel-core/gen/payment-gateways';
 import { planFixture, transpileTree } from './helpers/emitted.js';
 import { tmpDir } from './helpers/tmp.js';
@@ -65,8 +66,12 @@ async function miniWireMock() {
       const mapping = mappings.filter((candidate) => matches(candidate.request, request.method, url, body)).at(-1);
       if (!mapping) return json(404, {});
       if (mapping.response.fault) return request.socket.destroy();
-      response.writeHead(mapping.response.status, mapping.response.headers ?? {});
-      response.end(mapping.response.body ?? '');
+      const answer = () => {
+        response.writeHead(mapping.response.status, mapping.response.headers ?? {});
+        response.end(mapping.response.body ?? '');
+      };
+      if (mapping.response.fixedDelayMilliseconds) setTimeout(answer, mapping.response.fixedDelayMilliseconds);
+      else answer();
     });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -190,7 +195,42 @@ for (const gateway of ['stripe', 'mercadopago']) {
     await harness.gatewayReports('ch-11', 'AUTHORIZED');
     assert.equal((await adapter.capture('ch-11', harness.gatewayIdFor('ch-11'))).status, GatewayStatus.AUTHORIZED, 'rechazada: el estado real se consulta');
     await harness.gatewaySavesPaymentMethod();
-    assert.match(await adapter.savePaymentMethod('tok_x', 'payer-1'), /\|/);
+    const saved = await adapter.savePaymentMethod('tok_x', 'payer-1');
+    assert.match(saved.reference, /\|/);
+    assert.deepEqual({ ...saved.card }, { ...DEFAULT_SAVED_CARD }, 'el resumen por defecto del doble es el que lee el adaptador');
+  });
+
+  // G12 (corrida payment de prueba-gelsa): las primitivas que faltaban, las mismas que el AbstractFlowIT de keel-spring.
+  test(`${gateway}: guardar con una tarjeta concreta, y el 3DS al guardar donde la pasarela lo pide`, async () => {
+    await fresh();
+    await harness.gatewaySavesCard('amex', '0005', 3, 2029);
+    assert.deepEqual({ ...(await adapter.savePaymentMethod('tok_y', 'payer-2')).card }, { brand: 'amex', last4: '0005', expMonth: 3, expYear: 2029 });
+    if (gateway === 'stripe') {
+      const { PaymentMethodAuthenticationRequiredException } = await tree.load('src/domain/payment/payment-method-authentication-required-exception.ts');
+      await harness.gatewayRequiresAuthenticationToSave();
+      await assert.rejects(adapter.savePaymentMethod('tok_z', 'payer-3'), PaymentMethodAuthenticationRequiredException);
+    } else {
+      await assert.rejects(harness.gatewayRequiresAuthenticationToSave(), /no pide autenticar al guardar/);
+    }
+  });
+
+  test(`${gateway}: devuelto por un total concreto, anulación que falla con su motivo y respuesta retenida`, async () => {
+    await fresh();
+    await harness.gatewayReportsRefunded('ch-20', '7.50');
+    const refunded = await adapter.status('ch-20', harness.gatewayIdFor('ch-20'));
+    assert.equal(refunded.status, GatewayStatus.REFUNDED);
+    assert.equal(refunded.refundedAmount.toString(), '7.50');
+    await harness.gatewayCancelFails('ch-21', 'authenticationFailed');
+    const failed = await adapter.voidAuthorization('ch-21', harness.gatewayIdFor('ch-21'));
+    assert.equal(failed.status, GatewayStatus.FAILED);
+    assert.equal(failed.failureReason, PaymentFailureReason.AUTHENTICATION_FAILED);
+    await harness.gatewayAnswersLate(harness.GatewayCall.CHARGE, 'ch-22', 'AUTHORIZED', 300);
+    const started = Date.now();
+    assert.equal((await adapter.authorize(charge('ch-22'))).status, GatewayStatus.AUTHORIZED);
+    assert.ok(Date.now() - started >= 250, 'la respuesta llega tarde');
+    await harness.gatewayAnswersLate(harness.GatewayCall.CAPTURE, 'ch-23', 'CAPTURED', 50);
+    assert.equal((await adapter.capture('ch-23', harness.gatewayIdFor('ch-23'))).status, GatewayStatus.CAPTURED);
+    await assert.rejects(harness.gatewayAnswersLate(harness.GatewayCall.STATUS, 'ch-24', 'CAPTURED', 10), /usa CHARGE, CAPTURE o CANCEL/);
   });
 
   test(`${gateway}: el aviso que firma el arnés lo acepta el verificador; el falsificado, no`, async () => {

@@ -63,19 +63,30 @@ constructor, en el mismo orden. Siempre en este orden, y el orden es la defensa:
    error que declara el diseño.
    - Un importe parcial viaja **con la moneda del cobro**, que ya tienes en el registro: no le preguntes la moneda
      a la pasarela.
-   - **Guardar un medio** (`savePaymentMethod`): la pasarela que lo rechaza lanza
-     `GatewayRejectedPaymentMethodException` (`src/domain/payment/gateway-rejected-payment-method-exception.ts`), y la
-     que no contesta, `PaymentGatewayUnavailableException`. Captura **esas dos** y tradúcelas a los errores que declare
-     el diseño; cualquier otra excepción se deja pasar, porque es un fallo de programación y tiene que salir como 500.
+   - **Guardar un medio** (`savePaymentMethod`): devuelve `SavedPaymentMethod` (`src/domain/payment/saved-payment-method.ts`):
+     la referencia opaca (se guarda y no sale nunca del servicio) y el resumen de la tarjeta (`card`: marca, últimos
+     cuatro, mes y año), que va al campo que dice `payments.savePaymentMethod.cardDetails`. Tres negativas:
+     `GatewayRejectedPaymentMethodException` (el medio no vale), `PaymentMethodAuthenticationRequiredException`
+     (la pasarela exige autenticar al cliente, 3DS: puede completarla y volver a pedirlo) y
+     `PaymentGatewayUnavailableException` (no contestó: aquí no se guardó nada). Captura **esas** y tradúcelas a los
+     errores que declare el diseño; cualquier otra excepción se deja pasar, porque es un fallo de programación y tiene
+     que salir como 500.
 3. **Desenlaces** (`outcomes.*`): **idempotentes**. Si el cobro ya no está en el estado de origen —lo aplicó otro
    camino—, no hagas nada y no lances. Ver `references/outcomes.md`.
    - Al salir de un estado de espera, **vacía `awaitingSince`** (y `customerAction` fuera de `actionRequired`).
    - Un cobro que rechazas **antes** de llamar a la pasarela nace sin el medio y sin `gatewayPaymentId`: lo que no
      llegó a existir no se anota.
-4. **Barrido** (`reconciliation.sweep`): candidatos en los estados que esperan desenlace con `awaitingSince`
-   anterior a `this.paymentReconciliation.staleBefore()`; **reclama** cada uno volviendo a estampar
-   `awaitingSince` en una escritura condicional con su propia transacción, y llama a
-   `this.paymentReconciliation.consult(reference, gatewayPaymentId)`. Ver `references/reconciliation.md`.
+4. **Barrido** (`reconciliation.sweep`): los candidatos YA RECLAMADOS los da
+   `claimForPaymentSweep(this.paymentReconciliation.staleBefore(new Date()), this.paymentReconciliation.batchSize())`
+   en el repositorio del registro, que build generó; llama a `this.paymentReconciliation.consult(reference,
+   gatewayPaymentId)` con cada uno. No escribas otro reclamo. Ver `references/reconciliation.md`.
+
+En los escenarios, sin stubs a mano (la forma de la pasarela la pone el arnés, desde `flow.ts`):
+`gatewaySavesCard(marca, últimos4, mes, año)` y `gatewayRequiresAuthenticationToSave()` al guardar un medio;
+`gatewayReportsRefunded(referencia, total)` para una consulta que da el cobro devuelto por ese total;
+`gatewayCancelFails(referencia, 'authenticationFailed')` para una anulación que vuelve como cobro fallido;
+`gatewayAnswersLate(GatewayCall.CAPTURE, referencia, 'CAPTURED', ms)` para la pasarela que retiene su respuesta
+mientras el aviso llega antes (envía el aviso sin esperar a la petición; el retardo, por debajo del read-timeout).
 
 ## Lo que nunca
 

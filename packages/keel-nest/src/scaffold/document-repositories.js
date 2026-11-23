@@ -27,7 +27,7 @@ import { TEXT_FOLD_TS } from './persistence-entities.js';
 import { BSON_VALUES_TS } from './document-persistence.js';
 import { PERSISTENCE_ERRORS_TS, PAGE_TS, TRANSACTION_CONTEXT_TS, adapterClass, adapterPath, portClass, portPath, isPaginated, naturalKeyFinder, naturalKeyBatchFinder, occupantFinders, uniqueFieldFinders, constructorOf, emitsDomainEvents, credentialFinders } from './repositories.js';
 import { adapterArming } from './timer.js';
-import { documentGuardMethods, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
+import { documentGuardMethods, documentReconciliationMethods, documentSweepClaimMethods, storedState } from './document-stores.js';
 import { sweepPassImport } from './timer.js';
 import { entityFinders, finderSignature, RANGE_OPERATORS, sortConstant, sortConstants } from './finders.js';
 import { AUDIT_ACTOR_TS } from './audit-actor.js';
@@ -35,6 +35,7 @@ import { DOCUMENT_SCOPE_LINE, readScopeDocumentHelpers, readScopeDocumentMethods
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import * as lifecycle from './data-lifecycle.js';
 import * as history from './history.js';
+import * as paymentSweepClaim from './payment-sweep-claim.js';
 import { saveGuardLine, DERIVED_MARK } from './entity-checks.js';
 import { sortablePaths } from '@keel-system/keel-core/gen/document';
 
@@ -526,7 +527,12 @@ export function renderDocumentAdapter(model, entity) {
   const literalPatterns = entityFinders(model, entity).some((finder) => finder.criteria.some((criterion) => criterion.match !== 'exact'));
 
   // Los reclamos de los barridos que sacan documentos de esta raíz y los de las reconciliaciones que la esperan.
-  const claimMethods = [...documentSweepClaimMethods(model, entity), ...documentReconciliationMethods(model, entity)];
+  const claimMethods = [
+    ...documentSweepClaimMethods(model, entity),
+    ...documentReconciliationMethods(model, entity),
+    // El reclamo del barrido de pagos (G11 de la corrida payment de prueba-gelsa).
+    ...paymentSweepClaim.documentAdapterMethods(model, entity, [], { keyOf: (member) => keyOf(model, entity, member), storedState: (state) => storedState(model, entity, state) })
+  ];
   // La señal del drenaje del cronómetro (inc. 8 del plan 2.26): su import, si algún reclamo la lleva.
   if (claimMethods.some((method) => method.includes('SweepPass.claimed('))) imports.push(sweepPassImport());
   methods.push(...claimMethods);

@@ -103,3 +103,35 @@ test('el ciclo de vida del dato entero (persistence *.deletion, *.restorableFor,
     assert.ok(files.some((file) => /-retention-timer\.ts$/.test(file.path)), `${design.name}: sin el recurrente de la retención`);
   }
 });
+
+// DSL 2.33 (inc. 6a de PLAN-CORRIDAS-GELSA.md): el umbral enlazado a un parámetro en una activación
+// (activations.*.unansweredAfter) y en el barrido de pagos (reconciliation.unansweredAfter), y el resumen de la tarjeta
+// guardada (savePaymentMethod.cardDetails). Lo que hace cada rama lo EJECUTAN dsl-233.test.js y payments.test.js; aquí,
+// que el árbol entero parsee y sus imports lleguen.
+test('DSL 2.33: unansweredAfter en la activación y en el barrido de pagos, y savePaymentMethod.cardDetails', async () => {
+  const { loadService } = await import('@keel-system/keel-core');
+  const { planService } = await import('../src/scaffold/index.js');
+  const { FIXTURES_DIR } = await import('./helpers/workspace.js');
+  const path = await import('node:path');
+  const minutes = { type: 'int', description: 'Minutos de silencio tolerados.', default: 30, testValue: 1, requiredInProduction: false };
+  const reservation = loadService(path.join(FIXTURES_DIR, 'stock-reservation'));
+  reservation.manifest.parameters.reserveSilenceMinutes = minutes;
+  const activation = reservation.layers.dependencies.dependencies.inventory.activations.reserveStock;
+  delete activation.unansweredAfterSeconds;
+  activation.unansweredAfter = { parameter: 'reserveSilenceMinutes', unit: 'minutes' };
+  assert.deepEqual(checkTree(planService({ ...reservation, workspace: FIXTURES_DIR }).files), []);
+  const checkout = loadService(path.join(FIXTURES_DIR, 'payment-checkout'));
+  checkout.manifest.parameters.sweepSilenceMinutes = minutes;
+  delete checkout.layers.payments.reconciliation.unansweredAfterSeconds;
+  checkout.layers.payments.reconciliation.unansweredAfter = { parameter: 'sweepSilenceMinutes', unit: 'minutes' };
+  checkout.layers.domain.types.SavedCardSummary = {
+    description: 'Resumen visible de la tarjeta guardada.',
+    fields: { brand: { type: 'string', required: true, constraints: { maxLength: 30 } }, last4: { type: 'string', required: true, constraints: { pattern: '^[0-9]{4}$' } } }
+  };
+  checkout.layers.domain.entities.SavedPaymentMethod.fields.card = { type: 'SavedCardSummary', required: true };
+  checkout.layers.payments.savePaymentMethod.cardDetails = 'card';
+  for (const gateway of ['stripe', 'mercadopago']) {
+    const files = planService({ ...checkout, workspace: FIXTURES_DIR, stack: { paymentGateway: gateway, broker: 'rabbitmq' } }).files;
+    assert.deepEqual(checkTree(files), [], gateway);
+  }
+});
