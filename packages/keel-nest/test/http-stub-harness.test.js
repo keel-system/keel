@@ -21,7 +21,8 @@ import {
   stubMapping,
   stubOkResponse,
   stubSequenceMappings,
-  stubSlowResponse
+  stubSlowResponse,
+  stubDelayedResponse
 } from '@keel-system/keel-core/gen/http-stub-probes';
 import { DATABASES } from '@keel-system/keel-core/gen/infra-catalog';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
@@ -79,11 +80,14 @@ test(`${SUBJECT}: cada helper manda al stub el mapping del vocabulario de keel-c
   await stub.stubFailure('GET', '/prices/.*', 503);
   await stub.stubConnectionFault('DELETE', '/stock/.*');
   await stub.stubTimeout('DELETE', '/stock/.*', 4000);
+  // G2 del plan de prueba-gelsa: una respuesta VÁLIDA con retardo, del mismo vocabulario.
+  await stub.stubForDelayed('POST', '/payments', 201, { status: 'authorized' }, 1500);
   assert.deepEqual(mapped(), [
     stubMapping({ method: 'GET', pathPattern: '/prices/.*', response: stubOkResponse(200, { amount: '2.50' }) }),
     stubMapping({ method: 'GET', pathPattern: '/prices/.*', response: stubOkResponse(503, {}) }),
     stubMapping({ method: 'DELETE', pathPattern: '/stock/.*', response: stubFaultResponse() }),
-    stubMapping({ method: 'DELETE', pathPattern: '/stock/.*', response: stubSlowResponse(4000) })
+    stubMapping({ method: 'DELETE', pathPattern: '/stock/.*', response: stubSlowResponse(4000) }),
+    stubMapping({ method: 'POST', pathPattern: '/payments', response: stubDelayedResponse(201, { status: 'authorized' }, 1500) })
   ]);
 
   admin.received.length = 0;

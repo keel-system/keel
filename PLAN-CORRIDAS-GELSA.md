@@ -192,7 +192,7 @@ Lo neutral en `keel-core/gen`, y cada generador con su test de paridad.
 | 0. Registro de corridas | hecho (2026-11-23) | `corrida-metrics.js series`: `page-out-of-range-totals` repetido en 3 corridas; H1 sin cambio |
 | 1. keel-core: puerta sin DSL | hecho (2026-11-23) | suite de keel-core 1684/1684, `design-matrix` sin `sin-mutacion` (246 falsados), `--ready` sobre las copias |
 | 2. keel-core/gen + keel-spring | hecho (2026-11-23) | `npm test` de la raíz en verde (6 paquetes); `compile-check` de catalog-extended en 4 combos; el arnés de la copia de order y el `main` de job-dispatch con `naturalKey: [id]` compilados, y G6 falsado |
-| 3. nest, dotnet, go | pendiente | |
+| 3. nest, dotnet, go | en curso (3a empezado) | |
 | 4. DSL 2.33 en keel-core | pendiente | |
 | 5. keel-spring 2.33 y pagos | pendiente | |
 | 6. nest, dotnet, go 2.33 y pagos | pendiente | |
@@ -240,5 +240,20 @@ y payment sigue en verde hasta el inc. 4 (D7). D2 también es del inc. 4. `CHK-D
 - Sin medir en vivo: `telemetry-check` no aplica a G3 (el helper es del arnés, no del servidor) y la red en vivo de
   G1-G4 es la corrida de control.
 
-Siguiente: el inc. 3 (keel-nest, keel-dotnet y keel-go: G5, G6, G1/G2 y G3 donde aplique; G4 ya les llega por lo
-neutral).
+**Inc. 3, en curso.** Se parte en 3a (keel-nest), 3b (keel-dotnet) y 3c (keel-go), una sesión cada uno si hace falta.
+- Hecho (3a, parcial): `stubDelayedResponse` neutral en `keel-core/gen/http-stub-probes.js` (y en `gen/index.js`), y en
+  keel-nest `stubForDelayed` y `StubResponse.delayed` desde `delayedBody` (`src/scaffold/http-stub-harness.js`, también
+  en `HTTP_STUB_EXPORTS`), EJECUTADO en `test/http-stub-harness.test.js`. G1 ya estaba en keel-nest (`forgetSequences()`
+  en `resetState`).
+- Pendiente en keel-nest:
+  - G5: `controllers.js:282` y `messaging.js:753` usan `callsPaymentGateway` → `commitsBeforeOutbound`, y
+    `outboundBoundaryNote` en `services.js`, con un test que compare con keel-spring sobre la silueta de catalog-extended
+    con `recordWithdrawal.awaits = 'acknowledgement'` (ver `keel-spring/test/outbound-boundary.test.js`).
+  - G6: la guarda `naturalKeyIsIdentity` en su finder por clave natural (`repositories.js`, `document-repositories.js`,
+    `services.js`, `idempotency-check.js`) y la lectura por lote de la réplica por `findAllById` cuando
+    `idBatchReason === 'replica-listing'` (su reader de la réplica); test sobre catalog-extended con
+    `supplierPrice.replica.keyField = 'id'` y con `naturalKey: [id]`, como `keel-spring/test/natural-key-identity.test.js`.
+  - G3: ver si su arnés pide métricas con credencial (`messaging-harness.js` `deadLetteredEvents`) y si cae en una
+    persona sin roles con la forma de conduit.
+  - Redes: `npm test` del paquete, `stub-check` (G2), `db-check --subject=catalog-extended` si toca el finder.
+- Después, lo mismo en keel-dotnet (3b) y keel-go (3c); G4 ya les llega por lo neutral (`tokenStubMappings`).

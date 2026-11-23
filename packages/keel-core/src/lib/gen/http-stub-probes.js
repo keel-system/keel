@@ -34,6 +34,15 @@ export function stubSlowResponse(delayMs) {
   return { status: 200, fixedDelayMilliseconds: delayMs, headers: { 'Content-Type': 'application/json' }, body: '{}' };
 }
 
+/**
+ * Una respuesta VÁLIDA que llega tarde: el status y el cuerpo de `stubOkResponse` con un retardo. Lo que mide un
+ * escenario de respuesta lenta que cabe en el timeout, o una que llega cuando el servicio ya decidió; `stubSlowResponse`
+ * no sirve para eso porque su cuerpo es vacío (corrida order de prueba-gelsa, G2).
+ */
+export function stubDelayedResponse(status, body, delayMs) {
+  return { ...stubOkResponse(status, body), fixedDelayMilliseconds: delayMs };
+}
+
 /** El corte de conexión, que no es una respuesta HTTP. */
 export function stubFaultResponse() {
   return { fault: HTTP_STUB_FAULT };

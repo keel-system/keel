@@ -36,6 +36,7 @@ export const HTTP_STUB_EXPORTS = [
   'stubFailure',
   'stubConnectionFault',
   'stubTimeout',
+  'stubForDelayed',
   'stubSequence',
   'stubCallCount',
   'stubRequests',
@@ -66,7 +67,9 @@ export const StubResponse = {
   /** Fallo sin cuerpo útil: un 5xx es reintentable si el diseño lo dice; un 4xx nunca. */
   failure: (status: number): object => okBody(status, {}),
   /** No contesta a tiempo: \`delayMs\` tiene que superar el \`timeoutMs\` de la llamada. */
-  timeout: (delayMs: number): object => ({ status: 200, fixedDelayMilliseconds: delayMs, headers: { 'Content-Type': 'application/json' }, body: '{}' }),
+  timeout: (delayMs: number): object => delayedBody(200, '{}', delayMs),
+  /** Respuesta válida con retardo, como \`stubForDelayed\`. */
+  delayed: (status: number, body: unknown, delayMs: number): object => delayedBody(status, body, delayMs),
   /** Corta la conexión antes de responder: el servidor lo ve como fallo del transporte. */
   connectionFault: (): object => ({ fault: ${tsString(HTTP_STUB_FAULT)} })
 };
@@ -95,6 +98,15 @@ export async function stubConnectionFault(method: string, pathPattern: string): 
 /** El proveedor tarda más de lo tolerado (\`retryOn: [timeout]\`): \`delayMs\` por encima del \`timeoutMs\` de la llamada. */
 export async function stubTimeout(method: string, pathPattern: string, delayMs: number): Promise<void> {
   await stubMapping(method, pathPattern, StubResponse.timeout(delayMs));
+}
+
+/**
+ * Una respuesta VÁLIDA que llega tarde: el status y el cuerpo de \`stubFor\` con un retardo. Lo que mide un escenario
+ * de respuesta lenta que cabe en el timeout, o una que llega cuando el servicio ya decidió; \`stubTimeout\` devuelve un
+ * cuerpo vacío.
+ */
+export async function stubForDelayed(method: string, pathPattern: string, status: number, body: unknown, delayMs: number): Promise<void> {
+  await stubMapping(method, pathPattern, delayedBody(status, body, delayMs));
 }
 
 /** Las rutas con secuencia ya programada en este flujo. \`resetStubs()\` lo vacía. */
@@ -182,6 +194,11 @@ export function forgetSequences(): void {
 
 function okBody(status: number, body: unknown): object {
   return { status, headers: { 'Content-Type': 'application/json' }, body: body == null ? '' : typeof body === 'string' ? body : JSON.stringify(body) };
+}
+
+/** La respuesta normal con un retardo: la lenta y la válida con retardo salen de aquí. */
+function delayedBody(status: number, body: unknown, delayMs: number): object {
+  return { ...okBody(status, body), fixedDelayMilliseconds: delayMs };
 }
 
 function criterion(method: string, pathPattern: string): object {

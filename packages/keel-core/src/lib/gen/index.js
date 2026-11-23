@@ -94,6 +94,7 @@ export {
   HTTP_STUB_INITIAL_STATE,
   stubOkResponse,
   stubSlowResponse,
+  stubDelayedResponse,
   stubFaultResponse,
   stubMapping,
   stubSequenceMappings,
