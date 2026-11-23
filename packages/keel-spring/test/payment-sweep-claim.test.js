@@ -50,3 +50,17 @@ test('el handler del barrido y PaymentReconciliation dicen que el reclamo ya est
   assert.match(note, /No escribas otro reclamo/);
   assert.match(flat(read('/PaymentReconciliation.java')), /PaymentRepository\.claimForPaymentSweep\(staleBefore\(now\), batchSize\(\)\)\}, que build ya generó/);
 });
+
+test('claim-check lo reconoce como sujeto y lo ejecuta con sus seis casos', async () => {
+  const { claimScenarios, claimTestClass, PAYMENT_SWEEP_SABOTAGE_CASES } = await import('../src/lib/claim-probes.js');
+  const { model } = plan();
+  model.stack = { database: 'postgresql', paymentGateway: 'stripe' };
+  const scenarios = claimScenarios(model);
+  assert.equal(scenarios.paymentSweep?.method, 'claimForPaymentSweep');
+  assert.equal(scenarios.entity.name, 'Payment');
+  const packages = { enums: 'x.enums', port: 'x.port', entities: 'x.entities', repositories: 'x.repositories' };
+  const java = claimTestClass(model, scenarios, { datasource: { url: 'jdbc:postgresql://h/db', username: 'u' }, packages, database: 'postgresql' });
+  const cases = [...java.matchAll(/void (elBarridoDePagos\w+|unCobroEnEspera\w+)\(\)/g)].map((match) => match[1]);
+  assert.equal(cases.length, 6, cases.join(', '));
+  for (const expected of Object.values(PAYMENT_SWEEP_SABOTAGE_CASES).flat()) assert.ok(cases.includes(expected), expected);
+});

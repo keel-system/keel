@@ -1,6 +1,7 @@
 import { claimOrderField, rescueShape, stallSql, missingClockCountSql } from '@keel-system/keel-core/gen';
 import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { scheduleTimerClass, schedulerClassOf } from '../scaffold/timer.js';
+import { paymentSweepClaim } from '../scaffold/payment-sweep-claim.js';
 // Las sentencias del rescate son neutrales: las lanza también el arnés de keel-nest.
 export { rescueShape, stallSql, missingClockCountSql };
 // El Java con el que `claim-check` ejercita el reclamo, y de dónde salen sus nombres.
@@ -249,6 +250,24 @@ export function claimScenarios(model) {
     };
   }
 
+  // El reclamo del barrido de pagos (G11 de la corrida payment de prueba-gelsa), que build genera fuera de
+  // `operation.claim`: un sujeto propio cuando el diseño no trae otro.
+  const recordEntity = model.payments?.record?.entity && entityOf(model.payments.record.entity);
+  const paymentSweep = recordEntity ? paymentSweepClaim(model, recordEntity) : null;
+  if (paymentSweep) {
+    return {
+      operation: paymentSweep.sweep,
+      entity: recordEntity,
+      enumType: recordEntity.lifecycle.enumType,
+      statusField: recordEntity.lifecycle.field,
+      claims: [],
+      queue: null,
+      rescue: null,
+      guard: null,
+      paymentSweep
+    };
+  }
+
   return { claims: [] };
 }
 
@@ -270,6 +289,22 @@ export function drainSubject(model, scenarios) {
 export const DRAIN_SABOTAGE_CASES = Object.freeze({
   'drain-no-signal': ['dr1_unTickDrenaTodoEnVariasPasadas'],
   'drain-no-budget': ['dr3_agotadoElPresupuestoElTickPara']
+});
+
+/**
+ * Los sabotajes del reclamo del barrido de pagos (G11), sobre `<Registro>JpaRepository.java`: cada uno conserva la forma
+ * (los parámetros siguen usados, así que el contexto arranca) y tiene que tirar EXACTAMENTE sus casos.
+ */
+export const PAYMENT_SWEEP_SABOTAGE_CASES = Object.freeze({
+  // El reclamo no renueva el reloj: se lleva la fila, pero una segunda pasada inmediata la vuelve a tomar.
+  'payment-sweep-no-lease': ['elBarridoDePagosSeLlevaLoRancioSinMoverElEstadoYRenuevaElReloj'],
+  // La cota al revés, en las dos consultas: se lleva lo reciente y deja lo rancio.
+  'payment-sweep-cutoff': [
+    'elBarridoDePagosCubreCadaEstadoEnEspera',
+    'elBarridoDePagosNoSeLlevaLoRecienPuestoEnEspera',
+    'elBarridoDePagosSeLlevaLoRancioSinMoverElEstadoYRenuevaElReloj',
+    'elBarridoDePagosVaAcotadoPorElLote'
+  ]
 });
 
 /**
@@ -816,12 +851,12 @@ ${tests.join('\n')}
 }
 
 function relationalClaimTestClass(model, scenarios, { datasource, packages, database }) {
-  const { entity, enumType, statusField, queue, rescue, guard } = scenarios;
+  const { entity, enumType, statusField, queue, rescue, guard, paymentSweep } = scenarios;
   const jpaClass = `${entity.name}Jpa`;
   const portClass = `${entity.name}Repository`;
   const jpaRepoClass = `${entity.name}JpaRepository`;
   const adapterClass = `${entity.name}RepositoryImpl`;
-  const clockField = queue?.stamps?.field ?? rescue?.stalled?.stampField ?? null;
+  const clockField = queue?.stamps?.field ?? rescue?.stalled?.stampField ?? paymentSweep?.stampField ?? null;
   const statusSetter = accessor('set', statusField);
   const statusGetter = accessor('get', statusField);
   const clockSetter = clockField ? accessor('set', clockField) : null;
@@ -1089,6 +1124,8 @@ function relationalClaimTestClass(model, scenarios, { datasource, packages, data
     }));
   }
 
+  if (paymentSweep) tests.push(paymentSweepTests({ paymentSweep, entity, constant, statusGetter, clockGetter }));
+
   return `package ${model.service.basePackage}.${PACKAGE_LEAF};
 
 ${imports.map((entry) => `import ${entry};`).join('\n')}
@@ -1156,4 +1193,77 @@ ${requiredLiterals(scenarios, clockField, orderField).join('\n')}
 ${tests.join('\n')}
 }
 `;
+}
+
+/**
+ * El reclamo del barrido de pagos (G11), contra el motor: lo rancio de CADA estado en espera entra, lo reciente y lo de
+ * otro estado no, no mueve el estado, renueva el reloj (así que una segunda pasada inmediata no lo vuelve a tomar), el
+ * lote va acotado por el argumento y una fila sin reloj no la recoge nadie. El plazo lo pasa el handler, así que aquí
+ * es un instante cualquiera: lo que se mide es que el predicado CASE.
+ */
+function paymentSweepTests({ paymentSweep, entity, constant, statusGetter, clockGetter }) {
+  const waiting = paymentSweep.states.map(constant);
+  const awaiting = new Set(paymentSweep.states.map((state) => screamingSnake(state)));
+  const other = [...new Set((entity.lifecycle.transitions ?? []).flatMap((t) => [].concat(t.from ?? [], t.to ?? [])))]
+    .map((state) => screamingSnake(state))
+    .find((state) => !awaiting.has(state));
+  const [first] = waiting;
+  const call = (batch) => `adaptador.${paymentSweep.method}(corte, ${batch})`;
+  const otherCase = other
+    ? `
+    @Test
+    void elBarridoDePagosNoTocaOtrosEstados() {
+        fila(${constant(other)}, Instant.now().minusSeconds(3600), Instant.now());
+        Instant corte = Instant.now().minusSeconds(600);
+        assertTrue(${call(10)}.isEmpty(), "el reclamo se llevó un cobro que no espera a la pasarela");
+    }
+`
+    : '';
+  return `
+    // ─── El reclamo del barrido de pagos (G11) ───────────────────────────────
+
+    @Test
+    void elBarridoDePagosSeLlevaLoRancioSinMoverElEstadoYRenuevaElReloj() {
+        UUID rancio = fila(${first}, Instant.now().minusSeconds(3600), Instant.now());
+        Instant corte = Instant.now().minusSeconds(600);
+
+        var reclamados = ${call(10)};
+
+        assertEquals(1, reclamados.size(), "el reclamo no se llevó el cobro rancio");
+        var tras = jpa.findById(rancio).orElseThrow();
+        assertEquals(${first}, tras.${statusGetter}(), "el reclamo cambió el estado: el desenlace lo aplica la consulta");
+        assertTrue(tras.${clockGetter}().isAfter(corte), "el reclamo no renovó ${paymentSweep.stampField}");
+        assertTrue(${call(10)}.isEmpty(), "una segunda pasada inmediata volvió a reclamar el mismo cobro");
+    }
+
+    @Test
+    void elBarridoDePagosNoSeLlevaLoRecienPuestoEnEspera() {
+        fila(${first}, Instant.now(), Instant.now());
+        Instant corte = Instant.now().minusSeconds(600);
+        assertTrue(${call(10)}.isEmpty(), "el reclamo se llevó un cobro que acaba de entrar en espera");
+    }
+${otherCase}
+    @Test
+    void elBarridoDePagosCubreCadaEstadoEnEspera() {
+${waiting.map((state) => `        fila(${state}, Instant.now().minusSeconds(3600), Instant.now());`).join('\n')}
+        Instant corte = Instant.now().minusSeconds(600);
+        assertEquals(${waiting.length}, ${call(50)}.size(), "algún estado en espera no entra en el reclamo");
+    }
+
+    @Test
+    void elBarridoDePagosVaAcotadoPorElLote() {
+        for (int i = 0; i < 3; i++) {
+            fila(${first}, Instant.now().minusSeconds(3600 + i), Instant.now());
+        }
+        Instant corte = Instant.now().minusSeconds(600);
+        assertEquals(2, ${call(2)}.size(), "el lote no va acotado por su argumento");
+    }
+
+    @Test
+    void unCobroEnEsperaSinRelojNoLoRecogeNadie() {
+        // NULL < :staleBefore no es falso, es UNKNOWN: la fila no entra en ningún lote.
+        fila(${first}, null, Instant.now());
+        Instant corte = Instant.now().minusSeconds(600);
+        assertTrue(${call(10)}.isEmpty(), "el reclamo recogió un cobro sin reloj");
+    }`;
 }

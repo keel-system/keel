@@ -40,6 +40,10 @@
 // `--sabotage` el verde es que caigan EXACTAMENTE sus casos: `drain-no-signal` quita el aviso del lote lleno del
 // adaptador (DR-1) y `drain-no-budget` quita el tope de tiempo del tick (DR-3).
 //
+// Y el reclamo del BARRIDO DE PAGOS (G11 de la corrida payment de prueba-gelsa), que build genera fuera de
+// `operation.claim`: con `payment-checkout` (`--database=postgresql|mysql`) se ejercitan sus seis casos, y dos sabotajes
+// lo falsan: `payment-sweep-no-lease` (el UPDATE no renueva el reloj) y `payment-sweep-cutoff` (la cota al revés).
+//
 // Necesita podman o docker, y JDK (Gradle compila el proyecto entero, `main` incluido).
 
 import fs from 'node:fs';
@@ -52,7 +56,9 @@ import { loadService } from '@keel-system/keel-core';
 import { tmpDir } from '../test/helpers/tmp.js';
 import { buildModel } from '../src/lib/model.js';
 import { scaffoldService } from '../src/scaffold/index.js';
-import { claimScenarios, claimTestClass, drainSubject, CLASS_NAME, DRAIN_SABOTAGE_CASES, PACKAGE_LEAF } from '../src/lib/claim-probes.js';
+import { claimScenarios, claimTestClass, drainSubject, CLASS_NAME, DRAIN_SABOTAGE_CASES, PAYMENT_SWEEP_SABOTAGE_CASES, PACKAGE_LEAF } from '../src/lib/claim-probes.js';
+
+const SABOTAGE_CASES = { ...DRAIN_SABOTAGE_CASES, ...PAYMENT_SWEEP_SABOTAGE_CASES };
 import { databaseHealthProbe } from '../src/lib/stack-catalog.js';
 
 // La URI del Mongo del perfil `local`, leída del db.yaml GENERADO. En Boot 4 la conexión del cliente
@@ -72,8 +78,8 @@ const keep = args.includes('--keep');
 const fixture = args.find((arg) => !arg.startsWith('--')) ?? 'job-dispatch';
 const database = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ?? 'postgresql';
 const sabotage = args.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
-if (sabotage && !DRAIN_SABOTAGE_CASES[sabotage]) {
-  console.error(`sabotaje desconocido: ${sabotage} (los hay: ${Object.keys(DRAIN_SABOTAGE_CASES).join(', ')})`);
+if (sabotage && !SABOTAGE_CASES[sabotage]) {
+  console.error(`sabotaje desconocido: ${sabotage} (los hay: ${Object.keys(SABOTAGE_CASES).join(', ')})`);
   process.exit(2);
 }
 
@@ -139,13 +145,15 @@ function prepare() {
   const document = (service.layers.persistence?.default?.model ?? 'relational') === 'document';
   const engine = document ? 'mongodb' : database;
 
-  const model = buildModel({ manifest: service.manifest, layers: service.layers, stack: { database: engine } });
+  // Con capa payments el modelo necesita una pasarela; el reclamo del barrido de pagos no depende de cuál.
+  const stack = { database: engine, ...(service.layers.payments ? { paymentGateway: 'stripe' } : {}) };
+  const model = buildModel({ manifest: service.manifest, layers: service.layers, stack });
   // El stack se cuelga del modelo como en planService: el cronómetro (y con él el drenaje) depende del motor.
-  model.stack = { database: engine };
+  model.stack = stack;
   const scenarios = claimScenarios(model);
   // La guarda cuenta como sujeto por sí sola: un diseño puede no tener barridos y tener un
   // efecto externo irreversible que reclamar, y ahí también hay algo que ejercitar.
-  if (scenarios.claims.length === 0 && !scenarios.guard) {
+  if (scenarios.claims.length === 0 && !scenarios.guard && !scenarios.paymentSweep) {
     throw new Error(`la fixture '${fixture}' no genera ningún reclamo: no hay nada que ejercitar`);
   }
 
@@ -154,7 +162,7 @@ function prepare() {
   // así que ahí no puede colgar de un directorio autolimpiable — una bandera que borra lo que
   // dice conservar es peor que no tenerla.
   const workspace = keep ? fs.mkdtempSync(path.join(os.tmpdir(), 'keel-claim-keep-')) : tmpDir('keel-claim-check-');
-  scaffoldService({ manifest: service.manifest, layers: service.layers, workspace, force: true, stack: { database: engine } });
+  scaffoldService({ manifest: service.manifest, layers: service.layers, workspace, force: true, stack });
   const projectName = fs
     .readdirSync(path.join(workspace, 'services'), { withFileTypes: true })
     .find((entry) => entry.isDirectory()).name;
@@ -169,7 +177,8 @@ function prepare() {
   // El paquete de cada clase se LEE del proyecto generado en vez de suponerse: si el scaffold
   // reorganiza el layout, este runner lo sigue en vez de escribir un import que no existe.
   const drain = drainSubject(model, scenarios);
-  if (sabotage && !drain) throw new Error(`sabotaje ${sabotage}: '${fixture}' no tiene un barrido de cola sobre el cronómetro`);
+  if (sabotage && DRAIN_SABOTAGE_CASES[sabotage] && !drain) throw new Error(`sabotaje ${sabotage}: '${fixture}' no tiene un barrido de cola sobre el cronómetro`);
+  if (sabotage && PAYMENT_SWEEP_SABOTAGE_CASES[sabotage] && !scenarios.paymentSweep) throw new Error(`sabotaje ${sabotage}: '${fixture}' no tiene barrido de pagos`);
   if (sabotage) applySabotage(projectDir, sabotage, scenarios, drain);
   const packages = resolvePackages(projectDir, {
     ...(drain ? { scheduling: `${drain.scheduler}.java`, timer: `${drain.timer}.java` } : {}),
@@ -215,9 +224,20 @@ function applySabotage(projectDir, id, scenarios, drain) {
     },
     // El tick ignora su presupuesto: drena mientras el lote salga lleno, aunque se solape con su arriendo.
     'drain-no-budget': {
-      file: `${drain.timer}.java`,
+      file: `${drain?.timer}.java`,
       find: ' || Duration.between(start, Instant.now()).toMillis() >= budget',
       replace: ''
+    },
+    'payment-sweep-no-lease': {
+      file: `${scenarios.entity.name}JpaRepository.java`,
+      find: `set e.${scenarios.paymentSweep?.stampField} = :leasedAt where`,
+      // Deja el reloj como estaba (no al corte: PostgreSQL redondea a microsegundos y el reloj podía quedar por encima).
+      replace: `set e.${scenarios.paymentSweep?.stampField} = e.${scenarios.paymentSweep?.stampField} where e.${scenarios.paymentSweep?.stampField} <> :leasedAt and`
+    },
+    'payment-sweep-cutoff': {
+      file: `${scenarios.entity.name}JpaRepository.java`,
+      find: new RegExp(`e\.${scenarios.paymentSweep?.stampField} < :staleBefore`, 'g'),
+      replace: `e.${scenarios.paymentSweep?.stampField} > :staleBefore`
     }
   };
   const patch = patches[id];
@@ -344,7 +364,8 @@ console.log(`claim-check · ${fixture} (${engine}) · ${runtimeInfo.runtime}`);
 console.log(
   `  reclamos ejercitados: ${[
     ...scenarios.claims.map((claim) => claim.method),
-    ...(scenarios.guard ? [`${scenarios.guard.method} (guarda)`] : [])
+    ...(scenarios.guard ? [`${scenarios.guard.method} (guarda)`] : []),
+    ...(scenarios.paymentSweep ? [`${scenarios.paymentSweep.method} (barrido de pagos)`] : [])
   ].join(', ')}`
 );
 
@@ -384,7 +405,7 @@ try {
       exitCode = failed > 0 ? 1 : 0;
       if (sabotage) {
         // Con sabotaje, el verde es que caigan EXACTAMENTE sus casos: ni uno de más, ni uno de menos.
-        const expected = [...DRAIN_SABOTAGE_CASES[sabotage]].sort();
+        const expected = [...SABOTAGE_CASES[sabotage]].sort();
         const red = cases.filter((item) => !item.ok).map((item) => item.name).sort();
         const exact = JSON.stringify(expected) === JSON.stringify(red);
         console.log(`  sabotaje ${sabotage}: ${exact ? 'cae exactamente en' : 'NO cae exactamente en'} ${expected.join(', ')}${exact ? '' : ` (cayeron: ${red.join(', ') || 'ninguno'})`}`);
