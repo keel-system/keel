@@ -378,7 +378,6 @@ y el gate `reconciliation` leen el parámetro) y D7 (`SavedPaymentMethod` con el
 `saveAuthenticationCodes`, `savedCardResponse`, `saveAuthenticationRejection`, `savedMethodNote`), G11 (su reclamo del
 barrido de pagos y la red que lo ejecute contra el motor) y las primitivas de G12, con su paridad contra keel-spring.
 Cuando los cuatro lo generen, una fixture que declare `unansweredAfter` y `cardDetails` sustituye a las siluetas.
-  y el resto de G12.
 
 **Inc. 6, en curso.** Se parte en 6a (keel-nest), 6b (keel-dotnet) y 6c (keel-go).
 - **6a (keel-nest) hecho (2026-11-23):**
@@ -454,4 +453,23 @@ parches `-233` de los cuatro), y la rama documental del reclamo de pagos, que ni
 lleva pagos sobre MongoDB.
 
 **Siguiente: inc. 7, la corrida de control** (la lanza el usuario).
+
+**Preparación del inc. 7 (2026-11-24, solo lectura sobre prueba-gelsa).** Medido con las CLIs del repo (keel-core y
+keel-spring 0.7.0):
+- Los tres `specs/` siguen en `keel: "2.32"`, así que `--ready` sale en rojo por schema (`/keel` solo admite `"2.33"`) y
+  no llega a evaluar el resto. Migrar es subir el número y validar (`dsl-reference.md`); después aparecen los rojos del
+  inc. 4 medidos en `D:\keel-gelsa-233`.
+- `keel init --check` da 19 archivos del payload atrasados (schemas, docs del DSL, el careo, la guía de escenarios y la
+  checklist de revisión). Hay que ponerlos al día ANTES de `/keel-evolve`, o el agente leerá la guía vieja.
+- Los tres proyectos los generó keel-spring 0.4.0, a partir de `BOOT4_SINCE` (0.2.0) y de `JAVA25_SINCE` (0.3.0):
+  `build --refresh` no los rechaza.
+
+Guion, en `prueba-gelsa`:
+1. `keel init --force`. No toca README, AGENTS.md ni CLAUDE.md.
+2. Por servicio, `/keel-evolve`: sube `keel` a `"2.33"` y cierra los rojos hasta `keel validate specs/<s> --ready` 13/13.
+   En order son D2 (×3), D3, D4 y D5; en payment, D7 y la revisión de G13; en notifications, D1 (×3).
+3. `keel-spring check specs/<s>` y `keel-spring build specs/<s> --refresh`. Luego `cd services/<s>-spring` y
+   `/keel-generate-spring`.
+4. Antes de tirar nada: `corrida-metrics.js footprint` sobre cada proyecto, y `docs/corridas/<fecha>-<s>-gelsa.md` con
+   los `designGaps`.
 
