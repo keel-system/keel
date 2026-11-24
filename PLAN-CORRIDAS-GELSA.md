@@ -519,3 +519,10 @@ que encontrará `/keel-evolve`, medido sobre una copia con `keel: "2.33"` (lo ú
 - notifications: `CHK-SCEN-PAGE-TOTALS` ×3 (D1).
 Los demás criterios, en verde en los tres. El siguiente paso es el 2 del guion, `/keel-evolve` por servicio.
 
+
+**notifications hecho (2026-11-24): 40/40 a la primera.** `/keel-evolve` (v0.3.0 → v0.3.1) cerró los tres
+`CHK-SCEN-PAGE-TOTALS`, y con eso D1 se cazó en diseño. La evolución dejó 0 `harnessPatches`, 0 `designGaps` y 0 cambios
+de código: solo reescribió los dos flujos de listado. La huella sigue en 41 reescritos, los mismos que el 11-19, y se
+registró en `docs/corridas/2026-11-24-notifications-gelsa.md` (control). Queda una observación sin arreglar: el aviso de
+`keel-spring check` sobre la clave natural de `EmailTemplateVersion`, la hija, es un falso positivo y sale duplicado
+(`naturalKeyParams`). Faltan order y payment.
