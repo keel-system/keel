@@ -175,3 +175,21 @@ for (const name of ['catalog-invariants', 'catalog-invariants-mongo']) {
     assert.ok(files.some((file) => /_repository\.go$/.test(file.path) && file.content.includes('if err := product.EnsureInvariants(); err != nil {')), `${name}: el Save no llama a la guarda`);
   });
 }
+
+// DSL 2.33 (inc. 6c de PLAN-CORRIDAS-GELSA.md): el umbral de silencio enlazado a un parámetro (activations.*.unansweredAfter y
+// reconciliation.unansweredAfter) se lee de la propiedad del parámetro en segundos, sin clave propia en los yaml; y la nota de
+// guardar un medio dice dónde va el resumen de la tarjeta (savePaymentMethod.cardDetails).
+test('stock-reservation-233: el reclamo de reconciliación lee el parámetro (activations.*.unansweredAfter)', () => {
+  const files = emitted('stock-reservation-233');
+  assert.match(content(files, '/reconciliation.go'), /"reserveStock": \{key: "stock-reservation-233\.reserve-silence-minutes", unitSeconds: 60\},/);
+  for (const file of files.filter((candidate) => /parameters\/[^/]+\/reconciliation\.yaml$/.test(candidate.path))) assert.doesNotMatch(file.content, /unanswered-after-seconds/, file.path);
+});
+
+test('payment-checkout-233: el barrido lee el parámetro (reconciliation.unansweredAfter) y la nota guarda la tarjeta (savePaymentMethod.cardDetails)', () => {
+  const files = emitted('payment-checkout-233');
+  assert.match(content(files, 'payment/settings.go'), /positive\("payment-checkout-233\.sweep-silence-minutes", 0\)/);
+  for (const file of files.filter((candidate) => /parameters\/[^/]+\/payments\.yaml$/.test(candidate.path))) assert.doesNotMatch(file.content, /unanswered-after-seconds/, file.path);
+  const handler = content(files, 'save_payment_method_command_handler.go').replace(/\s*\n\s*\/\/\s*/g, ' ');
+  assert.match(handler, /GUARDAR EL MEDIO: la pasarela devuelve domain\.GatewaySavedMethod/);
+  assert.match(handler, /guárdalo en el campo 'card'/);
+});

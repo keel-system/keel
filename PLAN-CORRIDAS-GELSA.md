@@ -1,6 +1,6 @@
 # Lo que destaparon las corridas de prueba-gelsa: cazarlo en diseño y corregir los generadores
 
-**Estado: ABIERTO (2026-11-20).** Inc. 0 a 5, 6a y 6b hechos (2026-11-23). Se ejecuta en varias sesiones, un incremento por sesión
+**Estado: ABIERTO (2026-11-20).** Inc. 0 a 6 hechos (2026-11-23); queda la corrida de control. Se ejecuta en varias sesiones, un incremento por sesión
 como norma, y cada uno se cierra con «Para retomar» en § Estado y su commit.
 
 ## Contexto
@@ -194,7 +194,7 @@ Lo neutral en `keel-core/gen`, y cada generador con su test de paridad.
 | 3. nest, dotnet, go | hecho (2026-11-23) | 3a: suite de keel-nest, `ts-check --only=catalog-gelsa-order` 13/13, `stub-check` 28/28. 3b: suite de keel-dotnet 1076/1076, `cs-check --fixtures --only=catalog-gelsa-order` (falsado), `stub-check` 9/9. 3c: suite de keel-go, `go-check` de la silueta y de stock-reservation (G6 falsado), `stub-check` 12/12 |
 | 4. DSL 2.33 en keel-core | hecho (2026-11-23) | `npm test` de la raíz en verde (6 paquetes), `design-matrix` sin `sin-mutacion`, `--ready` en rojo con su id en las tres copias |
 | 5. keel-spring 2.33 y pagos | hecho (2026-11-23; G10 aceptado como está) | `payment-check` en las dos pasarelas, sabotaje `saved-card`; `claim-check` del barrido de pagos en PostgreSQL y MySQL, falsado |
-| 6. nest, dotnet, go 2.33 y pagos | 6a (keel-nest) y 6b (keel-dotnet) hechos (2026-11-23); 6c pendiente | 6a: suite de keel-nest 1234; `ts-check --only=payment-checkout` 13/13; `stub-check` 37/37; `db-check --subject=payment-checkout` en PostgreSQL y MySQL, con los dos sabotajes del reclamo cayendo en sus casos PS. 6b: suite de keel-dotnet 1087; `cs-check --fixtures` de payment-checkout, -mp, -233 y stock-reservation-233 sin warnings (748 pruebas emitidas), con `payment-saved-card` y `payment-save-3ds` en rojo; `stub-check` 9/9 (17 sondas por pasarela); `db-check --only=payment-checkout` en PostgreSQL y MySQL, con los dos sabotajes en sus casos PS |
+| 6. nest, dotnet, go 2.33 y pagos | hecho (2026-11-23) | 6a: suite de keel-nest 1234; `ts-check --only=payment-checkout` 13/13; `stub-check` 37/37; `db-check --subject=payment-checkout` en PostgreSQL y MySQL, con los dos sabotajes del reclamo cayendo en sus casos PS. 6b: suite de keel-dotnet 1087; `cs-check --fixtures` de payment-checkout, -mp, -233 y stock-reservation-233 sin warnings (748 pruebas emitidas), con `payment-saved-card` y `payment-save-3ds` en rojo; `stub-check` 9/9 (17 sondas por pasarela); `db-check --only=payment-checkout` en PostgreSQL y MySQL, con los dos sabotajes en sus casos PS. 6c: `npm test` de la raíz en verde (keel-go 1690); los pasos de `go-check --fixtures` (tidy, gofmt, vet, staticcheck y pruebas) sobre payment-checkout con las dos pasarelas, en MySQL y en MongoDB, payment-checkout-233 y stock-reservation-233; `stub-check` 12/12; `db-check --only=payment-checkout` en PostgreSQL y MySQL, con los dos sabotajes en sus casos PS |
 | 7. Corrida de control | pendiente | |
 
 **Para retomar:** inc. 0 y 1 hechos. El inc. 1 dejó en keel-core:
@@ -426,13 +426,32 @@ Cuando los cuatro lo generen, una fixture que declare `unansweredAfter` y `cardD
     la carrera remata con una pasada más (por el filesort de MySQL), y esa pasada depende de que se renueve el reloj.
     `test/payment-sweep-claim.test.js` mide la forma de las tres ramas. La documental no se ha ejecutado.
 
-**6c (keel-go), empezado (2026-11-23):** D2 hecho sin medir con Go: `ReconciliationSettingsFrom` lee el parámetro enlazado
-(`reconciliationLinks`, obligatorio; el default sin configuración es su valor de prueba) y `payment.SettingsFrom` lo mismo
-para el barrido de pagos. Pasan `reconciliation`, `payments` y `go-syntax`. La frontera sigue cerrada (`dsl233PendingErrors`
-sin `generates`). Falta: abrir la frontera, D7+G9, G12, G11 (en Go el reclamo de pagos hoy lo escribe el agente en
-`<raíz>_queries.go`), los parches de `UNCOVERED_BRANCHES`, la suite, `go-check`, `stub-check` y `db-check`.
+- **6c (keel-go) hecho (2026-11-23):**
+  - D2: `ReconciliationSettingsFrom` lee el parámetro enlazado (`reconciliationLinks`, obligatorio; sin configuración vale
+    su valor de prueba) y `payment.SettingsFrom` lo mismo para el barrido de pagos.
+  - D7 + G9: el puerto devuelve `domain.GatewaySavedMethod` con `GatewaySavedCard`, y el 3DS al guardar es
+    `*domain.PaymentMethodAuthenticationRequiredError`. **No se llaman `SavedPaymentMethod`/`SavedCard`**: Go tiene un solo
+    paquete `domain`, y payment-checkout ya tiene una entidad `SavedPaymentMethod` (lo destapó `stub-check`, que no
+    compilaba). Lo común de los dos adaptadores sale de `savedMethodGo` (`payments.js`). Las pruebas emitidas
+    `stripe_test.go` y `mercadopago_test.go` leen el resumen de `savedCardResponse` y el 3DS de `saveAuthenticationRejection`.
+  - G12: `GatewaySavesCard`, `GatewayRequiresAuthenticationToSave` (con MercadoPago, `s.Fatal`), `GatewayReportsRefunded`,
+    `GatewayCancelFails` y `GatewayAnswersLate` (con un `time.Duration`) en `payment_gateway_test.go` y en la skill. Lo
+    mide `stub-check` con tres sondas nuevas en `scripts/probes/payment_probe_test.go`.
+  - G11: `src/scaffold/payment-sweep-claim.js` emite `ClaimForPaymentSweep(ctx, staleBefore, batchSize)` con las sentencias
+    del rescate (`claimStatements`): SQL con SKIP LOCKED en una transacción nueva (los ayudantes de `claims.go` se emiten
+    también solo por él), o `FindOneAndUpdate` en documental. El reclamo ya no es del agente en los `<raíz>_queries.go`, y
+    la skill lo dice. Lo ejecuta `db-check` (PS1 a PS7 en `scripts/lib/payment-sweep-probes.js`), con dos sabotajes en
+    `test/helpers/db-sabotages.js`. Como en keel-dotnet, `no-lease` y `cutoff` también tiran PS7.
+  - Los parches `stock-reservation-233` y `payment-checkout-233` en `UNCOVERED_BRANCHES`. El de stock-reservation destapó, al
+    compilarlo, que la prueba emitida `reconciliation_test.go` daba por hecho el default del umbral (`null` con el enlace)
+    y un perfil sin el parámetro: ahora lo carga y espera su valor en segundos. Ni `go-syntax` ni los tests de cadenas lo
+    veían.
+- **La frontera de 2.33 desaparece**: los cuatro generan las dos formas, así que `dsl233PendingErrors` ya no rechazaba nada.
+  Se quitan la función de keel-core (con su prueba), la llamada de los cuatro y la fila de `keel-go/README.md`.
 
-**Siguiente: 6c (keel-go), resto.** Lo mismo: frontera, D2, D7+G9, G12 en el arnés de Go, G11 con su red en `db-check`, y
-`stub-check` con los casos nuevos. Después, la fixture que declare `unansweredAfter` y `cardDetails` sustituye a las
-siluetas de los cuatro.
+**Inc. 6 cerrado.** Pendiente fuera del plan: una fixture que declare `unansweredAfter` y `cardDetails` (sustituiría a los
+parches `-233` de los cuatro), y la rama documental del reclamo de pagos, que ninguna red ejecuta porque ninguna fixture
+lleva pagos sobre MongoDB.
+
+**Siguiente: inc. 7, la corrida de control** (la lanza el usuario).
 

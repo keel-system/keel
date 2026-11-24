@@ -35,6 +35,7 @@ import { isLogicallyDeleted } from '@keel-system/keel-core/gen';
 import { claimDependencies, claimMethod, storedState } from './claim.js';
 import { deadlineDependencies, documentArming, sweepPassSignal } from './timer.js';
 import { documentReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
+import * as paymentSweepClaim from './payment-sweep-claim.js';
 import { credentialFinders, keyFinders, naturalKeyBatchFinder, naturalKeyFinder, portName, rankedEnums } from './repositories.js';
 import { BSON, MONGO_DRIVER, MONGO_OPTIONS } from './document-persistence.js';
 import { parameterAccessor } from './service-parameters.js';
@@ -481,6 +482,7 @@ func (r *${type}) ${batch.name}(ctx context.Context, ${batch.plural} []${batch.p
   if (isScopedRoot(model, entity)) parts.push(...readScopeDocumentMethods(model, entity, { type, constant, idWrite: writer(entity.idField ?? { goType: 'uuid.UUID', name: 'id' }, `found.${id.method}()`, uses) }));
   parts.push(...claimMethods(model, entity, type, constant, uses));
   parts.push(...documentReconciliationMethods(model, entity, type));
+  parts.push(...paymentSweepClaim.documentAdapterMethods(model, entity, type, constant, DOCUMENT_ALIVE.replace(/^bson\.E/, '')));
   parts.push(...documentGuardMethods(model, entity, type, constant, idWrite));
 
   // ─── Escrituras

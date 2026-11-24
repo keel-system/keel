@@ -19,7 +19,7 @@ import { operationError } from '@keel-system/keel-core/gen/declared-errors';
 import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
 import { finderNote } from '@keel-system/keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
-import { followUpRejectionNote } from '@keel-system/keel-core/gen/rejection-notes';
+import { followUpRejectionNote, savedMethodNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { isPartialUpdate, repositoryRoots } from '@keel-system/keel-core/gen/features';
 import { outboundBoundaryNote } from '@keel-system/keel-core/gen/outbound-boundary';
 import { naturalKeyFinder, repositoryParam } from './repositories.js';
@@ -504,6 +504,22 @@ function handlerNotes(model, operation) {
   // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la de todos los generadores.
   const rejection = followUpRejectionNote(model.payments, operation.name);
   if (rejection) notes.push(rejection);
+  const saving = savedMethodNote(model.payments, operation.name, {
+    saved: 'domain.GatewaySavedMethod',
+    rejected: '*domain.GatewayRejectedPaymentMethodError',
+    authentication: '*domain.PaymentMethodAuthenticationRequiredError',
+    unavailable: '*domain.PaymentGatewayUnavailableError'
+  });
+  if (saving) notes.push(saving);
+  // El barrido de pagos (G11 de la corrida payment de prueba-gelsa): el reclamo lo genera build en el puerto del registro.
+  if (model.payments?.reconciliation?.sweep === operation.name) {
+    notes.push(
+      `BARRIDO DE PAGOS: los candidatos ya RECLAMADOS los da h.${repositoryParam({ name: model.payments.record.entity })}.ClaimForPaymentSweep(ctx, h.paymentReconciliation.StaleBefore(time.Now()), h.paymentReconciliation.BatchSize()), ` +
+        'que build generó (renueva awaitingSince con una escritura condicional en su propia transacción y la confirma antes de volver; con el cronómetro, avisa él del lote lleno). ' +
+        'Llama a h.paymentReconciliation.Consult(ctx, reference, gatewayPaymentID) con cada uno, fuera de toda transacción, y aplica lo que devuelva según las reglas. ' +
+        'No escribas otro reclamo en los _queries.go: un segundo mecanismo en paralelo al generado no reclama nada, solo reparte peor.'
+    );
+  }
   for (const code of operation.errors ?? []) {
     const error = operationError(model, operation.name, code);
     // StatusErrorf recibe el status: es el de ESTA operación.

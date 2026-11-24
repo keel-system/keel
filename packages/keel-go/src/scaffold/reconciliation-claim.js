@@ -217,13 +217,21 @@ function settingsTest(model) {
   const [root, leaf, ...rest] = prefix.split('.');
   if (rest.length > 0) throw new Error(`La clave de reconciliación ${prefix} tiene más de dos niveles`);
   const fragment = (value) => `${root}:\n  ${leaf}:\n    batch-size: ${value}\n`;
+  // Con el umbral enlazado a un parámetro (DSL 2.33) el perfil lleva el parámetro, obligatorio, y el umbral es el suyo.
+  const linked = parameters.unansweredAfterSeconds.parameter;
+  const [parameterRoot, parameterLeaf] = linked ? linked.property.split('.') : [];
+  const parameterFile = linked
+    ? `
+		"parameters/local/parameters.yaml":     {Data: []byte(${goString(`${parameterRoot}:\n  ${parameterLeaf}: 3\n`)})},`
+    : '';
+  const unanswered = linked ? 3 * linked.unitSeconds : parameters.unansweredAfterSeconds.default;
   return `
 // load es la configuración con application.yaml y un fragmento del perfil por defecto con fragment dentro.
 func load(t *testing.T, fragment string) *config.Config {
 	t.Helper()
 	fsys := fstest.MapFS{
 		"application.yaml":                     {Data: []byte("server:\\n  port: 8080\\n")},
-		"parameters/local/reconciliation.yaml": {Data: []byte(fragment)},
+		"parameters/local/reconciliation.yaml": {Data: []byte(fragment)},${parameterFile}
 	}
 	cfg, err := config.Load(fsys, func(string) string { return "" })
 	if err != nil {
@@ -241,9 +249,9 @@ func TestReconciliationSettingsFromReadsTheProfile(t *testing.T) {
 	if window.BatchSize != 7 {
 		t.Errorf("BatchSize = %d, quiero 7", window.BatchSize)
 	}
-	// Lo que el perfil no dice conserva el default: el umbral es el del diseño.
-	if got := window.UnansweredAfter(); got != ${parameters.unansweredAfterSeconds.default}*time.Second {
-		t.Errorf("UnansweredAfter = %v, quiero el del diseño (${parameters.unansweredAfterSeconds.default} s)", got)
+	// ${linked ? `El umbral es el parámetro ${linked.name} (3 ${linked.unit} en el perfil)` : 'Lo que el perfil no dice conserva el default: el umbral es el del diseño'}.
+	if got := window.UnansweredAfter(); got != ${unanswered}*time.Second {
+		t.Errorf("UnansweredAfter = %v, quiero el del diseño (${unanswered} s)", got)
 	}
 	if got := window.ClaimTimeout(); got != ${parameters.claimTimeoutMs.default}*time.Millisecond {
 		t.Errorf("ClaimTimeout = %v, quiero el default (${parameters.claimTimeoutMs.default} ms)", got)

@@ -13,7 +13,6 @@ import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/me
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
 import { optionalAuthFrontierErrors } from '@keel-system/keel-core/gen/read-scope';
 import { batchFrontierErrors, batchPendingErrors } from '@keel-system/keel-core/gen/batch';
-import { dsl233PendingErrors } from '@keel-system/keel-core/gen/reconciliation-stores';
 import { declaredDeadlines } from '@keel-system/keel-core/gen/deadlines';
 
 /**
@@ -221,9 +220,6 @@ export function checkSupportedFeatures(manifest, layers) {
   // (scaffold/batch-jobs.js) se generan enteros, también la idempotencia del lote síncrono (D15, KeyedBatches); lo que
   // depende del stack lo rechaza planService (batchJobStackErrors).
   errors.push(...batchPendingErrors(layers, 'keel-spring', { syncIncrement: null, asyncIncrement: null }));
-  // El umbral de silencio desde un parámetro y el resumen de la tarjeta guardada (DSL 2.33) llegan en el incremento 5 de
-  // PLAN-CORRIDAS-GELSA.md: hasta entonces se rechazan, con el mismo mensaje en los cuatro.
-  errors.push(...dsl233PendingErrors(layers, 'keel-spring', '5', { generates: ['unansweredAfter', 'cardDetails'] }));
   // Las invariantes que se hacen cumplir y los derivados estructurados (DSL 2.31: checks, las cotas de la entidad y
   // computed { sum, count }) se generan enteros (scaffold/entity-checks.js): ensureInvariants() y su llamada en el save.
   errors.push(...batchFrontierErrors(layers, 'keel-spring', { syncIdempotency: true }));

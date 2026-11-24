@@ -194,6 +194,22 @@ export const DB_SABOTAGES = {
     expect: /^TestReconcile_\w+_TheNextPassTakesTheOnesBehind$/,
     also: /^TestReconcile_\w+_TwoReplicasDoNotRepeat$/
   },
+  // El reclamo del barrido de pagos (G11 de PLAN-CORRIDAS-GELSA.md), con --only=payment-checkout. El UPDATE deja el reloj
+  // en el pasado en vez de renovarlo: se lleva la fila, pero la pasada siguiente la vuelve a tomar (PS1, y PS7, cuya
+  // última pasada repite lo reclamado).
+  'payment-sweep-no-lease': {
+    files: /\/payment_repository\.go$/,
+    from: 'claimedAt := time.Now().UTC()\n\tvar claimed []*domain.Payment',
+    to: 'claimedAt := staleBefore.Add(-time.Second)\n\tvar claimed []*domain.Payment',
+    expect: /^TestPaymentSweep_PS(1|7)_/
+  },
+  // La cota en el futuro: se lleva lo reciente (PS2), y la pasada siguiente repite lo ya reclamado (PS1, PS7).
+  'payment-sweep-cutoff': {
+    files: /\/payment_repository\.go$/,
+    from: '\tstaleBefore = staleBefore.UTC()\n\tbatch := batchSize\n\t// El reloj renovado, uno por tanda: el reclamo ARRIENDA la fila',
+    to: '\tstaleBefore = time.Now().UTC().Add(24 * time.Hour)\n\tbatch := batchSize\n\t// El reloj renovado, uno por tanda: el reclamo ARRIENDA la fila',
+    expect: /^TestPaymentSweep_PS(1|2|7)_/
+  },
   // El arnés de flujos atasca todas las filas MENOS la pedida: la sonda lee sus sentencias de lo emitido, así que lo ve.
   'harness-stall': { files: /^tests\/integration\/flow_test\.go$/, from: /(UPDATE [^"\n]*) WHERE id = "/g, to: '$1 WHERE id <> "', expect: /^TestRescue_\w+_TheHarnessStatementsBuildItsPrecondition$/ },
   // El reloj «rancio» del arnés es AHORA: la fila no parece abandonada y el rescate no la recoge.

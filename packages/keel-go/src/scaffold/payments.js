@@ -239,9 +239,10 @@ function domainBody(model) {
 	Status(ctx context.Context, reference, gatewayPaymentID string) (GatewayOutcome, error)`);
   if (p.savePaymentMethod) {
     methods.push(`	// SavePaymentMethod guarda un medio de pago para cobrarlo sin el cliente delante y devuelve la referencia opaca de la
-	// pasarela, que no sale nunca del servicio. Un *GatewayRejectedPaymentMethodError si la pasarela no acepta el medio;
-	// un *PaymentGatewayUnavailableError si no se sabe qué hizo.
-	SavePaymentMethod(ctx context.Context, token, payerReference string) (string, error)`);
+	// pasarela, que no sale nunca del servicio, con el resumen de la tarjeta. Un *GatewayRejectedPaymentMethodError si la
+	// pasarela no acepta el medio; un *PaymentMethodAuthenticationRequiredError si exige autenticar al cliente (3DS) para
+	// guardarlo; un *PaymentGatewayUnavailableError si no se sabe qué hizo.
+	SavePaymentMethod(ctx context.Context, token, payerReference string) (GatewaySavedMethod, error)`);
   }
   const statusConstants = STATUSES.map(([value, constant, doc]) => `	// ${constant} ${doc}\n	${constant} GatewayStatus = ${goString(value)}`).join('\n');
   return `
@@ -404,6 +405,41 @@ type GatewayRejectedPaymentMethodError struct {
 // Error implementa error.
 func (e *GatewayRejectedPaymentMethodError) Error() string {
 	return fmt.Sprintf("la pasarela no acepta el medio de pago: HTTP %d", e.Status)
+}
+
+// PaymentMethodAuthenticationRequiredError es que la pasarela exige autenticar al cliente (3DS) para guardar la tarjeta. No es
+// un rechazo del medio: el cliente puede completar la autenticación al tokenizar y volver a pedir el guardado. No se guardó
+// nada.
+type PaymentMethodAuthenticationRequiredError struct {
+	// Status es el status HTTP con que contestó la pasarela.
+	Status int
+}
+
+// Error implementa error.
+func (e *PaymentMethodAuthenticationRequiredError) Error() string {
+	return fmt.Sprintf("la pasarela exige autenticar al cliente para guardar el medio: HTTP %d", e.Status)
+}
+
+// GatewaySavedCard es el resumen visible de la tarjeta guardada, tal como lo informa la pasarela: nunca el número completo. Lo que
+// la pasarela no informa queda en su valor cero.
+type GatewaySavedCard struct {
+	// Brand es la marca.
+	Brand string
+	// Last4 son los cuatro últimos dígitos.
+	Last4 string
+	// ExpMonth es el mes de caducidad.
+	ExpMonth int
+	// ExpYear es el año de caducidad.
+	ExpYear int
+}
+
+// GatewaySavedMethod es un medio de pago guardado en la pasarela (DSL 2.33: con el resumen de su tarjeta). No se llama
+// SavedPaymentMethod porque el diseño suele tener una entidad con ese nombre en el mismo paquete.
+type GatewaySavedMethod struct {
+	// Reference es la referencia opaca de la pasarela: no sale nunca del servicio.
+	Reference string
+	// Card es el resumen de la tarjeta.
+	Card GatewaySavedCard
 }
 `
     : ''
@@ -676,15 +712,16 @@ type PaymentReconciliationSettings struct {
 // PaymentReconciliation es la consulta del barrido de reconciliación (${sweep}) para UN cobro que espera desenlace: le
 // pregunta a la pasarela y aplica lo que diga.
 //
-// Lo que no hace es elegir los candidatos ni reclamarlos: eso es del handler del barrido. Los candidatos son los cobros en
-// ${p.awaitingStates.join(', ')} cuyo ${p.record.awaitingSince} es anterior a StaleBefore; y el handler reclama cada uno
-// volviendo a estampar ${p.record.awaitingSince} ANTES de llamar aquí, para que otra réplica no lo consulte en la misma pasada.${
+// Lo que no hace es elegir los candidatos ni reclamarlos: el handler del barrido los pide con
+// ${p.record.entity}Repository.ClaimForPaymentSweep(ctx, StaleBefore(now), BatchSize()), que build ya generó (G11 de la
+// corrida payment de prueba-gelsa: lo escribía el agente). Ese método devuelve los cobros en ${p.awaitingStates.join(', ')}
+// cuyo ${p.record.awaitingSince} es anterior a StaleBefore, ya RECLAMADOS —con ${p.record.awaitingSince} renovado y
+// confirmado—, y el handler llama aquí con cada uno.${
       scheduledByTimer(model, p.reconciliation.sweep)
         ? `
 //
-// El barrido lo dispara el cronómetro en una réplica por tick, y el tick DRENA: si el handler reclamó un lote lleno
-// (BatchSize() cobros), que lo avise con SweepClaimed(ctx, reclamados, BatchSize()) —application.SweepClaimed desde el
-// adaptador, donde va el reclamo— y el tick repetirá la pasada.`
+// El barrido lo dispara el cronómetro en una réplica por tick, y el tick DRENA: el reclamo generado ya avisa del lote lleno
+// con application.SweepClaimed, así que el tick repetirá la pasada sin que el handler haga nada.`
         : ''
     }
 type PaymentReconciliation struct {
@@ -1262,5 +1299,81 @@ func noAnswer(gateway, action string, err error) error {
 	}
 	return err
 }
+`;
+}
+
+/**
+ * Lo que los dos adaptadores escriben igual al guardar un medio (DSL 2.33, G9), el gemelo de `savedMethodJava` de
+ * keel-spring, `savedMethodTsHelpers` de keel-nest y `savedMethodCs` de keel-dotnet: la clasificación de una respuesta
+ * (5xx en duda, el 4xx de autenticación de `saveAuthenticationCodes` y el rechazo) y el resumen de la tarjeta leído de las
+ * rutas de su traducción (`savedCard` de keel-core/gen/payment-gateways.js). Las rutas son DATOS de keel-core: el doble de
+ * prueba (`savedCardResponse`) las usa para escribir la respuesta, así que leen lo mismo.
+ */
+export function savedMethodGo(translation, gatewayName) {
+  const path = (route) => route.split('.').map((key) => goString(key)).join(', ');
+  const { brand, last4, expMonth, expYear } = translation.savedCard;
+  const codes = translation.saveAuthenticationCodes;
+  const authentication = codes.length
+    ? `
+	case answer.status >= 400 && asksAuthentication(answer):
+		return &domain.PaymentMethodAuthenticationRequiredError{Status: answer.status}`
+    : '';
+  const asks = codes.length
+    ? `
+
+// asksAuthentication es el 4xx al guardar que dice que la tarjeta exige autenticar (3DS): no es un rechazo del medio.
+func asksAuthentication(answer gatewayAnswer) bool {
+	body, err := decodeObject(answer.text)
+	if err != nil {
+		return false
+	}
+	failure := objectOf(body["error"])
+	code := textOf(failure["decline_code"])
+	if code == "" {
+		code = textOf(failure["code"])
+	}
+	return ${codes.map((code) => `code == ${goString(code)}`).join(' || ')}
+}`
+    : '';
+  return `
+// rejectedMethod es guardar un medio: un 5xx deja la operación en duda; un 4xx es que la pasarela no acepta el medio${codes.length ? ',\n// salvo que pida autenticar al cliente (3DS)' : ''}.
+func rejectedMethod(answer gatewayAnswer, err error) error {
+	switch {
+	case err != nil:
+		return err
+	case answer.status >= 500:
+		return unavailableAnswer(${goString(gatewayName)}, "savePaymentMethod", answer)${authentication}
+	case answer.status >= 400:
+		return &domain.GatewayRejectedPaymentMethodError{Status: answer.status}
+	}
+	return nil
+}
+
+// savedCardOf es el resumen de la tarjeta guardada, de donde lo trae ${gatewayName}; lo que no informa queda en su valor cero.
+func savedCardOf(saved jsonObject) domain.GatewaySavedCard {
+	return domain.GatewaySavedCard{
+		Brand:    textOf(savedField(saved, ${path(brand)})),
+		Last4:    textOf(savedField(saved, ${path(last4)})),
+		ExpMonth: savedNumber(savedField(saved, ${path(expMonth)})),
+		ExpYear:  savedNumber(savedField(saved, ${path(expYear)})),
+	}
+}
+
+// savedField es el campo de esa ruta en la respuesta, o nil.
+func savedField(node jsonObject, path ...string) any {
+	var value any = node
+	for _, key := range path {
+		value = objectOf(value)[key]
+	}
+	return value
+}
+
+// savedNumber es un número entero de la respuesta, o 0.
+func savedNumber(value any) int {
+	if number, ok := value.(float64); ok {
+		return int(number)
+	}
+	return 0
+}${asks}
 `;
 }

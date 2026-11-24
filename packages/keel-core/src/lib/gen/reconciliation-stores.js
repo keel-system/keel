@@ -188,31 +188,3 @@ export function reconciliationWindow({ now, unansweredAfterSeconds, claimTimeout
 export function reconciliationClaimReference(claimedAt, claimExpiredBefore) {
   return claimedAt == null || claimedAt.getTime() <= claimExpiredBefore.getTime();
 }
-
-/**
- * La frontera mientras un generador no lee el umbral de silencio desde un service.parameters (`unansweredAfter`, DSL 2.33,
- * en una activación o en `payments.reconciliation`) ni el resumen de la tarjeta guardada (`savePaymentMethod.cardDetails`):
- * se rechaza con el mismo mensaje en los cuatro, porque a medias fallaría en silencio —el barrido usaría el umbral por
- * defecto, o el medio se guardaría sin su resumen—. Cada generador la quita en su incremento de PLAN-CORRIDAS-GELSA.md
- * (keel-spring en el 5, los otros tres en el 6). `generates` dice qué forma ya genera ese generador, para abrirlas de una en una.
- */
-export function dsl233PendingErrors(layers, generator, increment, { generates = [] } = {}) {
-  const pending = (what, fix) =>
-    `${what} (DSL 2.33): ${generator} todavía no lo genera — llega en el incremento ${increment} de PLAN-CORRIDAS-GELSA.md, ` +
-    `y a medias fallaría en silencio. ${fix} para generar este diseño.`;
-  const errors = [];
-  for (const [depName, dependency] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
-    for (const [name, activation] of Object.entries(dependency?.activations ?? {})) {
-      if (activation?.unansweredAfter && !generates.includes('unansweredAfter')) {
-        errors.push(pending(`dependencies: ${depName}.activations.${name}.unansweredAfter`, 'Escribe el umbral con unansweredAfterSeconds'));
-      }
-    }
-  }
-  if (layers?.payments?.reconciliation?.unansweredAfter && !generates.includes('unansweredAfter')) {
-    errors.push(pending('payments: reconciliation.unansweredAfter', 'Escribe el umbral con unansweredAfterSeconds'));
-  }
-  if (layers?.payments?.savePaymentMethod?.cardDetails && !generates.includes('cardDetails')) {
-    errors.push(pending('payments: savePaymentMethod.cardDetails', 'Quita cardDetails'));
-  }
-  return errors;
-}

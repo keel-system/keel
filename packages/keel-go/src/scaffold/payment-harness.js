@@ -9,7 +9,7 @@
 // el mismo adaptador. Lo que se mide es el servidor. Lo que el stub ENTIENDE de lo que se programa aquí, y que lo que
 // devuelve es lo que lee el adaptador emitido, lo mide `npm run stub-check` (scripts/probes/payment_probe_test.go).
 
-import { paymentProbesFor } from '@keel-system/keel-core/gen/payment-probes';
+import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
 import { paymentTestCurrency } from '@keel-system/keel-core/gen/payments-config';
 import { HTTP_STUB_ENDPOINTS } from '@keel-system/keel-core/gen/http-stub-probes';
@@ -38,6 +38,12 @@ export function paymentHarnessBody(model) {
   const constants = alignRows(calls.map(([call]) => ({ indent: '\t', cells: [gatewayCallConstant(call), `GatewayCall = ${goString(call)}`] }))).join('\n');
   const routes = keyedLiteral(calls.map(([call, route]) => [gatewayCallConstant(call), `{${goString(route.method)}, ${goString(route.path)}}`])).join('\n');
   const specific = gateway.id === 'stripe' ? stripeSpecific(probes) : mercadopagoSpecific(probes);
+  // La respuesta de guardar con el resumen en las rutas que lee el adaptador (keel-core: savedCardResponse), la MISMA que
+  // escriben los arneses de los otros tres; y el 4xx de la autenticación al guardar, si la pasarela lo pide.
+  const placeholders = { '@B@': 'brand', '@L@': 'last4', '-71': 'expMonth', '-72': 'expYear' };
+  const cardObject = goLiteral(savedCardResponse(gateway.id, { brand: '@B@', last4: '@L@', expMonth: -71, expYear: -72 }), placeholders);
+  const authentication = saveAuthenticationRejection(gateway.id);
+  const card = DEFAULT_SAVED_CARD;
   return String.raw`
 // La pasarela de pago de prueba (capa payments, ${gateway.label}) es el WireMock de infra/docker-compose.yaml hablando el
 // protocolo de la pasarela elegida, al que apunta payments.gateway.base-url en el perfil local. La API es NEUTRA —los
@@ -170,12 +176,74 @@ func (s *Scenario) GatewayRejects(call GatewayCall) {
 	s.StubFor(route.method, route.path, 400, map[string]any{"error": map[string]any{"code": "rejected_by_test"}})
 }
 
-// GatewaySavesPaymentMethod hace que la pasarela guarde el medio de pago que se le pase.
+// GatewaySavesPaymentMethod hace que la pasarela guarde el medio de pago que se le pase, con una tarjeta ${card.brand}
+// terminada en ${card.last4} (${card.expMonth}/${card.expYear}).
 func (s *Scenario) GatewaySavesPaymentMethod() {
+	s.Helper()
+	s.GatewaySavesCard(${goString(card.brand)}, ${goString(card.last4)}, ${card.expMonth}, ${card.expYear})
+}
+
+// GatewaySavesCard hace que la pasarela guarde el medio con ESTE resumen de tarjeta: lo que un escenario afirma en la
+// respuesta o en la ficha del medio guardado (savePaymentMethod.cardDetails).
+func (s *Scenario) GatewaySavesCard(brand, last4 string, expMonth, expYear int) {
 	s.Helper()
 	save, attach := s.gatewayRoute(CallSaveMethod), s.gatewayRoute(CallAttachMethod)
 	s.StubFor(save.method, save.path, 200, map[string]any{"id": "cus_keel_test"})
-	s.StubFor(attach.method, attach.path, 200, map[string]any{"id": "card_keel_test"})
+	s.StubFor(attach.method, attach.path, 200, ${cardObject})
+}
+
+// GatewayRequiresAuthenticationToSave hace que la pasarela exija autenticar al cliente (3DS) para guardar la tarjeta.${authentication ? '' : `
+// ${gateway.label} no lo pide al guardar (la autenticación es del cobro): un escenario que lo use no se puede ejecutar con
+// ella, y el helper lo dice en vez de programar otra cosa.`}
+func (s *Scenario) GatewayRequiresAuthenticationToSave() {
+	s.Helper()
+${authentication
+  ? `	save, attach := s.gatewayRoute(CallSaveMethod), s.gatewayRoute(CallAttachMethod)
+	s.StubFor(save.method, save.path, 200, map[string]any{"id": "cus_keel_test"})
+	s.StubFor(attach.method, attach.path, ${authentication.status}, ${goLiteral(authentication.body, {})})`
+  : `	s.Fatal(${goString(`${gateway.id} no pide autenticar al guardar un medio: este escenario no aplica con ella`)})`}
+}
+
+// GatewayReportsRefunded programa que, preguntada por el cobro de esa referencia, la pasarela lo dé por devuelto con ESE
+// total ("7.50"): lo que mide un escenario de devolución parcial, o una devolución cuya respuesta no llegó y el barrido
+// resuelve consultando.
+func (s *Scenario) GatewayReportsRefunded(reference, refundedTotal string) {
+	s.Helper()
+	object := s.gatewayObject(reference, "REFUNDED", "", refundedTotal)
+	s.gatewayStubPath(CallStatus, gatewayIDFor(reference), 200, object)
+	s.gatewayStub(CallSearch, reference, "", 200, map[string]any{"data": []any{object}})
+}
+
+// GatewayCancelFails hace que la anulación del cobro de esa referencia vuelva como un cobro FALLIDO con un motivo del
+// vocabulario neutro (la del 3DS que el cliente no completó es "authenticationFailed"): el desenlace no es la anulación
+// sino el fallo.
+func (s *Scenario) GatewayCancelFails(reference, reason string) {
+	s.Helper()
+	decline, err := gatewayDeclineFor(reason)
+	if err != nil {
+		s.Fatal(err)
+	}
+	s.gatewayStubPath(CallCancel, gatewayIDFor(reference), 200, s.gatewayObject(reference, "FAILED", decline, ""))
+}
+
+// GatewayAnswersLate hace que la pasarela RETENGA su respuesta a esa llamada durante delay y después conteste con el cobro
+// en ese estado: lo que hace escribible un escenario en el que el aviso llega ANTES que la respuesta (envía el aviso sin
+// esperar a la petición). Vale para CallCharge, CallCapture y CallCancel. El retardo tiene que quedar por debajo del
+// read-timeout del cliente de la pasarela (payments.gateway.read-timeout), o la acción quedará en duda.
+func (s *Scenario) GatewayAnswersLate(call GatewayCall, reference, status string, delay time.Duration) {
+	s.Helper()
+	object := s.gatewayObject(reference, status, "", "")
+	switch call {
+	case CallCharge:
+		route := s.gatewayRoute(call)
+		s.gatewayMappingDelayed(route.method, route.path, "", reference, 200, object, delay)
+	case CallCapture, CallCancel:
+		route := s.gatewayRoute(call)
+		concrete := strings.ReplaceAll(strings.ReplaceAll(route.path, "(?!search)[^/]+", gatewayIDFor(reference)), "[^/]+", gatewayIDFor(reference))
+		s.gatewayMappingDelayed(route.method, concrete, "", "", 200, object, delay)
+	default:
+		s.Fatalf("GatewayAnswersLate: %s no devuelve el cobro; usa CallCharge, CallCapture o CallCancel", call)
+	}
 }
 
 // GatewayRefunds hace que la devolución del cobro de esa referencia se complete por ese importe ("5.00").
@@ -269,6 +337,12 @@ func (s *Scenario) gatewayStubPath(call GatewayCall, gatewayID string, status in
 
 func (s *Scenario) gatewayMapping(method, pathPattern, queryContains, bodyContains string, status int, body any) {
 	s.Helper()
+	s.gatewayMappingDelayed(method, pathPattern, queryContains, bodyContains, status, body, 0)
+}
+
+// gatewayMappingDelayed es gatewayMapping con la respuesta retenida delay (fixedDelayMilliseconds de WireMock).
+func (s *Scenario) gatewayMappingDelayed(method, pathPattern, queryContains, bodyContains string, status int, body any, delay time.Duration) {
+	s.Helper()
 	request := stubCriterion(method, pathPattern)
 	if queryContains != "" {
 		request["queryParameters"] = map[string]any{${goString(probes.calls.SEARCH.query)}: map[string]any{"contains": queryContains}}
@@ -276,7 +350,11 @@ func (s *Scenario) gatewayMapping(method, pathPattern, queryContains, bodyContai
 	if bodyContains != "" {
 		request["bodyPatterns"] = []any{map[string]any{"contains": bodyContains}}
 	}
-	wire, err := RespondOK(status, body).wire()
+	response := RespondOK(status, body)
+	if delay > 0 {
+		response = RespondDelayed(status, body, delay)
+	}
+	wire, err := response.wire()
 	if err != nil {
 		s.Fatal(err)
 	}
@@ -358,6 +436,11 @@ ${statuses}
 
 var gatewayDeclineCodes = map[string]string{
 ${declines}
+}
+
+// gatewayDeclineFor es el decline_code de Stripe de un motivo del vocabulario neutro.
+func gatewayDeclineFor(reason string) (string, error) {
+	return known(gatewayDeclineCodes, reason, "Motivo")
 }
 
 // gatewayObject es un PaymentIntent con la forma que lee el adaptador de Stripe.
@@ -477,6 +560,11 @@ var gatewayDeclineDetails = map[string]string{
 ${declines}
 }
 
+// gatewayDeclineFor es el status_detail de MercadoPago de un motivo del vocabulario neutro.
+func gatewayDeclineFor(reason string) (string, error) {
+	return known(gatewayDeclineDetails, reason, "Motivo")
+}
+
 // gatewayObject es una order con la forma que lee el adaptador de MercadoPago.
 func gatewayObject(reference, status, detail, refunded string) (map[string]any, error) {
 	state, err := known(gatewayStatuses, status, "Estado")
@@ -552,4 +640,17 @@ func gatewayNotice(reference string, forged bool) GatewayNotice {
 	return GatewayNotice{Path: paymentNoticePath + "?${translation.notice.dataIdQuery}=" + id + "&type=order", Body: body, Header: header}
 }
 `;
+}
+
+/**
+ * Un valor JSON como literal de Go (`map[string]any{…}`), con las claves en orden y los marcadores de `placeholders`
+ * (texto o número) sustituidos por el nombre de una variable.
+ */
+function goLiteral(value, placeholders) {
+  const placeholder = placeholders[typeof value === 'number' ? String(value) : value];
+  if (placeholder) return placeholder;
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return `map[string]any{${Object.entries(value).map(([key, entry]) => `${goString(key)}: ${goLiteral(entry, placeholders)}`).join(', ')}}`;
+  }
+  return typeof value === 'string' ? goString(value) : String(value);
 }

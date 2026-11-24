@@ -34,6 +34,7 @@ import { layout, packageFile } from './render.js';
 import { parameterAccessor, parametersType } from './service-parameters.js';
 import { usesDependencies } from './use-cases.js';
 import { usesReconciliationClaims } from './reconciliation-claim.js';
+import { usesPaymentSweepClaim } from './payment-sweep-claim.js';
 import { sweepPassSignal } from './timer.js';
 
 const PROFILES = ['local', 'develop', 'production', 'test'];
@@ -49,7 +50,7 @@ export const claimMethod = (claim) => goExported(claim.method);
 /** ¿Hacen falta los ayudantes de un reclamo (claims.go)? Los usan el de barrido y el de reconciliación. */
 export function usesClaimHelpers(model) {
   // Los documentales no los necesitan: FindOneAndUpdate elige y marca en una operación (document-repositories.js).
-  return usesRelational(model) && (usesSweepClaims(model) || usesReconciliationClaims(model));
+  return usesRelational(model) && (usesSweepClaims(model) || usesReconciliationClaims(model) || usesPaymentSweepClaim(model));
 }
 
 export function generate(model) {

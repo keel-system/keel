@@ -32,15 +32,15 @@ const MOTIVOS = {
 const EXCEPCIONES = new Map([
   [
     'dependencies.dependencies.*.activations.*.unansweredAfter',
-    { motivo: MOTIVOS.pendiente, porque: 'DSL 2.33: la frontera la rechaza (dsl233PendingErrors) hasta el incremento 6 de PLAN-CORRIDAS-GELSA.md, que trae la fixture que la declara.' }
+    { motivo: MOTIVOS.soloCadenas, porque: 'DSL 2.33: el umbral enlazado a un parámetro en el reclamo generado: stock-reservation-233.' }
   ],
   [
     'payments.reconciliation.unansweredAfter',
-    { motivo: MOTIVOS.pendiente, porque: 'DSL 2.33: la frontera la rechaza (dsl233PendingErrors) hasta el incremento 6 de PLAN-CORRIDAS-GELSA.md, que trae la fixture que la declara.' }
+    { motivo: MOTIVOS.soloCadenas, porque: 'DSL 2.33: el umbral del barrido de pagos enlazado a un parámetro: payment-checkout-233.' }
   ],
   [
     'payments.savePaymentMethod.cardDetails',
-    { motivo: MOTIVOS.pendiente, porque: 'DSL 2.33: la frontera la rechaza (dsl233PendingErrors) hasta el incremento 6 de PLAN-CORRIDAS-GELSA.md, que trae la fixture que la declara.' }
+    { motivo: MOTIVOS.soloCadenas, porque: 'DSL 2.33: el resumen de la tarjeta en la nota del handler (el adaptador lo lee siempre, y lo ejecutan stripe_test.go y mercadopago_test.go): payment-checkout-233.' }
   ],
   [
     'messaging.subscriptions.*.contract.schemaRef',

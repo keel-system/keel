@@ -9,8 +9,9 @@
 
 import { gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
 import { alignRows, goString } from '../../lib/go-source.js';
+import { DEFAULT_SAVED_CARD, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { packageFile } from '../render.js';
-import { reasonConstant } from '../payments.js';
+import { reasonConstant, savedMethodGo } from '../payments.js';
 
 const TRANSLATION = gatewayTranslation('mercadopago');
 
@@ -161,25 +162,25 @@ func (g *mercadopagoGateway) Status(ctx context.Context, reference, gatewayPayme
   if (p.savePaymentMethod) {
     const [customerStep, cardStep] = TRANSLATION.savedMethodSteps;
     methods.push(`// SavePaymentMethod implementa domain.PaymentGateway: el cliente de MercadoPago y la tarjeta guardada en él.
-func (g *mercadopagoGateway) SavePaymentMethod(ctx context.Context, token, payerReference string) (string, error) {
+func (g *mercadopagoGateway) SavePaymentMethod(ctx context.Context, token, payerReference string) (domain.GatewaySavedMethod, error) {
 	customer, err := g.send(ctx, "savePaymentMethod", http.MethodPost, "/v1/customers", jsonObject{"description": payerReference}, savedKey(token, ${goString(customerStep)}))
 	if err := rejectedMethod(customer, err); err != nil {
-		return "", err
+		return domain.GatewaySavedMethod{}, err
 	}
 	created, err := decodeObject(customer.text)
 	if err != nil {
-		return "", err
+		return domain.GatewaySavedMethod{}, err
 	}
 	customerID := textOf(created["id"])
 	card, err := g.send(ctx, "savePaymentMethod", http.MethodPost, "/v1/customers/"+url.PathEscape(customerID)+"/cards", jsonObject{"token": token}, savedKey(token, ${goString(cardStep)}))
 	if err := rejectedMethod(card, err); err != nil {
-		return "", err
+		return domain.GatewaySavedMethod{}, err
 	}
 	saved, err := decodeObject(card.text)
 	if err != nil {
-		return "", err
+		return domain.GatewaySavedMethod{}, err
 	}
-	return customerID + savedMethodSeparator + textOf(saved["id"]), nil
+	return domain.GatewaySavedMethod{Reference: customerID + savedMethodSeparator + textOf(saved["id"]), Card: savedCardOf(saved)}, nil
 }`);
   }
   return `
@@ -312,20 +313,7 @@ func mercadopagoPayment(order jsonObject) jsonObject {
 }
 ${
   p.savePaymentMethod
-    ? `
-// rejectedMethod es guardar un medio: un 5xx deja la operación en duda; un 4xx es que la pasarela no acepta el medio.
-func rejectedMethod(answer gatewayAnswer, err error) error {
-	switch {
-	case err != nil:
-		return err
-	case answer.status >= 500:
-		return unavailableAnswer("MercadoPago", "savePaymentMethod", answer)
-	case answer.status >= 400:
-		return &domain.GatewayRejectedPaymentMethodError{Status: answer.status}
-	}
-	return nil
-}
-`
+    ? savedMethodGo(TRANSLATION, 'MercadoPago')
     : ''
 }`;
 }
@@ -506,7 +494,26 @@ func signedNotice(secret, ts, dataID string) domain.PaymentNotice {
 	return domain.NewPaymentNotice("{}", map[string][]string{${goString(header)}: {header}, "X-Request-Id": {"req-1"}}, map[string][]string{"data.id": {dataID}})
 }
 
-func TestTheNoticeVerifiesTheManifestAndItsWindow(t *testing.T) {
+${model.payments.savePaymentMethod ? `func TestSavingAMethodReadsTheCardAndTellsTheAuthenticationApart(t *testing.T) {
+	gateway, _, _, _ := fakeMercadopago(t, http.StatusOK, \`${JSON.stringify(savedCardResponse('mercadopago', DEFAULT_SAVED_CARD, 'cus_1'))}\`)
+	saved, err := gateway.SavePaymentMethod(t.Context(), "tok", "payer-1")
+	if err != nil {
+		t.Fatalf("SavePaymentMethod = %v", err)
+	}
+	want := domain.GatewaySavedCard{Brand: ${goString(DEFAULT_SAVED_CARD.brand)}, Last4: ${goString(DEFAULT_SAVED_CARD.last4)}, ExpMonth: ${DEFAULT_SAVED_CARD.expMonth}, ExpYear: ${DEFAULT_SAVED_CARD.expYear}}
+	if saved.Reference != "cus_1|cus_1" || saved.Card != want {
+		t.Errorf("SavePaymentMethod = %+v, quiero la referencia cus_1|cus_1 y el resumen %+v (de las rutas de keel-core)", saved, want)
+	}
+	// MercadoPago no pide 3DS al guardar: el 402 de la autenticación de Stripe es un rechazo más.
+	gateway, _, _, _ = fakeMercadopago(t, http.StatusPaymentRequired, \`${JSON.stringify(saveAuthenticationRejection('stripe').body)}\`)
+	_, err = gateway.SavePaymentMethod(t.Context(), "tok", "payer-1")
+	var rejected *domain.GatewayRejectedPaymentMethodError
+	if !errors.As(err, &rejected) {
+		t.Errorf("SavePaymentMethod con el 402 de autenticación = %v, quiero un *domain.GatewayRejectedPaymentMethodError", err)
+	}
+}
+
+` : ''}func TestTheNoticeVerifiesTheManifestAndItsWindow(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	verifier := &mercadopagoNoticeVerifier{secret: "secret", tolerance: 300 * time.Second, now: func() time.Time { return now }}
 	seconds := strconv.FormatInt(now.Unix(), 10)

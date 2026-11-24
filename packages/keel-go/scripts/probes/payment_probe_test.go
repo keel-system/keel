@@ -200,8 +200,8 @@ func TestPaymentProbeGuardarUnMedioYSuRechazo(t *testing.T) {
 	s, gateway, _ := paymentProbe(t)
 	s.GatewaySavesPaymentMethod()
 	saved, err := gateway.SavePaymentMethod(t.Context(), "tok_keel", "payer-1")
-	if err != nil || !strings.HasPrefix(saved, "cus_keel_test|") {
-		t.Errorf("SavePaymentMethod = %q, %v; quiero la referencia opaca cus_keel_test|…", saved, err)
+	if err != nil || !strings.HasPrefix(saved.Reference, "cus_keel_test|") {
+		t.Errorf("SavePaymentMethod = %+v, %v; quiero la referencia opaca cus_keel_test|…", saved, err)
 	}
 	s.ResetStubs()
 	s.GatewayRejects(CallSaveMethod)
@@ -209,6 +209,59 @@ func TestPaymentProbeGuardarUnMedioYSuRechazo(t *testing.T) {
 	var rejected *domain.GatewayRejectedPaymentMethodError
 	if !errors.As(err, &rejected) {
 		t.Errorf("SavePaymentMethod rechazado = %v, quiero un *domain.GatewayRejectedPaymentMethodError", err)
+	}
+}
+
+// DSL 2.33 y G12 (inc. 6c de PLAN-CORRIDAS-GELSA.md): lo que programan los helpers nuevos, leído por el adaptador emitido.
+func TestPaymentProbeGuardarConUnaTarjetaConcretaYEl3DSDondeLaPasarelaLoPide(t *testing.T) {
+	s, gateway, _ := paymentProbe(t)
+	s.GatewaySavesCard("amex", "0005", 3, 2029)
+	saved, err := gateway.SavePaymentMethod(t.Context(), "tok_keel", "payer-2")
+	want := domain.GatewaySavedCard{Brand: "amex", Last4: "0005", ExpMonth: 3, ExpYear: 2029}
+	if err != nil || saved.Card != want {
+		t.Errorf("SavePaymentMethod = %+v, %v; quiero la tarjeta %+v", saved, err, want)
+	}
+	// Solo Stripe pide 3DS al guardar (la ruta del último paso es la del attach); con MercadoPago el helper para el escenario.
+	if !strings.HasSuffix(gatewayRoutes[CallAttachMethod].path, "/attach") {
+		return
+	}
+	s.GatewayRequiresAuthenticationToSave()
+	_, err = gateway.SavePaymentMethod(t.Context(), "tok_3ds", "payer-3")
+	var asked *domain.PaymentMethodAuthenticationRequiredError
+	if !errors.As(err, &asked) {
+		t.Errorf("SavePaymentMethod con 3DS = %v, quiero un *domain.PaymentMethodAuthenticationRequiredError", err)
+	}
+}
+
+func TestPaymentProbeDevueltoPorUnTotalYAnulacionQueFallaConSuMotivo(t *testing.T) {
+	s, gateway, _ := paymentProbe(t)
+	ctx := t.Context()
+	s.GatewayReportsRefunded("ch-n", "7.50")
+	refunded, err := gateway.Status(ctx, "ch-n", s.GatewayIDFor("ch-n"))
+	if err != nil || refunded.Status != domain.GatewayRefunded || refunded.RefundedAmount == nil || refunded.RefundedAmount.Cmp(wire.MustDecimal("7.50")) != 0 {
+		t.Errorf("Status de uno devuelto = %+v, %v; quiero devuelto por 7.50", refunded, err)
+	}
+	s.GatewayCancelFails("ch-o", "authenticationFailed")
+	failed, err := gateway.VoidAuthorization(ctx, "ch-o", s.GatewayIDFor("ch-o"))
+	if err != nil || failed.Status != domain.GatewayFailed || failed.FailureReason != domain.PaymentFailureReasonAuthenticationFailed {
+		t.Errorf("VoidAuthorization = %+v, %v; quiero fallido por authenticationFailed", failed, err)
+	}
+}
+
+func TestPaymentProbeLaPasarelaRetieneSuRespuestaYDespuesContesta(t *testing.T) {
+	s, gateway, _ := paymentProbe(t)
+	ctx := t.Context()
+	s.GatewayAnswersLate(CallCharge, "ch-p", "AUTHORIZED", 400*time.Millisecond)
+	started := time.Now()
+	if got, err := gateway.Authorize(ctx, probeCharge(t, "ch-p")); err != nil || got.Status != domain.GatewayAuthorized {
+		t.Errorf("Authorize = %+v, %v; quiero autorizado", got, err)
+	}
+	if elapsed := time.Since(started); elapsed < 350*time.Millisecond {
+		t.Errorf("la respuesta llegó en %v: quiero que la pasarela la retenga", elapsed)
+	}
+	s.GatewayAnswersLate(CallCapture, "ch-q", "CAPTURED", 50*time.Millisecond)
+	if got, err := gateway.Capture(ctx, "ch-q", s.GatewayIDFor("ch-q")); err != nil || got.Status != domain.GatewayCaptured {
+		t.Errorf("Capture = %+v, %v; quiero cobrado", got, err)
 	}
 }
 

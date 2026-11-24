@@ -15,7 +15,6 @@ import { messagingWithoutPersistenceErrors } from '@keel-system/keel-core/gen/me
 import { conditionalWritesFrontierErrors } from '@keel-system/keel-core/gen/conditional-writes';
 import { optionalAuthFrontierErrors } from '@keel-system/keel-core/gen/read-scope';
 import { batchFrontierErrors, batchPendingErrors } from '@keel-system/keel-core/gen/batch';
-import { dsl233PendingErrors } from '@keel-system/keel-core/gen/reconciliation-stores';
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {};
@@ -75,9 +74,6 @@ export function checkSupportedFeatures(manifest, layers) {
   // (scaffold/batch-jobs.js) se generan enteros, también la idempotencia del lote síncrono (D15, KeyedBatches); lo que
   // depende del stack lo rechaza planService (batchJobStackErrors).
   errors.push(...batchPendingErrors(layers, 'keel-dotnet', { syncIncrement: null, asyncIncrement: null }));
-  // El umbral de silencio desde un parámetro y el resumen de la tarjeta guardada (DSL 2.33) llegan en el incremento 6 de
-  // PLAN-CORRIDAS-GELSA.md: hasta entonces se rechazan, con el mismo mensaje en los cuatro.
-  errors.push(...dsl233PendingErrors(layers, 'keel-dotnet', '6', { generates: ['unansweredAfter', 'cardDetails'] }));
   // La búsqueda de 2.32 (op in/ne, search y sortable) se genera entera: el finder (scaffold/finders.js y
   // document-repositories.js) y el lector de ?sort= y de la lista de la query (rest-support.js).
   // Las invariantes que se hacen cumplir y los derivados estructurados (DSL 2.31: checks, las cotas de la entidad y

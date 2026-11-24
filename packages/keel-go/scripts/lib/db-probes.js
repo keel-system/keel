@@ -51,6 +51,7 @@ import { filterTypeName, finderMethod, hasFilter } from '../../src/scaffold/find
 import { purgeProbes } from './purge-probes.js';
 import { claimProbes } from './claim-probes.js';
 import { replicaProbes } from './replica-probes.js';
+import { paymentSweepProbes } from './payment-sweep-probes.js';
 import { PROBE_RECONCILIATION, reconciliationProbes } from './reconciliation-probes.js';
 import { credentialFinders } from '../../src/scaffold/repositories.js';
 import { guardClaimsOf, guardMethod } from '../../src/scaffold/mail.js';
@@ -129,6 +130,8 @@ export function probeFile(model, files = []) {
   parts.push(claimProbes(model, files, (root) => repository(model, root)));
   parts.push(replicaProbes(model, (root) => repository(model, root)));
   parts.push(reconciliationProbes(model, (root) => repository(model, root)));
+  // El reclamo del barrido de pagos (G11 de PLAN-CORRIDAS-GELSA.md), PS1 a PS7.
+  parts.push(paymentSweepProbes(model, (root) => repository(model, root)));
   parts.push(patternTables(ctx));
   if (entities.length === 0) return null;
   const content = goFile({ pkg: STORE_PACKAGES[d.engine], imports: IMPORTS, body: `\n${parts.filter(Boolean).join('\n\n')}\n`, module: model.service.goModule, generated: false });

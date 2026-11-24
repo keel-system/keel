@@ -10,9 +10,10 @@
 
 import { gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
 import { goString } from '../../lib/go-source.js';
+import { DEFAULT_SAVED_CARD, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { alignRows } from '../../lib/go-source.js';
 import { packageFile } from '../render.js';
-import { reasonConstant } from '../payments.js';
+import { reasonConstant, savedMethodGo } from '../payments.js';
 
 const TRANSLATION = gatewayTranslation('stripe');
 
@@ -167,25 +168,30 @@ func (g *stripeGateway) Status(ctx context.Context, reference, gatewayPaymentID 
   if (p.savePaymentMethod) {
     const [customerStep, attachStep] = TRANSLATION.savedMethodSteps;
     methods.push(`// SavePaymentMethod implementa domain.PaymentGateway: el cliente de Stripe y el medio adjunto a él.
-func (g *stripeGateway) SavePaymentMethod(ctx context.Context, token, payerReference string) (string, error) {
+func (g *stripeGateway) SavePaymentMethod(ctx context.Context, token, payerReference string) (domain.GatewaySavedMethod, error) {
 	customerForm := &formBody{}
 	customerForm.add(${goString(`metadata[${TRANSLATION.payerKey}]`)}, payerReference)
 	customer, err := g.send(ctx, "savePaymentMethod", http.MethodPost, "/v1/customers", customerForm, savedKey(token, ${goString(customerStep)}))
 	if err := rejectedMethod(customer, err); err != nil {
-		return "", err
+		return domain.GatewaySavedMethod{}, err
 	}
 	created, err := decodeObject(customer.text)
 	if err != nil {
-		return "", err
+		return domain.GatewaySavedMethod{}, err
 	}
 	customerID := textOf(created["id"])
 	attachForm := &formBody{}
 	attachForm.add("customer", customerID)
 	attach, err := g.send(ctx, "savePaymentMethod", http.MethodPost, "/v1/payment_methods/"+url.PathEscape(token)+"/attach", attachForm, savedKey(token, ${goString(attachStep)}))
 	if err := rejectedMethod(attach, err); err != nil {
-		return "", err
+		return domain.GatewaySavedMethod{}, err
 	}
-	return customerID + savedMethodSeparator + token, nil
+	// El attach devuelve el PaymentMethod con su card: de ahí sale el resumen de la tarjeta.
+	attached, err := decodeObject(attach.text)
+	if err != nil {
+		return domain.GatewaySavedMethod{}, err
+	}
+	return domain.GatewaySavedMethod{Reference: customerID + savedMethodSeparator + token, Card: savedCardOf(attached)}, nil
 }`);
   }
   return `
@@ -332,20 +338,7 @@ func stripeReason(failure jsonObject) ${F} {
 }
 ${
   p.savePaymentMethod
-    ? `
-// rejectedMethod es guardar un medio: un 5xx deja la operación en duda; un 4xx es que la pasarela no acepta el medio.
-func rejectedMethod(answer gatewayAnswer, err error) error {
-	switch {
-	case err != nil:
-		return err
-	case answer.status >= 500:
-		return unavailableAnswer("Stripe", "savePaymentMethod", answer)
-	case answer.status >= 400:
-		return &domain.GatewayRejectedPaymentMethodError{Status: answer.status}
-	}
-	return nil
-}
-`
+    ? savedMethodGo(TRANSLATION, 'Stripe')
     : ''
 }`;
 }
@@ -536,7 +529,25 @@ func signedNotice(secret string, at int64, body string) domain.PaymentNotice {
 	return domain.NewPaymentNotice(body, map[string][]string{${goString(header)}: {header}}, nil)
 }
 
-func TestTheNoticeVerifiesItsSignatureAndItsWindow(t *testing.T) {
+${model.payments.savePaymentMethod ? `func TestSavingAMethodReadsTheCardAndTellsTheAuthenticationApart(t *testing.T) {
+	gateway, _, _, _ := fakeStripe(t, http.StatusOK, \`${JSON.stringify(savedCardResponse('stripe', DEFAULT_SAVED_CARD, 'cus_1'))}\`)
+	saved, err := gateway.SavePaymentMethod(t.Context(), "tok", "payer-1")
+	if err != nil {
+		t.Fatalf("SavePaymentMethod = %v", err)
+	}
+	want := domain.GatewaySavedCard{Brand: ${goString(DEFAULT_SAVED_CARD.brand)}, Last4: ${goString(DEFAULT_SAVED_CARD.last4)}, ExpMonth: ${DEFAULT_SAVED_CARD.expMonth}, ExpYear: ${DEFAULT_SAVED_CARD.expYear}}
+	if saved.Reference != "cus_1|tok" || saved.Card != want {
+		t.Errorf("SavePaymentMethod = %+v, quiero la referencia cus_1|tok y el resumen %+v (de las rutas de keel-core)", saved, want)
+	}
+	gateway, _, _, _ = fakeStripe(t, http.StatusPaymentRequired, \`${JSON.stringify(saveAuthenticationRejection('stripe').body)}\`)
+	_, err = gateway.SavePaymentMethod(t.Context(), "tok", "payer-1")
+	var asked *domain.PaymentMethodAuthenticationRequiredError
+	if !errors.As(err, &asked) {
+		t.Errorf("SavePaymentMethod con 3DS = %v, quiero un *domain.PaymentMethodAuthenticationRequiredError (no un rechazo)", err)
+	}
+}
+
+` : ''}func TestTheNoticeVerifiesItsSignatureAndItsWindow(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	verifier := &stripeNoticeVerifier{secret: "secret", tolerance: 300 * time.Second, now: func() time.Time { return now }}
 	body := \`{"data":{"object":{"object":"payment_intent","id":"pi_1"}}}\`

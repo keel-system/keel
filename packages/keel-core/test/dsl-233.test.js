@@ -175,15 +175,3 @@ test('el modelo de pagos: el umbral enlazado se resuelve y payments.yaml no emit
   }
   assert.match(paymentsYaml(model('payment-checkout', () => {}), 'production'), /unanswered-after-seconds: /);
 });
-
-test('la frontera de 2.33: el mismo rechazo en los cuatro hasta su incremento, y nada sin las formas nuevas', async () => {
-  const { dsl233PendingErrors } = await import('../src/lib/gen/reconciliation-stores.js');
-  const layers = {
-    dependencies: { dependencies: { pager: { activations: { pageOncall: { unansweredAfter: { parameter: 'x', unit: 'minutes' } } } } } },
-    payments: { reconciliation: { unansweredAfter: { parameter: 'x', unit: 'minutes' } }, savePaymentMethod: { cardDetails: 'card' } }
-  };
-  const errors = dsl233PendingErrors(layers, 'keel-x', '9');
-  assert.equal(errors.length, 3);
-  for (const message of errors) assert.match(message, /\(DSL 2\.33\): keel-x todavía no lo genera — llega en el incremento 9 de PLAN-CORRIDAS-GELSA\.md/);
-  assert.deepEqual(dsl233PendingErrors(loadService(path.join(FIXTURES_DIR, 'payment-checkout')).layers, 'keel-x', '9'), []);
-});

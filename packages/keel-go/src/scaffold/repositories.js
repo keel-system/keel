@@ -47,6 +47,7 @@ import { docComment, domainPath, goFileName, layout, localName, packageFile } fr
 import { emitsEvents, usesGoOutbox } from './messaging.js';
 import { adapterClaimMethods, claimDependencies, portClaimMethods } from './claim.js';
 import { adapterReconciliationMethods, portReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
+import * as paymentSweepClaim from './payment-sweep-claim.js';
 import { PARAMETERS_VAR } from './service-parameters.js';
 import { DEADLINES_VAR, deadlineDependencies, relationalArming } from './timer.js';
 import { loadExpectingAdapter, loadExpectingPort, loadsExpecting } from './conditional-writes.js';
@@ -303,6 +304,8 @@ function portBody(model, entity) {
   for (const [doc, signature] of portClaimMethods(model, entity)) method(doc, signature);
   for (const [doc, signature] of portGuardMethods(model, entity)) method(doc, signature);
   for (const [doc, signature] of portReconciliationMethods(model, entity)) method(doc, signature);
+  // El reclamo del barrido de pagos (G11 de la corrida payment de prueba-gelsa): lo escribía el agente.
+  for (const [doc, signature] of paymentSweepClaim.portMethods(model, entity)) method(doc, signature);
   // Un listado acotado (DSL 2.27) no da el List sin scope: la única puerta paginada es su finder.
   if (listsUnscoped(model, entity)) {
     method('una página de agregados, en el orden pedido y con el id como desempate. Una propiedad de orden que no existe es un error.', `List(ctx context.Context, pageable Pageable) (Page[*${name}], error)`);
@@ -765,6 +768,7 @@ ${batchLoad(model, batch.column, null, batch.plural, uses, batch.cast, alive)}
   parts.push(...adapterClaimMethods(model, entity, type));
   parts.push(...relationalGuardMethods(model, entity, type));
   parts.push(...adapterReconciliationMethods(model, entity, type));
+  parts.push(...paymentSweepClaim.adapterMethods(model, entity, type));
 
   // ─── Escrituras
   parts.push(saveMethods(model, entity, root, tables, type, uses));
