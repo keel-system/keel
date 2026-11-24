@@ -509,3 +509,13 @@ Guion, en `prueba-gelsa`:
 4. Antes de tirar nada: `corrida-metrics.js footprint` sobre cada proyecto, y `docs/corridas/<fecha>-<s>-gelsa.md` con
    los `designGaps`.
 
+**Paso 1 hecho (2026-11-24).** `keel init --force` en prueba-gelsa: cambian los 19 archivos del payload, sin commit, y
+`specs/` sigue intacto. `keel init --check` queda en verde. `keel` y `keel-spring` globales son enlaces al repo (0.7.0). Lo
+que encontrará `/keel-evolve`, medido sobre una copia con `keel: "2.33"` (lo único que cambia), en `incoherences`:
+- order: `CHK-DEPS-UNANSWERED-DUPLICATES-PARAMETER` ×3 (D2), `CHK-HTTP-TOKENURL-PLACEHOLDER` (D5),
+  `CHK-PERSIST-NATURALKEY-IS-ID` (D4) y `CHK-SCEN-PROJECTION-UNKNOWN-FIELD` (D3).
+- payment: `CHK-PAYMENTS-SAVED-CARD-UNSOURCED` (D7), y `review` con 19/20, por `REV-PAYMENTS-RECONCILE-INFLIGHT-NOTFOUND`
+  (G13).
+- notifications: `CHK-SCEN-PAGE-TOTALS` ×3 (D1).
+Los demás criterios, en verde en los tres. El siguiente paso es el 2 del guion, `/keel-evolve` por servicio.
+
