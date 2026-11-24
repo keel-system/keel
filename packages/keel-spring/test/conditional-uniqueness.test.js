@@ -24,7 +24,7 @@ import { tmpDir } from './helpers/tmp.js';
 import { loadService } from '@keel-system/keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { scaffoldService, resolveStack } from '../src/scaffold/index.js';
-import { relievingOperations, conditionedEntities } from '../src/scaffold/conditional-uniqueness.js';
+import { relievingOperations, conditionedEntities, conditionedRoots, portMethods, adapterMethods, stubNote } from '../src/scaffold/conditional-uniqueness.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 
 const fixturesDir = path.join(FIXTURES_DIR);
@@ -149,6 +149,42 @@ test('la nota del stub le dice al agente dónde va la llamada', () => {
   // Y le prohíbe la salida fácil, que es la que un agente con prisa toma: quitar el índice hace
   // pasar el escenario y borra el invariante.
   assert.match(handler, /No lo arregles quitando el índice/);
+});
+
+// El índice sobre una HIJA del agregado (la versión de una plantilla, corrida de control de prueba-gelsa del
+// 2026-11-24): la hija no tiene puerto. La nota nombraba `<Hija>Repository` y su finder, que no existen, `check` avisaba
+// en falso de que la clave natural de la hija tumbaría el arranque, y el agente escribía el flush a mano en la raíz.
+function modeloConHija() {
+  const root = { name: 'Plantilla', rootEntity: 'Plantilla', persisted: true, isAggregateRoot: true, indexes: [] };
+  const child = {
+    name: 'Version',
+    rootEntity: 'Plantilla',
+    persisted: true,
+    naturalKey: ['plantilla', 'numero'],
+    indexes: [{ fields: ['plantilla'], unique: true, when: { field: 'status', equals: 'active' } }]
+  };
+  const activar = {
+    name: 'activarVersion',
+    transitions: [
+      { entity: 'Version', from: ['active'], to: 'retired' },
+      { entity: 'Version', from: ['draft'], to: 'active' }
+    ]
+  };
+  return { persistenceKind: 'relational', entities: [root, child], services: [{ entity: 'Plantilla', operations: [activar] }], warnings: [] };
+}
+
+test('con el índice en una hija, el flush va en el puerto de la RAÍZ y la nota lo nombra ahí', () => {
+  const model = modeloConHija();
+  const [root, child] = model.entities;
+  assert.deepEqual(conditionedRoots(model), [root]);
+  assert.equal(portMethods(model, root).length, 1);
+  assert.equal(portMethods(model, child).length, 0, 'la hija no tiene puerto');
+  assert.match(adapterMethods(model, root, 'plantillaJpaRepository').join('\n'), /plantillaJpaRepository\.flush\(\)/);
+  const note = stubNote(model, model.services[0].operations[0]);
+  assert.match(note, /del puerto PlantillaRepository/);
+  assert.match(note, /en la colección de Plantilla/);
+  assert.doesNotMatch(note, /VersionRepository/);
+  assert.deepEqual(model.warnings, [], 'la clave natural de la hija no se resuelve como si tuviera finder');
 });
 
 test('el .sql que crea el índice lleva el contrato que impone', () => {

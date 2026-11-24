@@ -23,6 +23,12 @@
 // La rama documental no lo necesita: cada `save` es su propia escritura, así que el orden del
 // código ES el orden en la base. Por eso nada de esto se emite ahí, y por eso la corrida
 // `notification-mailer-mongo` pasó en verde con el mismo diseño.
+//
+// Y el índice puede estar sobre una HIJA del agregado (la versión de una plantilla, en prueba-gelsa):
+// la hija no tiene puerto ni finder propios, así que el `flushPendingWrites()` va en el puerto de su
+// RAÍZ —el flush vuelca el contexto entero, la colección de la raíz incluida— y la ocupante se busca
+// con los finders de la raíz, como en keel-nest. Antes la nota del handler nombraba un puerto
+// `<Hija>Repository` que no existe y el agente escribía el método a mano en el de la raíz.
 
 import { partialUniqueIndexes } from './persistence-members.js';
 import { relievingOperations as neutralRelieving } from '@keel-system/keel-core/gen/relational';
@@ -34,9 +40,23 @@ export function conditionedEntities(model) {
   return model.entities.filter((entity) => entity.persisted && partialUniqueIndexes(entity).length > 0);
 }
 
-/** Los estados condicionados de una entidad, tal como el diseño los nombra. */
-const conditionedStates = (entity) =>
-  new Set(partialUniqueIndexes(entity).map((index) => index.when.equals));
+/** La raíz del agregado de una entidad: el dueño del puerto. Una raíz es su propia raíz. */
+export function rootOf(model, entity) {
+  return model.entities.find((candidate) => candidate.name === entity.rootEntity) ?? entity;
+}
+
+/** Las RAÍCES cuyo agregado lleva una unicidad condicionada, en ella o en una hija: las que tienen el flush. */
+export function conditionedRoots(model) {
+  return [...new Set(conditionedEntities(model).map((entity) => rootOf(model, entity)))];
+}
+
+/** Los estados condicionados del agregado de una raíz, tal como el diseño los nombra. */
+const conditionedStates = (model, root) =>
+  new Set(
+    conditionedEntities(model)
+      .filter((entity) => rootOf(model, entity) === root)
+      .flatMap((entity) => partialUniqueIndexes(entity).map((index) => index.when.equals))
+  );
 
 /**
  * Las operaciones que RELEVAN: en el mismo acto sacan una fila del estado condicionado y meten
@@ -51,15 +71,19 @@ export function relievingOperations(model) {
   // La detección es del diseño (keel-core/gen/relational.js) y la comparte keel-nest; la rama
   // documental no la sufre (cada save es su propia escritura) y no recibe nada.
   if (conditionedEntities(model).length === 0) return [];
-  return neutralRelieving(model).map((relieving) => ({ ...relieving, method: portMethodName(relieving.entity) }));
+  return neutralRelieving(model).map((relieving) => ({
+    ...relieving,
+    root: rootOf(model, relieving.entity),
+    method: portMethodName(relieving.entity)
+  }));
 }
 
 export const portMethodName = () => 'flushPendingWrites';
 
 /** El método del puerto `<E>Repository`, solo para las entidades que lo necesitan. */
 export function portMethods(model, entity) {
-  if (!conditionedEntities(model).includes(entity)) return [];
-  const states = [...conditionedStates(entity)].join(', ');
+  if (!conditionedRoots(model).includes(entity)) return [];
+  const states = [...conditionedStates(model, entity)].join(', ');
   return [
     `    /**
      * Hace llegar a la base las escrituras pendientes de este agregado, aquí y no al commit.
@@ -79,7 +103,7 @@ export function portMethods(model, entity) {
 
 /** Su implementación en el adaptador JPA. */
 export function adapterMethods(model, entity, jpaRepositoryField) {
-  if (!conditionedEntities(model).includes(entity)) return [];
+  if (!conditionedRoots(model).includes(entity)) return [];
   return [
     `    @Override
     public void ${portMethodName(entity)}() {
@@ -100,15 +124,17 @@ export function stubNote(model, operation) {
   if (relieving.length === 0) return null;
 
   // El finder se resuelve aquí y no al detectar: la detección corre también sobre modelos
-  // sintéticos sin campos, y el finder necesita los miembros del agregado.
-  const occupantOf = (r) => occupantFinders(model, r.entity).find((finder) => finder.state === r.state)?.name ?? null;
+  // sintéticos sin campos, y el finder necesita los miembros del agregado. Es el de la RAÍZ: una
+  // hija no tiene puerto, y su ocupante se encuentra cargando la raíz y mirando su colección.
+  const occupantOf = (r) =>
+    r.root === r.entity ? (occupantFinders(model, r.root).find((finder) => finder.state === r.state)?.name ?? null) : null;
   return relieving
     .map((r) => ({ ...r, occupant: occupantOf(r) }))
     .map(
       (r) =>
         `ORDEN OBLIGATORIO (índice único condicionado sobre ${r.entity.name}.${r.state}): esta operación RELEVA — ` +
         `saca una fila de '${r.state}' y mete otra en el mismo acto—, y el índice se comprueba por FILA y no se ` +
-        `puede diferir. Retira la que estaba${r.occupant ? ` (la encuentras con ${r.entity.name}Repository.${r.occupant}(...))` : ''}, llama a ${r.method}() del puerto ${r.entity.name}Repository, y SOLO ` +
+        `puede diferir. Retira la que estaba${r.occupant ? ` (la encuentras con ${r.root.name}Repository.${r.occupant}(...))` : r.root !== r.entity ? ` (está en la colección de ${r.root.name}: carga la raíz y búscala ahí)` : ''}, llama a ${r.method}() del puerto ${r.root.name}Repository, y SOLO ` +
         `entonces activa la nueva. Sin esa llamada las dos escrituras se vuelcan al commit en el orden que decide ` +
         `Hibernate y, si la activación sale primero, la transición legítima muere con el error de unicidad del ` +
         `diseño — un 409 en el camino feliz. No lo arregles quitando el índice: es el invariante que el diseño ` +

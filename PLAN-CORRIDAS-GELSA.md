@@ -526,3 +526,7 @@ de código: solo reescribió los dos flujos de listado. La huella sigue en 41 re
 registró en `docs/corridas/2026-11-24-notifications-gelsa.md` (control). Queda una observación sin arreglar: el aviso de
 `keel-spring check` sobre la clave natural de `EmailTemplateVersion`, la hija, es un falso positivo y sale duplicado
 (`naturalKeyParams`). Faltan order y payment.
+Arreglado después (2026-11-24): el falso positivo era la punta de un hueco de keel-spring. Un índice condicionado sobre
+una HIJA dejaba la nota de orden apuntando a un `<Hija>Repository` que no existe, y no generaba `flushPendingWrites()`
+en el puerto de la raíz (en la corrida lo escribió a mano el agente en `EmailTemplateRepository`). Ahora el flush va en
+la raíz y la ocupante se busca en su colección, como ya hacían keel-nest, keel-dotnet y keel-go.
