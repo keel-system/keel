@@ -75,6 +75,8 @@ import { timerSchedules } from '@keel-system/keel-core/gen/timer-plan';
 import { PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, isPurgeTimerSabotage, isTimerSabotage, purgeTimerSabotageVerdict, timerProbePatch, timerSabotageVerdict, timerSubject } from './lib/timer-probes.js';
 import { timerPurges } from '@keel-system/keel-core/gen/timer-plan';
 import { READ_SCOPE_SABOTAGE_SPECS, READ_SCOPE_SUBJECTS, isReadScopeSabotage, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
+import { PAYMENT_SWEEP_DOCUMENT_SABOTAGE_CASES, paymentSweepFailures } from './lib/db-probes.js';
+import { PAYMENT_DOCUMENT_DESIGNS } from '../../keel-core/test/helpers/payment-designs.js';
 import { LIFECYCLE_SABOTAGE_SPECS, LIFECYCLE_SUBJECTS, isLifecycleSabotage, lifecycleSabotageVerdict } from './lib/lifecycle-probes.js';
 import { HISTORY_SABOTAGE_SPECS, HISTORY_SUBJECTS, isHistorySabotage, historySabotageVerdict } from './lib/history-probes.js';
 import { BATCH_SABOTAGE_SPECS, BATCH_SUBJECTS, batchProbePatch, batchSabotageVerdict, isBatchSabotage } from './lib/batch-probes.js';
@@ -96,6 +98,9 @@ const only = args.find((arg) => arg.startsWith('--only='))?.split('=')[1] ?? nul
 // no los mide esto: sobre documentos todavía se rechazan.
 const SUBJECTS = [
   { name: 'inspection-reports' },
+  // Los pagos sobre documentos (G11 de PLAN-CORRIDAS-GELSA.md): el reclamo del barrido de pagos, PS1 a PS7. El MISMO diseño
+  // que miden keel-spring y keel-nest (keel-core/test/helpers/payment-designs.js).
+  ...PAYMENT_DOCUMENT_DESIGNS.map((design) => ({ name: design.name, from: design.from, mutate: (manifest, layers) => design.mutate(layers, manifest) })),
   { name: 'job-dispatch-mongo' },
   { name: 'notification-mailer-mongo' },
   { name: 'asset-vault' },
@@ -150,6 +155,8 @@ const SUBJECTS = [
       ? subject.name === 'catalog-invariants-mongo'
     : isSearchSabotage(sabotage)
       ? subject.name === 'catalog-search-mongo'
+    : PAYMENT_SWEEP_DOCUMENT_SABOTAGE_CASES[sabotage]
+      ? PAYMENT_DOCUMENT_DESIGNS.some((design) => design.name === subject.name)
     : isHistorySabotage(sabotage)
       ? HISTORY_SUBJECTS.document.includes(subject.name)
       : isLifecycleSabotage(sabotage)
@@ -167,6 +174,9 @@ const SUBJECTS = [
 // El fin de línea de lo emitido (la llamada sigue en la línea siguiente).
 const NL = String.fromCharCode(10);
 const SABOTAGES = {
+  // El reclamo del barrido de pagos (G11): con --only=payment-checkout-mongo, cada uno cae en exactamente sus casos PS.
+  'payment-sweep-no-lease': ['Repositories/PaymentRepository.cs', 'new BsonDocument("$set", new BsonDocument("awaiting_since", leasedAt))', 'new BsonDocument("$set", new BsonDocument("awaiting_since", BsonValues.Of(staleBefore.AddSeconds(-1))))'],
+  'payment-sweep-cutoff': ['Repositories/PaymentRepository.cs', '{ "awaiting_since", new BsonDocument("$lt", BsonValues.Of(staleBefore)) }', '{ "awaiting_since", new BsonDocument("$lt", BsonValues.Of(DateTimeOffset.UtcNow.AddDays(1))) }'],
   // La escritura condicional (api.concurrency): con --only=catalog-conditional-mongo, cada uno cae en su caso CW.
   'cw-ignore-expected': ['Repositories/ProductRepository.cs', 'expectedVersions.Contains(version)', 'expectedVersions.Count >= 0'],
   'cw-stale-version': ['Repositories/ProductRepository.cs', 'return ToDomainProduct(new BsonDocument(', 'return expected is not null ? entity : ToDomainProduct(new BsonDocument('],
@@ -359,6 +369,13 @@ try {
   for (const subject of subjects) {
     const mine = failures.filter((line) => line.includes(` ${subject.probes.name}.`));
     const ran = tested.output.includes(`${subject.probes.name}.dll`);
+    // El del barrido de pagos (G11): verde si caen EXACTAMENTE sus casos PS.
+    if (PAYMENT_SWEEP_DOCUMENT_SABOTAGE_CASES[sabotage] && subject.model.payments?.reconciliation?.sweep) {
+      const failed = paymentSweepFailures(mine);
+      const want = [...PAYMENT_SWEEP_DOCUMENT_SABOTAGE_CASES[sabotage]].sort();
+      step(`${subject.name}: sabotaje ${sabotage} cae en exactamente sus casos`, ran && failed.join() === want.join(), `esperaba [${want.join(', ')}], cayeron [${failed.join(', ')}]`);
+      continue;
+    }
     // La guarda del agregado (DSL 2.31): verde si caen EXACTAMENTE sus casos IC/CP (sin los que enmascara el documental).
     if (isInvariantSabotage(sabotage) && invariantCases(subject.model).length > 0) {
       const verdict = invariantSabotageVerdict(mine, sabotage, subject.model, { document: true });

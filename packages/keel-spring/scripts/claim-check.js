@@ -43,6 +43,8 @@
 // Y el reclamo del BARRIDO DE PAGOS (G11 de la corrida payment de prueba-gelsa), que build genera fuera de
 // `operation.claim`: con `payment-checkout` (`--database=postgresql|mysql`) se ejercitan sus seis casos, y dos sabotajes
 // lo falsan: `payment-sweep-no-lease` (la escritura del reclamo no renueva el reloj) y `payment-sweep-cutoff` (la cota al revés).
+// Su rama DOCUMENTAL (un findAndModify por candidato) se ejercita con `payment-checkout-mongo`, el diseño derivado de
+// keel-core/test/helpers/payment-designs.js, con los mismos casos y los mismos dos sabotajes.
 //
 // Necesita podman o docker, y JDK (Gradle compila el proyecto entero, `main` incluido).
 
@@ -56,10 +58,11 @@ import { loadService } from '@keel-system/keel-core';
 import { tmpDir } from '../test/helpers/tmp.js';
 import { buildModel } from '../src/lib/model.js';
 import { scaffoldService } from '../src/scaffold/index.js';
-import { claimScenarios, claimTestClass, drainSubject, CLASS_NAME, DRAIN_SABOTAGE_CASES, PAYMENT_SWEEP_SABOTAGE_CASES, PACKAGE_LEAF } from '../src/lib/claim-probes.js';
+import { claimScenarios, claimTestClass, drainSubject, CLASS_NAME, DRAIN_SABOTAGE_CASES, PAYMENT_SWEEP_SABOTAGE_CASES, PAYMENT_SWEEP_DOCUMENT_SABOTAGE_CASES, PACKAGE_LEAF } from '../src/lib/claim-probes.js';
 
 const SABOTAGE_CASES = { ...DRAIN_SABOTAGE_CASES, ...PAYMENT_SWEEP_SABOTAGE_CASES };
 import { databaseHealthProbe } from '../src/lib/stack-catalog.js';
+import { PAYMENT_DOCUMENT_DESIGNS } from '../../keel-core/test/helpers/payment-designs.js';
 
 // La URI del Mongo del perfil `local`, leída del db.yaml GENERADO. En Boot 4 la conexión del cliente
 // es `spring.mongodb.uri` (antes `spring.data.mongodb.uri`). Si no aparece, el runner se para aquí:
@@ -137,8 +140,11 @@ function verdictStamp() {
 // ─── Preparación ─────────────────────────────────────────────────────────────
 
 function prepare() {
-  const service = loadService(path.join(fixturesDir, fixture));
+  // Un diseño derivado (los pagos sobre MongoDB) se carga de su fixture y se muta en memoria.
+  const derived = PAYMENT_DOCUMENT_DESIGNS.find((candidate) => candidate.name === fixture);
+  const service = loadService(path.join(fixturesDir, derived?.from ?? fixture));
   if (service.errors.length > 0) throw new Error(`la fixture '${fixture}' no carga: ${service.errors.join(' | ')}`);
+  if (derived) derived.mutate(service.layers, service.manifest);
 
   // El modelo de persistencia lo declara el DISEÑO, así que el motor sale de él y no del
   // argumento: pedir `--database=postgresql` sobre una fixture documental no significa nada.
@@ -179,7 +185,7 @@ function prepare() {
   const drain = drainSubject(model, scenarios);
   if (sabotage && DRAIN_SABOTAGE_CASES[sabotage] && !drain) throw new Error(`sabotaje ${sabotage}: '${fixture}' no tiene un barrido de cola sobre el cronómetro`);
   if (sabotage && PAYMENT_SWEEP_SABOTAGE_CASES[sabotage] && !scenarios.paymentSweep) throw new Error(`sabotaje ${sabotage}: '${fixture}' no tiene barrido de pagos`);
-  if (sabotage) applySabotage(projectDir, sabotage, scenarios, drain);
+  if (sabotage) applySabotage(projectDir, sabotage, scenarios, drain, document);
   const packages = resolvePackages(projectDir, {
     ...(drain ? { scheduling: `${drain.scheduler}.java`, timer: `${drain.timer}.java` } : {}),
     enums: `${scenarios.enumType}.java`,
@@ -214,7 +220,22 @@ function prepare() {
 }
 
 /** Los sabotajes del drenaje, sobre el árbol generado. Cada uno conserva la forma (compila) y rompe una mitad. */
-function applySabotage(projectDir, id, scenarios, drain) {
+function applySabotage(projectDir, id, scenarios, drain, document) {
+  const stamp = scenarios.paymentSweep?.stampField;
+  // En documental el reclamo es un findAndModify del adaptador: el mismo sabotaje con su forma.
+  const documentPatches = {
+    'payment-sweep-no-lease': {
+      file: `${scenarios.entity.name}RepositoryImpl.java`,
+      find: `new Update().set("${stamp}", leasedAt)`,
+      // Deja el reloj rancio: la fila sigue siendo candidata en la pasada siguiente.
+      replace: `new Update().set("${stamp}", staleBefore.minusSeconds(1))`
+    },
+    'payment-sweep-cutoff': {
+      file: `${scenarios.entity.name}RepositoryImpl.java`,
+      find: `.and("${stamp}").lt(staleBefore)`,
+      replace: `.and("${stamp}").gt(staleBefore)`
+    }
+  };
   const patches = {
     // El adaptador deja de avisar del lote lleno: el tick hace una pasada y deja candidatos.
     'drain-no-signal': {
@@ -240,7 +261,7 @@ function applySabotage(projectDir, id, scenarios, drain) {
       replace: `e.${scenarios.paymentSweep?.stampField} > :staleBefore`
     }
   };
-  const patch = patches[id];
+  const patch = (document && documentPatches[id]) || patches[id];
   const file = findFile(projectDir, patch.file);
   const source = fs.readFileSync(file, 'utf8');
   const next = source.replace(patch.find, patch.replace);
@@ -405,7 +426,8 @@ try {
       exitCode = failed > 0 ? 1 : 0;
       if (sabotage) {
         // Con sabotaje, el verde es que caigan EXACTAMENTE sus casos: ni uno de más, ni uno de menos.
-        const expected = [...SABOTAGE_CASES[sabotage]].sort();
+        const sabotageCases = engine === 'mongodb' ? { ...SABOTAGE_CASES, ...PAYMENT_SWEEP_DOCUMENT_SABOTAGE_CASES } : SABOTAGE_CASES;
+        const expected = [...sabotageCases[sabotage]].sort();
         const red = cases.filter((item) => !item.ok).map((item) => item.name).sort();
         const exact = JSON.stringify(expected) === JSON.stringify(red);
         console.log(`  sabotaje ${sabotage}: ${exact ? 'cae exactamente en' : 'NO cae exactamente en'} ${expected.join(', ')}${exact ? '' : ` (cayeron: ${red.join(', ') || 'ninguno'})`}`);

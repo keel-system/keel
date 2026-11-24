@@ -36,6 +36,7 @@ import { indexEntries } from '../../src/scaffold/document-persistence.js';
 import { sweepClaims, sweepConfig } from '@keel-system/keel-core/gen';
 import { parametersType, usesServiceParameters } from '../../src/scaffold/service-parameters.js';
 import { readScopeProbes } from './read-scope-probes.js';
+import { paymentSweepProbes } from './payment-sweep-probes.js';
 import { PROBE_HELPERS, concurrencyCode, dumpFunction, dumpValueObject, ensureFunction, patternTables, rootProbes, sampleFunction, usedValueObjects } from './db-probes.js';
 import { repositoryArgs } from '../../src/scaffold/repositories.js';
 import { claimDrains } from '@keel-system/keel-core/gen/timer-plan';
@@ -123,6 +124,8 @@ export function docProbeFile(model) {
   if (tablePurges(model).length > 0) parts.push(purgeProbes(model));
   for (const root of roots) parts.push(...claimProbes(model, root));
   parts.push(docReconciliationProbes(model, (root) => repository(model, root)));
+  // El reclamo del barrido de pagos (G11 de PLAN-CORRIDAS-GELSA.md), PS1 a PS7: las MISMAS que db-check, sobre la colección.
+  parts.push(paymentSweepProbes(model, (root) => repository(model, root), { document: true }));
   parts.push(patternTables(ctx));
   const content = goFile({ pkg: 'mongo', imports: IMPORTS, body: `\n${parts.filter(Boolean).join('\n\n')}\n`, module: model.service.goModule, generated: false });
   return { path: docProbePath(model), content, unsampled: ctx.unsampled };

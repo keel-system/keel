@@ -67,6 +67,8 @@ import { build } from '../src/commands/build.js';
 import { classPath, DIRS } from '../src/scaffold/render.js';
 import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantFinders, credentialFinders } from '../src/scaffold/repositories.js';
 import { guardClaimsFor } from '../src/scaffold/claim.js';
+import { PAYMENT_DOCUMENT_DESIGNS } from '../../keel-core/test/helpers/payment-designs.js';
+import { PAYMENT_SWEEP_DOCUMENT_SABOTAGES, PAYMENT_SWEEP_DOCUMENT_SABOTAGE_CASES, documentPaymentSweepBlock } from './lib/payment-sweep-probes.js';
 
 const keep = process.argv.includes('--keep');
 // --subject=<etiqueta>[,<etiqueta>…]: solo esos de SUBJECTS (para iterar; la red completa es sin él).
@@ -117,7 +119,9 @@ const SABOTAGES = {
   // La guarda del agregado (DSL 2.31): con --subject=catalog-invariants-mongo, cada uno cae en exactamente sus casos IC/CP.
   ...Object.fromEntries(Object.entries(INVARIANT_SABOTAGE_SPECS).map(([id, specs]) => [id, specs.document])),
   // La búsqueda de 2.32: con --subject=catalog-search-mongo, cada uno cae en exactamente sus casos FS/SO.
-  ...Object.fromEntries(Object.entries(SEARCH_SABOTAGE_SPECS).filter(([, specs]) => specs.document).map(([id, specs]) => [id, specs.document]))
+  ...Object.fromEntries(Object.entries(SEARCH_SABOTAGE_SPECS).filter(([, specs]) => specs.document).map(([id, specs]) => [id, specs.document])),
+  // El reclamo del barrido de pagos (G11): con --subject=payment-checkout-mongo, cada uno cae en exactamente sus casos PS.
+  ...PAYMENT_SWEEP_DOCUMENT_SABOTAGES
 };
 const sabotage = process.argv.find((arg) => arg.startsWith('--sabotage='))?.split('=')[1] ?? null;
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -215,7 +219,9 @@ const SUBJECTS = [
     withoutLayers: [],
     withoutAuthorship: design.from === 'asset-vault',
     mutate: design.mutate
-  }))
+  })),
+  // Los pagos sobre documentos (G11): el reclamo del barrido de pagos, PS-1 a PS-7. El MISMO diseño que mide keel-spring.
+  ...PAYMENT_DOCUMENT_DESIGNS.map((design) => ({ name: design.from, label: design.name, withoutLayers: [], mutate: design.mutate }))
 ];
 const results = [];
 
@@ -284,6 +290,8 @@ function probeScript(model, db) {
     rawOf: (id) => `await database.collection(${JSON.stringify(invariantRoot?.collectionName)}).findOne({ _id: new UUID(${id}).toBinary() })`,
     keys: invariantRoot ? Object.fromEntries(documentShape(model, invariantRoot).filter((entry) => entry.field?.computedSpec).map((entry) => [entry.member, entry.name])) : {}
   });
+  // El reclamo del barrido de pagos (G11), también antes de los imports.
+  const paymentSweepCode = documentPaymentSweepBlock(model, ctx);
   // La búsqueda de 2.32, también antes de los imports.
   const searchCode = searchBlock(model, ctx, { sampleEntity, adapterOf: (owner) => `new ${adapterClass(owner)}(${adapterArgs(model, owner)})` });
   const shapes = expectedShapes(model);
@@ -364,7 +372,7 @@ ${invariantCode
   : searchCode
     // El sujeto de la búsqueda (DSL 2.32) solo mide sus casos: FS-9 cuenta los documentos de la colección.
     ? searchCode
-    : [blocks.join('\n'), race, stores, timerCode, lifecycleCode, historyCode, batchCode, batchJobCode, batchKeyCode, purgeTimerBlock(model)].join('\n')}
+    : [blocks.join('\n'), race, stores, timerCode, lifecycleCode, historyCode, batchCode, batchJobCode, batchKeyCode, paymentSweepCode, purgeTimerBlock(model)].join('\n')}
 
 await client.close();
 console.log('@@RESULTS@@' + JSON.stringify(results));
@@ -643,7 +651,8 @@ try {
     subject.mutate?.(layers);
     const label = subject.label ?? subject.name;
     // Con mensajería, sobre RabbitMQ: los almacenes son los mismos con cualquier broker.
-    const { files, model } = planService({ manifest, layers, workspace, stack: { database: 'mongodb', ...(layers.messaging ? { broker: 'rabbitmq' } : {}) } });
+    // Con capa payments, sobre Stripe: el reclamo del barrido no depende de la pasarela.
+    const { files, model } = planService({ manifest, layers, workspace, stack: { database: 'mongodb', ...(layers.messaging ? { broker: 'rabbitmq' } : {}), ...(layers.payments ? { paymentGateway: 'stripe' } : {}) } });
     if (repositoryRoots(model).length === 0) continue;
     const dir = path.join(workspace, 'doc-check', label);
     for (const file of files) {
@@ -663,6 +672,14 @@ try {
       continue;
     }
     const checks = JSON.parse(marker);
+    // El del barrido de pagos (G11): verde si caen EXACTAMENTE sus casos PS (y ningún otro PS).
+    if (PAYMENT_SWEEP_DOCUMENT_SABOTAGE_CASES[sabotage] && model.payments?.reconciliation?.sweep) {
+      const failed = [...new Set(checks.filter((entry) => !entry.ok && /^PS-\d+:/.test(entry.name)).map((entry) => entry.name.split(':')[0]))];
+      const want = PAYMENT_SWEEP_DOCUMENT_SABOTAGE_CASES[sabotage];
+      for (const check of checks.filter((entry) => !entry.ok && /^PS-\d+:/.test(entry.name))) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
+      step(`${label}: sabotaje ${sabotage} cae en exactamente sus casos`, [...failed].sort().join() === [...want].sort().join(), `esperaba [${want.join(', ')}], cayeron [${failed.join(', ')}]`);
+      continue;
+    }
     if (isRelayWakeSabotage(sabotage) && checks.some((check) => /^RW-\d+:/.test(check.name))) {
       const verdict = relayWakeSabotageVerdict(checks, sabotage);
       step(`${label}: sabotaje ${sabotage} cae en exactamente sus casos`, verdict.exact, `esperaba [${verdict.want.join(', ')}], cayeron [${verdict.failed.join(', ')}]`);

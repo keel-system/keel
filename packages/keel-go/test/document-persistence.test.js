@@ -13,6 +13,7 @@ import { repositoryRoots } from '@keel-system/keel-core/gen/features';
 import { planService } from '../src/scaffold/index.js';
 import { AUTHORSHIP_DESIGNS, UNCOVERED_BRANCHES, FIXTURES_DIR } from './helpers/workspace.js';
 import { DOC_SABOTAGES, applyDocSabotage } from './helpers/doc-sabotages.js';
+import { PAYMENT_DOCUMENT_DESIGNS } from '../../keel-core/test/helpers/payment-designs.js';
 
 const DOCUMENTAL = ['asset-vault', 'conduit', 'inspection-reports', 'job-dispatch-mongo', 'notification-mailer-mongo'];
 const plan = (name) => planService({ ...loadService(path.join(FIXTURES_DIR, name)), workspace: FIXTURES_DIR });
@@ -76,7 +77,13 @@ test('cada sabotaje de doc-check se sigue aplicando a lo que emite alguna fixtur
       design.mutate(manifest, layers);
       return planService({ manifest, layers, workspace: FIXTURES_DIR }).files;
     });
-    const changed = [...DOCUMENTAL.map((name) => plan(name).files), ...derived].reduce((total, files) => total + applyDocSabotage(sabotage, files).changed, 0);
+    // Los pagos sobre documentos (payment-checkout-mongo): el sujeto de los sabotajes del barrido de pagos.
+    const payments = PAYMENT_DOCUMENT_DESIGNS.map((design) => {
+      const { manifest, layers } = loadService(path.join(FIXTURES_DIR, design.from));
+      design.mutate(layers, manifest);
+      return planService({ manifest, layers, workspace: FIXTURES_DIR }).files;
+    });
+    const changed = [...DOCUMENTAL.map((name) => plan(name).files), ...derived, ...payments].reduce((total, files) => total + applyDocSabotage(sabotage, files).changed, 0);
     assert.ok(changed > 0, `${id} ya no se aplica`);
   }
 });

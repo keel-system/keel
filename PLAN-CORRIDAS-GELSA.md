@@ -473,6 +473,21 @@ del DSL anteriores.
   pruebas) sobre payment-checkout con las dos pasarelas, en MySQL y en MongoDB, y sobre stock-reservation en
   PostgreSQL y MySQL. El `--fixtures` entero tenía 121 variantes por comprobar, horas.
 
+**La rama documental del reclamo de pagos, ejecutada (2026-11-24, fuera del plan).** Sujeto común:
+`payment-checkout-mongo`, payment-checkout con `model: document`, en `keel-core/test/helpers/payment-designs.js`. Valida sin
+avisos nuevos y cabe en las cuatro fronteras. Los casos PS de cada generador corren ahora también sobre documentos:
+- keel-spring: `claim-check payment-checkout-mongo`, con la clase documental de `claim-probes.js`, 7/7. Los dos sujetos de
+  pagos entran en `npm run claim-check`.
+- keel-nest: `doc-check --subject=payment-checkout-mongo`, con `scripts/lib/payment-sweep-probes.js`, 77/77.
+- keel-dotnet: `doc-check --only=payment-checkout-mongo`. `paymentSweepProbes` (`db-probes.js`) gana la siembra y la lectura
+  por la colección. El `db-check --only=payment-checkout` relacional sigue en verde en los dos motores.
+- keel-go: `doc-check --only=payment-checkout-mongo`, con `paymentSweepProbes(…, { document: true })`.
+- Falsado en los cuatro con `payment-sweep-no-lease` y `payment-sweep-cutoff`, cada uno en exactamente sus casos.
+- En documental caen MÁS casos que en relacional, y es correcto. El reclamo es un bucle de findOneAndUpdate: sin renovar el
+  reloj (o con la cota en el futuro), cada vuelta vuelve a casar con el MISMO documento. Así que caen también «cubre cada
+  estado» (PS-4) y la carrera (PS-7). Por eso cada red lleva su lista documental (`PAYMENT_SWEEP_DOCUMENT_SABOTAGE_CASES`,
+  o la `expect` de `doc-sabotages.js` en keel-go).
+
 **Siguiente: inc. 7, la corrida de control** (la lanza el usuario).
 
 **Preparación del inc. 7 (2026-11-24, solo lectura sobre prueba-gelsa).** Medido con las CLIs del repo (keel-core y

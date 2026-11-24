@@ -29,7 +29,7 @@ import { readScopeProbes, readScopeSampleCount } from './read-scope-probes.js';
 import { isNullable } from '../../src/scaffold/render.js';
 import { enumMember } from '../../src/lib/cs-projection.js';
 import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
-import { conditionalSampleCount, conditionalWriteProbes, authorshipProbe, finderProbes, finderSampleCount, idCsType, inverseFinderProbes, inverseSampleCount, rankProbes, rankSampleCount, idBatchProbe, counter, credentialProbes, guardProbes, guardSampleCount, sampleState, sampleValue, claimSampleCount, reconciliationSampleCount, probeSweepSettings, probeReconciliationSettings, purgeSettings, idempotencyBlock, guardBlock } from './db-probes.js';
+import { conditionalSampleCount, conditionalWriteProbes, authorshipProbe, finderProbes, finderSampleCount, idCsType, inverseFinderProbes, inverseSampleCount, rankProbes, rankSampleCount, idBatchProbe, counter, credentialProbes, guardProbes, guardSampleCount, paymentSweepProbes, paymentSweepSampleCount, sampleState, sampleValue, claimSampleCount, reconciliationSampleCount, probeSweepSettings, probeReconciliationSettings, purgeSettings, idempotencyBlock, guardBlock } from './db-probes.js';
 import { documentProbeSupport, storeKeyBlock, documentOutboxBlock, documentBridgeBlock, documentReconciliationStoreBlock, documentClaimProbes, documentReconciliationProbes, documentPurgeBlock } from './doc-store-probes.js';
 import { idempotencyNamespace, usesRequestIdempotency } from '../../src/scaffold/request-idempotency.js';
 import { bridgeClass, messagingNamespace, usesBridge, usesDotnetOutbox, usesProcessedEvents } from '../../src/scaffold/messaging.js';
@@ -276,7 +276,9 @@ function probesCs(model, namespace) {
     const beforeConditional = beforeInverse + inverseSampleCount(model, root);
     // Y las de la lectura acotada (DSL 2.27), detrás de todas.
     const beforeReadScope = beforeConditional + conditionalSampleCount(model, root);
-    const total = beforeReadScope + readScopeSampleCount(model, root);
+    // Y las del reclamo del barrido de pagos (G11), las últimas de todas.
+    const beforePaymentSweep = beforeReadScope + readScopeSampleCount(model, root);
+    const total = beforePaymentSweep + paymentSweepSampleCount(model, root);
     for (let n = 1; n <= total; n++) states.push(sampleState(model, root, ctx, `${root.name.toLowerCase()}${n}`));
     const refs = [...ctx.refs];
     for (const ref of refsBefore) ctx.refs.add(ref);
@@ -503,6 +505,15 @@ function probesCs(model, namespace) {
           `await Raw(${csString(root.collectionName)}).UpdateOneAsync(new BsonDocument("_id", BsonValues.Of(${row})), new BsonDocument("$set", new BsonDocument(${csString(field(root.lifecycle.field))}, ${csString(storedState(model, root, stateName))})), cancellationToken: Cancel);`,
         stateOf: (row) => `${rawOf(row)}[${csString(field(root.lifecycle.field))}].AsString`,
         stampOf: (row) => `!${rawOf(row)}.GetValue(${csString(stampKey)}, BsonNull.Value).IsBsonNull`
+      })
+    );
+    // El reclamo del barrido de pagos (G11) sobre documentos: las MISMAS sondas PS que db-check, sembradas en la colección.
+    tests.push(
+      ...paymentSweepProbes(model, root, {
+        state,
+        first: beforePaymentSweep + 1,
+        port,
+        document: { collection: root.collectionName, stateKey: field(root.lifecycle?.field ?? 'id'), stampKey: field(model.payments?.record?.awaitingSince ?? 'id') }
       })
     );
     blocks.push(`    // ─── ${root.name} ───\n\n${tests.join('\n\n')}`);

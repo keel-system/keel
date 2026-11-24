@@ -308,6 +308,15 @@ export const PAYMENT_SWEEP_SABOTAGE_CASES = Object.freeze({
 });
 
 /**
+ * Lo mismo en la rama DOCUMENTAL, donde el reclamo es un findAndModify por candidato. Sin renovar el reloj, el bucle
+ * vuelve a casar con el MISMO documento en cada vuelta del lote: también cae el caso que cuenta un cobro por estado.
+ */
+export const PAYMENT_SWEEP_DOCUMENT_SABOTAGE_CASES = Object.freeze({
+  ...PAYMENT_SWEEP_SABOTAGE_CASES,
+  'payment-sweep-no-lease': ['elBarridoDePagosCubreCadaEstadoEnEspera', 'elBarridoDePagosSeLlevaLoRancioSinMoverElEstadoYRenuevaElReloj']
+});
+
+/**
  * Los casos DR-* (los de `DRAIN_CASES` de keel-core), en Java. `seed` siembra una fila en el estado dado, `remaining`
  * cuenta las que siguen en el de partida.
  */
@@ -577,11 +586,11 @@ export function claimTestClass(model, scenarios, options) {
  * reclamo entero, así que llamar dos veces al adaptador sí mide la condición de estado.
  */
 function documentClaimTestClass(model, scenarios, { datasource, packages }) {
-  const { entity, enumType, statusField, queue, rescue, guard } = scenarios;
+  const { entity, enumType, statusField, queue, rescue, guard, paymentSweep } = scenarios;
   const documentClass = `${entity.name}Document`;
   const portClass = `${entity.name}Repository`;
   const adapterClass = `${entity.name}RepositoryImpl`;
-  const clockField = queue?.stamps?.field ?? rescue?.stalled?.stampField ?? null;
+  const clockField = queue?.stamps?.field ?? rescue?.stalled?.stampField ?? paymentSweep?.stampField ?? null;
   const statusSetter = accessor('set', statusField);
   const statusGetter = accessor('get', statusField);
   const clockSetter = clockField ? accessor('set', clockField) : null;
@@ -794,6 +803,17 @@ function documentClaimTestClass(model, scenarios, { datasource, packages }) {
       lee: (id) => `mongo.findById(${id}, ${documentClass}.class)`,
       statusGetter,
       guardStampGetter
+    }));
+  }
+  if (paymentSweep) {
+    tests.push(paymentSweepTests({
+      paymentSweep,
+      entity,
+      constant,
+      statusGetter,
+      clockGetter,
+      seed: 'documento',
+      read: (id) => `mongo.findById(${id}, ${documentClass}.class)`
     }));
   }
 
@@ -1124,7 +1144,9 @@ function relationalClaimTestClass(model, scenarios, { datasource, packages, data
     }));
   }
 
-  if (paymentSweep) tests.push(paymentSweepTests({ paymentSweep, entity, constant, statusGetter, clockGetter }));
+  if (paymentSweep) {
+    tests.push(paymentSweepTests({ paymentSweep, entity, constant, statusGetter, clockGetter, seed: 'fila', read: (id) => `jpa.findById(${id}).orElseThrow()` }));
+  }
 
   return `package ${model.service.basePackage}.${PACKAGE_LEAF};
 
@@ -1201,7 +1223,7 @@ ${tests.join('\n')}
  * lote va acotado por el argumento y una fila sin reloj no la recoge nadie. El plazo lo pasa el handler, así que aquí
  * es un instante cualquiera: lo que se mide es que el predicado CASE.
  */
-function paymentSweepTests({ paymentSweep, entity, constant, statusGetter, clockGetter }) {
+function paymentSweepTests({ paymentSweep, entity, constant, statusGetter, clockGetter, seed, read }) {
   const waiting = paymentSweep.states.map(constant);
   const awaiting = new Set(paymentSweep.states.map((state) => screamingSnake(state)));
   const other = [...new Set((entity.lifecycle.transitions ?? []).flatMap((t) => [].concat(t.from ?? [], t.to ?? [])))]
@@ -1213,7 +1235,7 @@ function paymentSweepTests({ paymentSweep, entity, constant, statusGetter, clock
     ? `
     @Test
     void elBarridoDePagosNoTocaOtrosEstados() {
-        fila(${constant(other)}, Instant.now().minusSeconds(3600), Instant.now());
+        ${seed}(${constant(other)}, Instant.now().minusSeconds(3600), Instant.now());
         Instant corte = Instant.now().minusSeconds(600);
         assertTrue(${call(10)}.isEmpty(), "el reclamo se llevó un cobro que no espera a la pasarela");
     }
@@ -1224,13 +1246,13 @@ function paymentSweepTests({ paymentSweep, entity, constant, statusGetter, clock
 
     @Test
     void elBarridoDePagosSeLlevaLoRancioSinMoverElEstadoYRenuevaElReloj() {
-        UUID rancio = fila(${first}, Instant.now().minusSeconds(3600), Instant.now());
+        UUID rancio = ${seed}(${first}, Instant.now().minusSeconds(3600), Instant.now());
         Instant corte = Instant.now().minusSeconds(600);
 
         var reclamados = ${call(10)};
 
         assertEquals(1, reclamados.size(), "el reclamo no se llevó el cobro rancio");
-        var tras = jpa.findById(rancio).orElseThrow();
+        var tras = ${read('rancio')};
         assertEquals(${first}, tras.${statusGetter}(), "el reclamo cambió el estado: el desenlace lo aplica la consulta");
         assertTrue(tras.${clockGetter}().isAfter(corte), "el reclamo no renovó ${paymentSweep.stampField}");
         assertTrue(${call(10)}.isEmpty(), "una segunda pasada inmediata volvió a reclamar el mismo cobro");
@@ -1238,14 +1260,14 @@ function paymentSweepTests({ paymentSweep, entity, constant, statusGetter, clock
 
     @Test
     void elBarridoDePagosNoSeLlevaLoRecienPuestoEnEspera() {
-        fila(${first}, Instant.now(), Instant.now());
+        ${seed}(${first}, Instant.now(), Instant.now());
         Instant corte = Instant.now().minusSeconds(600);
         assertTrue(${call(10)}.isEmpty(), "el reclamo se llevó un cobro que acaba de entrar en espera");
     }
 ${otherCase}
     @Test
     void elBarridoDePagosCubreCadaEstadoEnEspera() {
-${waiting.map((state) => `        fila(${state}, Instant.now().minusSeconds(3600), Instant.now());`).join('\n')}
+${waiting.map((state) => `        ${seed}(${state}, Instant.now().minusSeconds(3600), Instant.now());`).join('\n')}
         Instant corte = Instant.now().minusSeconds(600);
         assertEquals(${waiting.length}, ${call(50)}.size(), "algún estado en espera no entra en el reclamo");
     }
@@ -1253,7 +1275,7 @@ ${waiting.map((state) => `        fila(${state}, Instant.now().minusSeconds(3600
     @Test
     void elBarridoDePagosVaAcotadoPorElLote() {
         for (int i = 0; i < 3; i++) {
-            fila(${first}, Instant.now().minusSeconds(3600 + i), Instant.now());
+            ${seed}(${first}, Instant.now().minusSeconds(3600 + i), Instant.now());
         }
         Instant corte = Instant.now().minusSeconds(600);
         assertEquals(2, ${call(2)}.size(), "el lote no va acotado por su argumento");
@@ -1261,8 +1283,8 @@ ${waiting.map((state) => `        fila(${state}, Instant.now().minusSeconds(3600
 
     @Test
     void unCobroEnEsperaSinRelojNoLoRecogeNadie() {
-        // NULL < :staleBefore no es falso, es UNKNOWN: la fila no entra en ningún lote.
-        fila(${first}, null, Instant.now());
+        // NULL < :staleBefore no es falso, es UNKNOWN; y en MongoDB $lt no casa con un campo nulo o ausente.
+        ${seed}(${first}, null, Instant.now());
         Instant corte = Instant.now().minusSeconds(600);
         assertTrue(${call(10)}.isEmpty(), "el reclamo recogió un cobro sin reloj");
     }`;

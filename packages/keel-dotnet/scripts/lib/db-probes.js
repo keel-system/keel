@@ -2081,6 +2081,15 @@ export const PAYMENT_SWEEP_SABOTAGE_CASES = Object.freeze({
   'payment-sweep-cutoff': ['PS1', 'PS2', 'PS7']
 });
 
+/**
+ * Lo mismo sobre DOCUMENTOS, donde el reclamo es un BUCLE de FindOneAndUpdate: sin renovar el reloj (o con la cota en el
+ * futuro), cada vuelta vuelve a casar con el MISMO documento, así que cae también el que cuenta un cobro por estado (PS4).
+ */
+export const PAYMENT_SWEEP_DOCUMENT_SABOTAGE_CASES = Object.freeze({
+  'payment-sweep-no-lease': ['PS1', 'PS4', 'PS7'],
+  'payment-sweep-cutoff': ['PS1', 'PS2', 'PS4', 'PS7']
+});
+
 /** Los casos PS que cayeron, leídos de las líneas de fallo de `dotnet test`. */
 export function paymentSweepFailures(lines) {
   return [...new Set(lines.map((line) => /PaymentSweep_(PS\d+)_/.exec(line)?.[1]).filter(Boolean))].sort();
@@ -2092,7 +2101,7 @@ export function paymentSweepFailures(lines) {
  * lo vuelve a tomar); lo reciente, lo de otro estado y una fila sin reloj no; el lote va acotado; y dos réplicas a la
  * vez no se llevan el mismo cobro. El corte lo pasa el handler: aquí es un instante cualquiera.
  */
-function paymentSweepProbes(model, root, { state, first, port, context }) {
+export function paymentSweepProbes(model, root, { state, first, port, context, document = null }) {
   const payments = model.payments;
   if (!payments?.reconciliation?.sweep || payments.record?.entity !== root.name || !root.lifecycle) return [];
   const table = root.tableName;
@@ -2107,25 +2116,41 @@ function paymentSweepProbes(model, root, { state, first, port, context }) {
   const parkSql = `UPDATE ${table} SET ${stateColumn} = '${stored(other)}' WHERE ${stateColumn} IN (${waiting.map((s) => `'${s}'`).join(', ')})`;
   let next = first;
   const sql = (text) => `await InScope(other => other.GetRequiredService<${context}>().Database.${text})`;
-  const helpers = `    // ─── El reclamo del barrido de pagos (G11) ───
+  // En documental (payment-checkout-mongo) la siembra y la lectura van por la colección cruda, con las claves del documento.
+  const raw = document ? `Raw(${csString(document.collection)})` : null;
+  const rawOf = (row) => `(await ${raw}.Find(new BsonDocument("_id", BsonValues.Of(${row}))).SingleAsync(Cancel))`;
+  const accessors = document
+    ? `    private static async Task PaymentSweepPark() =>
+        await ${raw}.UpdateManyAsync(new BsonDocument(), new BsonDocument("$set", new BsonDocument(${csString(document.stateKey)}, ${csString(stored(other))})), cancellationToken: Cancel);
 
-    private static Task<IReadOnlyList<${root.name}>> PaymentSweep(DateTimeOffset staleBefore, int batchSize) =>
-        InScope(other => other.GetRequiredService<${port}>().ClaimForPaymentSweep(staleBefore, batchSize, Cancel));
+    private static async Task<DateTimeOffset?> PaymentSweepStamp(Guid row) =>
+        ${rawOf('row')}.GetValue(${csString(document.stampKey)}, BsonNull.Value) is BsonDateTime stamp ? new DateTimeOffset(stamp.ToUniversalTime()) : null;
 
-    private static async Task PaymentSweepPark() => ${sql(`ExecuteSqlRawAsync(${csString(parkSql)}, Cancel)`)};
+    private static async Task<string> PaymentSweepState(Guid row) =>
+        ${rawOf('row')}[${csString(document.stateKey)}].AsString;`
+    : `    private static async Task PaymentSweepPark() => ${sql(`ExecuteSqlRawAsync(${csString(parkSql)}, Cancel)`)};
 
     private static async Task<DateTimeOffset?> PaymentSweepStamp(Guid row) =>
         ${sql(`SqlQuery<DateTimeOffset?>($"SELECT ${stamp} ${sqlDialect(model).alias} FROM ${table} WHERE id = {row}").SingleAsync(Cancel)`)};
 
     private static async Task<string> PaymentSweepState(Guid row) =>
         ${sql(`SqlQuery<string>($"SELECT ${sqlDialect(model).text(stateColumn)} ${sqlDialect(model).alias} FROM ${table} WHERE id = {row}").SingleAsync(Cancel)`)};`;
+  const helpers = `    // ─── El reclamo del barrido de pagos (G11) ───
+
+    private static Task<IReadOnlyList<${root.name}>> PaymentSweep(DateTimeOffset staleBefore, int batchSize) =>
+        InScope(other => other.GetRequiredService<${port}>().ClaimForPaymentSweep(staleBefore, batchSize, Cancel));
+
+${accessors}`;
   // Guarda una muestra y la deja en ese estado con ese reloj.
   const row = (variable, stateName, at) => {
     const n = next++;
+    const set = document
+      ? `await ${raw}.UpdateOneAsync(new BsonDocument("_id", BsonValues.Of(sample${n}.${id})), new BsonDocument("$set", new BsonDocument { { ${csString(document.stateKey)}, ${csString(stateName)} }, { ${csString(document.stampKey)}, BsonValues.Of(at${n}) } }), cancellationToken: Cancel);`
+      : `${sql(`ExecuteSqlAsync($"UPDATE ${table} SET ${stateColumn} = '${stateName}', ${stamp} = {at${n}} WHERE id = {sample${n}.${id}}", Cancel)`)};`;
     return `            var sample${n} = new ${root.name}(${state(n)});
             await InScope(other => other.GetRequiredService<${port}>().Save(sample${n}, Cancel));
             DateTimeOffset? at${n} = ${at};
-            ${sql(`ExecuteSqlAsync($"UPDATE ${table} SET ${stateColumn} = '${stateName}', ${stamp} = {at${n}} WHERE id = {sample${n}.${id}}", Cancel)`)};
+            ${set}
             var ${variable} = sample${n}.${id};`;
   };
   const minutesAgo = (minutes) => `DateTimeOffset.UtcNow.AddMinutes(-${minutes})`;

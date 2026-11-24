@@ -26,6 +26,7 @@ import { loadService } from '@keel-system/keel-core';
 import { usesDocument } from '@keel-system/keel-core/gen/features';
 import { planService } from '../src/scaffold/index.js';
 import { AUTHORSHIP_DESIGNS, FIXTURES_DIR, UNCOVERED_BRANCHES, makeWorkspace } from '../test/helpers/workspace.js';
+import { PAYMENT_DOCUMENT_DESIGNS } from '../../keel-core/test/helpers/payment-designs.js';
 import { docProbeFile } from './lib/doc-probes.js';
 import { DOC_SABOTAGES, applyDocSabotage } from '../test/helpers/doc-sabotages.js';
 import { DRAIN_SABOTAGES, PURGE_TIMER_SABOTAGES, TIMER_SABOTAGES, drainBreaksCovered, isDrainSabotage, isPurgeTimerSabotage, isTimerSabotage, purgeTimerBreaksCovered, purgeTimerProbeFile, timerBreaksCovered, timerProbeFile, timerProbePatch, timerSabotageBreaks } from './lib/timer-probes.js';
@@ -122,7 +123,10 @@ try {
     // La guarda del agregado (DSL 2.31, IC-1 a IC-11 y CP-1 a CP-5): el MISMO sujeto que miden los otros tres.
     ...UNCOVERED_BRANCHES.filter((design) => INVARIANT_SUBJECTS.document.includes(design.name)),
     // La búsqueda de 2.32 (FS-* y SO-*): el MISMO sujeto que miden los otros tres; solo ejecuta sus casos.
-    ...UNCOVERED_BRANCHES.filter((design) => SEARCH_SUBJECTS.document.includes(design.name))
+    ...UNCOVERED_BRANCHES.filter((design) => SEARCH_SUBJECTS.document.includes(design.name)),
+    // Los pagos sobre documentos (G11 de PLAN-CORRIDAS-GELSA.md): el reclamo del barrido de pagos, PS1 a PS7. El MISMO diseño
+    // que miden los otros tres (keel-core/test/helpers/payment-designs.js).
+    ...PAYMENT_DOCUMENT_DESIGNS.map((design) => ({ name: design.name, from: design.from, mutate: (manifest, layers) => design.mutate(layers, manifest) }))
   ]
     .filter((design) => only || !isReadScopeSabotage(sabotage) || READ_SCOPE_SUBJECTS.document.includes(design.name))
     .filter((design) => only || !isLifecycleSabotage(sabotage) || LIFECYCLE_SUBJECTS.document.includes(design.name))

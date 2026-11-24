@@ -8,6 +8,21 @@ const file = (name) => new RegExp(`${STORE}${name}$`);
 const REPOSITORY = new RegExp(`${STORE}\\w+_repository\\.go$`);
 
 export const DOC_SABOTAGES = {
+  // El reclamo del barrido de pagos (G11 de PLAN-CORRIDAS-GELSA.md), con --only=payment-checkout-mongo. Es un BUCLE de
+  // FindOneAndUpdate: sin renovar el reloj (o con la cota en el futuro), cada vuelta vuelve a casar con el MISMO documento,
+  // así que cae también el que cuenta un cobro por estado (PS4), que en relacional no lo ve.
+  'payment-sweep-no-lease': {
+    files: /\/payment_repository\.go$/,
+    from: '\tclaimedAt := time.Now().UTC()\n\tfilter := bson.D{',
+    to: '\tclaimedAt := staleBefore.Add(-time.Second)\n\tfilter := bson.D{',
+    expect: /^TestPaymentSweep_PS(1|4|7)_/
+  },
+  'payment-sweep-cutoff': {
+    files: /\/payment_repository\.go$/,
+    from: '\tstaleBefore = staleBefore.UTC()\n\t// El reloj renovado, uno por tanda: el reclamo ARRIENDA el documento',
+    to: '\tstaleBefore = time.Now().UTC().Add(24 * time.Hour)\n\t// El reloj renovado, uno por tanda: el reclamo ARRIENDA el documento',
+    expect: /^TestPaymentSweep_PS(1|2|4|7)_/
+  },
   // La escritura condicional (api.concurrency), con --only=catalog-conditional-mongo: los mismos tres que db-check.
   'cw-ignore-expected': { files: /^internal\/domain\/versions\.go$/, from: 'if expected == nil {', to: 'if expected == nil || len(expected) >= 0 {', expect: /_CW2_|_CW3_/ },
   // Al ACTUALIZAR, Save devuelve el agregado con la versión cargada (el primer guardado sigue releyendo).

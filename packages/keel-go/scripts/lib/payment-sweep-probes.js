@@ -10,27 +10,33 @@
 //
 // El reclamo es de la tabla ENTERA: antes de cada sonda se APARCAN en un estado que el barrido no mira las filas que otras
 // sondas dejaron esperando. Cada sonda guarda sus propias muestras (números a partir de 600).
+//
+// Con `{ document: true }` son las de doc-check sobre payment-checkout-mongo (keel-core/test/helpers/payment-designs.js): el
+// reclamo es un bucle de FindOneAndUpdate, y la siembra, el aparcado y la lectura van por la colección cruda, con las
+// claves del documento.
 
 import { snakeCase, screamingSnake } from '@keel-system/keel-core/gen';
 import { goExported } from '../../src/lib/go-projection.js';
 import { goString } from '../../src/lib/go-source.js';
 import { sqlDialect } from '../../src/lib/relational-engine.js';
 import { paymentSweepClaim } from '../../src/scaffold/payment-sweep-claim.js';
+import { documentShape } from '@keel-system/keel-core/gen/document';
 
 const SAMPLES = 600;
 
 /** Las sondas del reclamo del barrido de pagos del sujeto, o null si no lo tiene. `repo(root)` es el adaptador. */
-export function paymentSweepProbes(model, repo) {
+export function paymentSweepProbes(model, repo, { document = false } = {}) {
   const root = (model.entities ?? []).find((entity) => paymentSweepClaim(model, entity));
   if (!root) return null;
   const claim = paymentSweepClaim(model, root);
-  const d = sqlDialect(model);
-  const p = d.param;
   const name = root.name;
   const id = goExported(root.idField?.name ?? 'id');
-  const table = d.quote(root.tableName);
-  const stateColumn = d.quote(snakeCase(root.lifecycle.field));
-  const stamp = d.quote(snakeCase(claim.stampField));
+  const keyOf = (member) => documentShape(model, root).find((entry) => entry.member === member)?.name ?? snakeCase(member);
+  const d = document ? null : sqlDialect(model);
+  const p = d?.param;
+  const table = document ? null : d.quote(root.tableName);
+  const stateColumn = document ? keyOf(root.lifecycle.field) : d.quote(snakeCase(root.lifecycle.field));
+  const stamp = document ? keyOf(claim.stampField) : d.quote(snakeCase(claim.stampField));
   const enumDef = model.enums.find((candidate) => candidate.name === root.lifecycle.enumType);
   const stored = (state) => enumDef?.values.find((value) => value.literal === state)?.constant ?? screamingSnake(state);
   const waiting = claim.states.map(stored);
@@ -40,8 +46,41 @@ export function paymentSweepProbes(model, repo) {
   const call = (cutoff, batch) => `${repo(root)}.ClaimForPaymentSweep(t.Context(), ${cutoff}, ${batch})`;
   const seed = (variable, state, at) => `	${variable} ${variable === '_' ? '=' : ':='} paySweepSeed(t, ${next++}, ${goString(state)}, ${at})`;
   const ago = (minutes) => `time.Now().UTC().Add(-${minutes} * time.Minute)`;
-  const parts = [
-    `// paySweepPark aparca lo que otras sondas dejaron esperando: el reclamo del barrido de pagos es de la tabla entera.
+  const collection = document ? `probeDB.Collection(${goString(root.collectionName)})` : null;
+  const helpers = document
+    ? `// paySweepPark aparca lo que otras sondas dejaron esperando: el reclamo del barrido de pagos es de la colección entera.
+func paySweepPark(t *testing.T) {
+	t.Helper()
+	if _, err := ${collection}.UpdateMany(t.Context(), bson.D{{Key: ${goString(stateColumn)}, Value: bson.D{{Key: "$in", Value: bson.A{${waiting.map(goString).join(', ')}}}}}}, bson.D{{Key: "$set", Value: bson.D{{Key: ${goString(stateColumn)}, Value: ${goString(stored(other))}}}}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// paySweepSeed guarda la muestra n y la deja en ese estado con ese reloj (nil: sin reloj), y devuelve su id.
+func paySweepSeed(t *testing.T, n int, state string, at any) uuid.UUID {
+	t.Helper()
+	sample := sample${name}(t, n)
+	if _, err := ${repo(root)}.Save(t.Context(), domain.Rehydrate${name}(sample)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if when, ok := at.(time.Time); ok {
+		at = instantValue(when)
+	}
+	if _, err := ${collection}.UpdateOne(t.Context(), bson.D{{Key: "_id", Value: uuidValue(sample.${id})}}, bson.D{{Key: "$set", Value: bson.D{{Key: ${goString(stateColumn)}, Value: state}, {Key: ${goString(stamp)}, Value: at}}}}); err != nil {
+		t.Fatal(err)
+	}
+	return sample.${id}
+}
+
+// paySweepRead es el estado y el reloj guardados del cobro.
+func paySweepRead(t *testing.T, row uuid.UUID) (string, time.Time) {
+	t.Helper()
+	raw := rawOf(t, ${goString(root.collectionName)}, uuidValue(row))
+	state, _ := raw.Lookup(${goString(stateColumn)}).StringValueOK()
+	clock, _ := raw.Lookup(${goString(stamp)}).DateTimeOK()
+	return state, time.UnixMilli(clock).UTC()
+}`
+    : `// paySweepPark aparca lo que otras sondas dejaron esperando: el reclamo del barrido de pagos es de la tabla entera.
 func paySweepPark(t *testing.T) {
 	t.Helper()
 	if _, err := must(probeTx.conn(t.Context())).ExecContext(t.Context(), ${goString(`UPDATE ${table} SET ${stateColumn} = '${stored(other)}' WHERE ${stateColumn} IN (${waiting.map((state) => `'${state}'`).join(', ')})`)}); err != nil {
@@ -62,6 +101,19 @@ func paySweepSeed(t *testing.T, n int, state string, at any) uuid.UUID {
 	return sample.${id}
 }
 
+// paySweepRead es el estado y el reloj guardados del cobro.
+func paySweepRead(t *testing.T, row uuid.UUID) (string, time.Time) {
+	t.Helper()
+	var state string
+	var clock time.Time
+	if err := must(probeTx.conn(t.Context())).QueryRowContext(t.Context(), ${goString(`SELECT ${stateColumn}, ${stamp} FROM ${table} WHERE id = ${p(1)}`)}, row).Scan(&state, &clock); err != nil {
+		t.Fatal(err)
+	}
+	return state, clock
+}`;
+  const parts = [
+    `${helpers}
+
 // paySweepIDs son los ids de lo reclamado.
 func paySweepIDs(claimed []*domain.${name}) []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(claimed))
@@ -79,11 +131,7 @@ ${seed('stale', waiting[0], ago(60))}
 	if err != nil || !slices.Equal(paySweepIDs(claimed), []uuid.UUID{stale}) {
 		t.Fatalf("ClaimForPaymentSweep = %v, %v; quiero solo el rancio %v", paySweepIDs(claimed), err, stale)
 	}
-	var state string
-	var clock time.Time
-	if err := must(probeTx.conn(t.Context())).QueryRowContext(t.Context(), ${goString(`SELECT ${stateColumn}, ${stamp} FROM ${table} WHERE id = ${p(1)}`)}, stale).Scan(&state, &clock); err != nil {
-		t.Fatal(err)
-	}
+	state, clock := paySweepRead(t, stale)
 	if state != ${goString(waiting[0])} || !clock.After(cutoff) {
 		t.Errorf("tras el reclamo: estado %q y reloj %v; quiero el estado intacto y el reloj renovado (después de %v)", state, clock, cutoff)
 	}
