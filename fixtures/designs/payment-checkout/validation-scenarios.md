@@ -47,7 +47,7 @@
   de un desenlace de un cobro que ya conoce. Un aviso de la pasarela va firmado como lo firma ella;
   el servidor nunca toma el desenlace de su contenido: se lo pregunta.
 - **El barrido**: `sweepPendingPayments` corre cada 5 minutos. Los escenarios que dependen de él
-  esperan **dos ciclos** (11 minutos) después de superar el umbral de `unansweredAfterSeconds`.
+  esperan **dos ciclos** (11 minutos) después de superar el umbral de silencio (`sweepSilenceMinutes`).
 
 ## Matriz de cobertura
 
@@ -85,12 +85,13 @@ La misma matriz leída por **mecanismo**:
 ### FL-MTH-001: se guarda un medio de pago
 
 **Given**: un token válido de la pasarela de prueba para `cli-1`, y la pasarela de prueba programada para
-guardar el medio.
+guardar el medio con una tarjeta `visa` acabada en `4242` que caduca en 12/2030.
 
 **When**: `savePaymentMethod` con `{payerId: "cli-1", paymentToken: <token>}`.
 
 **Then**:
-1. Status `201` con exactamente `{id: <m1>, payerId: "cli-1"}`: `gatewayReference` **no** aparece.
+1. Status `201` con exactamente `{id: <m1>, payerId: "cli-1", card: {brand: "visa", last4: "4242", expMonth: 12,
+   expYear: 2030}}`: el resumen de la tarjeta es el que contestó la pasarela, y `gatewayReference` **no** aparece.
 
 #### FL-MTH-001-B: lo que no se puede guardar
 
@@ -379,7 +380,7 @@ registrándolo.
    se cobró, y no lo reintenta.
 
 **When**: la pasarela de prueba vuelve a contestar —sabe que `ch-030` quedó autorizado—, pasa el
-umbral de `unansweredAfterSeconds` y corren dos ciclos de `sweepPendingPayments`.
+umbral de silencio (`sweepSilenceMinutes`) y corren dos ciclos de `sweepPendingPayments`.
 
 **Then**:
 2. `getPayment` sobre `ch-030` responde `status: "authorized"` con `gatewayPaymentId` no nulo, y

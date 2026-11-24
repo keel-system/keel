@@ -76,7 +76,11 @@ test('payments.yaml es el de keel-nest y dice lo mismo que el de keel-spring en 
       assert.equal(ours, content(nest, `config/parameters/${profile}/payments.yaml`), `${gateway}/${profile}: keel-nest`);
       assert.equal(ours, content(spring, `parameters/${profile}/payments.yaml`), `${gateway}/${profile}: keel-spring`);
     }
-    const declared = new Set(flatKeys(parseYaml(content(files, 'config/parameters/local/payments.yaml'))));
+    // El umbral enlazado a un parámetro (DSL 2.33, payment-checkout) lo declara el yaml de los parámetros del servicio.
+    const declared = new Set([
+      ...flatKeys(parseYaml(content(files, 'config/parameters/local/payments.yaml'))),
+      ...flatKeys(parseYaml(content(files, 'config/parameters/local/payment-checkout.yaml')))
+    ]);
     const settings = content(files, '/Payment/PaymentGatewaySettings.cs');
     const read = [...settings.matchAll(/\(configuration, "([^"]+)"/g)].map((match) => match[1]);
     assert.ok(read.length >= 8, gateway);

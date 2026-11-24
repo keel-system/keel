@@ -163,6 +163,8 @@ for (const name of [RELATIONAL, DOCUMENT]) {
       for (const profile of PROFILES) {
         const yaml = yamlOf(files, profile, 'reconciliation');
         for (const parameter of Object.values(parameters)) {
+          // El umbral enlazado a un parámetro (DSL 2.33) no tiene clave en el YAML: lo mide unanswered-parameter.test.js.
+          if (parameter.key == null) continue;
           const want = profile === 'local' ? parameter.default : `\${${parameter.env}:${parameter.default}}`;
           assert.equal(String(at(yaml, parameter.key)), String(want), `${profile}: ${parameter.key}`);
         }
@@ -171,7 +173,7 @@ for (const name of [RELATIONAL, DOCUMENT]) {
       const claim = model.services.flatMap((s) => s.operations).flatMap((op) => op.reconciles ?? []).find((r) => r.claim?.activation === activation.name)?.claim;
       if (claim) {
         assert.deepEqual(claim.parameters, parameters);
-        for (const parameter of Object.values(parameters)) {
+        for (const parameter of Object.values(parameters).filter((p) => p.key != null)) {
           assert.ok(java.includes(`\${${parameter.key}:${parameter.default}}`), `@Value ${parameter.key}`);
         }
       }

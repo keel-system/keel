@@ -40,15 +40,20 @@ test('stock-reservation: reconciliation.yaml es el de keel-nest y keel-dotnet, y
     const parameters = reconciliationParameters(activation, sweeper);
     const prefix = parameters.batchSize.key.replace(/\.batch-size$/, '');
     assert.ok(settings.includes(`"${activation.name}": "${prefix}",`), `${activation.name}: su prefijo`);
+    // Con el umbral enlazado a un parámetro (DSL 2.33, stock-reservation), sin configuración vale su valor de prueba.
+    const linked = parameters.unansweredAfterSeconds.parameter;
+    const unanswered = linked ? model.service.parameters.find((p) => p.name === linked.name).testValue * linked.unitSeconds : parameters.unansweredAfterSeconds.default;
     assert.ok(
-      settings.includes(`{UnansweredAfterSeconds: ${parameters.unansweredAfterSeconds.default}, ClaimTimeoutMs: ${parameters.claimTimeoutMs.default}, BatchSize: ${parameters.batchSize.default}}`),
+      settings.includes(`{UnansweredAfterSeconds: ${unanswered}, ClaimTimeoutMs: ${parameters.claimTimeoutMs.default}, BatchSize: ${parameters.batchSize.default}}`),
       `${activation.name}: los defaults de keel-core`
     );
   }
   // Las hojas que lee son las del YAML.
   for (const leaf of ['unanswered-after-seconds', 'claim-timeout-ms', 'batch-size']) {
     assert.ok(settings.includes(`{"${leaf}", &window.`), leaf);
-    assert.match(content(files, 'config/parameters/local/reconciliation.yaml'), new RegExp(`^    ${leaf}: `, 'm'), leaf);
+    // El umbral de reserveStock es un parámetro: el YAML no lo declara, para que no haya dos.
+    const declared = leaf !== 'unanswered-after-seconds';
+    assert.equal(new RegExp(`^    ${leaf}: `, 'm').test(content(files, 'config/parameters/local/reconciliation.yaml')), declared, leaf);
   }
 });
 

@@ -14,6 +14,16 @@ types:
     description: Por qué se anuló una autorización.
     values: [requested, expired]
 
+  # DSL 2.33: lo informa la PASARELA al guardar (payments.savePaymentMethod.cardDetails); la petición
+  # solo trae el token. Es lo que el cliente ve para reconocer su tarjeta, nunca un dato con el que cobrar.
+  SavedCardSummary:
+    description: Resumen visible de una tarjeta guardada.
+    fields:
+      brand: { type: string, required: true, constraints: { maxLength: 30 } }
+      last4: { type: string, required: true, constraints: { pattern: "^[0-9]{4}$" } }
+      expMonth: { type: int, required: true, constraints: { min: 1, max: 12 } }
+      expYear: { type: int, required: true, constraints: { min: 2000, max: 2999 } }
+
 entities:
   Payment:
     description: >-
@@ -114,6 +124,10 @@ entities:
         sensitive: true
         constraints: { maxLength: 255 }
         description: La referencia que la pasarela devolvió al guardarlo. Nunca sale del servicio.
+      card:
+        type: SavedCardSummary
+        required: true
+        description: La marca, los cuatro últimos dígitos y la caducidad, tal como los devuelve la pasarela al guardarlo.
 
 aggregates:
   Payment: { root: Payment }

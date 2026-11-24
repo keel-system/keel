@@ -452,6 +452,27 @@ Cuando los cuatro lo generen, una fixture que declare `unansweredAfter` y `cardD
 parches `-233` de los cuatro), y la rama documental del reclamo de pagos, que ninguna red ejecuta porque ninguna fixture
 lleva pagos sobre MongoDB.
 
+**Las fixtures declaran la 2.33 (2026-11-24, fuera del plan).** No hacía falta una fixture nueva: las dos formas caben
+en las que ya tenían su silueta. Las dos siguen listas (13/13), sin subir la versión del servicio, como en las subidas
+del DSL anteriores.
+- `stock-reservation`: `reserveStock.unansweredAfter` enlazado a `reserveStockSilenceMinutes`.
+- `payment-checkout`: `reconciliation.unansweredAfter` enlazado a `sweepSilenceMinutes`, y `savePaymentMethod.cardDetails:
+  card`, con `SavedPaymentMethod.card` (el value object `SavedCardSummary`, con los cuatro campos que informa la pasarela).
+- El `testValue` de cada parámetro es el umbral de antes (30 y 15 min), porque la convención «Reconciliación» de los
+  escenarios prohíbe acortarlo.
+- Escenarios: la prosa nombra el parámetro, y FL-MTH-001 fija en el Given la tarjeta que afirma su Then. El careo se
+  revisó y se volvió a sellar a mano, con la nota en la cabecera de los dos `flow-review.yaml`.
+- Se quitan los parches `-233` de keel-dotnet y keel-go, y las tres filas `soloCadenas` de los cuatro
+  `capability-coverage`. Las pruebas de 2.33 de los cuatro (y de keel-core) leen las fixtures, y su contraste les
+  quita la forma en memoria.
+- `payments.reconciliation.unansweredAfterSeconds` ya no la declara ninguna fixture. Queda como `ramaHermana` en los
+  cuatro: el mismo emisor de payments.yaml, y la mide el contraste en memoria.
+- Medido: las suites de los seis paquetes en verde. `compile-check` de keel-spring sobre payment-checkout (Stripe,
+  PostgreSQL y MySQL) y stock-reservation (Kafka). `cs-check --fixtures --only=payment-checkout,stock-reservation`
+  sin warnings y con 372 pruebas. En keel-go, los pasos de `go-check --fixtures` (tidy, gofmt, vet, staticcheck y
+  pruebas) sobre payment-checkout con las dos pasarelas, en MySQL y en MongoDB, y sobre stock-reservation en
+  PostgreSQL y MySQL. El `--fixtures` entero tenía 121 variantes por comprobar, horas.
+
 **Siguiente: inc. 7, la corrida de control** (la lanza el usuario).
 
 **Preparación del inc. 7 (2026-11-24, solo lectura sobre prueba-gelsa).** Medido con las CLIs del repo (keel-core y

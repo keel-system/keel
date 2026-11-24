@@ -23,17 +23,11 @@ function plan(gateway, mutate) {
 
 const flat = (text) => text.replace(/\s*\n\s*(\*\s*|\/\/\s*)?/g, ' ');
 
-// payment-checkout no tiene un resumen en la entidad guardada: se le añade, con cardDetails.
-const withCard = (manifest, layers) => {
-  layers.domain.types.SavedCardSummary = {
-    description: 'Resumen visible de la tarjeta guardada.',
-    fields: {
-      brand: { type: 'string', required: true, constraints: { maxLength: 30 } },
-      last4: { type: 'string', required: true, constraints: { pattern: '^[0-9]{4}$' } }
-    }
-  };
-  layers.domain.entities.SavedPaymentMethod.fields.card = { type: 'SavedCardSummary', required: true };
-  layers.payments.savePaymentMethod.cardDetails = 'card';
+// El contraste: payment-checkout sin el resumen en la entidad guardada, como antes de la 2.33.
+const withoutCard = (manifest, layers) => {
+  delete layers.payments.savePaymentMethod.cardDetails;
+  delete layers.domain.entities.SavedPaymentMethod.fields.card;
+  delete layers.domain.types.SavedCardSummary;
 };
 
 for (const gateway of ['stripe', 'mercadopago']) {
@@ -67,13 +61,13 @@ test('el arnés guarda con un resumen, deja elegirlo y pide el 3DS donde existe'
 });
 
 test('con cardDetails el handler sabe dónde va el resumen, y keel-spring lo genera', () => {
-  const { manifest, layers, read } = plan('stripe', withCard);
+  const { manifest, layers, read } = plan('stripe');
   assert.deepEqual(checkSupportedFeatures(manifest, layers).errors, []);
   const note = flat(read('/SavePaymentMethodCommandHandler.java'));
   assert.match(note, /guárdalo en el campo 'card' \(payments\.savePaymentMethod\.cardDetails\)/);
   assert.match(note, /PaymentMethodAuthenticationRequiredException \(la pasarela exige autenticar al cliente, 3DS/);
   // Sin cardDetails, la nota dice que el diseño no lo decidió.
-  assert.match(flat(plan('stripe').read('/SavePaymentMethodCommandHandler.java')), /el diseño no dice dónde guardarlo/);
+  assert.match(flat(plan('stripe', withoutCard).read('/SavePaymentMethodCommandHandler.java')), /el diseño no dice dónde guardarlo/);
 });
 
 // El resto de G12: las primitivas que la corrida payment escribió a mano en sus flujos.

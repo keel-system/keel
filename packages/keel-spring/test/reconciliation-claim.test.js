@@ -110,10 +110,12 @@ test('el puerto expone el reclamo sin batchSize: el handler no puede leer config
   assert.match(port, /Reclama, no lee/);
 });
 
-test('los tres números se leen de parameters/, y el umbral trae el valor del diseño', () => {
+test('los tres números se leen de parameters/, y el umbral es el parámetro del diseño', () => {
   const adapter = fileNamed(generateRepositories(modelFor()), 'ReservationRepositoryImpl.java');
 
-  assert.match(adapter, /reconciliation\.reserve-stock\.unanswered-after-seconds:1800/);
+  // stock-reservation enlaza el umbral a un parámetro (DSL 2.33): se lee de su propiedad, en segundos.
+  assert.match(adapter, /@Value\("#\{\$\{[^}]+reserve-stock-silence-minutes\} \* 60\}"\)/);
+  assert.doesNotMatch(adapter, /reconciliation\.reserve-stock\.unanswered-after-seconds/);
   // El default ya no es la cadencia del cron: cubre el lote entero (50 × 5000 ms + 10 s) y
   // dos ticks. Era 60000 fijo, igual a la cadencia de un barrido por minuto (asset-vault, R8).
   assert.match(adapter, /reconciliation\.reserve-stock\.claim-timeout-ms:260000/);

@@ -34,16 +34,8 @@ const MOTIVOS = {
 
 const EXCEPCIONES = new Map([
   [
-    'dependencies.dependencies.*.activations.*.unansweredAfter',
-    { motivo: MOTIVOS.soloCadenas, porque: 'DSL 2.33: test/dsl-233.test.js parchea stock-reservation y payment-checkout en memoria y EJECUTA la lectura del umbral. La fixture que la declare llega cuando la generen los cuatro (inc. 6 de PLAN-CORRIDAS-GELSA.md).' }
-  ],
-  [
-    'payments.reconciliation.unansweredAfter',
-    { motivo: MOTIVOS.soloCadenas, porque: 'DSL 2.33: test/dsl-233.test.js parchea stock-reservation y payment-checkout en memoria y EJECUTA la lectura del umbral. La fixture que la declare llega cuando la generen los cuatro (inc. 6 de PLAN-CORRIDAS-GELSA.md).' }
-  ],
-  [
-    'payments.savePaymentMethod.cardDetails',
-    { motivo: MOTIVOS.soloCadenas, porque: 'DSL 2.33: el adaptador que lee el resumen lo EJECUTA test/payments.test.js en las dos pasarelas, y test/dsl-233.test.js parchea payment-checkout para la nota. La fixture que la declare llega cuando la generen los cuatro (inc. 6 de PLAN-CORRIDAS-GELSA.md).' }
+    'payments.reconciliation.unansweredAfterSeconds',
+    { motivo: MOTIVOS.ramaHermana, porque: 'DSL 2.33: payment-checkout declara la rama hermana, `unansweredAfter`, con el umbral enlazado a un parámetro. Los segundos son lo que payment-checkout declaró hasta la 2.33, con el mismo emisor de payments.yaml; los mide en memoria el contraste de test/dsl-233.test.js y el de keel-core/test/dsl-233.test.js.' }
   ],
   [
     'messaging.subscriptions.*.contract.schemaRef',

@@ -18,6 +18,16 @@ parameters:
     description: Moneda en la que cobra el servicio (ISO 4217), la de la cuenta de la pasarela. Solo monedas de dos decimales, que es la escala de todos los importes del diseño.
     constraints: { pattern: "^[A-Z]{3}$" }
     testValue: BRL
+  # DSL 2.33: el silencio de la pasarela que tolera el barrido antes de consultar un cobro en espera
+  # (payments.reconciliation.unansweredAfter).
+  sweepSilenceMinutes:
+    type: int
+    description: Minutos que un cobro puede esperar a la pasarela sin respuesta antes de que el barrido la consulte.
+    constraints: { min: 1 }
+    default: 15
+    # El mismo umbral en las pruebas: los escenarios envejecen la marca de espera, no acortan el umbral.
+    testValue: 15
+    requiredInProduction: false
 layers:
   domain: domain.keel.yaml
   use-cases: use-cases.keel.yaml

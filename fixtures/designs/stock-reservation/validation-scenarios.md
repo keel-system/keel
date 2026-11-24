@@ -60,7 +60,7 @@
   gana. Lo que se afirma es una disyunción **cerrada** de resultados admisibles más un conteo
   posterior: cualquier otra forma convierte una prueba de concurrencia en una lotería.
 - **Reconciliación**: la frecuencia del barrido (cada minuto) y su umbral de paciencia
-  (`unansweredAfterSeconds`: 1800 s) son cosas distintas, y el escenario solo toca la antigüedad de la
+  (`reserveStockSilenceMinutes`: 30 min) son cosas distintas, y el escenario solo toca la antigüedad de la
   fila —retrasa su marca de espera directamente en la base— y espera un tick, con margen (hasta 90 s).
   No se acorta el umbral: eso pondría a todos los demás flujos bajo el barrido y mediría un servicio que
   nadie opera.

@@ -1,9 +1,14 @@
+# DSL 2.33 (inc. 7 de PLAN-CORRIDAS-GELSA.md, 2026-11-24): el umbral del barrido pasa a un parámetro
+# (sweepSilenceMinutes, 15 min, el mismo en las pruebas) y savePaymentMethod devuelve el resumen de la tarjeta
+# (cardDetails: card). Careados a mano por quien lo cambió: la convención del barrido y FL-REC-001 solo cambian el
+# nombre del umbral; FL-MTH-001 afirma ahora `card`, que es lo que devuelve su output (SavedPaymentMethod sin
+# gatewayReference), y su Given fija los cuatro valores que afirma el Then.
 reviewedAt: 1.2.0
 passes: 3
-scenariosSha256: 6da28fb174f805c85103041a476f0472a8dcbcaeb94d306aae972ed479dded48
-conventionsSha256: 244b2aaf4157d73e7ce22b14cf91aeab7e3e91ee55207bba2a71859552976399
+scenariosSha256: c48722ecb7cd7d8b5566ec066277052c4b3e54c6aa78b493d1bcf304f018649d
+conventionsSha256: 05fa6d4fecdb69e605770b80500b676c8f9311665d44d4bf123d3a4913d49039
 flows:
-  - { id: FL-MTH-001, sha256: afb207fbd19e5761d0a7100bf9def9ec3f43312f16d424476fb3c37128669ec7 }
+  - { id: FL-MTH-001, sha256: 650c7fd703f906a6fd907602b72d9a0d3587039298fd9dfef5fcfba88b3b438f }
   - { id: FL-MTH-001-B, sha256: 802737b582e0aad88adf6e6d06abc70b3a3b8c29e2d98404d5572481249780e4 }
   - { id: FL-CHG-001, sha256: 47f2d34b8f831c6686864940a67f7972a592b378e0457228c481dda2aac7552a }
   - { id: FL-CHG-001-B, sha256: 9108940a88ab9b0faee8a6e4fdcae30102dfd99766b3cf7dafab97da24df4baa }
@@ -22,7 +27,7 @@ flows:
   - { id: FL-STL-003-B, sha256: 705854d866711a8524af806b24f4e25344bae6a332e15e65f1380ccd057f294a }
   - { id: FL-STL-004, sha256: 62beeb38f5774814284dff36004971ed4c13a8a7b1dbf84de7ce0107734a313d }
   - { id: FL-STL-004-B, sha256: 74dcd3933937f6de86aa68d3697cbdebf090f46e96879de1c530521432c03945 }
-  - { id: FL-REC-001, sha256: 96fdda59fd36fe85981fd84ac288aafed5af415c7ee3cb7a8fe5dd27d2922dc8 }
+  - { id: FL-REC-001, sha256: 4ff4baecbabbd767469704002892738737de9b17f8c44407a8dc3b2360932ad6 }
   - { id: FL-REC-002, sha256: ae7e22ca07d156f56234dc0403f208ced7c764dbbc3e7ebabd6b06a623471d5b }
   - { id: FL-REC-002-B, sha256: 363d24ef6f267cd9ab9ab179c2e13e163425efe5746f178db7923c319f0226a6 }
   - { id: FL-CLU-001, sha256: a2a407de4224905a0109b94766f50245ff08260e8256b3db639294db73826d37 }

@@ -213,40 +213,6 @@ export const UNCOVERED_BRANCHES = [
       layers.domain.entities.Template.fields.lockVersion = { type: 'int', generated: true };
     }
   },
-  // DSL 2.33 (inc. 6c de PLAN-CORRIDAS-GELSA.md): el umbral de silencio enlazado a un parámetro, en una activación con
-  // reclamo generado y en el barrido de pagos, y el resumen de la tarjeta guardada (savePaymentMethod.cardDetails).
-  {
-    name: 'stock-reservation-233',
-    from: 'stock-reservation',
-    mutate(manifest, layers) {
-      manifest.service.name = 'stock-reservation-233';
-      manifest.parameters.reserveSilenceMinutes = { type: 'int', description: 'Minutos de silencio tolerados.', default: 30, testValue: 1, requiredInProduction: false };
-      const activation = layers.dependencies.dependencies.inventory.activations.reserveStock;
-      delete activation.unansweredAfterSeconds;
-      activation.unansweredAfter = { parameter: 'reserveSilenceMinutes', unit: 'minutes' };
-    }
-  },
-  {
-    name: 'payment-checkout-233',
-    from: 'payment-checkout',
-    paymentGateway: 'stripe',
-    stack: { paymentGateway: 'stripe' },
-    mutate(manifest, layers) {
-      manifest.service.name = 'payment-checkout-233';
-      manifest.parameters.sweepSilenceMinutes = { type: 'int', description: 'Minutos de silencio tolerados.', default: 30, testValue: 1, requiredInProduction: false };
-      delete layers.payments.reconciliation.unansweredAfterSeconds;
-      layers.payments.reconciliation.unansweredAfter = { parameter: 'sweepSilenceMinutes', unit: 'minutes' };
-      layers.domain.types.SavedCardSummary = {
-        description: 'Resumen visible de la tarjeta guardada.',
-        fields: {
-          brand: { type: 'string', required: true, constraints: { maxLength: 30 } },
-          last4: { type: 'string', required: true, constraints: { pattern: '^[0-9]{4}$' } }
-        }
-      };
-      layers.domain.entities.SavedPaymentMethod.fields.card = { type: 'SavedCardSummary', required: true };
-      layers.payments.savePaymentMethod.cardDetails = 'card';
-    }
-  },
   {
     // La captura PARCIAL: payment-checkout captura siempre entero porque MercadoPago no la cubre; sobre Stripe sí.
     name: 'payment-checkout-partial-capture',

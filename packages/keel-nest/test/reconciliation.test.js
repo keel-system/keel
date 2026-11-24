@@ -36,6 +36,11 @@ test(`${SUBJECT}: la configuración del código respalda con los mismos defaults
   const settings = byPath[RECONCILIATION_SETTINGS_TS];
   for (const { activation, sweeper } of reconciledActivations(model)) {
     for (const parameter of Object.values(reconciliationParameters(activation, sweeper))) {
+      // El umbral enlazado a un parámetro (DSL 2.33) no tiene clave propia: lo lee `linked`, y lo EJECUTA dsl-233.test.js.
+      if (parameter.key == null) {
+        assert.ok(settings.includes(`linked(configuration, '`), `${activation.name}: el umbral enlazado`);
+        continue;
+      }
       assert.ok(settings.includes(`positive(configuration, '${parameter.key}', ${parameter.default})`), parameter.key);
     }
   }

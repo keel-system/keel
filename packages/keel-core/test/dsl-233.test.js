@@ -126,22 +126,18 @@ test('D7: un compuesto opcional, o uno que trae el input, no es un resumen sin f
   assert.ok(!fromInput.ids.includes('CHK-PAYMENTS-SAVED-CARD-UNSOURCED'));
 });
 
-function model(fixture, mutate) {
+function model(fixture, mutate = () => {}) {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, fixture));
   mutate(manifest, layers);
   const stack = { ...STACK_DEFAULTS, database: defaultDatabaseFor(layers.persistence?.default?.model) };
   return buildModel({ manifest, layers, stack, projection: PROBE });
 }
 
+// stock-reservation y payment-checkout declaran el enlace; el contraste se lo quita en memoria.
 test('el modelo: el umbral enlazado se resuelve al parámetro y reconciliation.yaml no emite su clave', () => {
-  const linked = model('stock-reservation', (manifest, layers) => {
-    manifest.parameters.reserveSilenceMinutes = { type: 'int', description: 'Minutos de silencio del almacén.', default: 30, testValue: 1, requiredInProduction: false };
-    const activation = layers.dependencies.dependencies.inventory.activations.reserveStock;
-    delete activation.unansweredAfterSeconds;
-    activation.unansweredAfter = { parameter: 'reserveSilenceMinutes', unit: 'minutes' };
-  });
+  const linked = model('stock-reservation');
   const activation = linked.dependencies.flatMap((dependency) => dependency.activations).find((candidate) => candidate.name === 'reserveStock');
-  assert.equal(activation.unansweredParameter.name, 'reserveSilenceMinutes');
+  assert.equal(activation.unansweredParameter.name, 'reserveStockSilenceMinutes');
   assert.equal(activation.unansweredParameter.unitSeconds, 60);
   const parameters = reconciliationParameters(activation, null);
   assert.equal(parameters.unansweredAfterSeconds.key, null);
@@ -149,29 +145,35 @@ test('el modelo: el umbral enlazado se resuelve al parámetro y reconciliation.y
   const yaml = reconciliationYaml(linked, 'production');
   const section = yaml.slice(yaml.indexOf('  reserve-stock:'), yaml.indexOf('batch-size', yaml.indexOf('  reserve-stock:')));
   assert.doesNotMatch(section, /unanswered-after-seconds/);
-  assert.match(section, /reserveSilenceMinutes \(en minutes\)/);
+  assert.match(section, /reserveStockSilenceMinutes \(en minutes\)/);
   const claim = linked.services.flatMap((service) => service.operations).flatMap((operation) => operation.reconciles ?? []).find((r) => r.claim?.activation === 'reserveStock')?.claim;
   if (claim) {
     assert.equal(claim.unansweredAfterSeconds, null);
-    assert.equal(claim.unansweredParameter.name, 'reserveSilenceMinutes');
+    assert.equal(claim.unansweredParameter.name, 'reserveStockSilenceMinutes');
   }
 
   // Sin el enlace, nada cambia: la clave y su default.
-  const plain = reconciliationYaml(model('stock-reservation', () => {}), 'production');
+  const plain = reconciliationYaml(model('stock-reservation', (manifest, layers) => {
+    delete manifest.parameters.reserveStockSilenceMinutes;
+    const reserveStock = layers.dependencies.dependencies.inventory.activations.reserveStock;
+    delete reserveStock.unansweredAfter;
+    reserveStock.unansweredAfterSeconds = 1800;
+  }), 'production');
   assert.match(plain, /unanswered-after-seconds: \$\{RECONCILIATION_RESERVE_STOCK_UNANSWERED_AFTER_SECONDS:1800\}/);
 });
 
 test('el modelo de pagos: el umbral enlazado se resuelve y payments.yaml no emite su clave', () => {
-  const linked = model('payment-checkout', (manifest, layers) => {
-    manifest.parameters.sweepAfterMinutes = { type: 'int', description: 'Minutos de silencio de la pasarela.', default: 15, testValue: 1, requiredInProduction: false };
-    delete layers.payments.reconciliation.unansweredAfterSeconds;
-    layers.payments.reconciliation.unansweredAfter = { parameter: 'sweepAfterMinutes', unit: 'minutes' };
-  });
-  assert.equal(linked.payments.reconciliation.unansweredParameter.name, 'sweepAfterMinutes');
+  const linked = model('payment-checkout');
+  assert.equal(linked.payments.reconciliation.unansweredParameter.name, 'sweepSilenceMinutes');
   for (const profile of ['local', 'production']) {
     const yaml = paymentsYaml(linked, profile);
     assert.doesNotMatch(yaml, /unanswered-after-seconds/, profile);
-    assert.match(yaml, /sweepAfterMinutes \(en minutes\)/, profile);
+    assert.match(yaml, /sweepSilenceMinutes \(en minutes\)/, profile);
   }
-  assert.match(paymentsYaml(model('payment-checkout', () => {}), 'production'), /unanswered-after-seconds: /);
+  const plain = model('payment-checkout', (manifest, layers) => {
+    delete manifest.parameters.sweepSilenceMinutes;
+    delete layers.payments.reconciliation.unansweredAfter;
+    layers.payments.reconciliation.unansweredAfterSeconds = 900;
+  });
+  assert.match(paymentsYaml(plain, 'production'), /unanswered-after-seconds: /);
 });

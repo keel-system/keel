@@ -38,6 +38,17 @@ parameters:
     default: 15
     testValue: 15
     requiredInProduction: false
+  # DSL 2.33: el silencio del almacén que tolera reconcileReservations antes de volver a pedir el
+  # bloqueo (dependencies.inventory.activations.reserveStock.unansweredAfter).
+  reserveStockSilenceMinutes:
+    type: int
+    description: "Minutos que una reserva puede esperar al almacén sin respuesta antes de que el barrido vuelva a pedir el bloqueo."
+    constraints: { min: 1 }
+    default: 30
+    # El mismo umbral en las pruebas: acortarlo pondría todos los flujos bajo el barrido (convención
+    # «Reconciliación» de validation-scenarios.md).
+    testValue: 30
+    requiredInProduction: false
 conventions:
   # Un campo sin valor viaja como null (releaseReason y lastCountedQuantity hasta que algo los escribe):
   # el default, escrito.

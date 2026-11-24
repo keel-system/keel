@@ -7,10 +7,13 @@
 # admite el 409 del cronómetro adelantado, y eso no deja el rechazo tardío sin medir: tras envejecer el plazo el
 # sondeador duerme hasta timer.max-sleep-ms (30 s) o el siguiente recurrente, y el POST sale en milisegundos.
 # Pasada 1 limpia.
+# DSL 2.33 (inc. 7 de PLAN-CORRIDAS-GELSA.md, 2026-11-24): el umbral de reserveStock pasa a un parámetro
+# (reserveStockSilenceMinutes, 30 min, el mismo en las pruebas). Solo cambió el nombre del umbral en la convención
+# «Reconciliación», no su valor ni lo que hace el escenario; resellado a mano por quien lo cambió.
 reviewedAt: 1.2.0
 passes: 1
-scenariosSha256: 1be914032afcf6ee5bbde0ee52342e3c2cbd5c38339ace4a1ab7d7ecd430e26a
-conventionsSha256: d11c42953837f976392d13cbce088e61e8a21785c47034115edea3861e6b2bbb
+scenariosSha256: dcf0149b0cd2d2b3f50d1a3fa3c9dbb2a796fd280a6885a1cca115d33d88f640
+conventionsSha256: 34f4f544eef335ea7190feab316886bd1a17d2e472b94a3cc758e4f30bb8d830
 flows:
   - { id: FL-RES-001, sha256: b26005bf6a1271a41e1d3201819c8edf11fea9644472b3045f0a4828257b8407 }
   - { id: FL-RES-001-B, sha256: daf9378d76e9806a292f16a259ec40b15d38507f80262141b802c72f1b86b1de }

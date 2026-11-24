@@ -33,16 +33,8 @@ const MOTIVOS = {
 
 const EXCEPCIONES = new Map([
   [
-    'dependencies.dependencies.*.activations.*.unansweredAfter',
-    { motivo: MOTIVOS.soloCadenas, porque: 'DSL 2.33: el umbral enlazado a un parámetro en el reclamo generado: stock-reservation-233.' }
-  ],
-  [
-    'payments.reconciliation.unansweredAfter',
-    { motivo: MOTIVOS.soloCadenas, porque: 'DSL 2.33: el umbral del barrido de pagos enlazado a un parámetro: payment-checkout-233.' }
-  ],
-  [
-    'payments.savePaymentMethod.cardDetails',
-    { motivo: MOTIVOS.soloCadenas, porque: 'DSL 2.33: el resumen de la tarjeta en la nota del handler (el adaptador lo lee siempre, y lo ejecuta PaymentGatewayTests): payment-checkout-233.' }
+    'payments.reconciliation.unansweredAfterSeconds',
+    { motivo: MOTIVOS.ramaHermana, porque: 'DSL 2.33: payment-checkout declara la rama hermana, `unansweredAfter`, con el umbral enlazado a un parámetro. Los segundos son lo que payment-checkout declaró hasta la 2.33, con el mismo emisor de payments.yaml; los mide en memoria el contraste de keel-core/test/dsl-233.test.js, y payments.yaml es byte a byte el de keel-spring y keel-nest.' }
   ],
   [
     'messaging.subscriptions.*.contract.schemaRef',

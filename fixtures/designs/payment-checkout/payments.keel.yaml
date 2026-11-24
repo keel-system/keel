@@ -34,6 +34,8 @@ savePaymentMethod:
   operation: savePaymentMethod
   token: paymentToken
   exposedAs: id
+  # DSL 2.33: el resumen de la tarjeta lo informa la pasarela al guardar, no la petición.
+  cardDetails: card
 
 outcomes:
   authorized: markAuthorized
@@ -45,4 +47,5 @@ outcomes:
 
 reconciliation:
   sweep: sweepPendingPayments
-  unansweredAfterSeconds: 900
+  # DSL 2.33: el umbral de silencio es un parámetro del despliegue, no un número del diseño.
+  unansweredAfter: { parameter: sweepSilenceMinutes, unit: minutes }

@@ -21,8 +21,9 @@ dependencies:
         # La pata del SILENCIO. Si no llega ni la confirmación ni el rechazo, la reserva
         # se queda en `awaitingStock` sin que nada lo delate: eso solo lo ve un barrido.
         reconciledBy: reconcileReservations
-        # Cuánto silencio del almacén se tolera antes de volver a insistir.
-        unansweredAfterSeconds: 1800
+        # Cuánto silencio del almacén se tolera antes de volver a insistir: un parámetro del
+        # despliegue (DSL 2.33), así que no tiene clave de configuración propia.
+        unansweredAfter: { parameter: reserveStockSilenceMinutes, unit: minutes }
         # Y desde cuándo se cuenta: la marca que estampa confirmReservation al encargar el
         # bloqueo. Lleva delante el nombre de la activación porque una reserva puede acabar
         # esperando dos desenlaces, y con una marca compartida el segundo pisa al primero.

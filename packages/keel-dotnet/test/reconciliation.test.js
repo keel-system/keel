@@ -42,6 +42,11 @@ test('reconciliation.yaml es el de keel-nest, y ReconciliationSettings lee sus c
     for (const { activation, sweeper } of reconciledActivations(model)) {
       const parameters = reconciliationParameters(activation, sweeper);
       for (const parameter of Object.values(parameters)) {
+        // El umbral enlazado a un parámetro (DSL 2.33, stock-reservation) no tiene clave propia: lo mide dsl-233.test.js.
+        if (parameter.key == null) {
+          assert.ok(parameter.parameter, `${name}: sin clave y sin parámetro`);
+          continue;
+        }
         const key = parameter.key.replaceAll('.', ':');
         assert.match(settings, new RegExp(`Positive\\(configuration, "${key}", ${parameter.default}\\)`), `${name}: ${parameter.key}`);
         const [, activationKey, leaf] = parameter.key.split('.');
