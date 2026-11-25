@@ -65,6 +65,7 @@ runtime). Orden fijo:
 | `Colecciones Postman` | `postman/` | siempre |
 | `Contrato de integración` | `INTEGRATION.md` | si el archivo existe |
 | `Documento de diseño` | `DESIGN.md` | si el archivo existe |
+| `Manual por actor` | `MANUAL.md` | si el archivo existe |
 
 ### `capabilities` — las nueve tarjetas, en este orden
 

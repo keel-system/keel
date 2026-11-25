@@ -2,6 +2,7 @@ import pc from 'picocolors';
 import { LAYERS } from '../lib/assets.js';
 import { loadService, resolveServiceRef } from '../lib/loader.js';
 import { diagramData, renderDiagramMarkdown } from '../lib/domain-diagram.js';
+import { renderActorManual } from '../lib/actor-manual.js';
 import { summarizeService } from '../lib/summarize-service.js';
 import { listDerivatives } from '../lib/derivatives.js';
 
@@ -249,11 +250,27 @@ function printDiagrams(dir, json) {
 ` : renderDiagramMarkdown(layers));
 }
 
+function printManual(dir) {
+  const { layers, manifest, errors } = loadService(dir);
+  if (!manifest || !layers['use-cases']) {
+    for (const message of errors) console.error(pc.red(`✘ ${message}`));
+    console.error(pc.red('✘ el diseño no tiene manifiesto y capa use-cases legibles: no hay manual que derivar'));
+    process.exitCode = 1;
+    return;
+  }
+  process.stdout.write(renderActorManual(layers, manifest));
+}
+
 export function describe(ref, options = {}) {
   const resolved = resolveServiceRef(ref);
   if (resolved.error) {
     console.error(pc.red(resolved.error));
     process.exitCode = 1;
+    return;
+  }
+
+  if (options.manual) {
+    printManual(resolved.dir);
     return;
   }
 

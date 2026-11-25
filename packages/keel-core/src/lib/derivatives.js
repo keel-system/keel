@@ -1,6 +1,6 @@
 // Inventario de los derivados de un diseño y su frescura.
 //
-// Un derivado (escenarios, DESIGN.md, contratos formales, panel, INTEGRATION.md)
+// Un derivado (escenarios, DESIGN.md, MANUAL.md, contratos formales, panel, INTEGRATION.md)
 // nace del spec y lleva estampado el `service.version` del que salió. Comparar
 // ese sello con el del manifiesto es lo único mecánico que puede decir si un
 // derivado quedó atrás tras editar el diseño; el resto —regenerarlos en orden—
@@ -118,6 +118,15 @@ const CATALOG = [
     producer: '/keel-handoff',
     location: 'docs',
     file: () => 'DESIGN.md',
+    stamp: stampFromBlockquote
+  },
+  {
+    id: 'manual',
+    producer: '/keel-handoff',
+    location: 'docs',
+    file: () => 'MANUAL.md',
+    applies: (layers) => 'api' in layers,
+    reason: 'sin capa api: nadie llama al servicio',
     stamp: stampFromBlockquote
   },
   {

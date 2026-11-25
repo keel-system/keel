@@ -1,6 +1,6 @@
 ---
 name: keel-evolve
-description: Evoluciona un diseño Keel ya cerrado y propaga el cambio a todos sus derivados (validation-scenarios.md, DESIGN.md, contratos formales, panel e INTEGRATION.md), versionando el spec. Usar cuando haya que cambiar un servicio cuyo diseño ya se cerró.
+description: Evoluciona un diseño Keel ya cerrado y propaga el cambio a todos sus derivados (validation-scenarios.md, DESIGN.md, MANUAL.md, contratos formales, panel e INTEGRATION.md), versionando el spec. Usar cuando haya que cambiar un servicio cuyo diseño ya se cerró.
 argument-hint: "<specs/servicio>"
 ---
 
@@ -150,7 +150,7 @@ En **este orden** (cada uno alimenta al siguiente) y **solo sobre lo que procede
 1. **`validation-scenarios.md`** — (y después, **el careo**: la nueva versión devuelve presupuesto, así que lanza `keel-flow-review` **una vez y acotado** a lo que `keel validate` nombre —los flujos que la evolución tocó—; si algún hallazgo anterior se cerró cambiando el YAML, el aviso pedirá pasada completa, que es correcto: lo careado salía de un diseño que ya no existe. Sus hallazgos se deciden con el usuario antes de seguir con los demás derivados, y el tope sigue siendo tres pasadas). Regenéralo con `keel-design/references/scenario-authoring.md` y sus
    dos pasadas de auto-revisión (cobertura en recorrido inverso + equivalencia). Toda operación con
    al menos un flujo, todo error declarado cubierto. Refresca su sello `> specs/<servicio> v<versión>`.
-2. **`/keel-handoff`** (skill `keel-handoff`) — `DESIGN.md` + índice del `README.md`. Re-deriva lo
+2. **`/keel-handoff`** (skill `keel-handoff`) — `DESIGN.md`, `MANUAL.md` (se reescribe entero con `keel describe --manual`) + índice del `README.md`. Re-deriva lo
    mecánico y **preserva** «Decisiones de diseño» y `### Supuestos y limitaciones`; pregunta solo por
    las decisiones nuevas que abrió esta evolución y revisa que las registradas sigan vigentes (una
    decisión cuya operación ya no existe se retira).

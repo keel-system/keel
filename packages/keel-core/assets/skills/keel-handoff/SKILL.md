@@ -1,6 +1,6 @@
 ---
 name: keel-handoff
-description: Genera el documento de diseño reutilizable (DESIGN.md) de un servicio a partir de sus artefactos Keel validados. Usar cuando otro equipo necesite entender y construir sobre el diseño sin leer el código ni hablar con quien lo diseñó.
+description: Genera el documento de diseño reutilizable (DESIGN.md) y el manual de uso por actor (MANUAL.md) de un servicio a partir de sus artefactos Keel validados. Usar cuando otro equipo necesite entender y construir sobre el diseño sin leer el código ni hablar con quien lo diseñó.
 argument-hint: "<specs/servicio>"
 ---
 
@@ -84,6 +84,16 @@ Los artefactos son **declarativos**: guardan el *qué*, no el *por qué*. El rat
 
    Pregunta con `AskUserQuestion` cuando haya opciones claras, en texto libre cuando no. **Nunca inventes el rationale**: si el humano no lo aporta, deja la entrada marcada como `> rationale pendiente` para completar después.
 3. **Regeneración segura.** Al re-ejecutar sobre un `DESIGN.md` existente, refresca el sello de versión y **re-deriva las secciones mecánicas** (1-5 y las subsecciones mecánicas de la 7) pero **preserva la sección "Decisiones de diseño" y la subsección `### Supuestos y limitaciones`** ya redactadas (esta última se localiza por su encabezado literal): solo pregunta por decisiones o supuestos nuevos (elecciones notables que aparecieron desde la última vez) o por los que quedaron `pendiente`. A diferencia de `INTEGRATION.md`, que se sobrescribe entero, aquí el conocimiento humano capturado no se pierde en la regeneración.
+
+## El manual de uso por actor (`MANUAL.md`)
+
+Junto a `DESIGN.md`, si el diseño tiene capa `api`, escribe `docs/<service.name>/MANUAL.md` con la salida de
+`keel describe specs/<servicio> --manual`, **tal cual y entera**: se sobrescribe en cada regeneración y no se edita.
+Organiza por actor lo que los demás derivados organizan por capa —quién puede hacer qué, sobre qué recursos, en qué
+estado deja la entidad y qué errores le pueden salir—, y lo calcula la CLI a partir de las reglas de acceso, los
+`roleGrants`, `ownership`, `scoping` y las transiciones, así que no puede contradecir al diseño. Si su sección
+`## Hallazgos` no está vacía, llévala al usuario antes de cerrar: es una operación que ningún actor alcanza o una que
+nada dispara, y se corrige en el YAML, no en el manual.
 
 ## Índice del repositorio (`README.md`)
 

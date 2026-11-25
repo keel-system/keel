@@ -66,6 +66,7 @@ program
   .argument('<servicio>', 'nombre del servicio (busca specs/<servicio>) o ruta al directorio/manifiesto')
   .option('--diagram', 'imprime solo los diagramas del dominio y de cada ciclo de vida, en markdown con bloques mermaid', false)
   .option('--json', 'con --diagram: los mismos diagramas como JSON (domain.diagrams del panel overview.html)', false)
+  .option('--manual', 'imprime solo el manual de uso por actor (docs/<servicio>/MANUAL.md), en markdown', false)
   .action((servicio, options) => describe(servicio, options));
 
 program

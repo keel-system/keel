@@ -126,6 +126,7 @@ test('con messaging y api, todos los formatos de sello se leen', () => {
     scenarios: blockquote(VERSION),
     docs: {
       'DESIGN.md': blockquote(VERSION),
+      'MANUAL.md': blockquote(VERSION),
       'openapi.yaml': openapi(VERSION),
       'asyncapi.yaml': `asyncapi: 3.0.0\ninfo:\n  title: catalog\n  version: ${VERSION}\nchannels: {}\n`,
       'openapi.html': html(VERSION),
@@ -137,8 +138,18 @@ test('con messaging y api, todos los formatos de sello se leen', () => {
   });
   const result = listDerivatives(serviceDir, { cwd });
 
-  assert.equal(result.counts.fresh, 9, JSON.stringify(result.derivatives, null, 2));
+  assert.equal(result.counts.fresh, 10, JSON.stringify(result.derivatives, null, 2));
   assert.equal(result.counts.stale + result.counts.missing + result.counts.unstamped, 0);
+});
+
+test('MANUAL.md sigue la versión del diseño y no aplica sin capa api', () => {
+  const stale = workspace({ layers: ['domain', 'use-cases', 'api'], docs: { 'MANUAL.md': blockquote('0.9.0') } });
+  assert.equal(byId(listDerivatives(stale.serviceDir, { cwd: stale.cwd })).manual.status, 'stale');
+
+  const headless = workspace();
+  const manual = byId(listDerivatives(headless.serviceDir, { cwd: headless.cwd })).manual;
+  assert.equal(manual.status, 'not-applicable');
+  assert.equal(manual.reason, 'sin capa api: nadie llama al servicio');
 });
 
 test('INTEGRATION.md no aplica sin superficie servidor-a-servidor', () => {
