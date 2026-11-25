@@ -1,6 +1,7 @@
 import pc from 'picocolors';
 import { LAYERS } from '../lib/assets.js';
-import { resolveServiceRef } from '../lib/loader.js';
+import { loadService, resolveServiceRef } from '../lib/loader.js';
+import { diagramData, renderDiagramMarkdown } from '../lib/domain-diagram.js';
 import { summarizeService } from '../lib/summarize-service.js';
 import { listDerivatives } from '../lib/derivatives.js';
 
@@ -235,11 +236,29 @@ const LAYER_PRINTERS = {
   payments: ['payments', printPayments]
 };
 
-export function describe(ref) {
+function printDiagrams(dir, json) {
+  const { layers, errors } = loadService(dir);
+  if (!layers.domain) {
+    for (const message of errors) console.error(pc.red(`✘ ${message}`));
+    console.error(pc.red('✘ el diseño no tiene una capa domain legible: no hay diagrama que derivar'));
+    process.exitCode = 1;
+    return;
+  }
+  // Sin colores ni cabecera: la salida es markdown para redirigir a un archivo o pegar en DESIGN.md y el panel.
+  process.stdout.write(json ? `${JSON.stringify(diagramData(layers), null, 2)}
+` : renderDiagramMarkdown(layers));
+}
+
+export function describe(ref, options = {}) {
   const resolved = resolveServiceRef(ref);
   if (resolved.error) {
     console.error(pc.red(resolved.error));
     process.exitCode = 1;
+    return;
+  }
+
+  if (options.diagram) {
+    printDiagrams(resolved.dir, options.json === true);
     return;
   }
 

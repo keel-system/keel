@@ -132,6 +132,7 @@
   .gaps ul { margin: 6px 0 0; }
   footer { margin-top: 44px; color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--border); padding-top: 12px; }
   [hidden] { display: none !important; }
+  pre.mermaid { overflow-x: auto; margin: 0 0 8px; padding: 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -481,9 +482,32 @@ const KEEL = /*__KEEL_DATA__*/ null;
 
   // -- dominio --------------------------------------------------------------
   var dom = KEEL.domain;
-  if (dom && (has(dom.entities) || has(dom.aggregates) || has(dom.types))) {
+  if (dom && (dom.diagrams || has(dom.entities) || has(dom.aggregates) || has(dom.types))) {
     document.getElementById('domain-wrap').hidden = false;
     var dh = document.getElementById('domain');
+    if (dom.diagrams && (dom.diagrams.domain || has(dom.diagrams.lifecycles))) {
+      // El texto Mermaid es la salida de `keel describe --diagram`, copiada sin tocar. Sin red se queda como texto,
+      // que también se lee; con red lo pinta Mermaid, fijado por versión como los visores (nunca `latest`).
+      var charts = [];
+      var chart = function (title, source, notes) {
+        var pre = txt('pre', source, 'mermaid');
+        charts.push(pre);
+        dh.appendChild(section(title, el('div', {}, [pre, has(notes) ? ul(notes) : null])));
+      };
+      dh.appendChild(txt('h3', 'Diagramas'));
+      if (dom.diagrams.domain) chart('Dominio', dom.diagrams.domain, dom.diagrams.notes);
+      (dom.diagrams.lifecycles || []).forEach(function (l) {
+        chart('Ciclo de vida de ' + l.entity + ' (' + l.field + ')', l.diagram, l.findings);
+      });
+      var mjs = document.createElement('script');
+      mjs.src = 'https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.min.js';
+      mjs.onload = function () {
+        var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        window.mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'neutral', securityLevel: 'strict' });
+        window.mermaid.run({ nodes: charts });
+      };
+      document.head.appendChild(mjs);
+    }
     if (has(dom.aggregates)) {
       dh.appendChild(txt('h3', 'Agregados'));
       dh.appendChild(table(['Agregado', 'Raíz', 'Entidades internas', 'Descripción'],

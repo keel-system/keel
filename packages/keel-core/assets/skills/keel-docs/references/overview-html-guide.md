@@ -39,7 +39,7 @@ Los tres archivos **se regeneran siempre y se sobrescriben enteros**.
   useCases:     [ … ],
   events:       { envelope, reliability, published: [ … ], subscriptions: [ … ] } | null,
   httpClients:  [ … ],
-  domain:       { entities: [ … ], aggregates: [ … ], types: [ … ] }
+  domain:       { diagrams: { … }, entities: [ … ], aggregates: [ … ], types: [ … ] }
 }
 ```
 
@@ -210,6 +210,7 @@ api-key, secret ni token.
 
 ```js
 {
+  diagrams: { domain: "classDiagram…", notes: [ "…" ], lifecycles: [ { entity, field, diagram: "stateDiagram-v2…", findings: [ "…" ] } ] },
   entities: [ {
     name: "Product", description, persisted: true,
     fields: [ { name, type, list, description, flags: ["id","requerido","único","sensible","generado","calculado","default: draft"] } ],
@@ -222,6 +223,11 @@ api-key, secret ni token.
 }
 ```
 
+- `diagrams` es **la salida de `keel describe specs/<servicio> --diagram --json`, copiada entera y sin tocar**: no
+  se redacta, no se resume y no se reordena. El template la pinta con Mermaid encima de las tablas (y, sin red, deja el
+  texto, que también se lee). Es el diagrama de dominio por agregados —no un entidad-relación: las tablas las decide
+  el generador— y uno de estados por `lifecycle`, con la operación de cada arista; sus `notes` y `findings` son lo
+  que el diseñador viene a mirar (una arista `sin operación`, un estado inalcanzable).
 - `flags` son etiquetas **en español**, derivadas de los atributos del campo (`id`, `required`,
   `unique`, `sensitive`, `generated`, `computed`, `default`). Los nombres de campo, tipo y entidad van
   en inglés tal cual los declara el diseño.
@@ -247,6 +253,7 @@ api-key, secret ni token.
 - [ ] Las nueve tarjetas están presentes y en orden, con `active` coherente con las capas declaradas.
 - [ ] Toda operación de `use-cases` aparece exactamente una vez, con su audiencia y su regla de acceso.
 - [ ] Los badges *idempotente* / *cacheada* / nivel de seguridad coinciden con el diseño.
+- [ ] `domain.diagrams` es idéntico a la salida de `keel describe --diagram --json` (compáralo, no lo releas).
 - [ ] §Eventos presente ⇔ hay capa `messaging`; §Clientes HTTP ⇔ hay capa `http-clients`.
 - [ ] `openapi.html` (y `asyncapi.html` si aplica) sin placeholders, con el spec inline y el `href` del
       botón de descarga apuntando al `.yaml` correcto.

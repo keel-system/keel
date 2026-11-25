@@ -17,6 +17,7 @@ export { validateService, workspaceRootOf } from './lib/validate-service.js';
 export { READINESS_CRITERIA, assessReadiness } from './lib/readiness.js';
 export { FAILURE_REASONS } from './lib/payment-vocabulary.js';
 export { summarizeService } from './lib/summarize-service.js';
+export { diagramData, domainDiagram, lifecycleDiagrams, renderDiagramMarkdown } from './lib/domain-diagram.js';
 export { listDerivatives } from './lib/derivatives.js';
 export {
   INDEX_FILE,

@@ -64,7 +64,9 @@ program
   .command('describe')
   .description('Resume un diseño para leerlo o reutilizarlo: identidad, estado, capas y contenido por capa')
   .argument('<servicio>', 'nombre del servicio (busca specs/<servicio>) o ruta al directorio/manifiesto')
-  .action((servicio) => describe(servicio));
+  .option('--diagram', 'imprime solo los diagramas del dominio y de cada ciclo de vida, en markdown con bloques mermaid', false)
+  .option('--json', 'con --diagram: los mismos diagramas como JSON (domain.diagrams del panel overview.html)', false)
+  .action((servicio, options) => describe(servicio, options));
 
 program
   .command('seals')
