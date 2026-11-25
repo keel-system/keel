@@ -59,6 +59,7 @@ export {
 } from './data-lifecycle.js';
 export { hidesDeleted, implicitPredicates, hasImplicitPredicate } from './implicit-predicates.js';
 export { PERSONAL_DATA_FILE, usesPersonalData, personalFieldNames, personalDataInventory } from './personal-data.js';
+export { OPERATIONS_MANUAL_FILE, operationsManual } from './operations-manual.js';
 export {
   HISTORY_CHANGES, HISTORY_FILTERS, HISTORY_ENTRY_FIELDS, historyShape, historyDiff, historyEntry, historyMatches,
   compareHistoryEntries, topFieldOf, historyPendingErrors, historyRootNames, usesHistory, historyOperations,

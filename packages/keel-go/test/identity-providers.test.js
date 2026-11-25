@@ -251,6 +251,8 @@ const ALLOWED_DIFFERENCES = {
     /^\.[a-z]+\/skills\/keel-[a-z]+-(keycloak|cognito)\//,
     /^\.[a-z]+\/skills\/keel-generate-[a-z]+\/SKILL\.md$/,
     /^(README|AGENTS|CLAUDE)\.md$/,
+    // El manual de operación nombra el stack elegido (keel-core/gen/operations-manual.js).
+    /^docs\/keel\/operations\.md$/,
     // Lo que el proveedor tiene que traer: nombra sus claims, su configuración y su nivel de verificación.
     /^docs\/keel\/identity-contract\.md$/,
     // Levantar y sembrar el proveedor de prueba.

@@ -27,7 +27,9 @@ const ALLOWED = [
   // Su skill, y las que nombran el stack elegido.
   /^\.[a-z]+\/skills\/keel-spring-(stripe|mercadopago)\//,
   /^\.[a-z]+\/skills\/keel-generate-spring\/SKILL\.md$/,
-  /^(README|AGENTS|CLAUDE)\.md$/
+  /^(README|AGENTS|CLAUDE)\.md$/,
+  // El manual de operación nombra el stack elegido (keel-core/gen/operations-manual.js).
+  /^docs\/keel\/operations\.md$/
 ];
 
 function generate(gateway) {

@@ -55,6 +55,8 @@ test('el mismo diseño genera lo mismo con cada pasarela, salvo su adaptador, su
     /^config\/parameters\/(develop|production)\/payments\.yaml$/,
     // Lo que nombra el stack elegido.
     /^(README|AGENTS|CLAUDE)\.md$/,
+    // El manual de operación nombra el stack elegido (keel-core/gen/operations-manual.js).
+    /^docs\/keel\/operations\.md$/,
     /^\.[a-z]+\/skills\//,
     /^keel-stack\.json$/
   ];

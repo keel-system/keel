@@ -24,6 +24,8 @@ import { HARNESSES, applyTokens, emitHarnessFiles } from '@keel-system/keel-core
 import { contractDocs } from '@keel-system/keel-core/gen/contract-docs';
 import { identityContractFile } from '@keel-system/keel-core/gen/identity-support';
 import { personalDataInventory } from '@keel-system/keel-core/gen/personal-data';
+import { operationsManual } from '@keel-system/keel-core/gen/operations-manual';
+import { DOTNET_OBSERVABILITY } from './observability-assets.js';
 import { describeStack } from '@keel-system/keel-core/gen/stack';
 import { assetsDir, SKILL, TARGET_FRAMEWORK } from '../lib/assets.js';
 import { solution } from './render.js';
@@ -87,6 +89,9 @@ export function generate(model) {
   // Qué datos personales guarda, cuánto viven y qué garantiza el servidor sobre ellos (keel-core/gen/personal-data.js).
   const personalData = personalDataInventory(model);
   if (personalData) files.push(personalData);
+  // Lo que hay que configurar, lo que corre solo, dónde se atasca y qué significa cada alerta, para quien despliega y
+  // está de guardia (keel-core/gen/operations-manual.js). Las alertas, de la misma lista que provisiona el Grafana.
+  files.push(operationsManual(model, DOTNET_OBSERVABILITY));
   for (const harness of HARNESSES) files.push(...harnessArtifacts(model, harness));
   return files;
 }

@@ -380,7 +380,7 @@ providers:
 }
 
 /**
- * Las alertas, en el formato de provisioning de Grafana: las de NEGOCIO, las del RUNTIME y —donde
+ * Las alertas del servicio como DATOS (las provisiona `alerting` y las explica el manual de operación): las de NEGOCIO, las del RUNTIME y —donde
  * el broker lo permite— la del retraso del consumidor.
  *
  * <p>No son unas cualesquiera. Las de negocio dicen que algo ya va mal: pérdida de datos en el
@@ -393,7 +393,7 @@ providers:
  * outbox`, la del pool si hay persistencia, la del retraso si hay consumidores y el broker
  * publica la serie. Una alerta sobre una métrica que nadie publica no falla: no dispara nunca.
  */
-function alerting(model, platform) {
+export function alertRules(model, platform) {
   const useCase = promMetric(OBSERVATIONS.useCase);
   const operationTag = promTag(ATTRIBUTES.operation);
   const outcomeTag = promTag(ATTRIBUTES.outcome);
@@ -401,7 +401,7 @@ function alerting(model, platform) {
 
   if (platform.outbox(model)) {
     rules.push(
-      rule({
+      ({
         uid: `keel-${model.service.artifactId}-outbox`,
         title: 'Eventos del outbox rendidos',
         expr: `max_over_time(${promGauge(OUTBOX_DEAD_LETTERED)}[5m])`,
@@ -414,7 +414,7 @@ function alerting(model, platform) {
   }
 
   rules.push(
-    rule({
+    ({
       uid: `keel-${model.service.artifactId}-errors`,
       title: 'Tasa de error de los casos de uso',
       expr:
@@ -426,7 +426,7 @@ function alerting(model, platform) {
       summary:
         'Más del 5 % de los casos de uso está fallando. Cuenta solo `error`: un rechazo del dominio (`rejected`) es un desenlace esperado.'
     }),
-    rule({
+    ({
       uid: `keel-${model.service.artifactId}-latency`,
       title: 'p95 de los casos de uso',
       expr: `histogram_quantile(0.95, sum by (le, ${operationTag}) (rate(${useCase.bucket}[5m])))`,
@@ -442,7 +442,7 @@ function alerting(model, platform) {
   const pool = poolFor(model, platform);
   if (pool) {
     rules.push(
-      rule({
+      ({
         uid: `keel-${model.service.artifactId}-pool`,
         title: 'Saturación del pool de conexiones',
         expr: `max_over_time(${pool.saturation}[5m])`,
@@ -456,7 +456,7 @@ function alerting(model, platform) {
   }
 
   rules.push(
-    rule({
+    ({
       uid: `keel-${model.service.artifactId}-heap`,
       title: 'Presión de memoria en el heap',
       expr: `${platform.runtime.heap.used}` + ` / clamp_min(${platform.runtime.heap.max}, 1)`,
@@ -469,7 +469,7 @@ function alerting(model, platform) {
 
   if (usesTimer(model)) {
     rules.push(
-      rule({
+      ({
         uid: `keel-${model.service.artifactId}-timer-lag`,
         title: 'Retraso del cronómetro',
         // `min` en la ventana: un plazo recién vencido es lo normal; lo que alerta es que el más viejo lleve más de un
@@ -482,7 +482,7 @@ function alerting(model, platform) {
           'Hay temporizadores vencidos que nadie reclama desde hace más de un minuto: plazos que no caducan a su hora y ' +
           'barridos o purgas que no corren. Mira si hay réplicas sondeando (scheduling.enabled) y si un tick no cabe en su periodo.'
       }),
-      rule({
+      ({
         uid: `keel-${model.service.artifactId}-timer-parked`,
         title: 'Temporizadores aparcados',
         expr: `max_over_time(max(${promGauge(TIMER_PARKED)})[5m:1m])`,
@@ -498,7 +498,7 @@ function alerting(model, platform) {
   const lag = consumerLag(model, platform);
   if (lag) {
     rules.push(
-      rule({
+      ({
         uid: `keel-${model.service.artifactId}-lag`,
         title: 'Retraso del consumidor',
         expr: `max(${lag.series})`,
@@ -513,7 +513,12 @@ function alerting(model, platform) {
       })
     );
   }
+  return rules;
+}
 
+/** Las reglas de `alertRules` en el formato de provisioning de Grafana, con su contacto y su política. */
+function alerting(model, platform) {
+  const rules = alertRules(model, platform).map(rule);
   const groups = [
     {
       orgId: 1,
