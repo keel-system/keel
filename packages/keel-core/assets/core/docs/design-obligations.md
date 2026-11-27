@@ -49,6 +49,7 @@ donde «aceptado» significaría dejársela al generador. Están marcadas como t
 | `OBL-BATCH-ATOMICITY-UNDECIDED` | `use-cases`: una operación con `batch` sin `atomicity` | no está decidido si un elemento que falla deshace el lote entero | 15 | no |
 | `OBL-RESOURCE-SCOPE` | `use-cases`: una operación protegida por rol declara un error 403 | un 403 que nada de lo declarado puede producir | 9 | no |
 | `OBL-PAYMENTS-FOLLOWUP-REJECTED` | `payments`: una acción de seguimiento (`capture`, `void`, `refund`) sin `onRejected` | no está decidido qué pasa cuando la pasarela contesta que NO a una acción de seguimiento | 18 | no |
+| `OBL-PAYMENTS-REFUND-REFERENCE` | `payments`: `refund` con la capacidad `partial-refund` y sin `reference` | no está decidido qué identifica a cada devolución ante la pasarela | 18 | no |
 | `OBL-PAYMENTS-REFERENCE-REUSED` | `payments` + `messaging`: una suscripción dispara el cobro y no declara `onFailure.acknowledgeOn` | no está decidido qué se hace con un mensaje distinto cuya referencia de cobro ya tiene cobro | 18 | sí |
 
 La columna **Clase** es la del análisis de huecos (`gap-analysis.md`), para que el barrido del

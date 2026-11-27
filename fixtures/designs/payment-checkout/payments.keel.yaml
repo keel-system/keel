@@ -29,7 +29,7 @@ charge:
 # del 2026-10-09 lo resolvieron de dos formas distintas, una por generador).
 capture: { operation: capturePayment, inFlight: capturing, onRejected: { error: CAPTURE_REJECTED } }
 void: { operation: cancelPayment, inFlight: canceling, onRejected: { error: CANCEL_REJECTED } }
-refund: { operation: refundPayment, amount: amount, inFlight: refunding, onRejected: { error: REFUND_REJECTED } }
+refund: { operation: refundPayment, amount: amount, reference: refundRequestId, inFlight: refunding, onRejected: { error: REFUND_REJECTED } }
 savePaymentMethod:
   operation: savePaymentMethod
   token: paymentToken

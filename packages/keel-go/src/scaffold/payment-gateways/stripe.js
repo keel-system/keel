@@ -15,6 +15,12 @@ import { alignRows } from '../../lib/go-source.js';
 import { packageFile } from '../render.js';
 import { reasonConstant, savedMethodGo } from '../payments.js';
 
+// La clave de la devolución (corrida payment-go): con `refund.reference`, una por devolución
+// (`<cobro>:refund:<devolución>`, refundIdempotencyKey de keel-core); sin ella, la del cobro.
+const refundKeyCall = (p) => (p.refund.reference ? 'idempotencyKey(reference, "refund:"+refundReference)' : 'idempotencyKey(reference, "refund")');
+const refundReferenceParam = (p) => (p.refund.reference ? ', refundReference' : '');
+
+
 const TRANSLATION = gatewayTranslation('stripe');
 
 export function generate(model, infra) {
@@ -100,10 +106,10 @@ func (g *stripeGateway) VoidAuthorization(ctx context.Context, reference, gatewa
   }
   if (p.refund) {
     methods.push(`// Refund implementa domain.PaymentGateway.
-func (g *stripeGateway) Refund(ctx context.Context, reference, gatewayPaymentID string${partialRefund ? ', amount *wire.Decimal, currency string' : ''}) (domain.GatewayOutcome, error) {
+func (g *stripeGateway) Refund(ctx context.Context, reference${refundReferenceParam(p)}, gatewayPaymentID string${partialRefund ? ', amount *wire.Decimal, currency string' : ''}) (domain.GatewayOutcome, error) {
 	form := &formBody{}
 	form.add("payment_intent", gatewayPaymentID)${partialRefund ? amountLine('amount') : ''}
-	answer, err := g.send(ctx, "refund", http.MethodPost, "/v1/refunds", form, idempotencyKey(reference, "refund"))
+	answer, err := g.send(ctx, "refund", http.MethodPost, "/v1/refunds", form, ${refundKeyCall(p)})
 	if err != nil {
 		return domain.GatewayOutcome{}, err
 	}

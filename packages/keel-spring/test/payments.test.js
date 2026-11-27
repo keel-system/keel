@@ -113,7 +113,7 @@ for (const gateway of Object.keys(PAYMENT_GATEWAYS)) {
   const adapterName = `${gateway.charAt(0).toUpperCase()}${gateway.slice(1)}PaymentGateway.java`;
 
   test(`${gateway}: el importe parcial viaja con su moneda; ninguna consulta a la pasarela fuera del try`, () => {
-    assert.match(file('PaymentGateway.java'), /GatewayOutcome refund\(String reference, String gatewayPaymentId, BigDecimal amount, String currency\);/);
+    assert.match(file('PaymentGateway.java'), /GatewayOutcome refund\(String reference, String refundReference, String gatewayPaymentId, BigDecimal amount, String currency\);/);
     const adapter = file(adapterName);
     assert.doesNotMatch(adapter, /currencyOf/);
     if (gateway === 'mercadopago') {

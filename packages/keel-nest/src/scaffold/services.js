@@ -51,7 +51,7 @@ import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from '@keel-system/keel-core/gen/requ
 import { IDEMPOTENCY_STORE_TS, usesRequestIdempotency } from './request-idempotency.js';
 import { CALLER_SCOPE_TS, scopedOperation, CALLER_ROLES_TS, roleCheckedOperation } from './security.js';
 import { schedulerPath } from './scheduling.js';
-import { followUpRejectionNote, savedMethodNote } from '@keel-system/keel-core/gen/rejection-notes';
+import { followUpRejectionNote, refundReferenceNote, savedMethodNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { portPath as clientPortPath } from './http-clients.js';
 import { projectorPath, readerPath, replicaBatchFinder, replicas } from './projections.js';
@@ -553,6 +553,8 @@ function handlerNotes(model, operation) {
   // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la misma en los dos generadores.
   const rejection = followUpRejectionNote(model.payments, operation.name);
   if (rejection) notes.push(rejection);
+  const refundReference = refundReferenceNote(model.payments, operation.name);
+  if (refundReference) notes.push(refundReference);
   const saving = savedMethodNote(model.payments, operation.name, {
     saved: 'SavedPaymentMethod',
     rejected: 'GatewayRejectedPaymentMethodException',

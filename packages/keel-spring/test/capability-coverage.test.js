@@ -111,6 +111,13 @@ const EXCEPCIONES = new Map([
   ],
   // La capa payments: la fixture payment-checkout declara casi toda. Quedan dos ramas que no usa.
   [
+    'payments.capture.reference',
+    {
+      motivo: MOTIVOS.informativo,
+      porque: 'el schema lo admite porque capture, void y refund comparten definición, pero solo la devolución lleva referencia propia: en capture o void lo rechaza CHK-PAYMENTS-FIELD-UNKNOWN y ningún generador lo lee.'
+    }
+  ],
+  [
     'payments.capture.amount',
     {
       motivo: MOTIVOS.hueco,

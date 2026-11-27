@@ -12,7 +12,7 @@ import { createHmac } from 'node:crypto';
 import { loadService } from '@keel-system/keel-core';
 import path from 'node:path';
 import { paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
-import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, paymentIdempotencyKey } from '@keel-system/keel-core/gen/payment-gateways';
+import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, paymentIdempotencyKey, refundIdempotencyKey } from '@keel-system/keel-core/gen/payment-gateways';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { planFixture, transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
@@ -239,15 +239,30 @@ for (const gateway of GATEWAYS) {
     fake.reset();
     fake.drop('GET', '.*');
     fake.drop('POST', '.*');
-    await assert.rejects((await gatewayAt(fake.baseUrl)).refund('ch-6', 'pay6', Decimal.parse('5.00'), 'BRL'), PaymentGatewayUnavailableException);
+    await assert.rejects((await gatewayAt(fake.baseUrl)).refund('ch-6', 'rf-6', 'pay6', Decimal.parse('5.00'), 'BRL'), PaymentGatewayUnavailableException);
   });
 
   test(`${gateway}: una devolución parcial con un 5xx de la pasarela queda en duda y no se repite`, async () => {
     fake.reset();
     fake.route(calls.STATUS, 503, {});
     fake.route(calls.REFUND, 503, {});
-    await assert.rejects((await gatewayAt(fake.baseUrl)).refund('ch-6', 'pay6', Decimal.parse('5.00'), 'BRL'), PaymentGatewayUnavailableException);
+    await assert.rejects((await gatewayAt(fake.baseUrl)).refund('ch-6', 'rf-6', 'pay6', Decimal.parse('5.00'), 'BRL'), PaymentGatewayUnavailableException);
     assert.equal(fake.recorded.length, 1, 'ni la devolución ni la lectura previa se reintentan');
+  });
+
+  // Corrida payment-go: con la clave del cobro, la segunda devolución parcial reutilizaba la de la primera y la pasarela
+  // la rechazaba (otro importe) o devolvía la respuesta de la primera sin devolver nada (el mismo).
+  test(`${gateway}: dos devoluciones del mismo cobro llevan cada una su clave, y repetir una repite la suya`, async () => {
+    fake.reset();
+    fake.route(calls.REFUND, 503, {});
+    const adapter = await gatewayAt(fake.baseUrl);
+    for (const refundReference of ['rf-1', 'rf-2', 'rf-1']) {
+      await assert.rejects(adapter.refund('ch-7', refundReference, 'pay7', null, 'BRL'), PaymentGatewayUnavailableException);
+    }
+    assert.deepEqual(
+      fake.recorded.map((entry) => entry.key),
+      [refundIdempotencyKey('ch-7', 'rf-1'), refundIdempotencyKey('ch-7', 'rf-2'), refundIdempotencyKey('ch-7', 'rf-1')]
+    );
   });
 
   if (gateway === 'stripe') {

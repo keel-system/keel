@@ -179,6 +179,11 @@ operations:
     input:
       fields:
         chargeRequestId: { type: string, required: true, constraints: { maxLength: 64 } }
+        refundRequestId:
+          type: string
+          required: true
+          constraints: { maxLength: 64 }
+          description: Clave de negocio de esta devolución; con devoluciones parciales distingue cada una ante la pasarela.
         amount:
           type: decimal
           constraints: { min: 0.01, scale: 2, scalePolicy: reject }

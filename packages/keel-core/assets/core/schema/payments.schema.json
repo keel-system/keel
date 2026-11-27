@@ -177,7 +177,7 @@
     },
     "refund": {
       "$ref": "#/$defs/followUp",
-      "description": "Devolver lo cobrado. Con 'amount' devuelve una parte (exige partial-refund)."
+      "description": "Devolver lo cobrado. Con 'amount' devuelve una parte (exige partial-refund), y con 'reference' cada devolución lleva su propia clave ante la pasarela."
     },
     "savePaymentMethod": {
       "type": "object",
@@ -281,6 +281,11 @@
           "type": "string",
           "pattern": "^[a-z][A-Za-z0-9]*$",
           "description": "Campo decimal (opcional en el contrato) del input con un importe menor que el total."
+        },
+        "reference": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "Solo en `refund`: campo obligatorio del input con la clave de negocio de ESTA devolución (p. ej. `refundRequestId`). Con devoluciones parciales un cobro tiene varias, y la clave de idempotencia que viaja a la pasarela tiene que distinguirlas: sin ella, la segunda reutilizaría la de la primera y la pasarela la rechazaría o devolvería la respuesta de la primera sin devolver nada. Con `partial-refund` y sin declararla, `OBL-PAYMENTS-REFUND-REFERENCE`."
         },
         "inFlight": {
           "type": "string",

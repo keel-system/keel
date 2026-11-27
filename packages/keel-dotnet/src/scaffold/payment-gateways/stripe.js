@@ -8,10 +8,19 @@
 //   * Stripe-Signature: t=…,v1=…[,v1=…]: HMAC-SHA256 de `${t}.${cuerpo}`; solo cuenta v1, puede haber varias durante la
 //     rotación del secreto, y se compara en tiempo constante.
 
-import { gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
+import { gatewayTranslation, refundIdempotencyKey } from '@keel-system/keel-core/gen/payment-gateways';
 import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { csFile, csString, located, namespaceOf } from '../render.js';
 import { PAYMENT_GATEWAY_PORT, NOTICE_VERIFIER_PORT, paymentInfraNamespace, paymentNamespace, reasonMember, savedMethodCs } from '../payments.js';
+
+// La clave de la devolución (corrida payment-go): con `refund.reference`, una por devolución
+// (`<cobro>:refund:<devolución>`, refundIdempotencyKey de keel-core); sin ella, la del cobro.
+const refundKeyCall = (p) => (p.refund.reference ? 'GatewayKeys.Idempotency(reference, "refund:" + refundReference)' : 'GatewayKeys.Idempotency(reference, "refund")');
+const refundReferenceParam = (p) => (p.refund.reference ? 'string refundReference, ' : '');
+// El argumento de la referencia de la devolución en las pruebas emitidas, y la clave que tienen que ver.
+const refundArg = (p, value) => (p.refund.reference ? `"${value}", ` : '');
+const refundKeyOf = (p, reference, value) => refundIdempotencyKey(reference, p.refund.reference ? value : null);
+
 
 const TRANSLATION = gatewayTranslation('stripe');
 const PROBES = paymentProbesFor('stripe');
@@ -107,11 +116,11 @@ function adapterBody(model) {
             form.Add(new("amount", MoneyAmounts.ToMinorUnits(partial, GatewayKeys.RequiredCurrency(currency)).ToString(CultureInfo.InvariantCulture)));
         }`
       : '';
-    methods.push(`    public async Task<GatewayOutcome> Refund(string reference, string gatewayPaymentId${amountParam}, ${ct})
+    methods.push(`    public async Task<GatewayOutcome> Refund(string reference, ${refundReferenceParam(p)}string gatewayPaymentId${amountParam}, ${ct})
     {
         ArgumentNullException.ThrowIfNull(gatewayPaymentId);
         var form = new List<KeyValuePair<string, string>> { new("payment_intent", gatewayPaymentId) };${amountLine}
-        var answer = await Send("refund", new GatewayRequest("POST", "/v1/refunds", GatewayJson.FormBody(form), Key(GatewayKeys.Idempotency(reference, "refund"))), cancellationToken);
+        var answer = await Send("refund", new GatewayRequest("POST", "/v1/refunds", GatewayJson.FormBody(form), Key(${refundKeyCall(p)})), cancellationToken);
         if (answer.Status >= 500)
         {
             throw Unavailable("refund", answer);
@@ -538,19 +547,37 @@ ${declineRows.join('\n')}
     public async Task UnaDevolucionConUn5xxQuedaEnDudaYNoSeRepite()
     {
         var fake = FakeGateway.Json(HttpStatusCode.BadGateway, "{}");
-        await Assert.ThrowsAsync<PaymentGatewayUnavailableException>(() => Gateway(fake).Refund("ch-f", "pi_f", ${amount}Token));
+        await Assert.ThrowsAsync<PaymentGatewayUnavailableException>(() => Gateway(fake).Refund("ch-f", ${refundArg(p, 'rf-f')}"pi_f", ${amount}Token));
         var (request, body) = Assert.Single(fake.Requests);
-        Assert.Equal("ch-f:refund", request.Headers.GetValues(${header}).Single());${p.refund.amount ? '\n        Assert.Contains("amount=500", body, StringComparison.Ordinal);' : '\n        Assert.Contains("payment_intent=pi_f", body, StringComparison.Ordinal);'}
+        Assert.Equal(${csString(refundKeyOf(p, 'ch-f', 'rf-f'))}, request.Headers.GetValues(${header}).Single());${p.refund.amount ? '\n        Assert.Contains("amount=500", body, StringComparison.Ordinal);' : '\n        Assert.Contains("payment_intent=pi_f", body, StringComparison.Ordinal);'}
     }
 
     [Fact]
     public async Task UnaDevolucionHechaDiceLoDevueltoYUnaRechazadaDejaElCobroCapturado()
     {
-        var done = await Gateway(FakeGateway.Json(HttpStatusCode.OK, """{"status":"succeeded","amount":500,"currency":"eur"}""")).Refund("ch-g", "pi_g", ${amount}Token);
+        var done = await Gateway(FakeGateway.Json(HttpStatusCode.OK, """{"status":"succeeded","amount":500,"currency":"eur"}""")).Refund("ch-g", ${refundArg(p, 'rf-g')}"pi_g", ${amount}Token);
         Assert.Equal(GatewayStatus.Refunded, done.Status);
         Assert.Equal(5.00m, done.RefundedAmount);
-        var rejected = await Gateway(FakeGateway.Json(HttpStatusCode.BadRequest, "{}")).Refund("ch-g", "pi_g", ${amount}Token);
+        var rejected = await Gateway(FakeGateway.Json(HttpStatusCode.BadRequest, "{}")).Refund("ch-g", ${refundArg(p, 'rf-g')}"pi_g", ${amount}Token);
         Assert.Equal(GatewayStatus.Captured, rejected.Status);
+    }`);
+  }
+  // Corrida payment-go: con la clave del cobro, la segunda devolución parcial reutilizaba la de la primera y la pasarela la
+  // rechazaba (otro importe) o devolvía la respuesta guardada de la primera sin devolver nada (el mismo).
+  if (p.refund?.reference) {
+    const none = p.refund.amount ? 'null, null, ' : '';
+    cases.push(`
+    [Fact]
+    public async Task DosDevolucionesDelMismoCobroLlevanCadaUnaSuClave()
+    {
+        var fake = FakeGateway.Json(HttpStatusCode.BadGateway, "{}");
+        foreach (var refundReference in new[] { "rf-1", "rf-2", "rf-1" })
+        {
+            await Assert.ThrowsAsync<PaymentGatewayUnavailableException>(() => Gateway(fake).Refund("ch-7", refundReference, "pi_7", ${none}Token));
+        }
+        Assert.Equal(
+            new[] { ${csString(refundIdempotencyKey('ch-7', 'rf-1'))}, ${csString(refundIdempotencyKey('ch-7', 'rf-2'))}, ${csString(refundIdempotencyKey('ch-7', 'rf-1'))} },
+            fake.Requests.Select(sent => sent.Request.Headers.GetValues(${header}).Single()).ToArray());
     }`);
   }
   if (p.savePaymentMethod) {

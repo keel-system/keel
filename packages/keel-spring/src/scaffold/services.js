@@ -47,7 +47,7 @@ import { BATCH_ITEM_COMPONENT } from './batch.js';
 import { batchNote } from '@keel-system/keel-core/gen/batch';
 import { stubNote as conditionalUniquenessNote } from './conditional-uniqueness.js';
 import { callerResolution } from './security.js';
-import { followUpRejectionNote, savedMethodNote } from '@keel-system/keel-core/gen/rejection-notes';
+import { followUpRejectionNote, refundReferenceNote, savedMethodNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { rawJsonAnnotations } from './jackson.js';
 import { readScopeNote, optionalIdentityNote } from '@keel-system/keel-core/gen/read-scope';
@@ -663,6 +663,8 @@ function renderHandler(model, service, operation) {
   // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la misma en los dos generadores.
   const rejection = followUpRejectionNote(model.payments, operation.name);
   if (rejection) notes.push(rejection);
+  const refundReference = refundReferenceNote(model.payments, operation.name);
+  if (refundReference) notes.push(refundReference);
   const saving = savedMethodNote(model.payments, operation.name, {
     saved: 'SavedPaymentMethod',
     rejected: 'PaymentMethodRejectedException',

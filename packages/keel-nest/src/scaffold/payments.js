@@ -371,9 +371,11 @@ function portTs(model) {
   if (p.refund) {
     methods.push(`  /**
    * Devuelve lo cobrado${p.refund.amount ? '; con amount null, todo. La moneda es la del cobro: la pasa quien llama,\n   * que la conoce, en vez de pedírsela a la pasarela con una llamada más' : ''}. El cobro tiene que estar ya en
-   * ${p.refund.inFlight}. Si la pasarela la rechaza, el resultado NO es REFUNDED.
+   * ${p.refund.inFlight}. Si la pasarela la rechaza, el resultado NO es REFUNDED.${p.refund.reference ? `
+   * refundReference es la clave de negocio de ESTA devolución (${p.refund.reference}): con devoluciones parciales un cobro
+   * tiene varias, y la clave de idempotencia ante la pasarela es una por devolución.` : ''}
    */
-  abstract refund(reference: string, gatewayPaymentId: string${p.refund.amount ? ', amount: Decimal | null, currency: string | null' : ''}): Promise<GatewayOutcome>;`);
+  abstract refund(reference: string, ${p.refund.reference ? 'refundReference: string, ' : ''}gatewayPaymentId: string${p.refund.amount ? ', amount: Decimal | null, currency: string | null' : ''}): Promise<GatewayOutcome>;`);
   }
   methods.push(`  /**
    * El estado de un cobro según la pasarela. Con gatewayPaymentId null —la pasarela no llegó a contestar— se

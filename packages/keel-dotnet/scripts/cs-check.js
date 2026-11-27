@@ -207,6 +207,8 @@ const FIXTURE_SABOTAGES = {
   ],
   'cancel-as-timeout': [`${CLIENTS_DIR}/HttpExchange.cs`, 'when (!cancellationToken.IsCancellationRequested)', 'when (client.Timeout > TimeSpan.Zero)'],
   'payment-key-random': [`${PAYMENT_DIR}/GatewayKeys.cs`, '=> $"{reference}:{action}";', '=> $"{reference}:{action}:{Guid.NewGuid()}";'],
+  // La devolución vuelve a la clave del cobro: dos devoluciones parciales comparten clave (corrida payment-go).
+  'payment-refund-key': [`${PAYMENT_DIR}/Stripe/StripePaymentGateway.cs`, 'GatewayKeys.Idempotency(reference, "refund:" + refundReference)', 'GatewayKeys.Idempotency(reference, "refund")'],
   'payment-5xx-pending': [`${PAYMENT_DIR}/Stripe/StripePaymentGateway.cs`, 'throw Unavailable("authorize", answer);', 'return GatewayOutcome.Of(GatewayStatus.Pending, request.Reference, null);'],
   'payment-rounding': [`${PAYMENT_DIR}/MoneyAmounts.cs`, 'if (decimal.Round(amount, digits, MidpointRounding.ToZero) != amount)', 'if (decimal.Round(amount, digits, MidpointRounding.ToZero) != amount && digits < 0)'],
   'payment-window': [`${PAYMENT_DIR}/Stripe/StripeNoticeVerifier.cs`, '> settings.NoticeToleranceSeconds)', '> settings.NoticeToleranceSeconds * 1000L)'],

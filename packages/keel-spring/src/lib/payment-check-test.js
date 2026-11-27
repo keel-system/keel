@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
-import { CURRENCY_MINOR_UNITS } from '@keel-system/keel-core/gen/payment-gateways';
+import { CURRENCY_MINOR_UNITS, refundIdempotencyKey } from '@keel-system/keel-core/gen/payment-gateways';
 import { PAYMENT_TEST_SECRETS } from '../scaffold/config.js';
 import { isRawJsonField } from '../scaffold/jackson.js';
 import { OUTBOUND_POLICY_CLASS } from '../scaffold/outbound-address.js';
@@ -134,6 +134,12 @@ const SABOTAGES = {
     file: (s) => `${s.adapter}.java`,
     from: 'return reference + ":" + action;',
     to: 'return java.util.UUID.randomUUID().toString();'
+  },
+  // La devolución vuelve a la clave del cobro: dos devoluciones parciales comparten clave (corrida payment-go).
+  'refund-key': {
+    file: (s) => `${s.adapter}.java`,
+    from: 'idempotencyKey(reference, "refund:" + refundReference)',
+    to: 'idempotencyKey(reference, "refund")'
   },
   // La ventana del aviso deja de aplicarse: un aviso repetido días después pasa.
   tolerance: { file: (s) => `${s.verifier}.java`, from: '> properties.noticeToleranceSeconds()', to: '> Long.MAX_VALUE' },
@@ -385,7 +391,20 @@ ${model.payments.refund?.amount ? `    @Test
         ROUTES.add(new Route("GET", ".*", 0, "", true));
         ROUTES.add(new Route("POST", ".*", 0, "", true));
         assertThrows(PaymentGatewayUnavailableException.class,
-                () -> gateway().refund("ch-6", "pay6", new BigDecimal("5.00"), "BRL"));
+                () -> gateway().refund("ch-6", ${model.payments.refund.reference ? '"rf-6", ' : ''}"pay6", new BigDecimal("5.00"), "BRL"));
+    }
+
+` : ''}${model.payments.refund?.reference ? `    @Test
+    void dosDevolucionesDelMismoCobroLlevanCadaUnaSuClave() {
+        // Corrida payment-go: con la clave del cobro, la segunda devolución parcial reutilizaba la de la primera y la
+        // pasarela la rechazaba (otro importe) o devolvía la respuesta de la primera sin devolver nada (el mismo).
+        ROUTES.add(new Route("POST", ".*", 503, "{}", false));
+        assertThrows(PaymentGatewayUnavailableException.class, () -> gateway().refund("ch-7", "rf-1", "pay7", null, "BRL"));
+        assertThrows(PaymentGatewayUnavailableException.class, () -> gateway().refund("ch-7", "rf-2", "pay7", null, "BRL"));
+        assertThrows(PaymentGatewayUnavailableException.class, () -> gateway().refund("ch-7", "rf-1", "pay7", null, "BRL"));
+        assertEquals(${q(refundIdempotencyKey('ch-7', 'rf-1'))}, RECORDED.get(0).idempotencyKey());
+        assertEquals(${q(refundIdempotencyKey('ch-7', 'rf-2'))}, RECORDED.get(1).idempotencyKey());
+        assertEquals(RECORDED.get(0).idempotencyKey(), RECORDED.get(2).idempotencyKey());
     }
 
 ` : ''}${model.payments.capture ? `    @Test

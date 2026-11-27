@@ -139,6 +139,18 @@ export function paymentIdempotencyKey(reference, action) {
   return `${reference}:${action}`;
 }
 
+/**
+ * La clave de idempotencia de UNA devolución: `<referencia del cobro>:refund:<referencia de la devolución>`. Con
+ * devoluciones parciales un cobro tiene varias, y con la clave del cobro (`<referencia>:refund`) la segunda reutilizaba
+ * la de la primera: Stripe la rechaza si cambia el importe y, si no, devuelve la respuesta guardada de la primera sin
+ * devolver nada (corrida payment-go, 2026-11-27; WireMock no lo ve). Sale de las dos referencias de NEGOCIO, así que un
+ * reintento de la misma devolución repite la clave y otra devolución no. Sin referencia de la devolución (un diseño sin
+ * `refund.reference`, que solo admite una por cobro), la clave de siempre.
+ */
+export function refundIdempotencyKey(reference, refundReference) {
+  return refundReference ? `${paymentIdempotencyKey(reference, 'refund')}:${refundReference}` : paymentIdempotencyKey(reference, 'refund');
+}
+
 /** Las acciones con clave propia. Son las del puerto `PaymentGateway`. */
 export const PAYMENT_ACTIONS = ['authorize', 'capture', 'void', 'refund'];
 

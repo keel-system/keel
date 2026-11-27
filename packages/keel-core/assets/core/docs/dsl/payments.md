@@ -27,7 +27,7 @@ charge:
 
 capture: { operation: capturePayment, inFlight: capturing }
 void: { operation: cancelPayment, inFlight: canceling }
-refund: { operation: refundPayment, amount: amount, inFlight: refunding }
+refund: { operation: refundPayment, amount: amount, reference: refundRequestId, inFlight: refunding }
 savePaymentMethod: { operation: savePaymentMethod, token: paymentToken, exposedAs: id }
 
 outcomes:
@@ -147,6 +147,14 @@ Las acciones:
 - **`capture`**: obligatoria con `authorize-capture`. Con `amount` captura un importe menor (exige `partial-capture`), y el resto se libera.
 - **`void`**: anula una autorización que no se va a capturar. Exige `outcomes.canceled`.
 - **`refund`**: devuelve lo cobrado. Con `amount` devuelve una parte (exige `partial-refund`). Exige `outcomes.refunded`.
+  Con `partial-refund` un cobro admite **varias** devoluciones, y cada una necesita su propia clave de idempotencia ante la
+  pasarela: con la del cobro, la segunda reutilizaría la de la primera, y la pasarela la rechazaría (otro importe) o
+  devolvería la respuesta guardada de la primera **sin devolver nada** (el mismo importe). Por eso la devolución declara
+  **`reference`**: un campo obligatorio del input que es la clave de negocio de esa devolución (`refundRequestId`). La
+  clave que viaja a la pasarela es `<referencia del cobro>:refund:<referencia de la devolución>`, así que un reintento de
+  la misma devolución la repite y otra devolución no. Sin `reference` y con `partial-refund`,
+  `OBL-PAYMENTS-REFUND-REFERENCE` (no se acepta); un `reference` que no es un campo obligatorio del input, o declarado en
+  `capture`/`void`, es `CHK-PAYMENTS-FIELD-UNKNOWN`.
 - **`savePaymentMethod`**: guarda un medio de pago para cobrar sin el cliente. Es una operación propia, y no un efecto lateral del cobro, porque cada pasarela lo hace de una forma distinta. `exposedAs` es el campo de la respuesta con el que sale la referencia guardada; es lo que después llega a `charge.source.saved`. `cardDetails` (DSL 2.33, opcional) nombra el campo de la entidad que devuelve la operación con el **resumen de la tarjeta** que informa la pasarela al guardar: un value object compuesto con algunos de `brand`, `last4`, `expMonth` y `expYear`, y ninguno más (`CHK-PAYMENTS-FIELD-UNKNOWN`). El input solo trae el token, así que un compuesto obligatorio de esa entidad que el input no trae lo puede informar solo la pasarela: sin `cardDetails` no lo informa nadie (`CHK-PAYMENTS-SAVED-CARD-UNSOURCED`).
 
 ### Cuando la pasarela contesta que NO (`onRejected`)
@@ -156,7 +164,7 @@ Una acción de seguimiento tiene **tres** desenlaces, no dos: la pasarela confir
 ```yaml
 capture: { operation: capturePayment, inFlight: capturing, onRejected: { error: PAYMENT_NOT_CAPTURABLE } }
 void:    { operation: cancelPayment, inFlight: canceling, onRejected: { error: PAYMENT_NOT_CANCELABLE } }
-refund:  { operation: refundPayment, amount: amount, inFlight: refunding, onRejected: reconcile }
+refund:  { operation: refundPayment, amount: amount, reference: refundRequestId, inFlight: refunding, onRejected: reconcile }
 ```
 
 - **`{ error: <code> }`**: el cobro sale del estado en vuelo y **vuelve al de origen** (`canceling` → `authorized`), y la operación responde ese error, que tiene que estar en sus `errors` (`CHK-PAYMENTS-REJECTED-ERROR-UNKNOWN`). El llamante sabe en la respuesta que no se hizo. Si la pasarela dice que el cobro ya está en otro desenlace (la autorización caducó: está anulado), se aplica ese desenlace en vez de volver.

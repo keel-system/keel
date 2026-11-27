@@ -10,10 +10,19 @@
 // Lo marcado VERIFICAR EN SANDBOX es lo que la matriz declara `unverified`: build lo genera con la lectura más probable,
 // avisando.
 
-import { gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
+import { gatewayTranslation, refundIdempotencyKey } from '@keel-system/keel-core/gen/payment-gateways';
 import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { csFile, csString, located, namespaceOf } from '../render.js';
 import { PAYMENT_GATEWAY_PORT, NOTICE_VERIFIER_PORT, paymentInfraNamespace, paymentNamespace, reasonMember, savedMethodCs } from '../payments.js';
+
+// La clave de la devolución (corrida payment-go): con `refund.reference`, una por devolución
+// (`<cobro>:refund:<devolución>`, refundIdempotencyKey de keel-core); sin ella, la del cobro.
+const refundKeyCall = (p) => (p.refund.reference ? 'GatewayKeys.Idempotency(reference, "refund:" + refundReference)' : 'GatewayKeys.Idempotency(reference, "refund")');
+const refundReferenceParam = (p) => (p.refund.reference ? 'string refundReference, ' : '');
+// El argumento de la referencia de la devolución en las pruebas emitidas, y la clave que tienen que ver.
+const refundArg = (p, value) => (p.refund.reference ? `"${value}", ` : '');
+const refundKeyOf = (p, reference, value) => refundIdempotencyKey(reference, p.refund.reference ? value : null);
+
 
 const TRANSLATION = gatewayTranslation('mercadopago');
 const PROBES = paymentProbesFor('mercadopago');
@@ -126,11 +135,11 @@ function adapterBody(model) {
             });
         }`
       : '';
-    methods.push(`    public ${p.refund.amount ? 'async ' : ''}Task<GatewayOutcome> Refund(string reference, string gatewayPaymentId${amountParam}, ${ct})
+    methods.push(`    public ${p.refund.amount ? 'async ' : ''}Task<GatewayOutcome> Refund(string reference, ${refundReferenceParam(p)}string gatewayPaymentId${amountParam}, ${ct})
     {
         ArgumentNullException.ThrowIfNull(gatewayPaymentId);
         var body = new JsonObject();${partial}
-        return ${p.refund.amount ? 'await ' : ''}FollowUp($"/v1/orders/{Uri.EscapeDataString(gatewayPaymentId)}/refund", body, reference, gatewayPaymentId, "refund", cancellationToken);
+        return ${p.refund.amount ? 'await ' : ''}FollowUp($"/v1/orders/{Uri.EscapeDataString(gatewayPaymentId)}/refund", body, reference, gatewayPaymentId, "refund", cancellationToken, ${refundKeyCall(p)});
     }`);
   }
 
@@ -225,9 +234,9 @@ ${methods.join('\n\n')}
     }
 
     /// <summary>Captura, anulación y devolución: si MercadoPago la rechaza, se devuelve el estado real de la order.</summary>
-    private async Task<GatewayOutcome> FollowUp(string path, JsonObject body, string reference, string gatewayPaymentId, string action, CancellationToken cancellationToken)
+    private async Task<GatewayOutcome> FollowUp(string path, JsonObject body, string reference, string gatewayPaymentId, string action, CancellationToken cancellationToken, string? key = null)
     {
-        var answer = await Send(action, new GatewayRequest("POST", path, GatewayJson.JsonBody(body), Key(GatewayKeys.Idempotency(reference, action))), cancellationToken);
+        var answer = await Send(action, new GatewayRequest("POST", path, GatewayJson.JsonBody(body), Key(key ?? GatewayKeys.Idempotency(reference, action))), cancellationToken);
         if (answer.Status >= 500)
         {
             throw Unavailable(action, answer);
@@ -496,7 +505,7 @@ ${declineRows.join('\n')}
     public async Task UnaDevolucionParcialSinRespuestaQuedaEnDudaAunqueFalleLaLecturaPrevia()
     {
         var fake = FakeGateway.Json(HttpStatusCode.ServiceUnavailable, "{}");
-        await Assert.ThrowsAsync<PaymentGatewayUnavailableException>(() => Gateway(fake).Refund("ch-f", "ORDF", 5.00m, "EUR", Token));
+        await Assert.ThrowsAsync<PaymentGatewayUnavailableException>(() => Gateway(fake).Refund("ch-f", ${refundArg(p, 'rf-f')}"ORDF", 5.00m, "EUR", Token));
         var (request, _) = Assert.Single(fake.Requests);
         Assert.Equal(HttpMethod.Get, request.Method);
     }
@@ -507,10 +516,10 @@ ${declineRows.join('\n')}
         var fake = new FakeGateway((request, _) => request.Method == HttpMethod.Get
             ? Reply(HttpStatusCode.OK, """{"id":"ORDG","transactions":{"payments":[{"id":"PAY1"}]}}""")
             : Reply(HttpStatusCode.BadGateway, "{}"));
-        await Assert.ThrowsAsync<PaymentGatewayUnavailableException>(() => Gateway(fake).Refund("ch-g", "ORDG", 5.00m, "EUR", Token));
+        await Assert.ThrowsAsync<PaymentGatewayUnavailableException>(() => Gateway(fake).Refund("ch-g", ${refundArg(p, 'rf-g')}"ORDG", 5.00m, "EUR", Token));
         Assert.Equal(2, fake.Requests.Count);
         var (refund, body) = fake.Requests[1];
-        Assert.Equal("ch-g:refund", refund.Headers.GetValues(${header}).Single());
+        Assert.Equal(${csString(refundKeyOf(p, 'ch-g', 'rf-g'))}, refund.Headers.GetValues(${header}).Single());
         Assert.Equal("""{"transactions":[{"id":"PAY1","amount":"5.00"}]}""", body);
     }`);
     } else {
@@ -519,10 +528,28 @@ ${declineRows.join('\n')}
     public async Task UnaDevolucionConUn5xxQuedaEnDudaYNoSeRepite()
     {
         var fake = FakeGateway.Json(HttpStatusCode.BadGateway, "{}");
-        await Assert.ThrowsAsync<PaymentGatewayUnavailableException>(() => Gateway(fake).Refund("ch-g", "ORDG", Token));
+        await Assert.ThrowsAsync<PaymentGatewayUnavailableException>(() => Gateway(fake).Refund("ch-g", ${refundArg(p, 'rf-g')}"ORDG", Token));
         Assert.Single(fake.Requests);
     }`);
     }
+  }
+  // Corrida payment-go: con la clave del cobro, la segunda devolución parcial reutilizaba la de la primera y la pasarela la
+  // rechazaba (otro importe) o devolvía la respuesta guardada de la primera sin devolver nada (el mismo).
+  if (p.refund?.reference) {
+    const none = p.refund.amount ? 'null, null, ' : '';
+    cases.push(`
+    [Fact]
+    public async Task DosDevolucionesDelMismoCobroLlevanCadaUnaSuClave()
+    {
+        var fake = FakeGateway.Json(HttpStatusCode.BadGateway, "{}");
+        foreach (var refundReference in new[] { "rf-1", "rf-2", "rf-1" })
+        {
+            await Assert.ThrowsAsync<PaymentGatewayUnavailableException>(() => Gateway(fake).Refund("ch-7", refundReference, "ORD7", ${none}Token));
+        }
+        Assert.Equal(
+            new[] { ${csString(refundIdempotencyKey('ch-7', 'rf-1'))}, ${csString(refundIdempotencyKey('ch-7', 'rf-2'))}, ${csString(refundIdempotencyKey('ch-7', 'rf-1'))} },
+            fake.Requests.Select(sent => sent.Request.Headers.GetValues(${header}).Single()).ToArray());
+    }`);
   }
   if (p.savePaymentMethod) {
     cases.push(`

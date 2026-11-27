@@ -5086,6 +5086,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       [payments.charge?.operation, 'charge.source.saved', payments.charge?.source?.saved, (t) => t === 'string' || t === 'uuid', 'string o uuid'],
       [payments.capture?.operation, 'capture.amount', payments.capture?.amount, (t) => t === 'decimal', 'decimal'],
       [payments.refund?.operation, 'refund.amount', payments.refund?.amount, (t) => t === 'decimal', 'decimal'],
+      [payments.refund?.operation, 'refund.reference', payments.refund?.reference, (t) => t === 'string' || t === 'uuid' || Boolean(domain.types?.[t]) && !domain.types[t].fields, 'string, uuid o un value type escalar'],
       [payments.savePaymentMethod?.operation, 'savePaymentMethod.token', payments.savePaymentMethod?.token, (t) => t === 'string', 'string']
     ];
     for (const [opName, where, field, accepts, expected] of fieldChecks) {
@@ -5097,6 +5098,23 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       } else if (!accepts(declared.type)) {
         error('CHK-PAYMENTS-FIELD-UNKNOWN',
           `payments: ${where}: '${field}' es ${declared.type} en el input de '${opName}' y tiene que ser ${expected}`);
+      }
+    }
+    // La referencia de la devolución (corrida payment-go, 2026-11-27): la clave de ESTA devolución ante la pasarela. Tiene
+    // que venir siempre —una clave ausente no distingue nada— y solo la tiene la devolución: una captura o una anulación
+    // hay como mucho una por cobro, y su clave ya es la del cobro.
+    const refundReference = payments.refund?.reference;
+    if (refundReference && operations[payments.refund.operation] && inputFieldsOf(payments.refund.operation)[refundReference]?.required !== true) {
+      const declared = inputFieldsOf(payments.refund.operation)[refundReference];
+      if (declared) {
+        error('CHK-PAYMENTS-FIELD-UNKNOWN',
+          `payments: refund.reference: '${refundReference}' tiene que ser obligatorio (required: true) en el input de '${payments.refund.operation}': sin ella la clave de la devolución ante la pasarela no distingue nada`);
+      }
+    }
+    for (const action of ['capture', 'void']) {
+      if (payments[action]?.reference) {
+        error('CHK-PAYMENTS-FIELD-UNKNOWN',
+          `payments: ${action}.reference: solo la devolución lleva referencia propia (un cobro tiene como mucho una ${action === 'capture' ? 'captura' : 'anulación'}, y su clave es la del cobro)`);
       }
     }
     const currencyParameter = payments.charge?.currency?.parameter;
@@ -5269,6 +5287,20 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
               'la operación no tendría con qué responder el rechazo');
         }
       }
+    }
+
+    // Varias devoluciones parciales del mismo cobro necesitan una clave cada una ante la pasarela (corrida payment-go,
+    // 2026-11-27): con la del cobro, la segunda reutilizaba la de la primera y Stripe la rechazaba —otro importe— o
+    // devolvía la respuesta guardada de la primera sin devolver nada —el mismo—. Solo el diseño sabe qué identifica a
+    // cada devolución, y no hay default seguro: obligación que no se acepta.
+    if (payments.refund?.operation && operations[payments.refund.operation] && capabilities.has('partial-refund') && !payments.refund.reference) {
+      obligation(
+        'OBL-PAYMENTS-REFUND-REFERENCE',
+        'payments.refund',
+        `payments: refund: con partial-refund un cobro admite varias devoluciones, y el diseño no dice qué identifica a cada una ` +
+          `ante la pasarela. Declara refund.reference: <campo obligatorio del input de '${payments.refund.operation}'> ` +
+          '(la clave de negocio de la devolución, p. ej. refundRequestId); sin ella la segunda devolución reutilizaría la clave de idempotencia de la primera'
+      );
     }
 
     // Un cobro por evento con una referencia que YA tiene cobro, en un mensaje distinto (otro eventId: la

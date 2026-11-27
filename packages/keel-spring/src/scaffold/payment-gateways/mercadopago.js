@@ -15,6 +15,10 @@ import { gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways'
 import { javaFile, javaPath, subPackage } from '../render.js';
 import { savedMethodJava } from '../payments.js';
 
+// La clave de la devolución (corrida payment-go): con `refund.reference`, una por devolución
+// (`<cobro>:refund:<devolución>`, refundIdempotencyKey de keel-core); sin ella, la del cobro.
+const refundKeyCall = (p) => (p.refund.reference ? 'idempotencyKey(reference, "refund:" + refundReference)' : 'idempotencyKey(reference, "refund")');
+
 // Un corte de conexión a mitad de la respuesta no llega como ResourceAccessException sino como
 // RestClientException genérica: se captura la general (después de la de respuesta HTTP, que es más
 // específica) o ese caso escapa sin dejar la acción en duda. Lo destapó payment-check.
@@ -103,9 +107,9 @@ function renderAdapter(model, ctx) {
         }`
       : '';
     methods.push(`    @Override
-    public GatewayOutcome refund(String reference, String gatewayPaymentId${amountParam}) {
+    public GatewayOutcome refund(String reference, ${p.refund.reference ? 'String refundReference, ' : ''}String gatewayPaymentId${amountParam}) {
         ObjectNode body = mapper.createObjectNode();${partial}
-        return followUp("/v1/orders/" + gatewayPaymentId + "/refund", body, reference, gatewayPaymentId, "refund");
+        return followUp("/v1/orders/" + gatewayPaymentId + "/refund", body, reference, gatewayPaymentId, "refund", ${refundKeyCall(p)});
     }`);
   }
 
@@ -226,9 +230,13 @@ ${methods.join('\n\n')}
 
     /** Captura, anulación y devolución: si MercadoPago la rechaza, se devuelve el estado real de la order. */
     private GatewayOutcome followUp(String path, ObjectNode body, String reference, String gatewayPaymentId, String action) {
+        return followUp(path, body, reference, gatewayPaymentId, action, idempotencyKey(reference, action));
+    }
+
+    private GatewayOutcome followUp(String path, ObjectNode body, String reference, String gatewayPaymentId, String action, String idempotencyKey) {
         try {
             return outcomeOf(json(http.post().uri(path)
-                    .headers(headers -> credentials(headers, idempotencyKey(reference, action)))
+                    .headers(headers -> credentials(headers, idempotencyKey))
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(body.toString())
                     .retrieve()

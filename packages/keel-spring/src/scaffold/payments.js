@@ -306,9 +306,11 @@ function renderPort(model) {
   if (payments.refund) {
     methods.push(`    /**
      * Devuelve lo cobrado${payments.refund.amount ? '; con amount null, todo. La moneda es la del cobro: la pasa quien llama,\n     * que la conoce, en vez de pedírsela a la pasarela con una llamada más' : ''}. El cobro tiene que estar ya en
-     * ${payments.refund.inFlight}. Si la pasarela la rechaza, el resultado NO es REFUNDED.
+     * ${payments.refund.inFlight}. Si la pasarela la rechaza, el resultado NO es REFUNDED.${payments.refund.reference ? `
+     * refundReference es la clave de negocio de ESTA devolución (${payments.refund.reference}): con devoluciones parciales
+     * un cobro tiene varias, y la clave de idempotencia ante la pasarela es una por devolución.` : ''}
      */
-    GatewayOutcome refund(String reference, String gatewayPaymentId${payments.refund.amount ? ', BigDecimal amount, String currency' : ''});`);
+    GatewayOutcome refund(String reference, ${payments.refund.reference ? 'String refundReference, ' : ''}String gatewayPaymentId${payments.refund.amount ? ', BigDecimal amount, String currency' : ''});`);
   }
   methods.push(`    /**
      * El estado de un cobro según la pasarela. Con gatewayPaymentId null —la pasarela no llegó a

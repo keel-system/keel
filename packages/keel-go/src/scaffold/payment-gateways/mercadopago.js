@@ -13,6 +13,12 @@ import { DEFAULT_SAVED_CARD, saveAuthenticationRejection, savedCardResponse } fr
 import { packageFile } from '../render.js';
 import { reasonConstant, savedMethodGo } from '../payments.js';
 
+// La clave de la devolución (corrida payment-go): con `refund.reference`, una por devolución
+// (`<cobro>:refund:<devolución>`, refundIdempotencyKey de keel-core); sin ella, la del cobro.
+const refundKeyCall = (p) => (p.refund.reference ? 'idempotencyKey(reference, "refund:"+refundReference)' : 'idempotencyKey(reference, "refund")');
+const refundReferenceParam = (p) => (p.refund.reference ? ', refundReference' : '');
+
+
 const TRANSLATION = gatewayTranslation('mercadopago');
 
 export function generate(model, infra) {
@@ -88,13 +94,13 @@ ${orderRows}
   if (p.capture) {
     methods.push(`// Capture implementa domain.PaymentGateway.${p.capture.amount ? ' La captura parcial no la cubre MercadoPago: la matriz de la pasarela no deja\n// generar un diseño que la exija, y el importe no se manda.' : ''}
 func (g *mercadopagoGateway) Capture(ctx context.Context, reference, gatewayPaymentID string${p.capture.amount ? ', _ *wire.Decimal, _ string' : ''}) (domain.GatewayOutcome, error) {
-	return g.followUp(ctx, "/v1/orders/"+url.PathEscape(gatewayPaymentID)+"/capture", jsonObject{}, reference, gatewayPaymentID, "capture")
+	return g.followUp(ctx, "/v1/orders/"+url.PathEscape(gatewayPaymentID)+"/capture", jsonObject{}, reference, gatewayPaymentID, "capture", idempotencyKey(reference, "capture"))
 }`);
   }
   if (p.void) {
     methods.push(`// VoidAuthorization implementa domain.PaymentGateway.
 func (g *mercadopagoGateway) VoidAuthorization(ctx context.Context, reference, gatewayPaymentID string) (domain.GatewayOutcome, error) {
-	return g.followUp(ctx, "/v1/orders/"+url.PathEscape(gatewayPaymentID)+"/cancel", jsonObject{}, reference, gatewayPaymentID, "void")
+	return g.followUp(ctx, "/v1/orders/"+url.PathEscape(gatewayPaymentID)+"/cancel", jsonObject{}, reference, gatewayPaymentID, "void", idempotencyKey(reference, "void"))
 }`);
   }
   if (p.refund) {
@@ -122,9 +128,9 @@ func (g *mercadopagoGateway) VoidAuthorization(ctx context.Context, reference, g
 	}`
       : '';
     methods.push(`// Refund implementa domain.PaymentGateway.
-func (g *mercadopagoGateway) Refund(ctx context.Context, reference, gatewayPaymentID string${partialRefund ? ', amount *wire.Decimal, currency string' : ''}) (domain.GatewayOutcome, error) {
+func (g *mercadopagoGateway) Refund(ctx context.Context, reference${refundReferenceParam(p)}, gatewayPaymentID string${partialRefund ? ', amount *wire.Decimal, currency string' : ''}) (domain.GatewayOutcome, error) {
 	body := jsonObject{}${partial}
-	return g.followUp(ctx, "/v1/orders/"+url.PathEscape(gatewayPaymentID)+"/refund", body, reference, gatewayPaymentID, "refund")
+	return g.followUp(ctx, "/v1/orders/"+url.PathEscape(gatewayPaymentID)+"/refund", body, reference, gatewayPaymentID, "refund", ${refundKeyCall(p)})
 }`);
   }
   methods.push(`// Status implementa domain.PaymentGateway.
@@ -232,8 +238,8 @@ func (g *mercadopagoGateway) send(ctx context.Context, action, method, path stri
 }
 
 // followUp es la captura, la anulación y la devolución: si MercadoPago la rechaza, se devuelve el estado real de la order.
-func (g *mercadopagoGateway) followUp(ctx context.Context, path string, body jsonObject, reference, gatewayPaymentID, action string) (domain.GatewayOutcome, error) {
-	answer, err := g.send(ctx, action, http.MethodPost, path, body, idempotencyKey(reference, action))
+func (g *mercadopagoGateway) followUp(ctx context.Context, path string, body jsonObject, reference, gatewayPaymentID, action, key string) (domain.GatewayOutcome, error) {
+	answer, err := g.send(ctx, action, http.MethodPost, path, body, key)
 	if err != nil {
 		return domain.GatewayOutcome{}, err
 	}

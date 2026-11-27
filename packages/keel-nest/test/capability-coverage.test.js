@@ -69,6 +69,13 @@ const EXCEPCIONES = new Map([
     { motivo: MOTIVOS.ramaHermana, porque: 'la simétrica de la anterior: reply-to con `source: data`, cuya rama ya se emite por el remitente.' }
   ],
   [
+    'payments.capture.reference',
+    {
+      motivo: MOTIVOS.informativo,
+      porque: 'el schema lo admite porque capture, void y refund comparten definición, pero solo la devolución lleva referencia propia: en capture o void lo rechaza CHK-PAYMENTS-FIELD-UNKNOWN y ningún generador lo lee.'
+    }
+  ],
+  [
     'payments.capture.amount',
     {
       motivo: MOTIVOS.hueco,

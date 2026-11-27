@@ -69,6 +69,9 @@ export function collectPayments(layers, stack, services, entities, warnings, pro
       ? {
           operation: spec.operation,
           amount: spec.amount ?? null,
+          // Solo en refund: el campo del input con la clave de negocio de ESTA devolución (corrida payment-go). Con ella la
+          // clave de idempotencia ante la pasarela es una por devolución (`refundIdempotencyKey`); sin ella, la del cobro.
+          reference: spec.reference ?? null,
           inFlight: spec.inFlight ?? null,
           // DSL 2.20: qué pasa cuando la pasarela contesta que NO. `reconcile`, `{ error }` o null (sin decidir).
           onRejected: spec.onRejected ?? null,

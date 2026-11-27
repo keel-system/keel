@@ -179,7 +179,7 @@ for (const gateway of ['stripe', 'mercadopago']) {
     await harness.gatewayExpiresAuthorization('ch-8');
     assert.equal((await adapter.capture('ch-8', harness.gatewayIdFor('ch-8'))).status, GatewayStatus.CANCELED);
     await harness.gatewayRefunds('ch-9', '5.00');
-    const refund = await adapter.refund('ch-9', harness.gatewayIdFor('ch-9'), Decimal.parse('5.00'), 'BRL');
+    const refund = await adapter.refund('ch-9', 'rf-9', harness.gatewayIdFor('ch-9'), Decimal.parse('5.00'), 'BRL');
     assert.equal(refund.status, GatewayStatus.REFUNDED);
     assert.equal(refund.refundedAmount.toString(), '5.00');
   });

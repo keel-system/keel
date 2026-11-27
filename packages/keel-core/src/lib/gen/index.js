@@ -237,6 +237,7 @@ export {
   PAYMENT_NOTICE_PATH,
   PAYMENT_TEST_SECRETS,
   paymentIdempotencyKey,
+  refundIdempotencyKey,
   PAYMENT_ACTIONS,
   savedMethodIdempotencyKey,
   SAVED_METHOD_SEPARATOR,

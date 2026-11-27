@@ -243,6 +243,16 @@ export const OBLIGATIONS = {
     doc: 'design-obligations.md'
   },
 
+  'OBL-PAYMENTS-REFUND-REFERENCE': {
+    gapClass: 18,
+    when: 'payments: `refund` con la capacidad `partial-refund` y sin `reference`',
+    kind: 'decision',
+    waivable: false,
+    title: 'no está decidido qué identifica a cada devolución ante la pasarela',
+    closes: '`refund.reference: <campo obligatorio del input>`, la clave de negocio de la devolución',
+    doc: 'design-obligations.md'
+  },
+
   'OBL-PAYMENTS-REFERENCE-REUSED': {
     gapClass: 18,
     when: 'payments + messaging: una suscripción dispara el cobro y no declara `onFailure.acknowledgeOn`',

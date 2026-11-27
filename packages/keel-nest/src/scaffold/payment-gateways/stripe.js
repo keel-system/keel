@@ -12,6 +12,12 @@ import { gatewayTranslation, paymentIdempotencyKey, savedMethodIdempotencyKey, S
 import { DIRS, classPath, tsModule, tsString } from '../render.js';
 import { savedMethodTsHelpers } from '../payments.js';
 
+// La clave de la devolución (corrida payment-go): con `refund.reference`, una por devolución
+// (`<cobro>:refund:<devolución>`, refundIdempotencyKey de keel-core); sin ella, la del cobro.
+const refundKeyCall = (p) => (p.refund.reference ? "idempotencyKey(reference, 'refund:' + refundReference)" : "idempotencyKey(reference, 'refund')");
+const refundReferenceParam = (p) => (p.refund.reference ? 'refundReference: string, ' : '');
+
+
 const TRANSLATION = gatewayTranslation('stripe');
 const DIR = 'infrastructure/payment/stripe';
 const ADAPTER_TS = classPath(DIR, 'StripePaymentGateway');
@@ -99,10 +105,10 @@ function adapterTs(model) {
       ? `
     if (amount != null) form.append('amount', MoneyAmounts.toMinorUnits(amount, requiredCurrency(currency)).toString());`
       : '';
-    methods.push(`  async refund(reference: string, gatewayPaymentId: string${amountParam}): Promise<GatewayOutcome> {
+    methods.push(`  async refund(reference: string, ${refundReferenceParam(p)}gatewayPaymentId: string${amountParam}): Promise<GatewayOutcome> {
     const form = new URLSearchParams();
     form.append('payment_intent', gatewayPaymentId);${amountLine}
-    const answer = await this.send('refund', { method: 'POST', path: '/v1/refunds', body: formBody(form), idempotency: this.key(idempotencyKey(reference, 'refund')) });
+    const answer = await this.send('refund', { method: 'POST', path: '/v1/refunds', body: formBody(form), idempotency: this.key(${refundKeyCall(p)}) });
     if (answer.status >= 500) throw unavailable('refund', answer);
     // Rechazada: el cobro sigue capturado.
     if (answer.status >= 400) return GatewayOutcome.of(GatewayStatus.CAPTURED, reference, gatewayPaymentId);

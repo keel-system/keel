@@ -190,9 +190,33 @@ func TestPaymentProbeLaDevolucionParcialSeCompletaPorSuImporte(t *testing.T) {
 	s, gateway, _ := paymentProbe(t)
 	s.GatewayRefunds("ch-l", "5.00")
 	amount := wire.MustDecimal("5.00")
-	outcome, err := gateway.Refund(t.Context(), "ch-l", s.GatewayIDFor("ch-l"), &amount, paymentCurrency)
+	outcome, err := gateway.Refund(t.Context(), "ch-l", "rf-l", s.GatewayIDFor("ch-l"), &amount, paymentCurrency)
 	if err != nil || outcome.Status != domain.GatewayRefunded || outcome.RefundedAmount == nil || outcome.RefundedAmount.Cmp(amount) != 0 {
 		t.Errorf("Refund = %+v, %v; quiero devuelto por 5.00", outcome, err)
+	}
+}
+
+// Corrida payment-go: con la clave del cobro, la segunda devolución parcial reutilizaba la de la primera y la pasarela la
+// rechazaba (otro importe) o devolvía la respuesta guardada de la primera sin devolver nada (el mismo).
+func TestPaymentProbeDosDevolucionesDelMismoCobroLlevanCadaUnaSuClave(t *testing.T) {
+	s, gateway, _ := paymentProbe(t)
+	s.GatewayRefunds("ch-m", "2.00")
+	amount := wire.MustDecimal("2.00")
+	for _, refundReference := range []string{"rf-1", "rf-2"} {
+		if _, err := gateway.Refund(t.Context(), "ch-m", refundReference, s.GatewayIDFor("ch-m"), &amount, paymentCurrency); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var keys []string
+	for _, request := range s.GatewayRequests(CallRefund) {
+		key := request.Header("Idempotency-Key")
+		if key == "" {
+			key = request.Header("X-Idempotency-Key")
+		}
+		keys = append(keys, key)
+	}
+	if len(keys) != 2 || keys[0] != "ch-m:refund:rf-1" || keys[1] != "ch-m:refund:rf-2" {
+		t.Errorf("claves de las dos devoluciones = %v; quiero [ch-m:refund:rf-1 ch-m:refund:rf-2]", keys)
 	}
 }
 

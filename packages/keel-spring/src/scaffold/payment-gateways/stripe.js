@@ -14,6 +14,10 @@ import { gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways'
 import { javaFile, javaPath, subPackage } from '../render.js';
 import { savedMethodJava } from '../payments.js';
 
+// La clave de la devolución (corrida payment-go): con `refund.reference`, una por devolución
+// (`<cobro>:refund:<devolución>`, refundIdempotencyKey de keel-core); sin ella, la del cobro.
+const refundKeyCall = (p) => (p.refund.reference ? 'idempotencyKey(reference, "refund:" + refundReference)' : 'idempotencyKey(reference, "refund")');
+
 // Un corte de conexión a mitad de la respuesta no llega como ResourceAccessException sino como
 // RestClientException genérica: se captura la general (después de la de respuesta HTTP, que es más
 // específica) o ese caso escapa sin dejar la acción en duda. Lo destapó payment-check.
@@ -86,13 +90,13 @@ function renderAdapter(model, ctx) {
         }`
       : '';
     methods.push(`    @Override
-    public GatewayOutcome refund(String reference, String gatewayPaymentId${amountParam}) {
+    public GatewayOutcome refund(String reference, ${p.refund.reference ? 'String refundReference, ' : ''}String gatewayPaymentId${amountParam}) {
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
         form.add("payment_intent", gatewayPaymentId);${amountLine}
         JsonNode refund;
         try {
             refund = json(http.post().uri("/v1/refunds")
-                    .headers(headers -> credentials(headers, idempotencyKey(reference, "refund")))
+                    .headers(headers -> credentials(headers, ${refundKeyCall(p)}))
                     .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                     .body(form)
                     .retrieve()

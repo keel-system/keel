@@ -466,7 +466,7 @@ function withPayments(d) {
     refundPriorityCharge: {
       description: 'Devuelve todo o parte de lo cobrado.',
       kind: 'command',
-      input: paymentInput({ amount: { type: 'decimal' } }),
+      input: paymentInput({ refundRequestId: { type: 'string', required: true, constraints: { maxLength: 64 } }, amount: { type: 'decimal' } }),
       output: { entity: 'Payment' },
       errors: [PAYMENT_NOT_FOUND],
       transitions: [{ entity: 'Payment', from: ['captured'], to: 'refunding' }]
@@ -547,7 +547,7 @@ function withPayments(d) {
       source: { token: 'paymentToken', saved: 'paymentMethodRef' }
     },
     capture: { operation: 'capturePriorityCharge', inFlight: 'capturing', onRejected: 'reconcile' },
-    refund: { operation: 'refundPriorityCharge', amount: 'amount', inFlight: 'refunding', onRejected: 'reconcile' },
+    refund: { operation: 'refundPriorityCharge', amount: 'amount', reference: 'refundRequestId', inFlight: 'refunding', onRejected: 'reconcile' },
     savePaymentMethod: { operation: 'savePaymentMethod', token: 'paymentToken', exposedAs: 'paymentMethodRef' },
     outcomes: {
       authorized: 'markAuthorized',
@@ -3702,6 +3702,42 @@ export const MUTATIONS = [
       delete d.layers.payments.capture.onRejected;
     },
     expect: ['OBL-PAYMENTS-FOLLOWUP-REJECTED']
+  },
+  {
+    id: 'M-PAYMENTS-REFUND-REFERENCE',
+    title: 'con devoluciones parciales, la devolución no dice qué la identifica ante la pasarela',
+    extends: 'payments',
+    mutate: (d) => {
+      delete d.layers.payments.refund.reference;
+    },
+    expect: ['OBL-PAYMENTS-REFUND-REFERENCE']
+  },
+  {
+    id: 'M-PAYMENTS-REFUND-REFERENCE-OPTIONAL',
+    title: 'la referencia de la devolución es un campo opcional del input',
+    extends: 'payments',
+    mutate: (d) => {
+      d.layers['use-cases'].operations.refundPriorityCharge.input.fields.refundRequestId.required = false;
+    },
+    expect: ['CHK-PAYMENTS-FIELD-UNKNOWN']
+  },
+  {
+    id: 'M-PAYMENTS-REFUND-REFERENCE-UNKNOWN',
+    title: 'la referencia de la devolución no es un campo del input',
+    extends: 'payments',
+    mutate: (d) => {
+      d.layers.payments.refund.reference = 'refundKey';
+    },
+    expect: ['CHK-PAYMENTS-FIELD-UNKNOWN']
+  },
+  {
+    id: 'M-PAYMENTS-CAPTURE-REFERENCE',
+    title: 'la captura declara una referencia propia, que solo tiene la devolución',
+    extends: 'payments',
+    mutate: (d) => {
+      d.layers.payments.capture.reference = 'chargeRequestId';
+    },
+    expect: ['CHK-PAYMENTS-FIELD-UNKNOWN']
   },
   {
     id: 'M-PAYMENTS-REJECTED-ERROR-UNKNOWN',

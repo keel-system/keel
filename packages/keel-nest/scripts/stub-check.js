@@ -189,7 +189,7 @@ try {
     await harness.gatewayExpiresAuthorization('pay-5');
     step(`${gateway}: la autorización caducada es un cobro anulado`, (await gatewayAdapter.capture('pay-5', harness.gatewayIdFor('pay-5'))).status === 'CANCELED');
     await harness.gatewayRefunds('pay-6', '5.00');
-    const refunded = await gatewayAdapter.refund('pay-6', harness.gatewayIdFor('pay-6'), Decimal.parse('5.00'), 'BRL');
+    const refunded = await gatewayAdapter.refund('pay-6', 'rf-6', harness.gatewayIdFor('pay-6'), Decimal.parse('5.00'), 'BRL');
     step(`${gateway}: la devolución parcial`, refunded.status === 'REFUNDED' && refunded.refundedAmount?.toString() === '5.00', `${refunded.status} ${refunded.refundedAmount}`);
 
     await http.resetStubs();

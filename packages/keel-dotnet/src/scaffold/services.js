@@ -23,7 +23,7 @@ import { finderNote } from '@keel-system/keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
 import { READ_SCOPE_PROPERTY, readScopeHandlerCall } from './read-scope.js';
 import { readScopeNote, optionalIdentityNote } from '@keel-system/keel-core/gen/read-scope';
-import { followUpRejectionNote, savedMethodNote } from '@keel-system/keel-core/gen/rejection-notes';
+import { followUpRejectionNote, refundReferenceNote, savedMethodNote } from '@keel-system/keel-core/gen/rejection-notes';
 import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { csFile, csMember, declType, fieldUsings, isNullable, located, namespaceOf, typeUsings, xmlDoc } from './render.js';
 import { carriesExpectedVersions, conditionalHandlerNote, expectedVersionsProperty, returnsVersioned, versionedType } from './conditional-writes.js';
@@ -501,6 +501,8 @@ function handlerNotes(model, operation) {
   // Lo que hace el handler cuando la pasarela contesta que NO (DSL 2.20): nota neutral, la de los tres generadores.
   const rejection = followUpRejectionNote(model.payments, operation.name);
   if (rejection) notes.push(rejection);
+  const refundReference = refundReferenceNote(model.payments, operation.name);
+  if (refundReference) notes.push(refundReference);
   const saving = savedMethodNote(model.payments, operation.name, {
     saved: 'SavedPaymentMethod',
     rejected: 'GatewayRejectedPaymentMethodException',

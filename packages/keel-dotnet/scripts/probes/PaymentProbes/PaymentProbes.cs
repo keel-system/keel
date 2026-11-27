@@ -124,7 +124,7 @@ public sealed class PaymentProbes : FlowTest, IAsyncLifetime
     public async Task LaDevolucionParcialSeCompletaPorSuImporte()
     {
         await GatewayRefunds("ch-l", "5.00");
-        var outcome = await Gateway.Refund("ch-l", GatewayIdFor("ch-l"), 5.00m, "BRL", Cancel);
+        var outcome = await Gateway.Refund("ch-l", "rf-l", GatewayIdFor("ch-l"), 5.00m, "BRL", Cancel);
         Assert.Equal(GatewayStatus.Refunded, outcome.Status);
         Assert.Equal(5.00m, outcome.RefundedAmount);
     }

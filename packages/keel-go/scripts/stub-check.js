@@ -60,6 +60,13 @@ const SABOTAGES = {
     '_ = bodyContains',
     ['TestPaymentProbeCadaCobroCasaPorSuReferenciaYLlevaSuClave', 'TestPaymentProbeElCobroInmediatoYLaAccionDelCliente']
   ],
+  // La devolución vuelve a la clave del cobro: dos devoluciones parciales comparten clave (corrida payment-go).
+  'payment-refund-key': [
+    'internal/infrastructure/payment/stripe.go',
+    'idempotencyKey(reference, "refund:"+refundReference)',
+    'idempotencyKey(reference, "refund")',
+    ['TestPaymentProbeDosDevolucionesDelMismoCobroLlevanCadaUnaSuClave']
+  ],
   'payment-forged': [PAYMENT_HARNESS, 'return paymentWebhookSecret + "-falso"', 'return paymentWebhookSecret', ['TestPaymentProbeElAvisoQueFirmaElArnesLoAceptaElVerificadorYElFalsificadoNo']]
 };
 if (sabotage && !SABOTAGES[sabotage]) {
@@ -105,7 +112,10 @@ function runSubject({ name, dir, fixture, stack, probes, prefix, harness }) {
   const source = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'probes', probes), 'utf8');
   fs.writeFileSync(path.join(dir, 'tests', 'integration', probes), source.replaceAll('__MODULE__', plan.model.service.name));
   let expected = null;
-  if (sabotage && (SABOTAGES[sabotage][0] === PAYMENT_HARNESS) === harness) {
+  // Los de la pasarela (su arnés o su adaptador) van a los payment-checkout, y el del adaptador solo al de SU pasarela: la
+  // otra no tiene ese archivo y corre sin sabotaje.
+  const paymentSabotage = sabotage && (SABOTAGES[sabotage][0] === PAYMENT_HARNESS || SABOTAGES[sabotage][0].startsWith('internal/infrastructure/payment/'));
+  if (sabotage && paymentSabotage === harness && fs.existsSync(path.join(dir, SABOTAGES[sabotage][0]))) {
     const [file, from, to, caught] = SABOTAGES[sabotage];
     const target = path.join(dir, file);
     const text = fs.readFileSync(target, 'utf8');
@@ -115,6 +125,7 @@ function runSubject({ name, dir, fixture, stack, probes, prefix, harness }) {
     }
     fs.writeFileSync(target, text.replace(from, to));
     expected = [...caught].sort();
+    sabotaged.push(name);
     console.log(`(sabotaje: ${sabotage} en ${name})`);
   }
 
@@ -150,6 +161,7 @@ function runSubject({ name, dir, fixture, stack, probes, prefix, harness }) {
     if (unexpected) step(`${name}: las sondas terminaron`, false, `código ${tested.status}`);
   }
 }
+const sabotaged = [];
 const root = makeWorkspace('keel-go-stub-check-');
 const project = path.join(root, SUBJECT);
 try {
@@ -178,6 +190,8 @@ try {
     }))
   ];
   for (const subject of subjects) runSubject(subject);
+  // Un sabotaje que no se aplicó a ningún sujeto dejaría todo en verde sin medir nada.
+  if (sabotage) step(`el sabotaje ${sabotage} se aplicó a algún sujeto`, sabotaged.length > 0, sabotaged.join(', '));
 } catch (error) {
   if (!results.some((result) => !result.ok)) step('stub-check', false, error.message);
 } finally {

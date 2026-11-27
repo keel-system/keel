@@ -231,8 +231,10 @@ function domainBody(model) {
   }
   if (p.refund) {
     methods.push(`	// Refund devuelve lo cobrado${partialRefund ? '; con amount nil, todo. La moneda es la del cobro: la pasa quien llama, que la\n\t// conoce, en vez de pedírsela a la pasarela con una llamada más' : ''}. El cobro tiene que estar ya en ${p.refund.inFlight}. Si la
-	// pasarela la rechaza, el resultado NO es GatewayRefunded.
-	Refund(ctx context.Context, reference, gatewayPaymentID string${partialRefund ? ', amount *wire.Decimal, currency string' : ''}) (GatewayOutcome, error)`);
+	// pasarela la rechaza, el resultado NO es GatewayRefunded.${p.refund.reference ? `
+	// refundReference es la clave de negocio de ESTA devolución (${p.refund.reference}): con devoluciones parciales un cobro
+	// tiene varias, y la clave de idempotencia ante la pasarela es una por devolución.` : ''}
+	Refund(ctx context.Context, reference${p.refund.reference ? ', refundReference' : ''}, gatewayPaymentID string${partialRefund ? ', amount *wire.Decimal, currency string' : ''}) (GatewayOutcome, error)`);
   }
   methods.push(`	// Status es el estado de un cobro según la pasarela. Con gatewayPaymentID vacío —la pasarela no llegó a contestar— se
 	// busca por la referencia, que el adaptador le mandó al pedirlo.

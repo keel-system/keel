@@ -14,6 +14,12 @@ import { gatewayTranslation, paymentIdempotencyKey, savedMethodIdempotencyKey, S
 import { DIRS, classPath, tsModule, tsString } from '../render.js';
 import { savedMethodTsHelpers } from '../payments.js';
 
+// La clave de la devolución (corrida payment-go): con `refund.reference`, una por devolución
+// (`<cobro>:refund:<devolución>`, refundIdempotencyKey de keel-core); sin ella, la del cobro.
+const refundKeyCall = (p) => (p.refund.reference ? "idempotencyKey(reference, 'refund:' + refundReference)" : "idempotencyKey(reference, 'refund')");
+const refundReferenceParam = (p) => (p.refund.reference ? 'refundReference: string, ' : '');
+
+
 const TRANSLATION = gatewayTranslation('mercadopago');
 const DIR = 'infrastructure/payment/mercadopago';
 const ADAPTER_TS = classPath(DIR, 'MercadopagoPaymentGateway');
@@ -113,9 +119,9 @@ function adapterTs(model) {
       body['transactions'] = [{ id: text(transaction['id']) ?? '', amount: MoneyAmounts.toMajorUnits(amount, requiredCurrency(currency)) }];
     }`
       : '';
-    methods.push(`  async refund(reference: string, gatewayPaymentId: string${amountParam}): Promise<GatewayOutcome> {
+    methods.push(`  async refund(reference: string, ${refundReferenceParam(p)}gatewayPaymentId: string${amountParam}): Promise<GatewayOutcome> {
     const body: Json = {};${partial}
-    return this.followUp(\`/v1/orders/\${encodeURIComponent(gatewayPaymentId)}/refund\`, body, reference, gatewayPaymentId, 'refund');
+    return this.followUp(\`/v1/orders/\${encodeURIComponent(gatewayPaymentId)}/refund\`, body, reference, gatewayPaymentId, 'refund', ${refundKeyCall(p)});
   }`);
   }
 
@@ -230,8 +236,8 @@ ${methods.join('\n\n')}
   }
 
   /** Captura, anulación y devolución: si MercadoPago la rechaza, se devuelve el estado real de la order. */
-  private async followUp(path: string, body: Json, reference: string, gatewayPaymentId: string, action: string): Promise<GatewayOutcome> {
-    const answer = await this.send(action, { method: 'POST', path, body: jsonBody(body), idempotency: this.key(idempotencyKey(reference, action)) });
+  private async followUp(path: string, body: Json, reference: string, gatewayPaymentId: string, action: string, key: string = idempotencyKey(reference, action)): Promise<GatewayOutcome> {
+    const answer = await this.send(action, { method: 'POST', path, body: jsonBody(body), idempotency: this.key(key) });
     if (answer.status >= 500) throw unavailable(action, answer);
     if (answer.status >= 400) return this.status(reference, gatewayPaymentId);
     return this.outcomeOf(json(answer.text), reference);

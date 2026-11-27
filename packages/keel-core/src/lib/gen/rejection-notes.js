@@ -38,6 +38,21 @@ export function followUpRejectionNote(payments, operationName) {
 }
 
 /**
+ * Qué referencia pasa el handler de la devolución a la pasarela (`payments.refund.reference`, corrida payment-go), o null si
+ * la operación no es la devolución o el diseño no la declara. La clave de idempotencia ante la pasarela es una por
+ * devolución: pasar otra cosa (la del cobro, un aleatorio) vuelve a juntar dos devoluciones bajo la misma clave.
+ */
+export function refundReferenceNote(payments, operationName) {
+  const spec = payments?.refund;
+  if (!spec?.reference || spec.operation !== operationName) return null;
+  return (
+    `A la pasarela, la devolución se pide con su propia referencia (payments.refund.reference): el campo ` +
+    `${spec.reference} del mensaje, además de la del cobro. Es la clave de idempotencia de ESTA devolución: un ` +
+    'reintento de la misma la repite y otra devolución del mismo cobro no.'
+  );
+}
+
+/**
  * Qué hace el listener con los rechazos de negocio que el diseño declara como «atendido»
  * (`onFailure.acknowledgeOn`), o null si no declara ninguno.
  */
