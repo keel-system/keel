@@ -280,3 +280,4 @@ export {
   planSchemaSteps,
   schemaStepFiles
 } from './schema-steps.js';
+export { internalUniqueKeys } from './internal-unique.js';

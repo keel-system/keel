@@ -16,6 +16,7 @@ import { DATA_LIFECYCLE_DESIGNS } from '../../../keel-core/test/helpers/data-lif
 import { HISTORY_DESIGNS } from '../../../keel-core/test/helpers/history-designs.js';
 import { BATCH_DESIGNS, BATCH_JOB_DESIGNS, BATCH_KEY_DESIGNS, withoutBatches } from '../../../keel-core/test/helpers/batch-designs.js';
 import { ENTITY_CHECK_DESIGNS } from '../../../keel-core/test/helpers/entity-check-designs.js';
+import { INTERNAL_UNIQUE_DESIGNS } from '../../../keel-core/test/helpers/internal-unique-designs.js';
 
 const here = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.join(here, '..', '..', '..');
@@ -307,6 +308,16 @@ export const UNCOVERED_BRANCHES = [
   // La búsqueda de 2.32 (in, ne, search y sortable): catalog-search y su gemelo documental, los MISMOS que miden los otros
   // tres. Los ejecutan db-check y doc-check (FS-* y SO-*).
   ...SEARCH_DESIGNS.map((design) => ({
+    name: design.name,
+    from: design.from,
+    mutate(manifest, layers) {
+      manifest.service.name = design.name;
+      design.mutate(layers);
+    }
+  })),
+  // Una hija con una clave única GLOBAL (keel-core/gen/internal-unique.js), relacional y documental: `ExistsBy<Campo>` en
+  // el puerto de la raíz (corrida payment-dotnet, 2026-11-27). Los MISMOS diseños que los otros tres.
+  ...INTERNAL_UNIQUE_DESIGNS.map((design) => ({
     name: design.name,
     from: design.from,
     mutate(manifest, layers) {

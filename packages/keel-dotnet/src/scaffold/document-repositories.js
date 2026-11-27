@@ -29,7 +29,7 @@ import * as paymentSweepClaim from './payment-sweep-claim.js';
 import { documentGuardMethods, documentOwnTransactionHelper, documentReconciliationMethods, documentSweepClaimMethods } from './document-stores.js';
 import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { defaultSortConstant, entityFinders, finderParameters, fixedValue, hasFilter, methodName, needsOrdering, resultType, sortConstants } from './finders.js';
-import { adapterClass, portClass, repositoriesNamespace, isPaginated, naturalKeyFinder, occupantFinders, uniqueFieldFinders, emitsEvents, credentialFinders, replicaOwnTransaction, replicaDependencies, naturalKeyBatchFinder } from './repositories.js';
+import { adapterClass, portClass, repositoriesNamespace, isPaginated, naturalKeyFinder, occupantFinders, uniqueFieldFinders, internalUniqueFinders, emitsEvents, credentialFinders, replicaOwnTransaction, replicaDependencies, naturalKeyBatchFinder } from './repositories.js';
 import { sortablePaths } from '@keel-system/keel-core/gen/document';
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import { DOCUMENT_SCOPE_LINE, readScopeDocumentMethods, scopedLoadsOf } from './read-scope.js';
@@ -460,6 +460,13 @@ export function renderDocumentAdapter(model, entity) {
         var found = await Find(${live(keyFilter(model, entity, finder))}).FirstOrDefaultAsync(cancellationToken);
         return found is null ? null : ToDomain${entity.name}(found);
     }`);
+  }
+
+  for (const exists of internalUniqueFinders(model, entity)) {
+    usings.push(...exists.usings);
+    const value = exists.shadow ? `BsonValues.Of(${foldCall(exists.shadow)}(${exists.local}))` : writeScalar(exists.field, exists.local);
+    methods.push(`    public Task<bool> ${exists.name}(${exists.type} ${exists.local}, CancellationToken cancellationToken = default) =>
+        Find(new BsonDocument(${csString(exists.documentPath)}, ${value})).Limit(1).AnyAsync(cancellationToken);`);
   }
 
   const batch = naturalKeyBatchFinder(model, entity);

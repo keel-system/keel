@@ -24,7 +24,8 @@ import {
   keyShadow,
   LOCK_VERSION,
   claimsForEntity,
-  naturalKeyBatchReason
+  naturalKeyBatchReason,
+  internalUniqueKeys
 } from '@keel-system/keel-core/gen';
 import { idBatchReason } from '@keel-system/keel-core/gen/ref-targets';
 import { csFile, csLocal, csMember, csString, isNullable, located, namespaceOf, typeUsings, xmlDoc, entityPlace } from './render.js';
@@ -229,6 +230,29 @@ export function uniqueFieldFinders(model, entity) {
   return finders;
 }
 
+/**
+ * Las claves únicas GLOBALES de las hijas del agregado (`internalUniqueKeys` de keel-core): `ExistsBy<Campo>` en el
+ * puerto de la raíz, para comprobarlas antes de un efecto que la transacción no deshace, como `uniqueFieldFinders` con las
+ * de la raíz. Sin él, el agente lo escribía a mano en el puerto y en el adaptador generados (corrida payment-dotnet,
+ * `ExistsByRefundRequestId`). El mismo criterio que keel-spring, keel-nest y keel-go.
+ */
+export function internalUniqueFinders(model, entity) {
+  if (!entity.isAggregateRoot) return [];
+  const taken = new Set(
+    [naturalKeyFinder(model, entity), ...occupantFinders(model, entity), ...uniqueFieldFinders(model, entity)].filter(Boolean).map((finder) => finder.name)
+  );
+  return internalUniqueKeys(model, entity)
+    .map((key) => ({
+      ...key,
+      name: `ExistsBy${csMember(key.field.name)}`,
+      type: key.field.csType.replace(/\?$/, ''),
+      local: csLocal(key.field.name),
+      property: csMember(key.shadow?.name ?? key.field.name),
+      usings: typeUsings(model, [key.field.csType])
+    }))
+    .filter((finder) => !taken.has(finder.name));
+}
+
 const signature = (finder) => finder.params.map((p) => `${p.type} ${csLocal(p.name)}`).join(', ');
 
 /** El finder con el nombre local de cada parámetro, la forma que lee data-lifecycle.js. */
@@ -342,6 +366,18 @@ function renderPort(model, entity) {
         ],
         '    '
       )}    Task<${entity.name}?> ${unique.name}(${signature(unique)}, CancellationToken cancellationToken = default);`
+    );
+  }
+  for (const exists of internalUniqueFinders(model, entity)) {
+    usings.push(...exists.usings);
+    methods.push(
+      `${xmlDoc(
+        [
+          `¿Hay ya un ${exists.entity.name} con este ${exists.field.name}, en cualquier ${entity.name}? Es único en todos: para`,
+          'comprobarlo antes de un efecto que la transacción no deshace. La carrera la sigue arbitrando la constraint.'
+        ],
+        '    '
+      )}    Task<bool> ${exists.name}(${exists.type} ${exists.local}, CancellationToken cancellationToken = default);`
     );
   }
   for (const credential of credentialFinders(model, entity)) {
@@ -494,6 +530,16 @@ function renderAdapter(model, entity) {
     {
 ${locals.length > 0 ? `${locals.join('\n')}\n` : ''}        var found = await Graph().AsNoTracking().SingleOrDefaultAsync(r => ${conditions.join(' && ')}${alive}, cancellationToken);
         return found is null ? null : ToDomain(found);
+    }`);
+  }
+
+  for (const exists of internalUniqueFinders(model, entity)) {
+    usings.push(...exists.usings);
+    const value = exists.shadow ? `TextFold.${exists.shadow.accents ? 'FoldCaseAndAccents' : 'FoldCase'}(${exists.local})` : exists.local;
+    methods.push(`    public Task<bool> ${exists.name}(${exists.type} ${exists.local}, CancellationToken cancellationToken = default)
+    {
+${exists.shadow ? `        var folded = ${value};
+` : ''}        return db.Set<${rowClass(exists.entity.name)}>().AsNoTracking().AnyAsync(r => r.${exists.property} == ${exists.shadow ? 'folded' : exists.local}, cancellationToken);
     }`);
   }
 

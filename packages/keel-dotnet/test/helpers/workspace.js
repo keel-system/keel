@@ -17,6 +17,7 @@ import { DATA_LIFECYCLE_DESIGNS } from '../../../keel-core/test/helpers/data-lif
 import { HISTORY_DESIGNS } from '../../../keel-core/test/helpers/history-designs.js';
 import { BATCH_DESIGNS, BATCH_JOB_DESIGNS, BATCH_KEY_DESIGNS } from '../../../keel-core/test/helpers/batch-designs.js';
 import { ENTITY_CHECK_DESIGNS } from '../../../keel-core/test/helpers/entity-check-designs.js';
+import { INTERNAL_UNIQUE_DESIGNS } from '../../../keel-core/test/helpers/internal-unique-designs.js';
 
 const here = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.join(here, '..', '..', '..');
@@ -174,6 +175,16 @@ export const UNCOVERED_BRANCHES = [
       manifest.service.name = name;
       layers.persistence.consistency = { ...(layers.persistence.consistency ?? {}), optimisticLocking: 'declared' };
       layers.domain.entities[root].fields.lockVersion = { type: 'int', generated: true };
+    }
+  })),
+  // Una hija con una clave única GLOBAL (keel-core/gen/internal-unique.js), en los dos modelos: `ExistsBy<Campo>` en el
+  // puerto de la raíz (corrida payment-dotnet, 2026-11-27). Los MISMOS diseños que recorren los otros tres.
+  ...INTERNAL_UNIQUE_DESIGNS.map((design) => ({
+    name: design.name,
+    from: design.from,
+    mutate(manifest, layers, name) {
+      manifest.service.name = name;
+      design.mutate(layers);
     }
   })),
   // Los finders de las búsquedas (DSL 2.22) en las formas que catalog-extended no declara: los diseños de

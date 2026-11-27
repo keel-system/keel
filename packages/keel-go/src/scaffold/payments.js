@@ -701,7 +701,7 @@ func (n *PaymentNotices) Receive(ctx context.Context, notice domain.PaymentNotic
 // PaymentReconciliationSettings son los dos números del barrido de pagos (${sweep}): el silencio tolerado antes de
 // preguntar por un cobro que espera desenlace, que lo declara el diseño (${p.reconciliation.unansweredParameter
        ? `el parámetro ${p.reconciliation.unansweredParameter.name}, payments.reconciliation.unansweredAfter`
-       : 'payments.reconciliation.unansweredAfterSeconds; en local y test se acorta'}), y cuántos consulta una pasada (${PAYMENT_SWEEP_PARAMETERS.batchSize.key}): capacidad, no diseño.
+       : 'payments.reconciliation.unansweredAfterSeconds, el mismo en todos los perfiles'}), y cuántos consulta una pasada (${PAYMENT_SWEEP_PARAMETERS.batchSize.key}): capacidad, no diseño.
 type PaymentReconciliationSettings struct {
 	// UnansweredAfter es el silencio tolerado.
 	UnansweredAfter time.Duration

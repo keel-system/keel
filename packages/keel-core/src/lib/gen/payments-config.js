@@ -34,14 +34,26 @@ export function paymentsYaml(model, profile) {
     ...(model.payments.reconciliation.unansweredParameter
       ? [`    # El silencio tolerado es el parámetro ${model.payments.reconciliation.unansweredParameter.name} (en ${model.payments.reconciliation.unansweredParameter.unit}): sin clave propia (DSL 2.33).`]
       : [
-          '    # Lo decide el diseño (payments.reconciliation.unansweredAfterSeconds); en local y test se acorta',
-          '    # para que los escenarios del barrido no esperen un cuarto de hora.',
-          `    unanswered-after-seconds: ${isLocalish ? PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.local : envWithDefault(profile, PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.env, model.payments.reconciliation.unansweredAfterSeconds)}`
+          ...unansweredAfterLines(model, profile)
         ]),
     '    # Cuántos cobros consulta una pasada como máximo: capacidad, no diseño. Se ajusta con datos de producción.',
     `    batch-size: ${envWithDefault(profile, PAYMENT_SWEEP_PARAMETERS.batchSize.env, PAYMENT_SWEEP_PARAMETERS.batchSize.default)}`
   ];
   return `${lines.join('\n')}\n`;
+}
+
+/**
+ * El umbral del barrido de pagos sin parámetro enlazado: el valor del DISEÑO en todos los perfiles, movible por entorno
+ * fuera de local. Lo escriben también keel-spring (su `payments.yaml`) y los otros tres, así que vive aquí una sola vez.
+ * No se acorta en local ni en test: el arnés envejece la marca, y un umbral menor que el `read-timeout` de la pasarela
+ * hace que la consulta que no contesta deje la marca renovada ya vencida.
+ */
+export function unansweredAfterLines(model, profile) {
+  return [
+    '    # Lo decide el diseño (payments.reconciliation.unansweredAfterSeconds), también en local y test: el arnés',
+    '    # envejece la marca a mano en vez de esperar el plazo.',
+    `    unanswered-after-seconds: ${envWithDefault(profile, PAYMENT_SWEEP_PARAMETERS.unansweredAfterSeconds.env, model.payments.reconciliation.unansweredAfterSeconds)}`
+  ];
 }
 
 /**

@@ -31,7 +31,8 @@ import {
   parentColumnOf,
   partialUniqueIndexes,
   persistedMembers,
-  uniqueFields
+  uniqueFields,
+  internalUniqueKeys
 } from '@keel-system/keel-core/gen';
 import { SYSTEM_ACTOR } from '@keel-system/keel-core/gen/relational';
 import { listsUnscoped, repositoryRoots, resolvedByOf, usesPersistence, usesRelational } from '@keel-system/keel-core/gen/features';
@@ -204,6 +205,26 @@ export function keyFinders(model, entity) {
   return finders;
 }
 
+/**
+ * Las claves únicas GLOBALES de las hijas del agregado (`internalUniqueKeys` de keel-core): `ExistsBy<Campo>` en el puerto
+ * de la raíz, para comprobarlas antes de un efecto que la transacción no deshace, como los finders de los campos únicos de
+ * la raíz. Sin él, el agente lo escribía a mano en el puerto y el adaptador generados (corrida payment-dotnet,
+ * `ExistsByRefundRequestId`). El mismo criterio que keel-spring, keel-nest y keel-dotnet. La columna, la sombra plegada y
+ * el valor que se escribe salen del finder por clave de la HIJA (`keyFinder` sobre su tabla).
+ */
+export function internalUniqueFinders(model, entity) {
+  if (!entity.isAggregateRoot) return [];
+  const taken = new Set(keyFinders(model, entity).map((finder) => finder.name));
+  return internalUniqueKeys(model, entity)
+    .map((key) => {
+      const finder = keyFinder(model, key.entity, [key.field.name]);
+      if (!finder) return null;
+      const [param] = finder.params;
+      return { ...key, name: `ExistsBy${goExported(key.field.name)}`, param, local: localName(key.field.name), table: sq(model, key.entity.tableName) };
+    })
+    .filter((finder) => finder && !taken.has(finder.name));
+}
+
 /** El finder por la clave natural de una raíz, o null. */
 export function naturalKeyFinder(model, entity) {
   return keyFinder(model, entity, entity.naturalKey ?? []);
@@ -286,6 +307,12 @@ function portBody(model, entity) {
   }
   for (const finder of keyFinders(model, entity)) {
     method(`${finder.doc} found es false si no existe.`, `${finder.name}(ctx context.Context, ${finder.params.map((p) => `${localName(p.name)} ${p.type.replace(/^domain\./, '')}`).join(', ')}) (*${name}, bool, error)`);
+  }
+  for (const exists of internalUniqueFinders(model, entity)) {
+    method(
+      `dice si hay ya un ${exists.entity.name} con este ${exists.field.name}, en cualquier ${name}: es único en todos, para comprobarlo antes de un efecto que la transacción no deshace. La carrera la sigue arbitrando la constraint.`,
+      `${exists.name}(ctx context.Context, ${exists.local} ${exists.param.type.replace(/^domain\./, '')}) (bool, error)`
+    );
   }
   for (const credential of credentialFinders(model, entity)) {
     method(
@@ -737,6 +764,22 @@ func (r *${type}) ${goExported(inverse.finder)}(ctx context.Context, ${param} ${
       }
     }
     one(finder.name, `${finder.name}(ctx context.Context, ${finder.params.map((p) => `${localName(p.name)} ${p.type}`).join(', ')})`, `WHERE ${conditions.join(' AND ')}${alive}`, args.join(', '));
+  }
+  // Sobre la tabla de la HIJA: la clave es única en todas las raíces, así que la vida de la raíz no cuenta.
+  for (const exists of internalUniqueFinders(model, entity)) {
+    const [where] = exists.param.where;
+    parts.push(`// ${exists.name} implementa domain.${portName(entity)}.
+func (r *${type}) ${exists.name}(ctx context.Context, ${exists.local} ${exists.param.type}) (bool, error) {
+	q, err := r.tx.conn(ctx)
+	if err != nil {
+		return false, err
+	}
+	var exists bool
+	if err := q.QueryRowContext(ctx, ${goString(`SELECT EXISTS (SELECT 1 FROM ${exists.table} WHERE ${where.column} = ${ph(model, 1)})`)}, ${where.arg}).Scan(&exists); err != nil {
+		return false, translate(err)
+	}
+	return exists, nil
+}`);
   }
   for (const credential of credentialFinders(model, entity)) {
     const list = root.lists.find((candidate) => candidate.method === goExported(credential.field.name));

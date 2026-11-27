@@ -25,7 +25,7 @@ import { PRECONDITION_FAILED_TS, loadExpectingAdapter, loadsExpecting } from './
 import { domainMembers } from './entities.js';
 import { TEXT_FOLD_TS } from './persistence-entities.js';
 import { BSON_VALUES_TS } from './document-persistence.js';
-import { PERSISTENCE_ERRORS_TS, PAGE_TS, TRANSACTION_CONTEXT_TS, adapterClass, adapterPath, portClass, portPath, isPaginated, naturalKeyFinder, naturalKeyBatchFinder, occupantFinders, uniqueFieldFinders, constructorOf, emitsDomainEvents, credentialFinders } from './repositories.js';
+import { PERSISTENCE_ERRORS_TS, PAGE_TS, TRANSACTION_CONTEXT_TS, adapterClass, adapterPath, portClass, portPath, isPaginated, naturalKeyFinder, naturalKeyBatchFinder, occupantFinders, uniqueFieldFinders, internalUniqueFinders, constructorOf, emitsDomainEvents, credentialFinders } from './repositories.js';
 import { adapterArming } from './timer.js';
 import { documentGuardMethods, documentReconciliationMethods, documentSweepClaimMethods, storedState } from './document-stores.js';
 import { sweepPassImport } from './timer.js';
@@ -475,6 +475,16 @@ export function renderDocumentAdapter(model, entity) {
     methods.push(`  async ${finder.name}(${finder.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null> {
     const found = await this.collection.findOne(${filter}, { session: this.session });
     return found == null ? null : toDomain${entity.name}(found);
+  }`);
+  }
+
+  for (const exists of internalUniqueFinders(model, entity)) {
+    imports.push(...exists.imports);
+    if (exists.shadow) imports.push({ symbol: 'TextFold', from: TEXT_FOLD_TS });
+    // La ruta dentro del documento de la raíz (keel-core la deriva de documentShape): Mongo la recorre por el array.
+    const value = exists.shadow ? exists.value : writeScalar(exists.field, exists.param, use);
+    methods.push(`  async ${exists.name}(${exists.param}: ${exists.type}): Promise<boolean> {
+    return (await this.collection.countDocuments({ ${tsString(exists.documentPath)}: ${value} }, { session: this.session, limit: 1 })) > 0;
   }`);
   }
 

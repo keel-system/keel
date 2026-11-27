@@ -556,8 +556,7 @@ export const PAYMENT_RECONCILIATION_SETTINGS = Symbol('PAYMENT_RECONCILIATION_SE
    ? `con el parámetro ${model.payments.reconciliation.unansweredParameter.name} (payments.reconciliation.unansweredAfter, en
  * ${model.payments.reconciliation.unansweredParameter.unit}), y se lee de su propiedad: no hay otra clave para la misma espera.`
    : `(payments.reconciliation.unansweredAfterSeconds) y lo lee la configuración
- * (payments.reconciliation.unanswered-after-seconds); en local y test se acorta para que los escenarios del
- * barrido no esperen un cuarto de hora.`}
+ * (payments.reconciliation.unanswered-after-seconds), el mismo en todos los perfiles: el arnés envejece la marca.`}
  */
 export interface PaymentReconciliationSettings {
   readonly unansweredAfterSeconds: number;

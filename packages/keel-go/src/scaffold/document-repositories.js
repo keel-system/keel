@@ -36,7 +36,7 @@ import { claimDependencies, claimMethod, storedState } from './claim.js';
 import { deadlineDependencies, documentArming, sweepPassSignal } from './timer.js';
 import { documentReconciliationMethods, reconciliationDependencies } from './reconciliation-claim.js';
 import * as paymentSweepClaim from './payment-sweep-claim.js';
-import { credentialFinders, keyFinders, naturalKeyBatchFinder, naturalKeyFinder, portName, rankedEnums } from './repositories.js';
+import { credentialFinders, internalUniqueFinders, keyFinders, naturalKeyBatchFinder, naturalKeyFinder, portName, rankedEnums } from './repositories.js';
 import { BSON, MONGO_DRIVER, MONGO_OPTIONS } from './document-persistence.js';
 import { parameterAccessor } from './service-parameters.js';
 import { loadExpectingAdapter, loadsExpecting } from './conditional-writes.js';
@@ -452,6 +452,23 @@ func (r *${type}) ${goExported(inverse.finder)}(ctx context.Context, ${param} ${
     const encodes = pairs.some(([, value]) => value.includes('e.'));
     const prelude = encodes ? '\te := &encoder{}\n\tfilter := ' + filterLiteral(pairs) + '\n\tif e.err != nil {\n\t\treturn nil, false, e.err\n\t}\n' : '';
     one(finder.name, `${finder.name}(ctx context.Context, ${finder.params.map((p) => `${localName(p.name)} ${p.type}`).join(', ')})`, encodes ? 'filter' : filterLiteral(pairs), prelude);
+  }
+  // La clave única de una hija: la ruta dentro del documento de la raíz (keel-core la deriva de documentShape), que MongoDB
+  // recorre por el array embebido.
+  for (const exists of internalUniqueFinders(model, entity)) {
+    const value = exists.shadow ? `${exists.shadow.accents ? 'textfold.CaseAndAccents' : 'textfold.Case'}(${exists.local})` : writer(exists.field, exists.local, uses);
+    parts.push(`// ${exists.name} implementa domain.${portName(entity)}.
+func (r *${type}) ${exists.name}(ctx context.Context, ${exists.local} ${exists.param.type}) (bool, error) {
+	documents, err := r.tx.collection(${constant})
+	if err != nil {
+		return false, err
+	}
+	total, err := documents.CountDocuments(ctx, bson.D{{Key: ${goString(exists.documentPath)}, Value: ${value}}}, options.Count().SetLimit(1))
+	if err != nil {
+		return false, translate(err)
+	}
+	return total > 0, nil
+}`);
   }
   // resolvedBy: la credencial es UNO de los elementos del array; MongoDB casa un array por cualquiera de sus elementos.
   for (const credential of credentialFinders(model, entity)) {

@@ -60,6 +60,7 @@ import { scaffoldService } from '../src/scaffold/index.js';
 import { FINDER_DESIGNS } from '../../keel-core/test/helpers/finder-designs.js';
 import { CONDITIONAL_WRITE_DESIGNS } from '../../keel-core/test/helpers/conditional-write-designs.js';
 import { HISTORY_DESIGNS } from '../../keel-core/test/helpers/history-designs.js';
+import { INTERNAL_UNIQUE_DESIGNS } from '../../keel-core/test/helpers/internal-unique-designs.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(here, '..', '..', '..', 'fixtures', 'designs');
@@ -101,7 +102,7 @@ const paymentGatewayArg = args.find((arg) => arg.startsWith('--payment-gateway='
 // Un diseño DERIVADO por su nombre (los finders de las búsquedas, DSL 2.22, la escritura condicional, DSL 2.25, y el
 // historial, DSL 2.29): la
 // fixture de la que sale con su parche, el MISMO que miden los otros generadores (keel-core/test/helpers/).
-const derived = [...FINDER_DESIGNS, ...CONDITIONAL_WRITE_DESIGNS, ...HISTORY_DESIGNS].find((design) => design.name === fixture) ?? null;
+const derived = [...FINDER_DESIGNS, ...CONDITIONAL_WRITE_DESIGNS, ...HISTORY_DESIGNS, ...INTERNAL_UNIQUE_DESIGNS].find((design) => design.name === fixture) ?? null;
 const sourceFixture = derived?.from ?? fixture;
 const loadDesign = () => {
   const loaded = loadService(path.join(fixturesDir, sourceFixture));

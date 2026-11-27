@@ -5,7 +5,7 @@
 Los cobros en los estados que esperan a la pasarela —`pending`, `actionRequired` si hay acción del cliente, y el
 `inFlight` de cada acción de seguimiento— cuyo `awaitingSince` es anterior a
 `this.paymentReconciliation.staleBefore(now)` (el umbral es `payments.reconciliation.unanswered-after-seconds`, o el
-parámetro que enlaza `payments.reconciliation.unansweredAfter`; en local y test, 5 segundos), en un lote acotado
+parámetro que enlaza `payments.reconciliation.unansweredAfter`; el del diseño también en local y test: el arnés envejece la marca a mano), en un lote acotado
 —`this.paymentReconciliation.batchSize()`—, el que más lleva esperando primero.
 
 No los busques tú: build generó el reclamo en el repositorio del registro (G11 de la corrida payment de prueba-gelsa):

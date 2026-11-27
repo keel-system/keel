@@ -186,9 +186,11 @@ function awaitingStates(payments, entities) {
 export const PAYMENT_SWEEP_PARAMETERS = Object.freeze({
   unansweredAfterSeconds: Object.freeze({
     key: 'payments.reconciliation.unanswered-after-seconds',
-    env: 'PAYMENT_UNANSWERED_AFTER_SECONDS',
-    // En local y test se acorta, para que los escenarios del barrido no esperen el plazo real.
-    local: 5
+    env: 'PAYMENT_UNANSWERED_AFTER_SECONDS'
+    // Sin valor propio en local y test: el del diseño en todos los perfiles, como el de un `reconciledBy`. El arnés no
+    // espera el plazo, envejece la marca a mano; y acortarlo por debajo del `read-timeout` de la pasarela hacía que una
+    // consulta sin respuesta, que dura el timeout entero, dejara la marca renovada ya vencida al acabar: el ciclo
+    // siguiente volvía a preguntar (FL-REC-005 de payment-dotnet, 2026-11-27).
   }),
   batchSize: Object.freeze({
     key: 'payments.reconciliation.batch-size',

@@ -177,3 +177,26 @@ test('el modelo de pagos: el umbral enlazado se resuelve y payments.yaml no emit
   });
   assert.match(paymentsYaml(plain, 'production'), /unanswered-after-seconds: /);
 });
+
+// payment-dotnet (2026-11-27): en local y test el umbral salía a 5 s mientras el read-timeout de la pasarela es 10 s. La
+// consulta que no contesta dura el timeout entero, así que al acabar la marca renovada ya había vencido y el ciclo
+// siguiente volvía a preguntar (FL-REC-005). El arnés envejece la marca a mano: el umbral es el del diseño en todo perfil.
+test('el umbral del barrido de pagos es el del diseño en todos los perfiles y nunca menor que el read-timeout', () => {
+  const plain = model('payment-checkout', (manifest, layers) => {
+    delete manifest.parameters.sweepSilenceMinutes;
+    delete layers.payments.reconciliation.unansweredAfter;
+    layers.payments.reconciliation.unansweredAfterSeconds = 900;
+  });
+  const seconds = (text) => {
+    const match = /^\s*(\d+)s$/.exec(String(text).replace(/^\$\{[A-Z_]+:(.*)\}$/, '$1'));
+    return match ? Number(match[1]) : NaN;
+  };
+  for (const profile of ['local', 'test', 'develop', 'production']) {
+    const yaml = paymentsYaml(plain, profile);
+    const threshold = /unanswered-after-seconds: (?:\$\{PAYMENT_UNANSWERED_AFTER_SECONDS:)?(\d+)\}?/.exec(yaml);
+    assert.ok(threshold, `${profile}: sin umbral\n${yaml}`);
+    assert.equal(Number(threshold[1]), 900, profile);
+    const readTimeout = seconds(/read-timeout: (.*)/.exec(yaml)[1]);
+    assert.ok(Number(threshold[1]) > readTimeout, `${profile}: el umbral (${threshold[1]} s) no supera el read-timeout (${readTimeout} s)`);
+  }
+});

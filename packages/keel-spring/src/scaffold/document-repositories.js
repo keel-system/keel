@@ -22,6 +22,7 @@ import {
   naturalKeyFinder,
   occupantFinders,
   uniqueFieldFinders,
+  internalUniqueFinders,
   credentialFinders,
   naturalKeyBatchFinder,
   collectInternalEntities,
@@ -92,6 +93,13 @@ function renderMongoRepository(model, entity) {
     imports.add('java.util.Optional');
     for (const param of unique.params) for (const name of param.imports) imports.add(name);
     methods += `\n\n    Optional<${entity.name}Document> ${lifecycle.liveFinder(entity, unique.store.name)}(${unique.store.signature});`;
+  }
+  for (const exists of internalUniqueFinders(model, entity)) {
+    imports.add('org.springframework.data.mongodb.repository.Query');
+    if (!exists.shadow) for (const name of exists.imports) imports.add(name);
+    // La ruta dentro del documento de la raíz (keel-core la deriva de documentShape): Mongo la recorre por el array.
+    methods += `\n\n    @Query(value = "{ '${exists.documentPath}': ?0 }", exists = true)
+    boolean ${exists.name}(${exists.storeType} ${exists.param});`;
   }
   for (const credential of credentialFinders(model, entity)) {
     imports.add('java.util.Optional');
@@ -186,6 +194,14 @@ function renderAdapter(model, entity, paginated, batchLookup, listed = paginated
     methods.push(`    @Override
     public Optional<${entity.name}> ${unique.name}(${unique.signature}) {
         return ${repoField}.${lifecycle.liveFinder(entity, unique.store.name)}(${unique.store.args}).map(this::toDomain);
+    }`);
+  }
+  for (const exists of internalUniqueFinders(model, entity)) {
+    for (const name of exists.imports) imports.add(name);
+    if (exists.shadow) imports.add(textFoldImport(model));
+    methods.push(`    @Override
+    public boolean ${exists.name}(${exists.javaType} ${exists.param}) {
+        return ${repoField}.${exists.name}(${exists.storeArg});
     }`);
   }
   for (const credentialAdapter of credentialFinders(model, entity)) {

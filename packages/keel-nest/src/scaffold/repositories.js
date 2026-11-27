@@ -14,7 +14,7 @@
 //     guardar el grafo; cero filas es otra escritura que ganó (o un borrado), y sale como conflicto;
 //   · la AUDITORÍA: `created_*`/`updated_*` los estampa el adaptador, como el listener de Spring Data.
 
-import { persistedMembers, collectInternalEntities, orderingFieldOf, orderingTieBreakerOf, partialUniqueIndexes, LOCK_VERSION, keyShadow, naturalKeyBatchReason, uniqueFields } from '@keel-system/keel-core/gen';
+import { persistedMembers, collectInternalEntities, orderingFieldOf, orderingTieBreakerOf, partialUniqueIndexes, LOCK_VERSION, keyShadow, naturalKeyBatchReason, uniqueFields, internalUniqueKeys } from '@keel-system/keel-core/gen';
 import { pluralize } from '@keel-system/keel-core/gen/naming';
 import { idBatchReason, listedIdQueries } from '@keel-system/keel-core/gen/ref-targets';
 import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections';
@@ -118,6 +118,30 @@ export function uniqueFieldFinders(model, entity) {
     finders.push({ ...finder, field: field.name });
   }
   return finders;
+}
+
+/**
+ * Las claves únicas GLOBALES de las hijas del agregado (`internalUniqueKeys` de keel-core): `existsBy<Campo>` en el puerto
+ * de la raíz, para comprobarlas antes de un efecto que la transacción no deshace, como `uniqueFieldFinders` con las de la
+ * raíz. Sin él, el agente lo escribía a mano en el puerto y el adaptador generados (corrida payment-dotnet,
+ * `ExistsByRefundRequestId`). El mismo criterio que keel-spring, keel-dotnet y keel-go.
+ */
+export function internalUniqueFinders(model, entity) {
+  if (!entity.isAggregateRoot) return [];
+  const taken = new Set(
+    [naturalKeyFinder(model, entity), ...occupantFinders(model, entity), ...uniqueFieldFinders(model, entity)].filter(Boolean).map((finder) => finder.name)
+  );
+  return internalUniqueKeys(model, entity)
+    .map((key) => ({
+      ...key,
+      name: `existsBy${capitalize(key.field.name)}`,
+      param: key.field.name,
+      type: key.field.tsType.replace(/ \| null$/, ''),
+      imports: typeImportsOf(key.field),
+      property: key.shadow?.name ?? key.field.name,
+      value: key.shadow ? `TextFold.${key.shadow.accents ? 'foldCaseAndAccents' : 'foldCase'}(${key.field.name})` : key.field.name
+    }))
+    .filter((finder) => !taken.has(finder.name));
 }
 
 /**
@@ -350,6 +374,16 @@ function renderPort(model, entity) {
 ` + `  abstract ${unique.name}(${unique.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null>;`
     );
   }
+  for (const exists of internalUniqueFinders(model, entity)) {
+    imports.push(...exists.imports);
+    methods.push(
+      `  /**
+   * ¿Hay ya un ${exists.entity.name} con este ${exists.field.name}, en cualquier ${entity.name}? Es único en todos: para
+   * comprobarlo antes de un efecto que la transacción no deshace. La carrera la sigue arbitrando la constraint.
+   */
+` + `  abstract ${exists.name}(${exists.param}: ${exists.type}): Promise<boolean>;`
+    );
+  }
   for (const credential of credentialFinders(model, entity)) {
     methods.push(
       `  /**
@@ -503,6 +537,15 @@ function renderAdapter(model, entity) {
     methods.push(`  async ${occupant.name}(${occupant.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null> {
     const found = await this.manager.findOne(${ormClass(entity.name)}, ${liveOptions(`{ ${where.join(', ')} }`)});
     return found == null ? null : toDomain${entity.name}(found);
+  }`);
+  }
+
+  for (const exists of internalUniqueFinders(model, entity)) {
+    imports.push(...exists.imports, { symbol: ormClass(exists.entity.name), from: ormPath(exists.entity.name) });
+    if (exists.shadow) imports.push({ symbol: 'TextFold', from: TEXT_FOLD_TS });
+    // Sobre la tabla de la HIJA: la clave es única en todas las raíces, así que la vida de la raíz no cuenta.
+    methods.push(`  async ${exists.name}(${exists.param}: ${exists.type}): Promise<boolean> {
+    return this.manager.exists(${ormClass(exists.entity.name)}, { where: { ${exists.property === exists.value ? exists.property : `${exists.property}: ${exists.value}`} } });
   }`);
   }
 

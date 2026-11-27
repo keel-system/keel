@@ -24,6 +24,7 @@ import { isScopedRoot, readScopeJpaMethods, readScopePortMethods } from './read-
 import { listsUnscoped } from '@keel-system/keel-core/gen/features';
 import { partialUniqueIndexes } from './persistence-members.js';
 import { collectInternalEntities, keyShadow, naturalKeyBatchReason, naturalKeyIsIdentity, uniqueFields } from '@keel-system/keel-core/gen/relational';
+import { internalUniqueKeys } from '@keel-system/keel-core/gen/internal-unique';
 import * as lifecycle from './data-lifecycle.js';
 import * as history from './history.js';
 
@@ -268,6 +269,35 @@ export function uniqueFieldFinders(model, entity) {
   return finders;
 }
 
+/**
+ * Las claves únicas GLOBALES de las hijas del agregado (`internalUniqueKeys` de keel-core): `existsBy<Campo>` en el puerto
+ * de la raíz, para comprobarlas antes de un efecto que la transacción no deshace, como `uniqueFieldFinders` con las de la
+ * raíz. Sin él, el agente lo escribía a mano en el puerto y el adaptador generados (corrida payment-dotnet,
+ * `ExistsByRefundRequestId`). El mismo criterio que keel-nest, keel-dotnet y keel-go. En JPA es una consulta sobre la
+ * entidad de la hija y en MongoDB sobre la ruta del array embebido: ninguna depende del nombre de la colección.
+ */
+export function internalUniqueFinders(model, entity) {
+  if (!entity.isAggregateRoot) return [];
+  const taken = new Set(
+    [naturalKeyFinder(model, entity), ...occupantFinders(model, entity), ...uniqueFieldFinders(model, entity)].filter(Boolean).map((finder) => finder.name)
+  );
+  return internalUniqueKeys(model, entity)
+    .map((key) => {
+      const typeImport = domainTypeImport(model, key.field);
+      return {
+        ...key,
+        name: `existsBy${capitalize(key.field.name)}`,
+        param: key.field.name,
+        javaType: key.field.javaType,
+        imports: [...(key.field.imports ?? []), ...(typeImport ? [typeImport] : [])],
+        storeType: key.shadow ? 'String' : key.field.javaType,
+        storeArg: key.shadow ? `TextFold.${key.shadow.accents ? 'foldCaseAndAccents' : 'foldCase'}(${key.field.name})` : key.field.name,
+        property: key.shadow?.name ?? key.field.name
+      };
+    })
+    .filter((finder) => !taken.has(finder.name));
+}
+
 export function naturalKeyFinder(model, entity) {
   // Una clave que es la identidad no da finder propio: ya está `findById` en el puerto.
   if (naturalKeyIsIdentity(entity)) return null;
@@ -376,6 +406,14 @@ export function renderPort(model, entity, paginated, batchLookup) {
      * efecto que la transacción no deshace. La carrera la sigue arbitrando la constraint.
      */
     Optional<${entity.name}> ${unique.name}(${unique.signature});`);
+  }
+  for (const exists of internalUniqueFinders(model, entity)) {
+    for (const name of exists.imports) imports.add(name);
+    methods.push(`    /**
+     * ¿Hay ya un ${exists.entity.name} con este ${exists.field.name}, en cualquier ${entity.name}? Es único en todos: para
+     * comprobarlo antes de un efecto que la transacción no deshace. La carrera la sigue arbitrando la constraint.
+     */
+    boolean ${exists.name}(${exists.javaType} ${exists.param});`);
   }
   for (const credential of credentialFinders(model, entity)) {
     methods.push(`    /**
@@ -496,6 +534,15 @@ function renderJpaRepository(model, entity) {
     imports.add('java.util.Optional');
     for (const param of unique.params) for (const name of param.imports) imports.add(name);
     methods += `\n\n${graph}    Optional<${entity.name}Jpa> ${lifecycle.liveFinder(entity, unique.store.name)}(${unique.store.signature});`;
+  }
+  for (const exists of internalUniqueFinders(model, entity)) {
+    imports.add('org.springframework.data.jpa.repository.Query');
+    imports.add('org.springframework.data.repository.query.Param');
+    if (!exists.shadow) for (const name of exists.imports) imports.add(name);
+    // Sobre la entidad de la HIJA y no derivado por la colección de la raíz: la clave es única en todas las raíces, así
+    // que la vida de la raíz no cuenta (la constraint tampoco la mira).
+    methods += `\n\n    @Query("select case when count(c) > 0 then true else false end from ${exists.entity.name}Jpa c where c.${exists.property} = :${exists.param}")
+    boolean ${exists.name}(@Param("${exists.param}") ${exists.storeType} ${exists.param});`;
   }
   for (const credential of credentialFinders(model, entity)) {
     imports.add('java.util.Optional');
@@ -620,6 +667,14 @@ function renderAdapter(model, entity, paginated, batchLookup, listed = paginated
     methods.push(`    @Override
     public Optional<${entity.name}> ${unique.name}(${unique.signature}) {
         return ${jpaField}.${lifecycle.liveFinder(entity, unique.store.name)}(${unique.store.args}).map(this::toDomain);
+    }`);
+  }
+  for (const exists of internalUniqueFinders(model, entity)) {
+    for (const name of exists.imports) imports.add(name);
+    if (exists.shadow) imports.add(textFoldImport(model));
+    methods.push(`    @Override
+    public boolean ${exists.name}(${exists.javaType} ${exists.param}) {
+        return ${jpaField}.${exists.name}(${exists.storeArg});
     }`);
   }
   for (const credential of credentialFinders(model, entity)) {
