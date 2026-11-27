@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { loadService } from '@keel-system/keel-core';
 import { makeWorkspace, mountDesign, DOTNET_READY_DESIGN } from './helpers/workspace.js';
 import { planService } from '../src/scaffold/index.js';
+import { qualifyRootUsings, rootNameIsShadowed } from '../src/scaffold/render.js';
 import { PACKAGES } from '../src/lib/dotnet-stack.js';
 import { DOTNET_SDK_BAND, TARGET_FRAMEWORK } from '../src/lib/assets.js';
 
@@ -171,4 +172,30 @@ test('el contrato del cable lo instala Program.cs en las opciones JSON de la API
   assert.match(wire, /UnsafeRelaxedJsonEscaping/);
   // Vive en Application: System.Text.Json es de la biblioteca base, no de ASP.NET Core.
   assert.doesNotMatch(wire, /Microsoft\.AspNetCore/);
+});
+
+// Un servicio cuyo nombre es también el de su agregado o el de una carpeta de capa (`payment`: `Payment.Domain.Aggregate.Payment`
+// y `Payment.Application.Payment`) tapa el namespace raíz, y `using Payment.Domain.X;` no compila ni dentro del namespace
+// (CS0246/CS0426; payment-dotnet, 2026-11). Los `using` del propio servicio se anclan con `global::`, y solo entonces.
+test('con el nombre raíz tapado por una entidad o una carpeta, los using del servicio llevan global::', () => {
+  const source = (ns) => `namespace ${ns};\n\nusing Payment.Domain.Entity;\nusing System.Text;\n\npublic sealed class X { }\n`;
+  const shadowedByEntity = [
+    { path: 'src/Payment.Domain/Aggregate/Payment.cs', content: source('Payment.Domain.Aggregate') },
+    { path: 'src/Payment.Application/UseCases/H.cs', content: source('Payment.Application.UseCases') }
+  ];
+  const shadowedByFolder = [{ path: 'src/Payment.Application/Payment/Notices.cs', content: source('Payment.Application.Payment') }];
+  for (const files of [shadowedByEntity, shadowedByFolder]) {
+    assert.equal(rootNameIsShadowed('Payment', files), true);
+    for (const { content } of qualifyRootUsings('Payment', files)) {
+      assert.match(content, /^using global::Payment\.Domain\.Entity;$/m);
+      assert.match(content, /^using System\.Text;$/m, 'lo ajeno al servicio no se toca');
+    }
+  }
+  const clean = [{ path: 'src/Payment.Domain/Aggregate/Charge.cs', content: source('Payment.Domain.Aggregate') }];
+  assert.equal(rootNameIsShadowed('Payment', clean), false);
+  assert.equal(qualifyRootUsings('Payment', clean), clean, 'sin choque no se reescribe nada');
+});
+
+test('ninguna fixture tiene el nombre raíz tapado: sus using no cambian', () => {
+  assert.equal(rootNameIsShadowed(model.service.rootNamespace, files), false);
 });

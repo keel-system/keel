@@ -199,6 +199,29 @@ export function typeLocations(model) {
   return map;
 }
 
+/**
+ * ¿El nombre raíz del servicio coincide con un nombre que build emite DENTRO de él? Una entidad (`Payment` en el servicio
+ * `payment`) o una carpeta (`Application/Payment` de la capa `payments`) llamadas como el namespace raíz lo TAPAN: dentro de
+ * `namespace Payment.Domain.Aggregate;` la clase `Payment` se encuentra antes que el namespace, y `using Payment.Domain.X;`
+ * no compila ni dentro del namespace. Se deriva de los archivos y no del modelo: lo que se emite es lo que tapa.
+ */
+export function rootNameIsShadowed(rootNamespace, files) {
+  for (const { path } of files) {
+    if (!path.endsWith('.cs')) continue;
+    const segments = path.split('/');
+    const folders = segments.slice(2, -1);
+    if (folders.includes(rootNamespace) || segments.at(-1) === `${rootNamespace}.cs`) return true;
+  }
+  return false;
+}
+
+/** Con el nombre raíz tapado, los `using` del propio servicio se anclan con `global::`; si no, quedan como siempre. */
+export function qualifyRootUsings(rootNamespace, files) {
+  if (!rootNameIsShadowed(rootNamespace, files)) return files;
+  const own = new RegExp(`^using (${rootNamespace}\\.)`, 'gm');
+  return files.map((file) => (file.path.endsWith('.cs') ? { ...file, content: file.content.replace(own, 'using global::$1') } : file));
+}
+
 /** Los `using` que necesita el tipo de un campo: los del framework (proyección) y el del tipo generado. */
 export function fieldUsings(model, field) {
   const usings = [...(field.usings ?? [])];

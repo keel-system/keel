@@ -92,6 +92,7 @@ import * as integrationTests from './integration-tests.js';
 import * as schemaBaseline from './schema-baseline.js';
 import * as readme from './readme.js';
 import * as generatorDocs from './generator-docs.js';
+import { qualifyRootUsings } from './render.js';
 
 // Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara. El primero es el contrato formal
 // de la API, derivado del modelo neutral (el mismo en los tres generadores), salvo que el workspace traiga el de
@@ -139,7 +140,7 @@ export function planService({ manifest, layers, fixtures = null, workspace, stac
   model.docs = listKeelDocs(workspace, model.service.name);
   // El estado de partida de los escenarios (specs/<servicio>/fixtures.yaml): lo carga infra/reset-db.sh.
   model.fixtures = fixtures;
-  return { model, stack: resolved, files: GENERATORS.flatMap((generator) => generator.generate(model)) };
+  return { model, stack: resolved, files: qualifyRootUsings(model.service.rootNamespace, GENERATORS.flatMap((generator) => generator.generate(model))) };
 }
 
 export function scaffoldService({
