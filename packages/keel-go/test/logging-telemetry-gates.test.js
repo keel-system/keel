@@ -19,8 +19,9 @@ import { tmpDir } from './helpers/tmp.js';
 const GATES = ['infra/check-logging.sh', 'infra/check-telemetry.sh'];
 const fixtures = fs.readdirSync(FIXTURES_DIR).filter((name) => fs.existsSync(path.join(FIXTURES_DIR, name, 'service.keel.yaml')));
 
-function materialize(name, stack = { telemetry: 'otel' }) {
+function materialize(name, stack = { telemetry: 'otel' }, mutate = null) {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
+  mutate?.(layers);
   const dir = tmpDir(`keel-go-gates-${name}-`);
   const broker = layers.messaging ? { broker: 'rabbitmq' } : {};
   for (const file of planService({ manifest, layers, workspace: FIXTURES_DIR, stack: { ...broker, ...stack } }).files) {
@@ -45,6 +46,19 @@ test('los dos gates nacen verdes sobre el árbol recién generado de toda fixtur
       assert.match(output, / OK$/m, `${name} ${script}`);
     }
   }
+});
+
+// payment-go (2026-11-27): el aviso de la pasarela rechazado logueaba `invalid.Reason`, y un diseño con un campo `reason`
+// personal (la devolución de payment) dejaba el gate de logs en rojo sobre código generado. Ahora loguea el error, como
+// los otros tres generadores.
+test('un campo personal llamado reason no tumba el gate de logs sobre el aviso de la pasarela', () => {
+  const dir = materialize('payment-checkout', { telemetry: 'none', paymentGateway: 'stripe' }, (layers) => {
+    layers.domain.entities.Payment.fields.reason = { type: 'string', personal: true, constraints: { maxLength: 200 } };
+  });
+  const { status, output } = run(dir, 'infra/check-logging.sh');
+  assert.match(output, /\[personal\]|logging +OK/, 'la regla personal no se emitió');
+  assert.equal(status, 0, output);
+  assert.match(fs.readFileSync(path.join(dir, 'internal/httpapi/payment_notice.go'), 'utf8'), /"error", invalid\.Error\(\)/);
 });
 
 test('los gates nacen verdes con cada broker', () => {

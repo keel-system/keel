@@ -820,7 +820,7 @@ func (a *api) receivePaymentNotice(w http.ResponseWriter, r *http.Request) error
 	err = a.useCases.PaymentNotices.Receive(r.Context(), domain.NewPaymentNotice(string(body), r.Header, r.URL.Query()))
 	var invalid *domain.InvalidPaymentNoticeError
 	if errors.As(err, &invalid) {
-		a.logger.WarnContext(r.Context(), "aviso de la pasarela rechazado", "reason", invalid.Reason)
+		a.logger.WarnContext(r.Context(), "aviso de la pasarela rechazado", "error", invalid.Error())
 		w.WriteHeader(http.StatusUnauthorized)
 		return nil
 	}
