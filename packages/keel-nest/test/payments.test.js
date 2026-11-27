@@ -395,11 +395,13 @@ test('el lector JSON deja pasar el cuerpo del aviso sin leerlo, y solo el de esa
 test('lo que llama a la pasarela se despacha SIN transacción abarcadora, como en keel-spring', () => {
   const { files, model } = plan('stripe');
   const controllers = files.filter((file) => file.path.startsWith('src/infrastructure/rest/controllers/')).map((file) => file.content).join('\n');
-  for (const name of [model.payments.charge.operation, model.payments.capture.operation, model.payments.refund.operation, model.payments.savePaymentMethod.operation]) {
+  for (const name of [model.payments.charge.operation, model.payments.capture.operation, model.payments.refund.operation]) {
     const messageClass = model.services.flatMap((service) => service.operations).find((operation) => operation.name === name).messageClass;
     assert.match(controllers, new RegExp(`this\\.mediator\\.dispatchWithoutTransaction\\(read${messageClass}\\(`), name);
   }
   assert.match(controllers, /this\.mediator\.dispatch\(readGetPaymentQuery\(/, 'una consulta sigue con su transacción');
+  const saveClass = model.services.flatMap((service) => service.operations).find((operation) => operation.name === model.payments.savePaymentMethod.operation).messageClass;
+  assert.match(controllers, new RegExp(`this\\.mediator\\.dispatch\\(read${saveClass}\\(`), 'guardar un medio va con su transacción');
   const scheduler = files.find((file) => file.path.endsWith('payment-scheduler.ts')).content;
   assert.match(scheduler, /dispatchWithoutTransaction\(new SweepPendingPaymentsCommand\(\)\)/);
 });

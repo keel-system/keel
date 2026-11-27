@@ -115,10 +115,14 @@ test('lo que llama a la pasarela se despacha SIN transacción: los endpoints y e
   const { model, files } = plan('stripe');
   const endpoints = files.filter((file) => file.path.startsWith('internal/httpapi/') && !file.path.endsWith('_test.go')).map((file) => file.content).join('\n');
   const p = model.payments;
-  for (const operation of [p.charge.operation, p.capture.operation, p.void.operation, p.refund.operation, p.savePaymentMethod.operation]) {
+  for (const operation of [p.charge.operation, p.capture.operation, p.void.operation, p.refund.operation]) {
     const field = operation[0].toUpperCase() + operation.slice(1);
     assert.match(endpoints, new RegExp(`a\\.useCases\\.${field}\\.Handle\\(application\\.WithoutTransaction\\(r\\.Context\\(\\)\\)`), operation);
   }
+  // Guardar un medio llama a la pasarela pero no deja estado pendiente: va con su transacción y un fallo libera la clave.
+  const save = p.savePaymentMethod.operation[0].toUpperCase() + p.savePaymentMethod.operation.slice(1);
+  assert.match(endpoints, new RegExp(`a\\.useCases\\.${save}\\.Handle\\(r\\.Context\\(\\)`), 'guardar un medio va con su transacción');
+  assert.doesNotMatch(endpoints, new RegExp(`a\\.useCases\\.${save}\\.Handle\\(application\\.WithoutTransaction`),'guardar un medio no va sin transacción');
   const scheduler = files.filter((file) => file.path.startsWith('internal/infrastructure/scheduler/')).map((file) => file.content).join('\n');
   assert.match(scheduler, /uc\.SweepPendingPayments\.Handle\(application\.WithoutTransaction\(ctx\)/);
   // El aplicador devuelve la transacción a cada desenlace.

@@ -138,10 +138,11 @@ test('lo que llama a la pasarela se despacha SIN transacción abarcadora, como e
     assert.ok(start >= 0, name);
     return endpoints.slice(start, endpoints.indexOf('\n    }', start));
   };
-  for (const name of [model.payments.charge.operation, model.payments.capture.operation, model.payments.refund.operation, model.payments.savePaymentMethod.operation]) {
+  for (const name of [model.payments.charge.operation, model.payments.capture.operation, model.payments.refund.operation]) {
     assert.match(endpoint(name), /Mediator\(http\)\.DispatchWithoutTransaction\(message, /, name);
   }
   assert.match(endpoint('getPayment'), /Mediator\(http\)\.Dispatch\(message, /, 'una consulta sigue con su transacción');
+  assert.match(endpoint(model.payments.savePaymentMethod.operation), /Mediator\(http\)\.Dispatch\(message, /, 'guardar un medio no deja estado pendiente: va con su transacción y un fallo libera la clave');
   assert.match(content(files, '/Scheduling/PaymentScheduler.cs'), /DispatchWithoutTransaction\(new SweepPendingPaymentsCommand\(\), /);
 });
 
