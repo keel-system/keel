@@ -2158,7 +2158,19 @@ function httpStubSection(model) {
      * que el generador lista en {@code retry-exceptions} para {@code connection}.
      */
     protected static void stubConnectionFault(String method, String pathPattern) {
-        stubMapping(method, pathPattern, stubFaultBody(), null, null, null);
+        stubMapping(method, pathPattern, stubFaultBody("CONNECTION_RESET_BY_PEER"), null, null, null);
+    }
+
+    /**
+     * El proveedor empieza a contestar y la respuesta se corta a mitad: un 200 y después basura antes de cerrar.
+     *
+     * <p>Para el servidor es lo mismo que {@link #stubConnectionFault} (la acción queda en duda), con una diferencia que
+     * importa al CONTAR peticiones: el cliente HTTP del JDK reintenta un GET una vez cuando la conexión del pool aparece
+     * cerrada antes de recibir nada, así que con un corte antes de responder el proveedor ve DOS consultas donde el
+     * servidor hizo una (corrida payment-spring, FL-REC-005). Con la respuesta empezada no hay reintento.
+     */
+    protected static void stubBrokenResponse(String method, String pathPattern) {
+        stubMapping(method, pathPattern, stubFaultBody("MALFORMED_RESPONSE_CHUNK"), null, null, null);
     }
 
     /**
@@ -2222,7 +2234,7 @@ function httpStubSection(model) {
 
         /** Corta la conexión antes de responder. */
         public static StubResponse connectionFault() {
-            return new StubResponse(stubFaultBody());
+            return new StubResponse(stubFaultBody("CONNECTION_RESET_BY_PEER"));
         }
     }
 
@@ -2297,10 +2309,9 @@ function httpStubSection(model) {
                 .formatted(status, delay, jsonBody == null ? "\\"\\"" : quote(jsonBody));
     }
 
-    /** El cuerpo de un corte de conexión, que no es una respuesta HTTP. */
-    private static String stubFaultBody() {
-        return """
-                {"fault": "CONNECTION_RESET_BY_PEER"}""";
+    /** El cuerpo de un corte de conexión, que no es una respuesta HTTP: el fault de WireMock que lo produce. */
+    private static String stubFaultBody(String fault) {
+        return "{\\"fault\\": \\"" + fault + "\\"}";
     }
 
     /**

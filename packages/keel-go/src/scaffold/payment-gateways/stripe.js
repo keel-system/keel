@@ -8,7 +8,7 @@
 //   * Stripe-Signature: t=…,v1=…[,v1=…]: HMAC-SHA256 de `${t}.${cuerpo}`; solo cuenta v1, puede haber varias durante la
 //     rotación del secreto, y se compara en tiempo constante (hmac.Equal).
 
-import { gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
+import { REFUND_OUTCOME_CASES, gatewayTranslation, refundTranslation, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { goString } from '../../lib/go-source.js';
 import { DEFAULT_SAVED_CARD, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { alignRows } from '../../lib/go-source.js';
@@ -22,6 +22,9 @@ const refundReferenceParam = (p) => (p.refund.reference ? ', refundReference' : 
 
 
 const TRANSLATION = gatewayTranslation('stripe');
+// Cómo se localiza una devolución en Stripe: por su metadata (keel-core: REFUND_TRANSLATIONS).
+const REFUND = refundTranslation('stripe');
+const goCases = (values) => values.map(goString).join(', ');
 
 export function generate(model, infra) {
   return [
@@ -33,6 +36,50 @@ export function generate(model, infra) {
       })
     }
   ];
+}
+
+
+// Los casos RF-* de keel-core (corrida payment-spring) como prueba emitida: importes de keel-core en unidades menores, la
+// moneda de las pruebas (EUR) tiene dos decimales. gofmt alinea los tipos de los campos del struct de la tabla.
+function refundTable(fields, rows) {
+  const names = fields.join(', ');
+  return { header: `\t\t${names} string\n\t\t${'status'.padEnd(names.length)} domain.GatewayStatus`, rows };
+}
+const goStatus = (expected) => (expected.status === 'REFUNDED' ? 'domain.GatewayRefunded' : expected.status === 'PENDING' ? 'domain.GatewayPending' : 'domain.GatewayCaptured');
+const goMajor = (minor) => (minor / 100).toFixed(2);
+const goRaw = (value) => `\`${JSON.stringify(value)}\``;
+
+function refundTestsGo() {
+  const table = refundTable(['name', 'body', 'refundReference', 'already', 'amount'], REFUND_OUTCOME_CASES.filter((c) => c.gateway === 'stripe').map((c) => {
+    const body = { object: 'list', has_more: false, data: c.refunds.map((r, i) => ({ id: `re_${i}`, object: 'refund', status: r.status, amount: r.amount, currency: 'eur', metadata: { [REFUND.referenceKey]: r.reference } })) };
+    return `\t\t{name: ${goString(c.id)}, body: ${goRaw(body)}, refundReference: ${goString(c.refundReference)}, already: ${goString(goMajor(c.alreadyRefunded))}, amount: ${goString(c.expected.status === 'REFUNDED' ? goMajor(c.expected.amount) : '')}, status: ${goStatus(c.expected)}},`;
+  }));
+  return `// TestTheRefundInFlightIsFoundByItsReference recorre los casos RF-* de keel-core (corrida payment-spring): la devolución en
+// vuelo se busca por su referencia, y su importe es el de ESA devolución, nunca el acumulado devuelto sobre el cobro.
+func TestTheRefundInFlightIsFoundByItsReference(t *testing.T) {
+	cases := []struct {
+${table.header}
+	}{
+${table.rows.join('\n')}
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			gateway, _, _, _ := fakeStripe(t, http.StatusOK, c.body)
+			outcome, err := gateway.RefundStatus(t.Context(), "ch-r", c.refundReference, "pi_r", wire.MustDecimal(c.already))
+			if err != nil {
+				t.Fatalf("RefundStatus = %v", err)
+			}
+			if outcome.Status != c.status {
+				t.Fatalf("RefundStatus = %s, quiero %s", outcome.Status, c.status)
+			}
+			if c.amount != "" && (outcome.RefundedAmount == nil || outcome.RefundedAmount.String() != c.amount) {
+				t.Errorf("lo devuelto es %v, quiero %s (el de ESTA devolución, no el acumulado)", outcome.RefundedAmount, c.amount)
+			}
+		})
+	}
+}
+
+`;
 }
 
 function adapterBody(model) {
@@ -108,7 +155,9 @@ func (g *stripeGateway) VoidAuthorization(ctx context.Context, reference, gatewa
     methods.push(`// Refund implementa domain.PaymentGateway.
 func (g *stripeGateway) Refund(ctx context.Context, reference${refundReferenceParam(p)}, gatewayPaymentID string${partialRefund ? ', amount *wire.Decimal, currency string' : ''}) (domain.GatewayOutcome, error) {
 	form := &formBody{}
-	form.add("payment_intent", gatewayPaymentID)${partialRefund ? amountLine('amount') : ''}
+	form.add("payment_intent", gatewayPaymentID)${partialRefund ? amountLine('amount') : ''}${tracksRefundInFlight(p) ? `
+	// La referencia de ESTA devolución viaja en su metadata: es lo que permite encontrarla si la respuesta se pierde.
+	form.add("metadata["+stripeRefundReferenceKey+"]", refundReference)` : ''}
 	answer, err := g.send(ctx, "refund", http.MethodPost, "/v1/refunds", form, ${refundKeyCall(p)})
 	if err != nil {
 		return domain.GatewayOutcome{}, err
@@ -124,16 +173,36 @@ func (g *stripeGateway) Refund(ctx context.Context, reference${refundReferencePa
 	if err != nil {
 		return domain.GatewayOutcome{}, err
 	}
-	switch textOf(refund["status"]) {
-	case "succeeded":
-		refunded, err := fromMinorUnits(minorOf(refund["amount"]), strings.ToUpper(textOf(refund["currency"])))
-		if err != nil {
-			return domain.GatewayOutcome{}, err
-		}
-		return domain.RefundedOutcome(reference, gatewayPaymentID, refunded), nil
-	case "pending", "requires_action":
-		return domain.NewGatewayOutcome(domain.GatewayPending, reference, gatewayPaymentID), nil
+	return stripeRefundOutcome(refund, reference, gatewayPaymentID)
+}`);
+  }
+  if (tracksRefundInFlight(p)) {
+    methods.push(`// RefundStatus implementa domain.PaymentGateway: la devolución en vuelo se busca entre las del cobro por la referencia que
+// lleva en su metadata. La consulta del cobro solo sabe el acumulado devuelto (latest_charge.amount_refunded), que no es el
+// desenlace de ESTA devolución; Stripe guarda la referencia, así que lo ya devuelto no hace falta aquí.
+func (g *stripeGateway) RefundStatus(ctx context.Context, reference, refundReference, gatewayPaymentID string, _ wire.Decimal) (domain.GatewayOutcome, error) {
+	query := &formBody{}
+	query.add("payment_intent", gatewayPaymentID)
+	query.add("limit", "100")
+	answer, err := g.send(ctx, "refundStatus", http.MethodGet, "/v1/refunds?"+query.encode(), nil, "")
+	if err != nil {
+		return domain.GatewayOutcome{}, err
 	}
+	if answer.status >= 400 {
+		return domain.GatewayOutcome{}, unavailableAnswer("Stripe", "refundStatus", answer)
+	}
+	body, err := decodeObject(answer.text)
+	if err != nil {
+		return domain.GatewayOutcome{}, err
+	}
+	refunds, _ := body["data"].([]any)
+	for _, item := range refunds {
+		refund := objectOf(item)
+		if textOf(objectOf(refund["metadata"])[stripeRefundReferenceKey]) == refundReference {
+			return stripeRefundOutcome(refund, reference, gatewayPaymentID)
+		}
+	}
+	// No está: la devolución no llegó a la pasarela, y el cobro sigue como estaba.
 	return domain.NewGatewayOutcome(domain.GatewayCaptured, reference, gatewayPaymentID), nil
 }`);
   }
@@ -204,7 +273,11 @@ func (g *stripeGateway) SavePaymentMethod(ctx context.Context, token, payerRefer
 // stripeReferenceKey es la clave de metadata con la que viaja la referencia del cobro; es lo que permite buscarlo.
 const stripeReferenceKey = ${goString(TRANSLATION.referenceKey)}
 
-// stripeIdempotencyHeader es la cabecera con la que Stripe recibe la clave de idempotencia.
+${tracksRefundInFlight(p) ? `// stripeRefundReferenceKey es la clave de metadata con la que viaja la referencia de UNA devolución; es lo que permite
+// encontrarla.
+const stripeRefundReferenceKey = ${goString(REFUND.referenceKey)}
+
+` : ''}// stripeIdempotencyHeader es la cabecera con la que Stripe recibe la clave de idempotencia.
 const stripeIdempotencyHeader = ${goString(p.gateway.idempotencyHeader)}
 
 // stripeDeclines traduce el decline_code (o el code si no hay) al motivo neutro (keel-core/gen/payment-gateways.js); lo que no
@@ -271,18 +344,37 @@ func (g *stripeGateway) followUp(ctx context.Context, path string, form *formBod
 	return stripeOutcome(body, reference)
 }
 
-// stripeOutcome traduce un PaymentIntent al desenlace neutro.
+${p.refund ? `// stripeRefundOutcome traduce un Refund al desenlace neutro: su importe, nunca el acumulado devuelto sobre el cobro.
+func stripeRefundOutcome(refund jsonObject, reference, gatewayPaymentID string) (domain.GatewayOutcome, error) {
+	switch textOf(refund["status"]) {
+	case ${goCases(REFUND.succeeded)}:
+		refunded, err := fromMinorUnits(minorOf(refund["amount"]), strings.ToUpper(textOf(refund["currency"])))
+		if err != nil {
+			return domain.GatewayOutcome{}, err
+		}
+		return domain.RefundedOutcome(reference, gatewayPaymentID, refunded), nil
+	case ${goCases(REFUND.pending)}:
+		return domain.NewGatewayOutcome(domain.GatewayPending, reference, gatewayPaymentID), nil
+	}
+	return domain.NewGatewayOutcome(domain.GatewayCaptured, reference, gatewayPaymentID), nil
+}
+
+` : ''}// stripeOutcome traduce un PaymentIntent al desenlace neutro.
 func stripeOutcome(intent jsonObject, reference string) (domain.GatewayOutcome, error) {
 	id := textOf(intent["id"])
 	ref := cmp.Or(textOf(objectOf(intent["metadata"])[stripeReferenceKey]), reference)
-	if charge := objectOf(intent["latest_charge"]); minorOf(charge["amount_refunded"]) > 0 {
+${tracksRefundInFlight(p)
+  ? `	// Sin deducir la devolución del acumulado (latest_charge.amount_refunded): con varias devoluciones no dice cuál terminó
+	// ni si la que está en vuelo llegó. La devolución en vuelo la contesta RefundStatus.
+`
+  : `	if charge := objectOf(intent["latest_charge"]); minorOf(charge["amount_refunded"]) > 0 {
 		refunded, err := fromMinorUnits(minorOf(charge["amount_refunded"]), strings.ToUpper(textOf(charge["currency"])))
 		if err != nil {
 			return domain.GatewayOutcome{}, err
 		}
 		return domain.RefundedOutcome(ref, id, refunded), nil
 	}
-	switch textOf(intent["status"]) {
+`}	switch textOf(intent["status"]) {
 	case "requires_capture":
 		return domain.NewGatewayOutcome(domain.GatewayAuthorized, ref, id), nil
 	case "succeeded":
@@ -495,7 +587,7 @@ func TestAuthorizeSendsTheKeyOfTheReferenceAndTheMinorUnits(t *testing.T) {
 	}
 }
 
-func TestAServerErrorLeavesTheChargeInDoubtAndIsNotRetried(t *testing.T) {
+${tracksRefundInFlight(model.payments) ? refundTestsGo() : ''}func TestAServerErrorLeavesTheChargeInDoubtAndIsNotRetried(t *testing.T) {
 	gateway, calls, _, _ := fakeStripe(t, http.StatusServiceUnavailable, \`{}\`)
 	_, err := gateway.Authorize(t.Context(), charge(t, "12.50"))
 	var unavailable *domain.PaymentGatewayUnavailableError

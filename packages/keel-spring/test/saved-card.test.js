@@ -72,10 +72,13 @@ test('con cardDetails el handler sabe dónde va el resumen, y keel-spring lo gen
 
 // El resto de G12: las primitivas que la corrida payment escribió a mano en sus flujos.
 for (const gateway of ['stripe', 'mercadopago']) {
-  test(`${gateway}: el arnés da la devolución por un total, la anulación fallida y la respuesta retenida`, () => {
+  test(`${gateway}: el arnés da la devolución en vuelo con lo devuelto antes, la anulación fallida y la respuesta retenida`, () => {
     const flow = plan(gateway).read('AbstractFlowIT.java');
-    assert.match(flow, /protected static void gatewayReportsRefunded\(String reference, BigDecimal refundedTotal\) \{\n\s+gatewayReportsObject\(reference, gatewayObject\(reference, "REFUNDED", null, refundedTotal\)\);/);
-    assert.match(flow, /if \("REFUNDED"\.equals\(status\)\) \{\n\s+gatewayReportsRefunded\(reference, new BigDecimal\("10\.00"\)\);/);
+    // payment-checkout sigue cada devolución (refund.reference): el arnés programa UNA devolución, no el total del cobro
+    // (corrida payment-spring), y la consulta del cobro ya no se programa como devuelta.
+    assert.match(flow, /protected static void gatewayReportsRefund\(String reference, String refundReference, String outcome, BigDecimal amount,\n\s+BigDecimal previouslyRefunded\) \{/);
+    assert.doesNotMatch(flow, /gatewayReportsRefunded\(/);
+    assert.match(flow, /if \("REFUNDED"\.equals\(status\)\) \{\n[^}]*throw new IllegalArgumentException\("gatewayReports: una devolución se programa con gatewayReportsRefund/);
     assert.match(flow, /protected static void gatewayCancelFails\(String reference, String reason\) \{\n\s+gatewayStubPath\(GatewayCall\.CANCEL, gatewayIdFor\(reference\), null, 200,\n\s+gatewayObject\(reference, "FAILED", GATEWAY_DECLINES\.get\(reason\), null\)\);/);
     assert.match(flow, /protected static void gatewayAnswersLate\(GatewayCall call, String reference, String status, int delayMs\)/);
     assert.match(flow, /quote\("fixedDelayMilliseconds"\) \+ ": " \+ delayMs/);

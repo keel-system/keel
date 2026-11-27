@@ -12,7 +12,7 @@
 // flujos siguen importando solo de `flow.ts`.
 
 import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
-import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
+import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, gatewayTranslation, refundTranslation, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { tsString } from './render.js';
 import { paymentTestCurrency } from '@keel-system/keel-core/gen/payments-config';
 
@@ -22,8 +22,16 @@ export function usesPaymentHarness(model) {
   return Boolean(model.payments);
 }
 
-/** Los nombres que flow.ts reexporta. */
-export const PAYMENT_HARNESS_EXPORTS = [
+/**
+ * Los nombres que flow.ts reexporta. Con `refund.reference` (cada devolución por separado) la devolución se programa con
+ * `gatewayReportsRefund` y no con el total devuelto (corrida payment-spring).
+ */
+export function paymentHarnessExports(model) {
+  const tracks = tracksRefundInFlight(model.payments);
+  return PAYMENT_HARNESS_EXPORTS.map((name) => (tracks && name === 'gatewayReportsRefunded' ? 'gatewayReportsRefund' : name));
+}
+
+const PAYMENT_HARNESS_EXPORTS = [
   'GatewayCall',
   'gatewayIdFor',
   'gatewayAuthorizes',
@@ -69,7 +77,8 @@ function paymentGatewayTs(model) {
   const routes = Object.entries(probes.calls)
     .map(([call, route]) => `  ${call}: { method: ${tsString(route.method)}, path: ${tsString(route.path)} }`)
     .join(',\n');
-  const specific = gateway.id === 'stripe' ? stripeSpecific(probes, currency) : mercadopagoSpecific(probes, currency);
+  const tracks = tracksRefundInFlight(model.payments);
+  const specific = gateway.id === 'stripe' ? stripeSpecific(probes, tracks) : mercadopagoSpecific(probes, tracks);
   return `/**
  * La pasarela de pago de prueba (capa payments, ${gateway.label}): el WireMock de infra/ hablando el protocolo de la
  * pasarela elegida, al que apunta \`payments.gateway.base-url\` en el perfil \`local\`.
@@ -152,12 +161,32 @@ export async function gatewayReports(reference: string, status: string): Promise
     return;
   }
   if (status === 'REFUNDED') {
-    await gatewayReportsRefunded(reference, '10.00');
-    return;
+${tracks
+  ? `    // Con varias devoluciones por cobro, la consulta del cobro no dice nada de una devolución: la contesta la de la
+    // devolución en vuelo.
+    throw new Error('gatewayReports: una devolución se programa con gatewayReportsRefund(referencia, referencia de la devolución, desenlace, importe, lo devuelto antes)');`
+  : `    await gatewayReportsRefunded(reference, '10.00');
+    return;`}
   }
   await gatewayReportsObject(reference, gatewayObject(reference, status, null, null));
 }
-
+${tracks
+  ? `
+/**
+ * Lo que la pasarela dice de UNA devolución del cobro de esa referencia, la de \`refundReference\`, cuando el servidor le
+ * pregunta por ella (una devolución cuya respuesta no llegó y el barrido resuelve consultando): 'REFUNDED' (se completó
+ * por \`amount\`), 'PENDING' (la sigue procesando), 'FAILED' (la rechazó) o 'MISSING' (no le llegó nunca; \`amount\` no
+ * se usa). \`previouslyRefunded\` es lo que la pasarela ya había devuelto del cobro en devoluciones ANTERIORES, ya
+ * registradas ('0' si es la primera): es lo que distingue el importe de ESTA devolución del acumulado.
+ */
+export async function gatewayReportsRefund(reference: string, refundReference: string, outcome: string, amount: string, previouslyRefunded: string): Promise<void> {
+  if (!['REFUNDED', 'PENDING', 'FAILED', 'MISSING'].includes(outcome)) {
+    throw new Error(\`gatewayReportsRefund: \${outcome} no es REFUNDED, PENDING, FAILED ni MISSING\`);
+  }
+  await gatewayRefundsAtGateway(reference, refundReference, outcome, amount, previouslyRefunded);
+}
+`
+  : `
 /**
  * Preguntada por el cobro de esa referencia, la pasarela lo da por devuelto con ESE total: lo que mide un escenario
  * de devolución parcial, o una devolución cuya respuesta no llegó y el barrido resuelve consultando.
@@ -165,7 +194,7 @@ export async function gatewayReports(reference: string, status: string): Promise
 export async function gatewayReportsRefunded(reference: string, refundedTotal: string): Promise<void> {
   await gatewayReportsObject(reference, gatewayObject(reference, 'REFUNDED', null, refundedTotal));
 }
-
+`}
 async function gatewayReportsObject(reference: string, object: Record<string, unknown>): Promise<void> {
   await gatewayStubPath('STATUS', gatewayIdFor(reference), 200, object);
   await gatewayStub('SEARCH', reference, null, 200, { data: [object] });
@@ -322,8 +351,9 @@ function majorUnits(amount: string): string {
 ${specific}`;
 }
 
-function stripeSpecific(probes) {
+function stripeSpecific(probes, tracks) {
   const translation = gatewayTranslation('stripe');
+  const refund = refundTranslation('stripe');
   const statuses = Object.entries(probes.statuses).map(([key, value]) => `  ${key}: ${tsString(value)}`).join(',\n');
   const declines = Object.entries(probes.declines).map(([key, value]) => `  ${key}: ${tsString(value)}`).join(',\n');
   return `
@@ -376,7 +406,29 @@ export async function gatewayRefunds(reference: string, amount: string): Promise
   await gatewayStub('REFUND', null, id, 200, { id: \`re_\${id}\`, status: 'succeeded', amount: minorUnits(amount), currency: GATEWAY_CURRENCY.toLowerCase(), payment_intent: id });
 }
 
-function gatewayNotice<R>(flow: NoticeSender<R>, reference: string, secret: string): Promise<R> {
+${tracks
+  ? `// Las devoluciones del cobro tal como las lista Stripe (GET /v1/refunds?payment_intent=…), con la referencia de cada
+// una en su metadata: es lo que lee el refundStatus del adaptador.
+async function gatewayRefundsAtGateway(reference: string, refundReference: string, outcome: string, amount: string, previouslyRefunded: string): Promise<void> {
+  const id = gatewayIdFor(reference);
+  const refunds: Record<string, unknown>[] = [];
+  if (minorUnits(previouslyRefunded) > 0) refunds.push(stripeRefund(\`\${id}_previous\`, 'keel-previous-refund', ${tsString(refund.succeeded[0])}, previouslyRefunded));
+  if (outcome !== 'MISSING') {
+    const status = outcome === 'REFUNDED' ? ${tsString(refund.succeeded[0])} : outcome === 'PENDING' ? ${tsString(refund.pending[0])} : 'failed';
+    refunds.push(stripeRefund(\`\${id}_\${refundReference.replace(/[^A-Za-z0-9]/g, '')}\`, refundReference, status, amount));
+  }
+  await stubRawMapping(
+    { method: 'GET', urlPath: '/v1/refunds', queryParameters: { payment_intent: { equalTo: id } } },
+    { status: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ object: 'list', has_more: false, data: refunds }) }
+  );
+}
+
+function stripeRefund(id: string, refundReference: string, status: string, amount: string): Record<string, unknown> {
+  return { id: \`re_\${id}\`, object: 'refund', status, amount: minorUnits(amount), currency: GATEWAY_CURRENCY.toLowerCase(), metadata: { ${tsString(refund.referenceKey)}: refundReference } };
+}
+
+`
+  : ''}function gatewayNotice<R>(flow: NoticeSender<R>, reference: string, secret: string): Promise<R> {
   const id = gatewayIdFor(reference);
   const body = JSON.stringify({ id: \`evt_\${id}\`, type: 'payment_intent.updated', data: { object: { id, object: 'payment_intent' } } });
   const t = Math.floor(Date.now() / 1000);
@@ -387,8 +439,9 @@ function gatewayNotice<R>(flow: NoticeSender<R>, reference: string, secret: stri
 `;
 }
 
-function mercadopagoSpecific(probes) {
+function mercadopagoSpecific(probes, tracks) {
   const translation = gatewayTranslation('mercadopago');
+  const refund = refundTranslation('mercadopago');
   const statuses = Object.entries(probes.statuses)
     .map(([key, [status, detail]]) => `  ${key}: [${tsString(status)}, ${tsString(detail)}]`)
     .join(',\n');
@@ -410,10 +463,32 @@ function gatewayObject(reference: string, status: string, detail: string | null,
   const transactions: Record<string, unknown> = {
     payments: [{ id: \`PAY\${id}\`, status_detail: statusDetail, payment_method: { type: 'credit_card', url: \`https://pasarela.test/3ds/\${id}\` } }]
   };
-  if (refunded != null) transactions.refunds = [{ amount: majorUnits(refunded) }];
+  if (refunded != null) transactions.refunds = [mercadopagoRefund(\`\${id}-new\`, ${tsString(refund.succeeded[0])}, refunded)];
   return { id, status: state, status_detail: statusDetail, ${tsString(translation.referenceKey)}: reference, currency: GATEWAY_CURRENCY, transactions };
 }
 
+// Una devolución de la order con la forma que leen el adaptador y su refundStatus: id, importe y estado.
+function mercadopagoRefund(id: string, status: string, amount: string): Record<string, unknown> {
+  return { id: \`REF\${id}\`, status, amount: majorUnits(amount) };
+}
+${tracks
+  ? `
+// La order con sus devoluciones: MercadoPago no guarda referencia propia en una devolución, así que refundStatus la
+// localiza por lo procesado por encima de lo que el registro ya cuenta como devuelto.
+async function gatewayRefundsAtGateway(reference: string, refundReference: string, outcome: string, amount: string, previouslyRefunded: string): Promise<void> {
+  const id = gatewayIdFor(reference);
+  const refunds: Record<string, unknown>[] = [];
+  if (Number(previouslyRefunded) > 0) refunds.push(mercadopagoRefund(\`\${id}-previous\`, ${tsString(refund.succeeded[0])}, previouslyRefunded));
+  if (outcome !== 'MISSING') {
+    const status = outcome === 'REFUNDED' ? ${tsString(refund.succeeded[0])} : outcome === 'PENDING' ? ${tsString(refund.pending[0])} : 'failed';
+    refunds.push(mercadopagoRefund(\`\${id}-\${refundReference.replace(/[^A-Za-z0-9]/g, '')}\`, status, amount));
+  }
+  const order = gatewayObject(reference, 'CAPTURED', null, null);
+  (order['transactions'] as Record<string, unknown>)['refunds'] = refunds;
+  await gatewayReportsObject(reference, order);
+}
+`
+  : ''}
 async function gatewayDecline(reference: string, reason: string): Promise<void> {
   const detail = GATEWAY_DECLINES[reason] ?? 'cc_rejected_other_reason';
   await gatewayStub('CHARGE', null, reference, 200, gatewayObject(reference, 'FAILED', detail, null));

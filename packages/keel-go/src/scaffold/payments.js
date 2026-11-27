@@ -21,7 +21,7 @@
 // del diseño y la escribe el agente con la skill de la pasarela. Lo que sí hace es dársela al handler: el puerto y el
 // aplicador a cada operación que llama a la pasarela, y la consulta al barrido (paymentDependencies).
 
-import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, SAVED_METHOD_SEPARATOR, paymentIdempotencyKey, savedMethodIdempotencyKey } from '@keel-system/keel-core/gen/payment-gateways';
+import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, SAVED_METHOD_SEPARATOR, paymentIdempotencyKey, savedMethodIdempotencyKey, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { paymentsYaml } from '@keel-system/keel-core/gen/payments-config';
 import { PAYMENT_SWEEP_PARAMETERS } from '@keel-system/keel-core/gen/payments-model';
 import { usesPayments } from '@keel-system/keel-core/gen/features';
@@ -239,6 +239,15 @@ function domainBody(model) {
   methods.push(`	// Status es el estado de un cobro según la pasarela. Con gatewayPaymentID vacío —la pasarela no llegó a contestar— se
 	// busca por la referencia, que el adaptador le mandó al pedirlo.
 	Status(ctx context.Context, reference, gatewayPaymentID string) (GatewayOutcome, error)`);
+  if (tracksRefundInFlight(p)) {
+    methods.push(`	// RefundStatus es el desenlace de UNA devolución en vuelo, la de refundReference (corrida payment-spring): GatewayRefunded
+	// con el importe de ESA devolución, GatewayPending si la pasarela aún la procesa, o GatewayCaptured si no le llegó o la
+	// rechazó (el estado del que salió). La consulta del cobro solo sabe el acumulado devuelto, y con una devolución anterior
+	// daría por hecha una que no llegó. alreadyRefunded es lo que el registro ya cuenta como devuelto, sin esta devolución:
+	// lo usa la pasarela que no guarda referencia propia en sus devoluciones (keel-core: REFUND_TRANSLATIONS). Un
+	// *PaymentGatewayUnavailableError si no contestó.
+	RefundStatus(ctx context.Context, reference, refundReference, gatewayPaymentID string, alreadyRefunded wire.Decimal) (GatewayOutcome, error)`);
+  }
   if (p.savePaymentMethod) {
     methods.push(`	// SavePaymentMethod guarda un medio de pago para cobrarlo sin el cliente delante y devuelve la referencia opaca de la
 	// pasarela, que no sale nunca del servicio, con el resumen de la tarjeta. Un *GatewayRejectedPaymentMethodError si la
@@ -762,7 +771,25 @@ func (r *PaymentReconciliation) Consult(ctx context.Context, reference, gatewayP
 	}
 	return outcome.Status, nil
 }
-`;
+${tracksRefundInFlight(p) ? `
+// ConsultRefund es la consulta de un cobro en ${p.refund.inFlight}: el desenlace de SU devolución en vuelo, no el del cobro, que
+// solo sabe el acumulado devuelto (corrida payment-spring). refundReference es la de la devolución pendiente del cobro
+// (${p.refund.reference}) y alreadyRefunded lo que el registro ya cuenta como devuelto, sin esa devolución. Devuelve
+// GatewayRefunded (ya aplicado, con el importe de ESA devolución), GatewayPending (sigue en ${p.refund.inFlight}) o
+// GatewayCaptured: la devolución no llegó a la pasarela o la rechazó, y el handler devuelve el cobro a ese estado.
+func (r *PaymentReconciliation) ConsultRefund(ctx context.Context, reference, refundReference, gatewayPaymentID string, alreadyRefunded wire.Decimal) (domain.GatewayStatus, error) {
+	outcome, err := r.gateway.RefundStatus(ctx, reference, refundReference, gatewayPaymentID, alreadyRefunded)
+	if err != nil {
+		return "", err
+	}
+	if outcome.Status == domain.GatewayRefunded {
+		if err := r.outcomes.Apply(ctx, outcome); err != nil {
+			return "", err
+		}
+	}
+	return outcome.Status, nil
+}
+` : ''}`;
 }
 
 /** El repositorio del registro (payments.record.entity), que reciben las decisiones del agente; null sin ninguna. */

@@ -20,6 +20,7 @@ import { textFilterNotes } from '@keel-system/keel-core/gen/text-filters';
 import { finderNote } from '@keel-system/keel-core/gen/query-filters';
 import { finderCall } from './finders.js';
 import { followUpRejectionNote, refundReferenceNote, savedMethodNote } from '@keel-system/keel-core/gen/rejection-notes';
+import { refundSweepNote, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { isPartialUpdate, repositoryRoots } from '@keel-system/keel-core/gen/features';
 import { outboundBoundaryNote } from '@keel-system/keel-core/gen/outbound-boundary';
 import { naturalKeyFinder, repositoryParam } from './repositories.js';
@@ -521,6 +522,10 @@ function handlerNotes(model, operation) {
         'Llama a h.paymentReconciliation.Consult(ctx, reference, gatewayPaymentID) con cada uno, fuera de toda transacción, y aplica lo que devuelva según las reglas. ' +
         'No escribas otro reclamo en los _queries.go: un segundo mecanismo en paralelo al generado no reclama nada, solo reparte peor.'
     );
+    // La devolución en vuelo (corrida payment-spring): la consulta del cobro solo sabe el acumulado devuelto.
+    if (tracksRefundInFlight(model.payments)) {
+      notes.push(refundSweepNote(model.payments, 'h.paymentReconciliation.ConsultRefund(ctx, reference, refundReference, gatewayPaymentID, alreadyRefunded)'));
+    }
   }
   for (const code of operation.errors ?? []) {
     const error = operationError(model, operation.name, code);

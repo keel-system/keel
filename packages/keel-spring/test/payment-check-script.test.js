@@ -10,7 +10,7 @@ import path from 'node:path';
 import { loadService } from '@keel-system/keel-core';
 import { planService } from '../src/scaffold/index.js';
 import { PAYMENT_GATEWAYS } from '../src/lib/stack-catalog.js';
-import { paymentCheckTest, PAYMENT_CHECK_SABOTAGES } from '../src/lib/payment-check-test.js';
+import { paymentCheckTest, PAYMENT_CHECK_SABOTAGES, PAYMENT_CHECK_SABOTAGE_GATEWAY } from '../src/lib/payment-check-test.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 import { tmpDir } from './helpers/tmp.js';
 
@@ -25,10 +25,17 @@ for (const gateway of Object.keys(PAYMENT_GATEWAYS)) {
       fs.mkdirSync(path.dirname(path.join(projectDir, file.path)), { recursive: true });
       fs.writeFileSync(path.join(projectDir, file.path), file.content);
     }
-    const { saboteur, content } = paymentCheckTest(model, gateway);
+    const { saboteur, content, relativePath } = paymentCheckTest(model, gateway);
     assert.match(content, /class PaymentCheckTest/);
-    for (const kind of PAYMENT_CHECK_SABOTAGES) {
+    // `transport-retry` sabotea la pasarela de prueba, que vive en la propia clase de payment-check.
+    fs.mkdirSync(path.dirname(path.join(projectDir, relativePath)), { recursive: true });
+    fs.writeFileSync(path.join(projectDir, relativePath), content);
+    for (const kind of PAYMENT_CHECK_SABOTAGES.filter((k) => !PAYMENT_CHECK_SABOTAGE_GATEWAY[k] || PAYMENT_CHECK_SABOTAGE_GATEWAY[k] === gateway)) {
       assert.doesNotThrow(() => saboteur(projectDir, kind), `el sabotaje '${kind}' ya no se aplica con ${gateway}`);
+    }
+    // Un sabotaje de la otra pasarela se niega en voz alta en vez de aplicarse a medias.
+    for (const kind of PAYMENT_CHECK_SABOTAGES.filter((k) => PAYMENT_CHECK_SABOTAGE_GATEWAY[k] && PAYMENT_CHECK_SABOTAGE_GATEWAY[k] !== gateway)) {
+      assert.throws(() => saboteur(projectDir, kind), /es de/);
     }
   });
 }

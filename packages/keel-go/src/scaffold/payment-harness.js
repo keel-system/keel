@@ -10,7 +10,7 @@
 // devuelve es lo que lee el adaptador emitido, lo mide `npm run stub-check` (scripts/probes/payment_probe_test.go).
 
 import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
-import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
+import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, gatewayTranslation, refundTranslation, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { paymentTestCurrency } from '@keel-system/keel-core/gen/payments-config';
 import { HTTP_STUB_ENDPOINTS } from '@keel-system/keel-core/gen/http-stub-probes';
 import { alignRows, goString, keyedLiteral } from '../lib/go-source.js';
@@ -37,7 +37,8 @@ export function paymentHarnessBody(model) {
   const calls = Object.entries(probes.calls);
   const constants = alignRows(calls.map(([call]) => ({ indent: '\t', cells: [gatewayCallConstant(call), `GatewayCall = ${goString(call)}`] }))).join('\n');
   const routes = keyedLiteral(calls.map(([call, route]) => [gatewayCallConstant(call), `{${goString(route.method)}, ${goString(route.path)}}`])).join('\n');
-  const specific = gateway.id === 'stripe' ? stripeSpecific(probes) : mercadopagoSpecific(probes);
+  const tracks = tracksRefundInFlight(model.payments);
+  const specific = gateway.id === 'stripe' ? stripeSpecific(probes, tracks) : mercadopagoSpecific(probes, tracks);
   // La respuesta de guardar con el resumen en las rutas que lee el adaptador (keel-core: savedCardResponse), la MISMA que
   // escriben los arneses de los otros tres; y el 4xx de la autenticación al guardar, si la pasarela lo pide.
   const placeholders = { '@B@': 'brand', '@L@': 'last4', '-71': 'expMonth', '-72': 'expYear' };
@@ -136,11 +137,18 @@ func (s *Scenario) GatewayReports(reference, status string) {
 		s.gatewayStub(CallSearch, reference, "", 200, map[string]any{"data": []any{}})
 		return
 	}
-	refunded := ""
+${tracks
+  ? `	if status == "REFUNDED" {
+		// Con varias devoluciones por cobro, la consulta del cobro no dice nada de una devolución: la contesta la de la
+		// devolución en vuelo.
+		s.Fatal("GatewayReports: una devolución se programa con GatewayReportsRefund(referencia, referencia de la devolución, desenlace, importe, lo devuelto antes)")
+	}
+	object := s.gatewayObject(reference, status, "", "")`
+  : `	refunded := ""
 	if status == "REFUNDED" {
 		refunded = "10.00"
 	}
-	object := s.gatewayObject(reference, status, "", refunded)
+	object := s.gatewayObject(reference, status, "", refunded)`}
 	s.gatewayStubPath(CallStatus, gatewayIDFor(reference), 200, object)
 	s.gatewayStub(CallSearch, reference, "", 200, map[string]any{"data": []any{object}})
 }
@@ -204,7 +212,36 @@ ${authentication
   : `	s.Fatal(${goString(`${gateway.id} no pide autenticar al guardar un medio: este escenario no aplica con ella`)})`}
 }
 
-// GatewayReportsRefunded programa que, preguntada por el cobro de esa referencia, la pasarela lo dé por devuelto con ESE
+${tracks
+  ? `// GatewayReportsRefund programa lo que la pasarela dice de UNA devolución del cobro de esa referencia, la de refundReference,
+// cuando el servidor le pregunta por ella (una devolución cuya respuesta no llegó y el barrido resuelve consultando):
+// "REFUNDED" (se completó por amount), "PENDING" (la sigue procesando), "FAILED" (la rechazó) o "MISSING" (no le llegó
+// nunca; amount no se usa). previouslyRefunded es lo que la pasarela ya había devuelto del cobro en devoluciones ANTERIORES,
+// ya registradas ("0" si es la primera): es lo que distingue el importe de ESTA devolución del acumulado (corrida
+// payment-spring).
+func (s *Scenario) GatewayReportsRefund(reference, refundReference, outcome, amount, previouslyRefunded string) {
+	s.Helper()
+	switch outcome {
+	case "REFUNDED", "PENDING", "FAILED", "MISSING":
+	default:
+		s.Fatalf("GatewayReportsRefund: %s no es REFUNDED, PENDING, FAILED ni MISSING", outcome)
+	}
+	if err := s.gatewayRefundsAtGateway(reference, refundReference, outcome, amount, previouslyRefunded); err != nil {
+		s.Fatal(err)
+	}
+}
+
+// gatewayRefundStatus es el estado de una devolución en la pasarela para el desenlace que pide el escenario.
+func gatewayRefundStatus(outcome string) string {
+	switch outcome {
+	case "REFUNDED":
+		return gatewayRefundSucceeded
+	case "PENDING":
+		return gatewayRefundPending
+	}
+	return "failed"
+}`
+  : `// GatewayReportsRefunded programa que, preguntada por el cobro de esa referencia, la pasarela lo dé por devuelto con ESE
 // total ("7.50"): lo que mide un escenario de devolución parcial, o una devolución cuya respuesta no llegó y el barrido
 // resuelve consultando.
 func (s *Scenario) GatewayReportsRefunded(reference, refundedTotal string) {
@@ -212,7 +249,7 @@ func (s *Scenario) GatewayReportsRefunded(reference, refundedTotal string) {
 	object := s.gatewayObject(reference, "REFUNDED", "", refundedTotal)
 	s.gatewayStubPath(CallStatus, gatewayIDFor(reference), 200, object)
 	s.gatewayStub(CallSearch, reference, "", 200, map[string]any{"data": []any{object}})
-}
+}`}
 
 // GatewayCancelFails hace que la anulación del cobro de esa referencia vuelva como un cobro FALLIDO con un motivo del
 // vocabulario neutro (la del 3DS que el cliente no completó es "authenticationFailed"): el desenlace no es la anulación
@@ -414,7 +451,8 @@ func known[T any](table map[string]T, key, what string) (T, error) {
 ${specific}`;
 }
 
-function stripeSpecific(probes) {
+function stripeSpecific(probes, tracks) {
+  const refund = refundTranslation('stripe');
   const translation = gatewayTranslation('stripe');
   const statuses = keyedLiteral(Object.entries(probes.statuses).map(([key, value]) => [goString(key), goString(value)])).join('\n');
   const declines = keyedLiteral(Object.entries(probes.declines).map(([key, value]) => [goString(key), goString(value)])).join('\n');
@@ -517,7 +555,53 @@ func (s *Scenario) gatewayRefunds(reference, amount string) error {
 	return nil
 }
 
-// gatewayNotice es un aviso firmado como Stripe: ${probes.notice.signatureHeader}: t=…,v1=HMAC(t.cuerpo).
+${tracks
+  ? `// gatewayRefundSucceeded y gatewayRefundPending son los estados de una devolución de Stripe (keel-core: REFUND_TRANSLATIONS).
+const (
+	gatewayRefundSucceeded = ${goString(refund.succeeded[0])}
+	gatewayRefundPending   = ${goString(refund.pending[0])}
+)
+
+// gatewayRefundsAtGateway programa las devoluciones del cobro tal como las lista Stripe (GET /v1/refunds?payment_intent=…),
+// con la referencia de cada una en su metadata: es lo que lee el RefundStatus del adaptador.
+func (s *Scenario) gatewayRefundsAtGateway(reference, refundReference, outcome, amount, previouslyRefunded string) error {
+	s.Helper()
+	id := gatewayIDFor(reference)
+	refunds := []any{}
+	if previouslyRefunded != "0" && previouslyRefunded != "" {
+		previous, err := stripeRefund(id+"_previous", "keel-previous-refund", gatewayRefundSucceeded, previouslyRefunded)
+		if err != nil {
+			return err
+		}
+		refunds = append(refunds, previous)
+	}
+	if outcome != "MISSING" {
+		current, err := stripeRefund(id+"_"+refundReference, refundReference, gatewayRefundStatus(outcome), amount)
+		if err != nil {
+			return err
+		}
+		refunds = append(refunds, current)
+	}
+	request := map[string]any{"method": http.MethodGet, "urlPath": "/v1/refunds", "queryParameters": map[string]any{"payment_intent": map[string]any{"equalTo": id}}}
+	response, err := RespondOK(200, map[string]any{"object": "list", "has_more": false, "data": refunds}).wire()
+	if err != nil {
+		return err
+	}
+	_, err = stubAdmin(s.Context(), ${goString(HTTP_STUB_ENDPOINTS.mappings)}, map[string]any{"request": request, "response": response})
+	return err
+}
+
+// stripeRefund es un Refund de Stripe con la forma que lee el adaptador.
+func stripeRefund(id, refundReference, status, amount string) (map[string]any, error) {
+	minor, err := minorUnits(amount)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"id": "re_" + id, "object": "refund", "status": status, "amount": minor, "currency": strings.ToLower(paymentCurrency), "metadata": map[string]any{${goString(refund.referenceKey)}: refundReference}}, nil
+}
+
+`
+  : ''}// gatewayNotice es un aviso firmado como Stripe: ${probes.notice.signatureHeader}: t=…,v1=HMAC(t.cuerpo).
 func gatewayNotice(reference string, forged bool) GatewayNotice {
 	id := gatewayIDFor(reference)
 	body := fmt.Sprintf(` + '`' + String.raw`{"id":%q,"type":"payment_intent.updated","data":{"object":{"id":%q,"object":"payment_intent"}}}` + '`' + String.raw`, "evt_"+id, id)
@@ -530,7 +614,8 @@ func gatewayNotice(reference string, forged bool) GatewayNotice {
 `;
 }
 
-function mercadopagoSpecific(probes) {
+function mercadopagoSpecific(probes, tracks) {
+  const refund = refundTranslation('mercadopago');
   const translation = gatewayTranslation('mercadopago');
   const statuses = keyedLiteral(Object.entries(probes.statuses).map(([key, [status, detail]]) => [goString(key), `{${goString(status)}, ${goString(detail)}}`])).join('\n');
   const declines = keyedLiteral(Object.entries(probes.declines).map(([key, value]) => [goString(key), goString(value)])).join('\n');
@@ -583,7 +668,7 @@ func gatewayObject(reference, status, detail, refunded string) (map[string]any, 
 		}},
 	}
 	if refunded != "" {
-		transactions["refunds"] = []any{map[string]any{"amount": majorUnits(refunded)}}
+		transactions["refunds"] = []any{mercadopagoRefund(id+"-new", ${goString(refund.succeeded[0])}, refunded)}
 	}
 	return map[string]any{
 ${order}
@@ -604,6 +689,41 @@ func (s *Scenario) gatewayDeclines(reference, reason string) error {
 	return nil
 }
 
+// mercadopagoRefund es una devolución de la order con la forma que leen el adaptador y su RefundStatus: id, importe y estado.
+func mercadopagoRefund(id, status, amount string) map[string]any {
+	return map[string]any{"id": "REF" + id, "status": status, "amount": majorUnits(amount)}
+}
+${tracks
+  ? `
+// gatewayRefundSucceeded y gatewayRefundPending son los estados de una devolución de la order (keel-core: REFUND_TRANSLATIONS).
+const (
+	gatewayRefundSucceeded = ${goString(refund.succeeded[0])}
+	gatewayRefundPending   = ${goString(refund.pending[0])}
+)
+
+// gatewayRefundsAtGateway programa la order con sus devoluciones: MercadoPago no guarda referencia propia en una
+// devolución, así que RefundStatus la localiza por lo procesado por encima de lo que el registro ya cuenta como devuelto.
+func (s *Scenario) gatewayRefundsAtGateway(reference, refundReference, outcome, amount, previouslyRefunded string) error {
+	s.Helper()
+	id := gatewayIDFor(reference)
+	refunds := []any{}
+	if previouslyRefunded != "0" && previouslyRefunded != "" {
+		refunds = append(refunds, mercadopagoRefund(id+"-previous", gatewayRefundSucceeded, previouslyRefunded))
+	}
+	if outcome != "MISSING" {
+		refunds = append(refunds, mercadopagoRefund(id+"-"+refundReference, gatewayRefundStatus(outcome), amount))
+	}
+	order, err := gatewayObject(reference, "CAPTURED", "", "")
+	if err != nil {
+		return err
+	}
+	order["transactions"].(map[string]any)["refunds"] = refunds
+	s.gatewayStubPath(CallStatus, id, 200, order)
+	s.gatewayStub(CallSearch, reference, "", 200, map[string]any{"data": []any{order}})
+	return nil
+}
+`
+  : ''}
 // expiredCapture: MercadoPago no documenta un código para la captura caducada, así que el adaptador consulta el estado.
 func expiredCapture() map[string]any {
 	return map[string]any{"errors": []any{map[string]any{"code": "order_expired"}}}

@@ -12,7 +12,16 @@ import { createHmac } from 'node:crypto';
 import { loadService } from '@keel-system/keel-core';
 import path from 'node:path';
 import { paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
-import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, paymentIdempotencyKey, refundIdempotencyKey } from '@keel-system/keel-core/gen/payment-gateways';
+import {
+  CURRENCY_MINOR_UNITS,
+  PAYMENT_NOTICE_PATH,
+  PAYMENT_TEST_SECRETS,
+  REFUND_OUTCOME_CASES,
+  REFUND_RESPONSE_CASES,
+  REFUND_TRANSLATIONS,
+  paymentIdempotencyKey,
+  refundIdempotencyKey
+} from '@keel-system/keel-core/gen/payment-gateways';
 import { planService as planSpring } from '../../keel-spring/src/scaffold/index.js';
 import { planFixture, transpileTree } from './helpers/emitted.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
@@ -254,16 +263,52 @@ for (const gateway of GATEWAYS) {
   // la rechazaba (otro importe) o devolvía la respuesta de la primera sin devolver nada (el mismo).
   test(`${gateway}: dos devoluciones del mismo cobro llevan cada una su clave, y repetir una repite la suya`, async () => {
     fake.reset();
+    // La lectura previa de la order (MercadoPago) contesta; solo cuentan las peticiones de devolución.
+    fake.route(calls.STATUS, 200, {});
     fake.route(calls.REFUND, 503, {});
     const adapter = await gatewayAt(fake.baseUrl);
     for (const refundReference of ['rf-1', 'rf-2', 'rf-1']) {
       await assert.rejects(adapter.refund('ch-7', refundReference, 'pay7', null, 'BRL'), PaymentGatewayUnavailableException);
     }
     assert.deepEqual(
-      fake.recorded.map((entry) => entry.key),
+      fake.recorded.filter((entry) => entry.method === 'POST').map((entry) => entry.key),
       [refundIdempotencyKey('ch-7', 'rf-1'), refundIdempotencyKey('ch-7', 'rf-2'), refundIdempotencyKey('ch-7', 'rf-1')]
     );
   });
+
+  // La devolución en vuelo (corrida payment-spring): los casos RF-* de keel-core contra el adaptador emitido, los
+  // mismos que payment-check de keel-spring. Importes del caso en unidades menores; la moneda de prueba tiene dos.
+  const refundT = REFUND_TRANSLATIONS[gateway];
+  const major = (minor) => (minor / 100).toFixed(2);
+  const refundId = gateway === 'stripe' ? 'pi_chr' : 'ORDchr';
+  const refundsBody = (refunds) =>
+    gateway === 'stripe'
+      ? { object: 'list', has_more: false, data: refunds.map((r, i) => ({ id: `re_${i}`, object: 'refund', status: r.status, amount: r.amount, currency: 'brl', metadata: r.reference ? { [refundT.referenceKey]: r.reference } : {} })) }
+      : { id: refundId, status: 'processed', status_detail: 'partially_refunded', external_reference: 'ch-r', transactions: { payments: [{ id: `PAY${refundId}` }], refunds: refunds.map((r, i) => ({ id: r.id ?? `REF-${i}`, status: r.status, amount: major(r.amount) })) } };
+  const refundRoute = gateway === 'stripe' ? { method: 'GET', path: '/v1/refunds' } : calls.STATUS;
+  const assertRefundOutcome = (outcome, expected, label) => {
+    assert.equal(outcome.status, GatewayStatus[expected.status], label);
+    if (expected.status === 'REFUNDED') assert.equal(outcome.refundedAmount.toString(), major(expected.amount), label);
+  };
+
+  for (const c of REFUND_OUTCOME_CASES.filter((entry) => entry.gateway === gateway)) {
+    test(`${gateway}: ${c.id}, ${c.what}`, async () => {
+      fake.reset();
+      fake.route(refundRoute, 200, refundsBody(c.refunds));
+      const outcome = await (await gatewayAt(fake.baseUrl)).refundStatus('ch-r', c.refundReference, refundId, Decimal.parse(major(c.alreadyRefunded)));
+      assertRefundOutcome(outcome, c.expected, c.id);
+    });
+  }
+
+  for (const c of REFUND_RESPONSE_CASES.filter((entry) => entry.gateway === gateway)) {
+    test(`${gateway}: ${c.id}, ${c.what}`, async () => {
+      fake.reset();
+      fake.route(calls.STATUS, 200, refundsBody(c.refunds.filter((r) => c.knownIds.includes(r.id))));
+      fake.route(calls.REFUND, 200, refundsBody(c.refunds));
+      const outcome = await (await gatewayAt(fake.baseUrl)).refund('ch-r', 'rf-new', refundId, Decimal.parse('2.00'), 'BRL');
+      assertRefundOutcome(outcome, c.expected, c.id);
+    });
+  }
 
   if (gateway === 'stripe') {
     test('stripe: un cobro sin el cliente delante que el emisor quiere autenticar es una acción pendiente, no un fallo', async () => {

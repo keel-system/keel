@@ -183,7 +183,7 @@ export { ${httpStubHarness.HTTP_STUB_EXPORTS.join(', ')} } from './http-stub.js'
 export type { StubRequest } from './http-stub.js';` : ''}${paymentHarness.usesPaymentHarness(model) ? `
 
 // La pasarela de pago de prueba (el mismo WireMock, hablando su protocolo): la misma API que el arnés de keel-spring.
-export { ${paymentHarness.PAYMENT_HARNESS_EXPORTS.join(', ')} } from './payment-gateway.js';` : ''}${mailHarness.generate(model).length > 0 ? `
+export { ${paymentHarness.paymentHarnessExports(model).join(', ')} } from './payment-gateway.js';` : ''}${mailHarness.generate(model).length > 0 ? `
 
 // El buzón de prueba (Mailpit de infra/): los flujos afirman sobre el correo con estos helpers, importados de aquí.
 export { ${mailHarness.MAIL_HARNESS_EXPORTS.filter((name) => name !== 'MailMessageView').join(', ')} } from './mail.js';

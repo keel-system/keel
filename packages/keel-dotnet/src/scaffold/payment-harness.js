@@ -12,7 +12,7 @@
 // necesitan el Post del flujo, así que van en FlowTest.cs (`paymentNoticeMembers`).
 
 import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
-import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
+import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, gatewayTranslation, refundTranslation, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { paymentTestCurrency } from '@keel-system/keel-core/gen/payments-config';
 import { csFile, csString, solution } from './render.js';
 
@@ -70,7 +70,8 @@ function harnessBody(model) {
   const routes = Object.entries(probes.calls)
     .map(([call, route]) => `        [GatewayCall.${callMember(call)}] = (${csString(route.method)}, ${csString(route.path)}),`)
     .join('\n');
-  const specific = gateway.id === 'stripe' ? stripeSpecific(probes) : mercadopagoSpecific(probes);
+  const tracks = tracksRefundInFlight(model.payments);
+  const specific = gateway.id === 'stripe' ? stripeSpecific(probes, tracks) : mercadopagoSpecific(probes, tracks);
   // La respuesta de guardar con el resumen en las rutas que lee el adaptador (keel-core: savedCardResponse), la MISMA que
   // escriben el AbstractFlowIT de keel-spring y el payment-gateway.ts de keel-nest.
   const cardNode = (node, indent) => {
@@ -167,12 +168,24 @@ public abstract partial class FlowTest
     /// </summary>
     protected static Task GatewayRequiresAuthenticationToSave() => PaymentGatewayHarness.RequiresAuthenticationToSave();
 
-    /// <summary>
+${tracks
+  ? `    /// <summary>
+    /// Lo que la pasarela dice de UNA devolución del cobro de esa referencia, la de <paramref name="refundReference"/>, cuando el
+    /// servidor le pregunta por ella (una devolución cuya respuesta no llegó y el barrido resuelve consultando): "REFUNDED" (se
+    /// completó por <paramref name="amount"/>), "PENDING" (la sigue procesando), "FAILED" (la rechazó) o "MISSING" (no le llegó
+    /// nunca; el importe no se usa). <paramref name="previouslyRefunded"/> es lo que la pasarela ya había devuelto del cobro en
+    /// devoluciones ANTERIORES, ya registradas ("0" si es la primera): es lo que distingue el importe de ESTA devolución del
+    /// acumulado (corrida payment-spring).
+    /// </summary>
+    protected static Task GatewayReportsRefund(string reference, string refundReference, string outcome, string amount, string previouslyRefunded) =>
+        PaymentGatewayHarness.ReportsRefund(reference, refundReference, outcome, amount, previouslyRefunded);
+`
+  : `    /// <summary>
     /// Preguntada por el cobro de esa referencia, la pasarela lo da por devuelto con ESE total ("7.50"): lo que mide un
     /// escenario de devolución parcial, o una devolución cuya respuesta no llegó y el barrido resuelve consultando.
     /// </summary>
     protected static Task GatewayReportsRefunded(string reference, string refundedTotal) => PaymentGatewayHarness.ReportsRefunded(reference, refundedTotal);
-
+`}
     /// <summary>
     /// La anulación del cobro de esa referencia vuelve como un cobro FALLIDO con un motivo del vocabulario neutro (la del 3DS
     /// que el cliente no completó es "authenticationFailed"): el desenlace no es la anulación sino el fallo.
@@ -244,15 +257,31 @@ ${routes}
         }
         if (status == "REFUNDED")
         {
-            await ReportsRefunded(reference, "10.00");
-            return;
+${tracks
+  ? `            // Con varias devoluciones por cobro, la consulta del cobro no dice nada de una devolución: la contesta la de la
+            // devolución en vuelo.
+            throw new ArgumentException("Reports: una devolución se programa con GatewayReportsRefund(referencia, referencia de la devolución, desenlace, importe, lo devuelto antes)", nameof(status));`
+  : `            await ReportsRefunded(reference, "10.00");
+            return;`}
         }
         await ReportsObject(reference, () => GatewayObject(reference, status, null, null));
     }
-
+${tracks
+  ? `
+    public static Task ReportsRefund(string reference, string refundReference, string outcome, string amount, string previouslyRefunded)
+    {
+        ArgumentNullException.ThrowIfNull(refundReference);
+        if (outcome is not ("REFUNDED" or "PENDING" or "FAILED" or "MISSING"))
+        {
+            throw new ArgumentException($"ReportsRefund: {outcome} no es REFUNDED, PENDING, FAILED ni MISSING", nameof(outcome));
+        }
+        return RefundsAtGateway(reference, refundReference, outcome, amount, previouslyRefunded);
+    }
+`
+  : `
     public static Task ReportsRefunded(string reference, string refundedTotal) =>
         ReportsObject(reference, () => GatewayObject(reference, "REFUNDED", null, refundedTotal));
-
+`}
     private static async Task ReportsObject(string reference, Func<JsonObject> gatewayObject)
     {
         await StubPath(GatewayCall.Status, IdFor(reference), 200, gatewayObject());
@@ -387,8 +416,9 @@ ${specific}
 }`;
 }
 
-function stripeSpecific(probes) {
+function stripeSpecific(probes, tracks) {
   const translation = gatewayTranslation('stripe');
+  const refund = refundTranslation('stripe');
   const statuses = Object.entries(probes.statuses).map(([key, value]) => `        [${csString(key)}] = ${csString(value)},`).join('\n');
   const declines = Object.entries(probes.declines).map(([key, value]) => `        [${csString(key)}] = ${csString(value)},`).join('\n');
   return `
@@ -467,7 +497,46 @@ ${declines}
         });
     }
 
-    /// <summary>Un aviso firmado como Stripe: <c>${probes.notice.signatureHeader}: t=…,v1=HMAC(t.cuerpo)</c>.</summary>
+${tracks
+  ? `    /// <summary>
+    /// Las devoluciones del cobro tal como las lista Stripe (GET /v1/refunds?payment_intent=…), con la referencia de cada una
+    /// en su metadata: es lo que lee el RefundStatus del adaptador.
+    /// </summary>
+    private static Task RefundsAtGateway(string reference, string refundReference, string outcome, string amount, string previouslyRefunded)
+    {
+        var id = IdFor(reference);
+        var refunds = new JsonArray();
+        if (MinorUnits(previouslyRefunded) > 0)
+        {
+            refunds.Add(StripeRefund(id + "_previous", "keel-previous-refund", ${csString(refund.succeeded[0])}, previouslyRefunded));
+        }
+        if (outcome != "MISSING")
+        {
+            var status = outcome switch { "REFUNDED" => ${csString(refund.succeeded[0])}, "PENDING" => ${csString(refund.pending[0])}, _ => "failed" };
+            refunds.Add(StripeRefund(id + "_" + NonAlphanumeric().Replace(refundReference, string.Empty), refundReference, status, amount));
+        }
+        var request = new JsonObject
+        {
+            ["method"] = "GET",
+            ["urlPath"] = "/v1/refunds",
+            ["queryParameters"] = new JsonObject { ["payment_intent"] = new JsonObject { ["equalTo"] = id } }
+        };
+        var list = new JsonObject { ["object"] = "list", ["has_more"] = false, ["data"] = refunds };
+        return HttpStubHarness.RawMappingAsync(request, HttpStubHarness.Response(200, list.ToJsonString(), 0));
+    }
+
+    private static JsonObject StripeRefund(string id, string refundReference, string status, string amount) => new()
+    {
+        ["id"] = "re_" + id,
+        ["object"] = "refund",
+        ["status"] = status,
+        ["amount"] = MinorUnits(amount),
+        ["currency"] = Currency.ToLowerInvariant(),
+        ["metadata"] = new JsonObject { [${csString(refund.referenceKey)}] = refundReference }
+    };
+
+`
+  : ''}    /// <summary>Un aviso firmado como Stripe: <c>${probes.notice.signatureHeader}: t=…,v1=HMAC(t.cuerpo)</c>.</summary>
     public static GatewayNotice Notice(string reference, bool forged)
     {
         var id = IdFor(reference);
@@ -482,8 +551,9 @@ ${declines}
     }`;
 }
 
-function mercadopagoSpecific(probes) {
+function mercadopagoSpecific(probes, tracks) {
   const translation = gatewayTranslation('mercadopago');
+  const refund = refundTranslation('mercadopago');
   const statuses = Object.entries(probes.statuses)
     .map(([key, [status, detail]]) => `        [${csString(key)}] = (${csString(status)}, ${csString(detail)}),`)
     .join('\n');
@@ -516,7 +586,7 @@ ${declines}
         };
         if (refunded is not null)
         {
-            transactions["refunds"] = new JsonArray(new JsonObject { ["amount"] = MajorUnits(refunded) });
+            transactions["refunds"] = new JsonArray(MercadopagoRefund(id + "-new", ${csString(refund.succeeded[0])}, refunded));
         }
         return new JsonObject
         {
@@ -529,6 +599,39 @@ ${declines}
         };
     }
 
+    /// <summary>Una devolución de la order con la forma que leen el adaptador y su RefundStatus: id, importe y estado.</summary>
+    private static JsonObject MercadopagoRefund(string id, string status, string amount) =>
+        new() { ["id"] = "REF" + id, ["status"] = status, ["amount"] = MajorUnits(amount) };
+${tracks
+  ? `
+    /// <summary>
+    /// La order con sus devoluciones: MercadoPago no guarda referencia propia en una devolución, así que RefundStatus la
+    /// localiza por lo procesado por encima de lo que el registro ya cuenta como devuelto.
+    /// </summary>
+    private static Task RefundsAtGateway(string reference, string refundReference, string outcome, string amount, string previouslyRefunded)
+    {
+        var id = IdFor(reference);
+        return ReportsObject(reference, () =>
+        {
+            var refunds = new JsonArray();
+            if (MinorOf(previouslyRefunded) > 0)
+            {
+                refunds.Add(MercadopagoRefund(id + "-previous", ${csString(refund.succeeded[0])}, previouslyRefunded));
+            }
+            if (outcome != "MISSING")
+            {
+                var status = outcome switch { "REFUNDED" => ${csString(refund.succeeded[0])}, "PENDING" => ${csString(refund.pending[0])}, _ => "failed" };
+                refunds.Add(MercadopagoRefund(id + "-" + NonAlphanumeric().Replace(refundReference, string.Empty), status, amount));
+            }
+            var order = GatewayObject(reference, "CAPTURED", null, null);
+            order["transactions"]!["refunds"] = refunds;
+            return order;
+        });
+    }
+
+    private static decimal MinorOf(string amount) => decimal.Parse(amount, NumberStyles.Number, CultureInfo.InvariantCulture);
+`
+  : ''}
     private static string DeclineFor(string reason) => Known(DeclineDetails, reason, "Motivo");
 
     public static Task Declines(string reference, string reason) =>

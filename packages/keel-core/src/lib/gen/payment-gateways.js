@@ -256,6 +256,201 @@ export const GATEWAY_TRANSLATIONS = {
   }
 };
 
+// ─── La devolución en vuelo (corrida payment-spring, 2026-11-27) ─────────────
+//
+// Con `partial-refund` un cobro admite varias devoluciones, y el desenlace `refunded` lleva el importe de ESTA
+// devolución, nunca el acumulado devuelto sobre el cobro (`markRefunded.amount` en el diseño de pagos). La consulta del
+// cobro solo sabe el acumulado (`latest_charge.amount_refunded` de Stripe, la suma de `transactions.refunds` de
+// MercadoPago), así que leerla como el desenlace de la devolución en curso fallaba de tres formas: el importe salía
+// mal (el acumulado, recortado a lo que quedaba), una devolución que NUNCA llegó a la pasarela se daba por hecha (había
+// una anterior y el acumulado era > 0) y una rechazada también. La devolución en vuelo se localiza aparte, con
+// `refundStatus`, y la consulta del cobro deja de deducir el desenlace de la devolución del acumulado.
+//
+// Cómo se localiza depende de lo que la pasarela guarda de cada devolución:
+//   - `reference`: la devolución lleva en su metadata la referencia de negocio de la devolución (`refund.reference`),
+//     y se busca por ella. Stripe (Refund.metadata, GET /v1/refunds?payment_intent=…).
+//   - `delta`: la pasarela no admite referencia ni metadata propia en la devolución (MercadoPago Orders: `id` y
+//     `reference_id` los genera ella), así que la devolución en vuelo es lo procesado por encima de lo que el registro
+//     ya cuenta como devuelto. Como el diseño solo admite una devolución en curso por cobro, la diferencia es esa
+//     devolución. Una devolución hecha fuera del servicio (en el panel de la pasarela) la inflaría: es la asunción.
+// `succeeded` y `pending` son los estados de la devolución en la pasarela; cualquier otro es una devolución rechazada.
+
+export const REFUND_TRANSLATIONS = Object.freeze({
+  stripe: Object.freeze({
+    locate: 'reference',
+    referenceKey: 'keel_refund_reference',
+    succeeded: Object.freeze(['succeeded']),
+    pending: Object.freeze(['pending', 'requires_action'])
+  }),
+  mercadopago: Object.freeze({
+    locate: 'delta',
+    referenceKey: null,
+    succeeded: Object.freeze(['processed']),
+    pending: Object.freeze(['processing'])
+  })
+});
+
+export function refundTranslation(gatewayId) {
+  const translation = REFUND_TRANSLATIONS[gatewayId];
+  if (!translation) throw new Error(`payment-gateways: la pasarela '${gatewayId}' no dice cómo localiza una devolución`);
+  return translation;
+}
+
+/**
+ * Si el diseño sigue cada devolución por separado: con `refund.reference` (que `partial-refund` exige,
+ * `OBL-PAYMENTS-REFUND-REFERENCE`) el puerto lleva `refundStatus` y la consulta del cobro no dice nada de devoluciones.
+ * Sin ella el cobro admite una sola devolución, el acumulado ES esa devolución y todo queda como estaba.
+ */
+export function tracksRefundInFlight(payments) {
+  return Boolean(payments?.refund?.reference);
+}
+
+/**
+ * REFERENCIA EJECUTABLE del desenlace de la devolución en vuelo, la que siguen los adaptadores de los cuatro
+ * generadores. Importes en unidades MENORES (enteros), para no depender de una aritmética decimal.
+ *
+ * @param gatewayId        la pasarela (decide cómo se localiza)
+ * @param refunds          las devoluciones que la pasarela tiene del cobro: `{ amount, status, reference? }`
+ * @param refundReference  la referencia de negocio de la devolución en vuelo
+ * @param alreadyRefunded  lo que el registro ya cuenta como devuelto (solo lo usa `delta`)
+ * @returns `{ status: 'REFUNDED', amount }`, `{ status: 'PENDING' }` o `{ status: 'CAPTURED' }`: CAPTURED es el estado
+ *          del que salió la devolución, así que la devolución no llegó o se rechazó y el cobro vuelve a él
+ */
+export function refundOutcome(gatewayId, refunds, { refundReference, alreadyRefunded = 0 }) {
+  const t = refundTranslation(gatewayId);
+  if (t.locate === 'reference') {
+    const mine = refunds.find((refund) => refund.reference === refundReference);
+    if (!mine) return { status: 'CAPTURED' };
+    if (t.succeeded.includes(mine.status)) return { status: 'REFUNDED', amount: mine.amount };
+    if (t.pending.includes(mine.status)) return { status: 'PENDING' };
+    return { status: 'CAPTURED' };
+  }
+  if (refunds.some((refund) => t.pending.includes(refund.status))) return { status: 'PENDING' };
+  const processed = refunds.filter((refund) => t.succeeded.includes(refund.status)).reduce((sum, refund) => sum + refund.amount, 0);
+  const delta = processed - alreadyRefunded;
+  return delta > 0 ? { status: 'REFUNDED', amount: delta } : { status: 'CAPTURED' };
+}
+
+/**
+ * REFERENCIA EJECUTABLE de la respuesta SÍNCRONA a pedir una devolución cuando la respuesta es el cobro entero con
+ * todas sus devoluciones (MercadoPago: POST /v1/orders/{id}/refund devuelve la order). La devolución nueva es la que
+ * no estaba en la lectura previa del cobro, que el adaptador ya hace para nombrar la transacción. Si no aparece
+ * ninguna nueva, la respuesta no dice nada de ESTA devolución: queda en vuelo (PENDING) y la resuelve el barrido.
+ *
+ * @param knownIds  los ids de las devoluciones que el cobro tenía antes de pedirla
+ * @param refunds   las de la respuesta: `{ id, amount, status }`, importes en unidades menores
+ */
+export function refundResponseOutcome(gatewayId, knownIds, refunds) {
+  const t = refundTranslation(gatewayId);
+  const fresh = refunds.filter((refund) => !knownIds.includes(refund.id));
+  if (fresh.length === 0 || fresh.some((refund) => t.pending.includes(refund.status))) return { status: 'PENDING' };
+  const amount = fresh.filter((refund) => t.succeeded.includes(refund.status)).reduce((sum, refund) => sum + refund.amount, 0);
+  return amount > 0 ? { status: 'REFUNDED', amount } : { status: 'CAPTURED' };
+}
+
+/**
+ * Los casos RF-*: lo que cada adaptador tiene que contestar, por pasarela. `refunds` en unidades menores y con las
+ * referencias que cada pasarela guarda (Stripe en la metadata; MercadoPago no guarda ninguna). Los ejecuta la red de
+ * cada generador contra el adaptador emitido (payment-check en keel-spring).
+ */
+export const REFUND_OUTCOME_CASES = Object.freeze([
+  {
+    id: 'RF-1',
+    gateway: 'stripe',
+    what: 'la devolución en vuelo se completó: su importe, no el acumulado',
+    refunds: [{ amount: 300, status: 'succeeded', reference: 'rf-1' }, { amount: 200, status: 'succeeded', reference: 'rf-2' }],
+    refundReference: 'rf-2',
+    alreadyRefunded: 300,
+    expected: { status: 'REFUNDED', amount: 200 }
+  },
+  {
+    id: 'RF-2',
+    gateway: 'stripe',
+    what: 'la devolución en vuelo no llegó a la pasarela, aunque hubo otra antes',
+    refunds: [{ amount: 300, status: 'succeeded', reference: 'rf-1' }],
+    refundReference: 'rf-2',
+    alreadyRefunded: 300,
+    expected: { status: 'CAPTURED' }
+  },
+  {
+    id: 'RF-3',
+    gateway: 'stripe',
+    what: 'la devolución en vuelo está pendiente en la pasarela',
+    refunds: [{ amount: 300, status: 'succeeded', reference: 'rf-1' }, { amount: 200, status: 'pending', reference: 'rf-2' }],
+    refundReference: 'rf-2',
+    alreadyRefunded: 300,
+    expected: { status: 'PENDING' }
+  },
+  {
+    id: 'RF-4',
+    gateway: 'stripe',
+    what: 'la pasarela rechazó la devolución en vuelo',
+    refunds: [{ amount: 300, status: 'succeeded', reference: 'rf-1' }, { amount: 200, status: 'failed', reference: 'rf-2' }],
+    refundReference: 'rf-2',
+    alreadyRefunded: 300,
+    expected: { status: 'CAPTURED' }
+  },
+  {
+    id: 'RF-5',
+    gateway: 'mercadopago',
+    what: 'la devolución en vuelo se completó: lo procesado por encima de lo ya registrado',
+    refunds: [{ amount: 300, status: 'processed' }, { amount: 200, status: 'processed' }],
+    refundReference: 'rf-2',
+    alreadyRefunded: 300,
+    expected: { status: 'REFUNDED', amount: 200 }
+  },
+  {
+    id: 'RF-6',
+    gateway: 'mercadopago',
+    what: 'la devolución en vuelo no llegó a la pasarela, aunque hubo otra antes',
+    refunds: [{ amount: 300, status: 'processed' }],
+    refundReference: 'rf-2',
+    alreadyRefunded: 300,
+    expected: { status: 'CAPTURED' }
+  },
+  {
+    id: 'RF-7',
+    gateway: 'mercadopago',
+    what: 'la devolución en vuelo está procesándose en la pasarela',
+    refunds: [{ amount: 300, status: 'processed' }, { amount: 200, status: 'processing' }],
+    refundReference: 'rf-2',
+    alreadyRefunded: 300,
+    expected: { status: 'PENDING' }
+  }
+]);
+
+/** Los casos de la respuesta síncrona (solo MercadoPago: la de Stripe es el objeto de la devolución). */
+export const REFUND_RESPONSE_CASES = Object.freeze([
+  {
+    id: 'RF-8',
+    gateway: 'mercadopago',
+    what: 'la respuesta trae la devolución nueva y la anterior: cuenta solo la nueva',
+    knownIds: ['REF-1'],
+    refunds: [{ id: 'REF-1', amount: 300, status: 'processed' }, { id: 'REF-2', amount: 200, status: 'processed' }],
+    expected: { status: 'REFUNDED', amount: 200 }
+  },
+  {
+    id: 'RF-9',
+    gateway: 'mercadopago',
+    what: 'la respuesta no trae ninguna devolución nueva: queda en vuelo para el barrido',
+    knownIds: ['REF-1'],
+    refunds: [{ id: 'REF-1', amount: 300, status: 'processed' }],
+    expected: { status: 'PENDING' }
+  }
+]);
+
+/** La nota del handler del barrido sobre un candidato con una devolución en vuelo, con la llamada de cada generador. */
+export function refundSweepNote(payments, call) {
+  const inFlight = payments.refund.inFlight;
+  return (
+    `Un candidato en ${inFlight} NO se consulta con la llamada de arriba sino con ${call}: la referencia de su devolución ` +
+    `pendiente (${payments.refund.reference}) y lo que el registro ya cuenta como devuelto (sin esa devolución). La consulta ` +
+    'del cobro solo sabe el acumulado devuelto, y con una devolución anterior daría por hecha una que no llegó. ' +
+    `Devuelve REFUNDED (ya aplicado, con el importe de ESA devolución), PENDING (sigue en ${inFlight}) o CAPTURED: la ` +
+    'devolución no llegó a la pasarela o la rechazó, y el cobro vuelve al estado del que salió.'
+  );
+}
+
 export function gatewayTranslation(gatewayId) {
   const translation = GATEWAY_TRANSLATIONS[gatewayId];
   if (!translation) throw new Error(`payment-gateways: la pasarela '${gatewayId}' no tiene traducción`);

@@ -83,7 +83,7 @@ constructor, en el mismo orden. Siempre en este orden, y el orden es la defensa:
 
 En los escenarios, sin stubs a mano (la forma de la pasarela la pone el arnés, desde `flow.ts`):
 `gatewaySavesCard(marca, últimos4, mes, año)` y `gatewayRequiresAuthenticationToSave()` al guardar un medio;
-`gatewayReportsRefunded(referencia, total)` para una consulta que da el cobro devuelto por ese total;
+`gatewayReportsRefunded(referencia, total)` para una consulta que da el cobro devuelto por ese total (solo sin `refund.reference`; con ella, `gatewayReportsRefund(referencia, devolución, desenlace, importe, devueltoAntes)` para lo que la pasarela dice de UNA devolución: `"REFUNDED"`, `"PENDING"`, `"FAILED"` o `"MISSING"`, con lo que ya había devuelto antes);
 `gatewayCancelFails(referencia, 'authenticationFailed')` para una anulación que vuelve como cobro fallido;
 `gatewayAnswersLate(GatewayCall.CAPTURE, referencia, 'CAPTURED', ms)` para la pasarela que retiene su respuesta
 mientras el aviso llega antes (envía el aviso sin esperar a la petición; el retardo, por debajo del read-timeout).

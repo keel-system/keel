@@ -117,3 +117,61 @@ test('las unidades menores son las de ISO 4217 (la tabla del JDK), no las de Int
   const intl = (code) => new Intl.NumberFormat('en', { style: 'currency', currency: code }).resolvedOptions().maximumFractionDigits;
   assert.notEqual(intl('IQD'), CURRENCY_MINOR_UNITS.IQD);
 });
+import {
+  REFUND_OUTCOME_CASES,
+  REFUND_RESPONSE_CASES,
+  REFUND_TRANSLATIONS,
+  refundOutcome,
+  refundResponseOutcome,
+  refundSweepNote,
+  tracksRefundInFlight
+} from '../src/lib/gen/payment-gateways.js';
+
+// ─── La devolución en vuelo (corrida payment-spring, 2026-11-27) ─────────────
+
+test('toda pasarela del catálogo dice cómo localiza una devolución', () => {
+  assert.deepEqual(Object.keys(REFUND_TRANSLATIONS).sort(), Object.keys(PAYMENT_GATEWAYS).sort());
+  for (const [id, t] of Object.entries(REFUND_TRANSLATIONS)) {
+    assert.ok(['reference', 'delta'].includes(t.locate), id);
+    assert.equal(t.locate === 'reference', Boolean(t.referenceKey), `${id}: solo 'reference' lleva clave de metadata`);
+  }
+});
+
+test('la referencia del desenlace de la devolución en vuelo cumple los casos RF-*', () => {
+  for (const c of REFUND_OUTCOME_CASES) {
+    assert.deepEqual(refundOutcome(c.gateway, c.refunds, c), c.expected, `${c.id}: ${c.what}`);
+  }
+  for (const c of REFUND_RESPONSE_CASES) {
+    assert.deepEqual(refundResponseOutcome(c.gateway, c.knownIds, c.refunds), c.expected, `${c.id}: ${c.what}`);
+  }
+});
+
+test('los casos RF-* cubren las dos pasarelas y los tres desenlaces', () => {
+  for (const gateway of Object.keys(REFUND_TRANSLATIONS)) {
+    const statuses = new Set(REFUND_OUTCOME_CASES.filter((c) => c.gateway === gateway).map((c) => c.expected.status));
+    assert.deepEqual([...statuses].sort(), ['CAPTURED', 'PENDING', 'REFUNDED'], gateway);
+  }
+  const ids = [...REFUND_OUTCOME_CASES, ...REFUND_RESPONSE_CASES].map((c) => c.id);
+  assert.equal(new Set(ids).size, ids.length);
+});
+
+test('el acumulado no es el desenlace: leerlo así falla los casos de una devolución previa', () => {
+  // El defecto de la corrida, escrito como alternativa: la suma de lo devuelto.
+  const cumulative = (refunds) => ({ status: 'REFUNDED', amount: refunds.reduce((sum, r) => sum + r.amount, 0) });
+  const caught = REFUND_OUTCOME_CASES.filter((c) => JSON.stringify(cumulative(c.refunds)) !== JSON.stringify(c.expected));
+  assert.equal(caught.length, REFUND_OUTCOME_CASES.length);
+});
+
+test('solo un diseño con refund.reference sigue cada devolución por separado', () => {
+  assert.equal(tracksRefundInFlight({ refund: { reference: 'refundRequestId' } }), true);
+  assert.equal(tracksRefundInFlight({ refund: { reference: null } }), false);
+  assert.equal(tracksRefundInFlight({}), false);
+  assert.equal(tracksRefundInFlight(null), false);
+});
+
+test('la nota del barrido nombra la llamada, la referencia y el estado en vuelo', () => {
+  const note = refundSweepNote({ refund: { inFlight: 'refunding', reference: 'refundRequestId' } }, 'x.consultRefund(...)');
+  for (const fragment of ['refunding', 'refundRequestId', 'x.consultRefund(...)', 'CAPTURED', 'PENDING', 'REFUNDED']) {
+    assert.ok(note.includes(fragment), fragment);
+  }
+});

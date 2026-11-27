@@ -11,7 +11,7 @@
 // Lo marcado VERIFICAR EN SANDBOX es lo que la matriz de gateway-support.js declara `unverified`: la
 // documentación no fija la forma exacta y build lo genera con la lectura más probable, avisando.
 
-import { gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
+import { gatewayTranslation, refundTranslation, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { javaFile, javaPath, subPackage } from '../render.js';
 import { savedMethodJava } from '../payments.js';
 
@@ -33,6 +33,9 @@ const SUB = 'infrastructure.payment.mercadopago';
 const TRANSLATION = gatewayTranslation('mercadopago');
 const SAVED = savedMethodJava(TRANSLATION, 'MercadoPago');
 const DETAILS = TRANSLATION.declines;
+// MercadoPago no guarda referencia propia en una devolución: se localiza por diferencia (keel-core: REFUND_TRANSLATIONS).
+const REFUND = refundTranslation('mercadopago');
+const javaCases = (values) => values.map((value) => `"${value}"`).join(', ');
 
 function renderAdapter(model, ctx) {
   const p = model.payments;
@@ -106,10 +109,47 @@ function renderAdapter(model, ctx) {
             partial.put("amount", MoneyAmounts.toMajorUnits(amount, currency));
         }`
       : '';
-    methods.push(`    @Override
+    if (tracksRefundInFlight(p)) {
+      methods.push(trackedRefund(p, amountParam));
+    } else {
+      methods.push(`    @Override
     public GatewayOutcome refund(String reference, ${p.refund.reference ? 'String refundReference, ' : ''}String gatewayPaymentId${amountParam}) {
         ObjectNode body = mapper.createObjectNode();${partial}
         return followUp("/v1/orders/" + gatewayPaymentId + "/refund", body, reference, gatewayPaymentId, "refund", ${refundKeyCall(p)});
+    }`);
+    }
+  }
+  if (tracksRefundInFlight(p)) {
+    methods.push(`    /**
+     * La devolución en vuelo, por diferencia: MercadoPago no guarda referencia propia en una devolución, así que es lo
+     * procesado por encima de lo que el registro ya cuenta como devuelto (el diseño admite una sola devolución en curso
+     * por cobro). La suma de transactions.refunds es el acumulado, no el desenlace de ESTA devolución.
+     */
+    @Override
+    public GatewayOutcome refundStatus(String reference, String refundReference, String gatewayPaymentId, BigDecimal alreadyRefunded) {
+        JsonNode order;
+        try {
+            order = fetch(gatewayPaymentId);
+        } catch (RestClientException noAnswer) {
+            throw unavailable("refundStatus", noAnswer);
+        }
+        BigDecimal processed = BigDecimal.ZERO;
+        for (JsonNode refund : order.path("transactions").path("refunds")) {
+            switch (refund.path("status").asString("")) {
+                case ${javaCases(REFUND.pending)} -> {
+                    return GatewayOutcome.of(GatewayStatus.PENDING, reference, gatewayPaymentId);
+                }
+                case ${javaCases(REFUND.succeeded)} -> processed = processed.add(new BigDecimal(refund.path("amount").asString("0")));
+                default -> {
+                    // Rechazada: no cuenta como devuelta.
+                }
+            }
+        }
+        BigDecimal refunded = processed.subtract(alreadyRefunded == null ? BigDecimal.ZERO : alreadyRefunded);
+        return refunded.signum() > 0
+                ? GatewayOutcome.refunded(reference, gatewayPaymentId, refunded)
+                // Nada por encima de lo registrado: la devolución no llegó a la pasarela o la rechazó.
+                : GatewayOutcome.of(GatewayStatus.CAPTURED, reference, gatewayPaymentId);
     }`);
   }
 
@@ -271,14 +311,21 @@ ${methods.join('\n\n')}
         JsonNode payment = order.path("transactions").path("payments").path(0);
         String detail = order.path("status_detail").asString(payment.path("status_detail").asString(""));
         String status = order.path("status").asString("");
-        if (status.equals("refunded") || detail.equals("refunded") || detail.equals("partially_refunded")) {
+${tracksRefundInFlight(p)
+  ? `        if (status.equals("refunded") || detail.equals("refunded") || detail.equals("partially_refunded")) {
+            // Una order con devoluciones sigue cobrada: la suma de transactions.refunds es el acumulado, no el
+            // desenlace de una devolución. La devolución en vuelo la contesta refundStatus.
+            return GatewayOutcome.of(GatewayStatus.CAPTURED, ref, id);
+        }
+`
+  : `        if (status.equals("refunded") || detail.equals("refunded") || detail.equals("partially_refunded")) {
             BigDecimal refunded = BigDecimal.ZERO;
             for (JsonNode refund : order.path("transactions").path("refunds")) {
                 refunded = refunded.add(new BigDecimal(refund.path("amount").asString("0")));
             }
             return GatewayOutcome.refunded(ref, id, refunded);
         }
-        return switch (status) {
+`}        return switch (status) {
             case "action_required" -> GatewayOutcome.actionRequired(ref, id, customerAction(payment));
             case "processed" -> detail.equals("waiting_capture")
                     ? GatewayOutcome.of(GatewayStatus.AUTHORIZED, ref, id)
@@ -289,7 +336,46 @@ ${methods.join('\n\n')}
         };
     }
 
-    /** VERIFICAR EN SANDBOX (gateway-support.js: customer-action sin verificar): la acción va opaca. */
+${tracksRefundInFlight(p) ? `    /** Los ids de las devoluciones que ya tenía la order: lo que NO es la devolución que se acaba de pedir. */
+    private static Set<String> refundIds(JsonNode order) {
+        Set<String> ids = new HashSet<>();
+        for (JsonNode refund : order.path("transactions").path("refunds")) {
+            ids.add(refund.path("id").asString(""));
+        }
+        return ids;
+    }
+
+    /**
+     * La respuesta a pedir una devolución es la order entera, con TODAS sus devoluciones: la nueva es la que no estaba
+     * en la lectura previa. Sin ninguna nueva, la respuesta no dice nada de ésta y queda en vuelo para el barrido.
+     */
+    private static GatewayOutcome refundResponse(JsonNode order, Set<String> known, String reference, String gatewayPaymentId) {
+        BigDecimal refunded = BigDecimal.ZERO;
+        boolean fresh = false;
+        for (JsonNode refund : order.path("transactions").path("refunds")) {
+            if (known.contains(refund.path("id").asString(""))) {
+                continue;
+            }
+            fresh = true;
+            switch (refund.path("status").asString("")) {
+                case ${javaCases(REFUND.pending)} -> {
+                    return GatewayOutcome.of(GatewayStatus.PENDING, reference, gatewayPaymentId);
+                }
+                case ${javaCases(REFUND.succeeded)} -> refunded = refunded.add(new BigDecimal(refund.path("amount").asString("0")));
+                default -> {
+                    // Rechazada: no cuenta como devuelta.
+                }
+            }
+        }
+        if (!fresh) {
+            return GatewayOutcome.of(GatewayStatus.PENDING, reference, gatewayPaymentId);
+        }
+        return refunded.signum() > 0
+                ? GatewayOutcome.refunded(reference, gatewayPaymentId, refunded)
+                : GatewayOutcome.of(GatewayStatus.CAPTURED, reference, gatewayPaymentId);
+    }
+
+` : ''}    /** VERIFICAR EN SANDBOX (gateway-support.js: customer-action sin verificar): la acción va opaca. */
     private String customerAction(JsonNode payment) {
         return payment.path("payment_method").toString();
     }
@@ -338,7 +424,54 @@ ${p.savePaymentMethod ? SAVED.helpers : ''}
     'org.springframework.web.client.RestClientResponseException'
   ];
   if (p.savePaymentMethod) imports.push(...SAVED.imports(ctx.domainPkg));
+  if (tracksRefundInFlight(p)) imports.push('java.util.HashSet', 'java.util.Set');
   return { path: javaPath(model, SUB, 'MercadopagoPaymentGateway'), content: javaFile(subPackage(model, SUB), imports, body) };
+}
+
+// La devolución de un diseño que sigue cada una (refund.reference): la lectura previa de la order se hace SIEMPRE, no
+// solo para nombrar la transacción de una parcial, porque deja las devoluciones que ya tenía y la nueva es la que no
+// estaba (corrida payment-spring: sumarlas todas daba el acumulado como importe de la segunda devolución parcial).
+function trackedRefund(p, amountParam) {
+  const partial = p.refund.amount
+    ? `
+        if (amount != null) {
+            JsonNode transaction = current.path("transactions").path("payments").path(0);
+            ObjectNode partial = body.putArray("transactions").addObject();
+            partial.put("id", transaction.path("id").asString());
+            partial.put("amount", MoneyAmounts.toMajorUnits(amount, currency));
+        }`
+    : '';
+  return `    @Override
+    public GatewayOutcome refund(String reference, String refundReference, String gatewayPaymentId${amountParam}) {
+        ObjectNode body = mapper.createObjectNode();
+        // La lectura previa falla igual que la devolución: dentro del mismo tratamiento, o un 5xx aquí sale como un 500
+        // con el cobro atascado en refunding.
+        JsonNode current;
+        try {
+            current = fetch(gatewayPaymentId);
+        } catch (RestClientException noAnswer) {
+            throw unavailable("refund", noAnswer);
+        }${partial}
+        Set<String> known = refundIds(current);
+        JsonNode order;
+        try {
+            order = json(http.post().uri("/v1/orders/" + gatewayPaymentId + "/refund")
+                    .headers(headers -> credentials(headers, ${refundKeyCall(p)}))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body.toString())
+                    .retrieve()
+                    .body(String.class));
+        } catch (RestClientResponseException error) {
+            if (error.getStatusCode().is5xxServerError()) {
+                throw unavailable("refund", error);
+            }
+            // Rechazada: se pregunta el estado real, que con devoluciones es el cobro capturado.
+            return status(reference, gatewayPaymentId);
+        } catch (RestClientException noAnswer) {
+            throw unavailable("refund", noAnswer);
+        }
+        return refundResponse(order, known, reference, gatewayPaymentId);
+    }`;
 }
 
 function renderVerifier(model, ctx) {

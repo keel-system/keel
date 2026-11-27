@@ -10,6 +10,7 @@ import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, save
 import { PAYMENT_TEST_SECRETS } from './config.js';
 import { PAYMENT_NOTICE_PATH } from './payments.js';
 import { paymentTestCurrency as testCurrency } from '@keel-system/keel-core/gen/payments-config';
+import { refundTranslation, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 
 export function usesPaymentHarness(model) {
   return Boolean(model.payments);
@@ -49,7 +50,8 @@ export function paymentHarnessSection(model) {
     .map(([call, route]) => `            Map.entry(GatewayCall.${call}, new String[] {"${route.method}", "${route.path}"})`)
     .join(',\n');
   const calls = Object.keys(probes.calls).join(', ');
-  const specific = gateway.id === 'stripe' ? stripeSpecific(probes, currency) : mercadopagoSpecific(probes, currency);
+  const tracks = tracksRefundInFlight(model.payments);
+  const specific = gateway.id === 'stripe' ? stripeSpecific(probes, currency, tracks) : mercadopagoSpecific(probes, currency, tracks);
   return `
     // ── Pasarela de pago de prueba (capa payments, ${gateway.label}) ─────────────
     //
@@ -100,10 +102,14 @@ ${routes});
         gatewayDecline(reference, reason);
     }
 
-    /** La pasarela no contesta a esa llamada: corta la conexión. La acción queda EN DUDA. */
+    /**
+     * La pasarela no contesta a esa llamada: la respuesta se corta a mitad. La acción queda EN DUDA, y la pasarela cuenta
+     * UNA petición: con un corte antes de responder, el cliente HTTP del JDK repite una consulta (un GET) y
+     * {@link #gatewayCallCount} contaría dos (corrida payment-spring, FL-REC-005).
+     */
     protected static void gatewayDoesNotAnswer(GatewayCall call) {
         String[] route = GATEWAY_ROUTES.get(call);
-        stubConnectionFault(route[0], route[1]);
+        stubBrokenResponse(route[0], route[1]);
     }
 
     /**
@@ -117,12 +123,35 @@ ${routes});
             return;
         }
         if ("REFUNDED".equals(status)) {
-            gatewayReportsRefunded(reference, new BigDecimal("10.00"));
-            return;
+${tracks
+  ? `            // Con varias devoluciones por cobro, la consulta del cobro no dice nada de una devolución: la contesta la
+            // de la devolución en vuelo.
+            throw new IllegalArgumentException("gatewayReports: una devolución se programa con gatewayReportsRefund(referencia, "
+                    + "referencia de la devolución, desenlace, importe, lo devuelto antes)");`
+  : `            gatewayReportsRefunded(reference, new BigDecimal("10.00"));
+            return;`}
         }
         gatewayReportsObject(reference, gatewayObject(reference, status, null, null));
     }
-
+${tracks
+  ? `
+    /**
+     * Lo que la pasarela dice de UNA devolución del cobro de esa referencia, la de {@code refundReference}, cuando el
+     * servidor le pregunta por ella (una devolución cuya respuesta no llegó y el barrido resuelve consultando):
+     * "REFUNDED" (se completó por {@code amount}), "PENDING" (la sigue procesando), "FAILED" (la rechazó) o "MISSING" (no
+     * le llegó nunca; {@code amount} no se usa). {@code previouslyRefunded} es lo que la pasarela ya había devuelto del
+     * cobro en devoluciones ANTERIORES, ya registradas (cero si es la primera): es lo que distingue el importe de ESTA
+     * devolución del acumulado.
+     */
+    protected static void gatewayReportsRefund(String reference, String refundReference, String outcome, BigDecimal amount,
+            BigDecimal previouslyRefunded) {
+        if (!List.of("REFUNDED", "PENDING", "FAILED", "MISSING").contains(outcome)) {
+            throw new IllegalArgumentException("gatewayReportsRefund: " + outcome + " no es REFUNDED, PENDING, FAILED ni MISSING");
+        }
+        gatewayRefundsAtGateway(reference, refundReference, outcome, amount, previouslyRefunded);
+    }
+`
+  : `
     /**
      * Preguntada por el cobro de esa referencia, la pasarela lo da por devuelto con ESE total: lo que mide un escenario
      * de devolución parcial, o una devolución cuya respuesta no llegó y el barrido resuelve consultando.
@@ -130,7 +159,7 @@ ${routes});
     protected static void gatewayReportsRefunded(String reference, BigDecimal refundedTotal) {
         gatewayReportsObject(reference, gatewayObject(reference, "REFUNDED", null, refundedTotal));
     }
-
+`}
     private static void gatewayReportsObject(String reference, String object) {
         gatewayStubPath(GatewayCall.STATUS, gatewayIdFor(reference), null, 200, object);
         gatewayStub(GatewayCall.SEARCH, reference, null, 200, "{\\"data\\": [" + object + "]}");
@@ -298,7 +327,8 @@ ${authentication
 ${specific}`;
 }
 
-function stripeSpecific(probes, currency) {
+function stripeSpecific(probes, currency, tracks) {
+  const refund = refundTranslation('stripe');
   const statusMap = Object.entries(probes.statuses).map(([key, value]) => `            Map.entry("${key}", "${value}")`).join(',\n');
   const declineMap = Object.entries(probes.declines).map(([key, value]) => `            Map.entry("${key}", "${value}")`).join(',\n');
   return `
@@ -358,7 +388,40 @@ ${declineMap});
                         + GATEWAY_CURRENCY.toLowerCase(Locale.ROOT) + "\\", \\"payment_intent\\": \\"" + gatewayIdFor(reference) + "\\"}");
     }
 
-    private Response gatewayNotice(String reference, String secret) {
+${tracks
+  ? `    // Las devoluciones del cobro tal como las lista Stripe (GET /v1/refunds?payment_intent=…), con la referencia de cada
+    // una en su metadata: es lo que lee StripePaymentGateway.refundStatus.
+    private static void gatewayRefundsAtGateway(String reference, String refundReference, String outcome, BigDecimal amount,
+            BigDecimal previouslyRefunded) {
+        String id = gatewayIdFor(reference);
+        List<String> refunds = new java.util.ArrayList<>();
+        if (previouslyRefunded != null && previouslyRefunded.signum() > 0) {
+            refunds.add(stripeRefund(id + "_previous", "keel-previous-refund", "${refund.succeeded[0]}", previouslyRefunded));
+        }
+        if (!"MISSING".equals(outcome)) {
+            String status = switch (outcome) {
+                case "REFUNDED" -> "${refund.succeeded[0]}";
+                case "PENDING" -> "${refund.pending[0]}";
+                default -> "failed";
+            };
+            refunds.add(stripeRefund(id + "_" + refundReference.replaceAll("[^A-Za-z0-9]", ""), refundReference, status, amount));
+        }
+        String list = "{\\"object\\": \\"list\\", \\"has_more\\": false, \\"data\\": [" + String.join(", ", refunds) + "]}";
+        String request = "{" + quote("method") + ": " + quote("GET") + ", " + quote("urlPath") + ": " + quote("/v1/refunds") + ", "
+                + quote("queryParameters") + ": {" + quote("payment_intent") + ": {" + quote("equalTo") + ": " + quote(id) + "}}}";
+        String response = "{" + quote("status") + ": 200, " + quote("headers") + ": {" + quote("Content-Type") + ": "
+                + quote("application/json") + "}, " + quote("body") + ": " + quote(list) + "}";
+        stubAdmin("/mappings", "{" + quote("request") + ": " + request + ", " + quote("response") + ": " + response + "}");
+    }
+
+    private static String stripeRefund(String id, String refundReference, String status, BigDecimal amount) {
+        return "{\\"id\\": \\"re_" + id + "\\", \\"object\\": \\"refund\\", \\"status\\": \\"" + status + "\\", \\"amount\\": "
+                + amount.movePointRight(2).longValueExact() + ", \\"currency\\": \\"" + GATEWAY_CURRENCY.toLowerCase(Locale.ROOT)
+                + "\\", \\"metadata\\": {\\"${refund.referenceKey}\\": \\"" + refundReference + "\\"}}";
+    }
+
+`
+  : ''}    private Response gatewayNotice(String reference, String secret) {
         String id = gatewayIdFor(reference);
         String body = "{\\"id\\": \\"evt_" + id + "\\", \\"type\\": \\"payment_intent.updated\\", \\"data\\": {\\"object\\": {\\"id\\": \\""
                 + id + "\\", \\"object\\": \\"payment_intent\\"}}}";
@@ -369,7 +432,8 @@ ${declineMap});
 `;
 }
 
-function mercadopagoSpecific(probes, currency) {
+function mercadopagoSpecific(probes, currency, tracks) {
+  const refund = refundTranslation('mercadopago');
   const statusMap = Object.entries(probes.statuses)
     .map(([key, [status, detail]]) => `            Map.entry("${key}", new String[] {"${status}", "${detail}"})`)
     .join(',\n');
@@ -396,11 +460,40 @@ ${declineMap});
                 .append("\\", \\"payment_method\\": {\\"type\\": \\"credit_card\\", \\"url\\": \\"https://pasarela.test/3ds/")
                 .append(id).append("\\"}}]");
         if (refunded != null) {
-            json.append(", \\"refunds\\": [{\\"amount\\": \\"").append(refunded.toPlainString()).append("\\"}]");
+            json.append(", \\"refunds\\": [").append(mercadopagoRefund(id + "-new", "${refund.succeeded[0]}", refunded)).append("]");
         }
         return json.append("}}").toString();
     }
 
+    // Una devolución de la order con la forma que leen el adaptador y su refundStatus: id, importe y estado.
+    private static String mercadopagoRefund(String id, String status, BigDecimal amount) {
+        return "{\\"id\\": \\"REF" + id + "\\", \\"status\\": \\"" + status + "\\", \\"amount\\": \\"" + amount.toPlainString() + "\\"}";
+    }
+${tracks
+  ? `
+    // La order con sus devoluciones: MercadoPago no guarda referencia propia en una devolución, así que refundStatus la
+    // localiza por lo procesado por encima de lo que el registro ya cuenta como devuelto.
+    private static void gatewayRefundsAtGateway(String reference, String refundReference, String outcome, BigDecimal amount,
+            BigDecimal previouslyRefunded) {
+        String id = gatewayIdFor(reference);
+        List<String> refunds = new java.util.ArrayList<>();
+        if (previouslyRefunded != null && previouslyRefunded.signum() > 0) {
+            refunds.add(mercadopagoRefund(id + "-previous", "${refund.succeeded[0]}", previouslyRefunded));
+        }
+        if (!"MISSING".equals(outcome)) {
+            String status = switch (outcome) {
+                case "REFUNDED" -> "${refund.succeeded[0]}";
+                case "PENDING" -> "${refund.pending[0]}";
+                default -> "failed";
+            };
+            refunds.add(mercadopagoRefund(id + "-" + refundReference.replaceAll("[^A-Za-z0-9]", ""), status, amount));
+        }
+        String order = gatewayObject(reference, "CAPTURED", null, null);
+        order = order.substring(0, order.length() - 2) + ", \\"refunds\\": [" + String.join(", ", refunds) + "]}}";
+        gatewayReportsObject(reference, order);
+    }
+`
+  : ''}
     private static void gatewayDecline(String reference, String reason) {
         String detail = GATEWAY_DECLINES.getOrDefault(reason, "cc_rejected_other_reason");
         gatewayStub(GatewayCall.CHARGE, null, reference, 200, gatewayObject(reference, "FAILED", detail, null));

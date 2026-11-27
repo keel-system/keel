@@ -120,7 +120,12 @@ test('las cuatro respuestas se renderizan en UN solo sitio', () => {
   assert.match(bodyOf(source, 'protected static void stubTimeout('), /stubMapping\(method, pathPattern, stubSlowBody\(/);
   assert.match(
     bodyOf(source, 'protected static void stubConnectionFault('),
-    /stubMapping\(method, pathPattern, stubFaultBody\(\)/
+    /stubMapping\(method, pathPattern, stubFaultBody\("CONNECTION_RESET_BY_PEER"\)/
+  );
+  // La respuesta cortada a mitad (corrida payment-spring, G2) también pasa por él.
+  assert.match(
+    bodyOf(source, 'protected static void stubBrokenResponse('),
+    /stubMapping\(method, pathPattern, stubFaultBody\("MALFORMED_RESPONSE_CHUNK"\)/
   );
   // Y una sola definición de cada forma, no dos.
   for (const render of ['stubOkBody', 'stubSlowBody', 'stubDelayedBody', 'stubFaultBody']) {

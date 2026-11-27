@@ -208,9 +208,13 @@ try {
       const asked = await gatewayAdapter.savePaymentMethod('tok_z', 'payer-3').then(() => null, (error) => error);
       step(`${gateway}: el 3DS al guardar es SU excepción, no un rechazo`, asked?.name === 'PaymentMethodAuthenticationRequiredException', asked?.name);
     }
-    await harness.gatewayReportsRefunded('pay-8', '7.50');
-    const refundedTotal = await gatewayAdapter.status('pay-8', harness.gatewayIdFor('pay-8'));
-    step(`${gateway}: devuelto por un total concreto`, refundedTotal.status === 'REFUNDED' && refundedTotal.refundedAmount?.toString() === '7.50', `${refundedTotal.status} ${refundedTotal.refundedAmount}`);
+    // La devolución en vuelo (corrida payment-spring): su importe, no el acumulado, y una que no llegó no está hecha.
+    await harness.gatewayReportsRefund('pay-8', 'rf-8', 'REFUNDED', '2.50', '5.00');
+    const inFlight = await gatewayAdapter.refundStatus('pay-8', 'rf-8', harness.gatewayIdFor('pay-8'), Decimal.parse('5.00'));
+    step(`${gateway}: la devolución en vuelo lleva SU importe, no el acumulado`, inFlight.status === 'REFUNDED' && inFlight.refundedAmount?.toString() === '2.50', `${inFlight.status} ${inFlight.refundedAmount}`);
+    await harness.gatewayReportsRefund('pay-11', 'rf-11', 'MISSING', '2.50', '5.00');
+    const missing = await gatewayAdapter.refundStatus('pay-11', 'rf-11', harness.gatewayIdFor('pay-11'), Decimal.parse('5.00'));
+    step(`${gateway}: la devolución que no llegó no está hecha aunque hubiera otra antes`, missing.status === 'CAPTURED', missing.status);
     await harness.gatewayCancelFails('pay-9', 'authenticationFailed');
     const cancelFailed = await gatewayAdapter.voidAuthorization('pay-9', harness.gatewayIdFor('pay-9'));
     step(`${gateway}: la anulación vuelve como cobro fallido con su motivo`, cancelFailed.status === 'FAILED' && cancelFailed.failureReason === 'authenticationFailed', `${cancelFailed.status} ${cancelFailed.failureReason}`);

@@ -10,7 +10,7 @@
 // Lo marcado VERIFICAR EN SANDBOX es lo que la matriz declara `unverified`: build lo genera con la lectura más probable,
 // avisando.
 
-import { gatewayTranslation, refundIdempotencyKey } from '@keel-system/keel-core/gen/payment-gateways';
+import { REFUND_OUTCOME_CASES, REFUND_RESPONSE_CASES, gatewayTranslation, refundIdempotencyKey, refundTranslation, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { csFile, csString, located, namespaceOf } from '../render.js';
 import { PAYMENT_GATEWAY_PORT, NOTICE_VERIFIER_PORT, paymentInfraNamespace, paymentNamespace, reasonMember, savedMethodCs } from '../payments.js';
@@ -25,6 +25,8 @@ const refundKeyOf = (p, reference, value) => refundIdempotencyKey(reference, p.r
 
 
 const TRANSLATION = gatewayTranslation('mercadopago');
+// MercadoPago no guarda referencia propia en una devolución: se localiza por diferencia (keel-core: REFUND_TRANSLATIONS).
+const REFUND = refundTranslation('mercadopago');
 const PROBES = paymentProbesFor('mercadopago');
 
 /** Un JSON como literal crudo de C# (las pruebas emitidas lo pasan a la pasarela falsa). */
@@ -135,11 +137,47 @@ function adapterBody(model) {
             });
         }`
       : '';
-    methods.push(`    public ${p.refund.amount ? 'async ' : ''}Task<GatewayOutcome> Refund(string reference, ${refundReferenceParam(p)}string gatewayPaymentId${amountParam}, ${ct})
+    if (tracksRefundInFlight(p)) {
+      methods.push(trackedRefund(p, amountParam, ct));
+    } else {
+      methods.push(`    public ${p.refund.amount ? 'async ' : ''}Task<GatewayOutcome> Refund(string reference, ${refundReferenceParam(p)}string gatewayPaymentId${amountParam}, ${ct})
     {
         ArgumentNullException.ThrowIfNull(gatewayPaymentId);
         var body = new JsonObject();${partial}
         return ${p.refund.amount ? 'await ' : ''}FollowUp($"/v1/orders/{Uri.EscapeDataString(gatewayPaymentId)}/refund", body, reference, gatewayPaymentId, "refund", cancellationToken, ${refundKeyCall(p)});
+    }`);
+    }
+  }
+  if (tracksRefundInFlight(p)) {
+    methods.push(`    /// <summary>
+    /// La devolución en vuelo, por diferencia: MercadoPago no guarda referencia propia en una devolución, así que es lo
+    /// procesado por encima de lo que el registro ya cuenta como devuelto (el diseño admite una sola devolución en curso por
+    /// cobro). La suma de transactions.refunds es el acumulado, no el desenlace de ESTA devolución.
+    /// </summary>
+    public async Task<GatewayOutcome> RefundStatus(string reference, string refundReference, string gatewayPaymentId, decimal alreadyRefunded, ${ct})
+    {
+        ArgumentNullException.ThrowIfNull(gatewayPaymentId);
+        var answer = await Send("refundStatus", new GatewayRequest("GET", $"/v1/orders/{Uri.EscapeDataString(gatewayPaymentId)}"), cancellationToken);
+        if (answer.Status >= 400)
+        {
+            throw Unavailable("refundStatus", answer);
+        }
+        var processed = 0m;
+        foreach (var refund in RefundsOf(GatewayJson.Parse(answer.Text, Gateway)))
+        {
+            var status = GatewayJson.Text(refund, "status") ?? string.Empty;
+            if (RefundPending.Contains(status))
+            {
+                return GatewayOutcome.Of(GatewayStatus.Pending, reference, gatewayPaymentId);
+            }
+            if (RefundSucceeded.Contains(status))
+            {
+                processed += AmountOf(refund);
+            }
+        }
+        var refunded = processed - alreadyRefunded;
+        // Nada por encima de lo registrado: la devolución no llegó a la pasarela o la rechazó.
+        return refunded > 0m ? GatewayOutcome.Refunded(reference, gatewayPaymentId, refunded) : GatewayOutcome.Of(GatewayStatus.Captured, reference, gatewayPaymentId);
     }`);
   }
 
@@ -257,7 +295,15 @@ ${methods.join('\n\n')}
         var payment = FirstPayment(order);
         var detail = GatewayJson.Text(order, "status_detail") ?? GatewayJson.Text(payment, "status_detail") ?? string.Empty;
         var status = GatewayJson.Text(order, "status") ?? string.Empty;
-        if (status == "refunded" || detail is "refunded" or "partially_refunded")
+${tracksRefundInFlight(p)
+  ? `        if (status == "refunded" || detail is "refunded" or "partially_refunded")
+        {
+            // Una order con devoluciones sigue cobrada: la suma de transactions.refunds es el acumulado, no el desenlace de una
+            // devolución. La devolución en vuelo la contesta RefundStatus.
+            return GatewayOutcome.Of(GatewayStatus.Captured, known, id);
+        }
+`
+  : `        if (status == "refunded" || detail is "refunded" or "partially_refunded")
         {
             var refunded = 0m;
             foreach (var refund in GatewayJson.Array(GatewayJson.Object(order, "transactions"), "refunds"))
@@ -266,7 +312,7 @@ ${methods.join('\n\n')}
             }
             return GatewayOutcome.Refunded(known, id, refunded);
         }
-        return status switch
+`}        return status switch
         {
             "action_required" => GatewayOutcome.ActionRequired(known, id, CustomerAction(payment)),
             "processed" => detail == "waiting_capture" ? GatewayOutcome.Of(GatewayStatus.Authorized, known, id) : GatewayOutcome.Of(GatewayStatus.Captured, known, id),
@@ -276,7 +322,59 @@ ${methods.join('\n\n')}
         };
     }
 
-    /// <summary>VERIFICAR EN SANDBOX (customer-action sin verificar): la acción va opaca. Sin medio de pago, no hay acción que dar.</summary>
+${tracksRefundInFlight(p) ? `    /// <summary>Los estados de una devolución de la order (keel-core: REFUND_TRANSLATIONS); cualquier otro es una rechazada.</summary>
+    private static readonly HashSet<string> RefundSucceeded = new(StringComparer.Ordinal) { ${REFUND.succeeded.map(csString).join(', ')} };
+
+    private static readonly HashSet<string> RefundPending = new(StringComparer.Ordinal) { ${REFUND.pending.map(csString).join(', ')} };
+
+    /// <summary>Las devoluciones de la order, tal como las lista.</summary>
+    private static IEnumerable<JsonElement> RefundsOf(JsonElement order)
+    {
+        foreach (var refund in GatewayJson.Array(GatewayJson.Object(order, "transactions"), "refunds"))
+        {
+            if (refund.ValueKind == JsonValueKind.Object)
+            {
+                yield return refund;
+            }
+        }
+    }
+
+    private static decimal AmountOf(JsonElement refund) =>
+        decimal.Parse(GatewayJson.Text(refund, "amount") ?? "0", NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// La respuesta a pedir una devolución es la order entera, con TODAS sus devoluciones: la nueva es la que no estaba en la
+    /// lectura previa. Sin ninguna nueva, la respuesta no dice nada de ésta y queda en vuelo para el barrido.
+    /// </summary>
+    private static GatewayOutcome RefundResponse(JsonElement order, HashSet<string> known, string reference, string gatewayPaymentId)
+    {
+        var refunded = 0m;
+        var fresh = false;
+        foreach (var refund in RefundsOf(order))
+        {
+            if (known.Contains(GatewayJson.Text(refund, "id") ?? string.Empty))
+            {
+                continue;
+            }
+            fresh = true;
+            var status = GatewayJson.Text(refund, "status") ?? string.Empty;
+            if (RefundPending.Contains(status))
+            {
+                return GatewayOutcome.Of(GatewayStatus.Pending, reference, gatewayPaymentId);
+            }
+            if (RefundSucceeded.Contains(status))
+            {
+                refunded += AmountOf(refund);
+            }
+        }
+        if (!fresh)
+        {
+            return GatewayOutcome.Of(GatewayStatus.Pending, reference, gatewayPaymentId);
+        }
+        return refunded > 0m ? GatewayOutcome.Refunded(reference, gatewayPaymentId, refunded) : GatewayOutcome.Of(GatewayStatus.Captured, reference, gatewayPaymentId);
+    }
+
+` : ''}    /// <summary>VERIFICAR EN SANDBOX (customer-action sin verificar): la acción va opaca. Sin medio de pago, no hay acción que dar.</summary>
     private static string? CustomerAction(JsonElement payment) =>
         GatewayJson.Get(payment, "payment_method") is { } method ? GatewayJson.Compact(method) : null;
 
@@ -301,6 +399,82 @@ ${methods.join('\n\n')}
       : ''
   }
 }`;
+}
+
+// La devolución de un diseño que sigue cada una (refund.reference): la lectura previa de la order se hace SIEMPRE, no solo
+// para nombrar la transacción de una parcial, porque deja las devoluciones que ya tenía y la nueva es la que no estaba
+// (corrida payment-spring: sumarlas todas daba el acumulado como importe de la segunda devolución parcial).
+function trackedRefund(p, amountParam, ct) {
+  const partial = p.refund.amount
+    ? `
+        if (amount is { } partial)
+        {
+            var transaction = FirstPayment(before);
+            body["transactions"] = new JsonArray(new JsonObject
+            {
+                ["id"] = GatewayJson.Text(transaction, "id") ?? string.Empty,
+                ["amount"] = MoneyAmounts.ToMajorUnits(partial, GatewayKeys.RequiredCurrency(currency))
+            });
+        }`
+    : '';
+  return `    public async Task<GatewayOutcome> Refund(string reference, string refundReference, string gatewayPaymentId${amountParam}, ${ct})
+    {
+        ArgumentNullException.ThrowIfNull(gatewayPaymentId);
+        var body = new JsonObject();
+        // La lectura previa falla igual que la devolución: dentro del mismo tratamiento, o un 5xx aquí sale como un 500 con el
+        // cobro atascado en refunding.
+        var current = await Send("refund", new GatewayRequest("GET", $"/v1/orders/{Uri.EscapeDataString(gatewayPaymentId)}"), cancellationToken);
+        if (current.Status >= 400)
+        {
+            throw Unavailable("refund", current);
+        }
+        var before = GatewayJson.Parse(current.Text, Gateway);${partial}
+        var known = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var refund in RefundsOf(before))
+        {
+            known.Add(GatewayJson.Text(refund, "id") ?? string.Empty);
+        }
+        var answer = await Send("refund", new GatewayRequest("POST", $"/v1/orders/{Uri.EscapeDataString(gatewayPaymentId)}/refund", GatewayJson.JsonBody(body), Key(${refundKeyCall(p)})), cancellationToken);
+        if (answer.Status >= 500)
+        {
+            throw Unavailable("refund", answer);
+        }
+        if (answer.Status >= 400)
+        {
+            // Rechazada: se pregunta el estado real, que con devoluciones es el cobro capturado.
+            return await Status(reference, gatewayPaymentId, cancellationToken);
+        }
+        return RefundResponse(GatewayJson.Parse(answer.Text, Gateway), known, reference, gatewayPaymentId);
+    }`;
+}
+
+// RF-5 a RF-9 (corrida payment-spring) como pruebas emitidas, contra el adaptador y la pasarela falsa: la devolución en
+// vuelo por diferencia, y la respuesta síncrona que cuenta solo la devolución nueva. Importes de keel-core en unidades menores.
+function refundCasesCs(order, raw, S) {
+  const major = (minor) => (minor / 100).toFixed(2);
+  const status = (expected) => (expected.status === 'REFUNDED' ? 'Refunded' : expected.status === 'PENDING' ? 'Pending' : 'Captured');
+  const withRefunds = (refunds) => order('ORDR', S.CAPTURED, 'ch-r', { transactions: { payments: [{ id: 'PAYORDR' }], refunds: refunds.map((r, i) => ({ id: r.id ?? `REF-${i}`, status: r.status, amount: major(r.amount) })) } });
+  const amountLine = (expected) => (expected.status === 'REFUNDED' ? `
+        Assert.Equal("${major(expected.amount)}", outcome.RefundedAmount?.ToString(CultureInfo.InvariantCulture));` : '');
+  const outcomes = REFUND_OUTCOME_CASES.filter((c) => c.gateway === 'mercadopago').map((c) => `    // ${c.id}: ${c.what}.
+    [Fact]
+    public async Task ${c.id.replace('-', '')}_DevolucionEnVuelo()
+    {
+        var fake = FakeGateway.Json(HttpStatusCode.OK, ${raw(withRefunds(c.refunds))});
+        var outcome = await Gateway(fake).RefundStatus("ch-r", ${csString(c.refundReference)}, "ORDR", ${major(c.alreadyRefunded)}m, Token);
+        Assert.Equal(GatewayStatus.${status(c.expected)}, outcome.Status);${amountLine(c.expected)}
+    }`);
+  const responses = REFUND_RESPONSE_CASES.filter((c) => c.gateway === 'mercadopago').map((c) => `    // ${c.id}: ${c.what}.
+    [Fact]
+    public async Task ${c.id.replace('-', '')}_RespuestaDeLaDevolucion()
+    {
+        var before = ${raw(withRefunds(c.refunds.filter((r) => c.knownIds.includes(r.id))))};
+        var after = ${raw(withRefunds(c.refunds))};
+        var fake = new FakeGateway((request, _) => Reply(HttpStatusCode.OK, request.Method == HttpMethod.Get ? before : after));
+        var outcome = await Gateway(fake).Refund("ch-r", "rf-new", "ORDR", 2.00m, "EUR", Token);
+        Assert.Equal(GatewayStatus.${status(c.expected)}, outcome.Status);${amountLine(c.expected)}
+    }`);
+  return [...outcomes, ...responses].join('\n\n');
 }
 
 function verifierBody(model) {
@@ -466,14 +640,14 @@ ${declineRows.join('\n')}
         Assert.Equal(GatewayStatus.NotFound, (await Gateway(FakeGateway.Json(HttpStatusCode.OK, """{"data":[]}""")).Status("ch-4", null, Token)).Status);
     }
 
-    [Fact]
+${tracksRefundInFlight(p) ? refundCasesCs(order, raw, S) : `    [Fact]
     public async Task UnaOrderDevueltaSumaSusDevoluciones()
     {
         var fake = FakeGateway.Json(HttpStatusCode.OK, ${raw(order('ORDR', S.REFUNDED, 'ch-r', { transactions: { refunds: [{ amount: '2.50' }, { amount: '2.50' }] } }))});
         var outcome = await Gateway(fake).Status("ch-r", "ORDR", Token);
         Assert.Equal(GatewayStatus.Refunded, outcome.Status);
         Assert.Equal("5.00", outcome.RefundedAmount?.ToString(CultureInfo.InvariantCulture));
-    }
+    }`}
 
     [Fact]
     public async Task UnaAccionDelClienteVaOpacaYSinMedioNoHayAccion()
@@ -541,14 +715,15 @@ ${declineRows.join('\n')}
     [Fact]
     public async Task DosDevolucionesDelMismoCobroLlevanCadaUnaSuClave()
     {
-        var fake = FakeGateway.Json(HttpStatusCode.BadGateway, "{}");
+        // La lectura previa de la order contesta; solo cuentan las peticiones de devolución.
+        var fake = new FakeGateway((request, _) => request.Method == HttpMethod.Get ? Reply(HttpStatusCode.OK, "{}") : Reply(HttpStatusCode.BadGateway, "{}"));
         foreach (var refundReference in new[] { "rf-1", "rf-2", "rf-1" })
         {
             await Assert.ThrowsAsync<PaymentGatewayUnavailableException>(() => Gateway(fake).Refund("ch-7", refundReference, "ORD7", ${none}Token));
         }
         Assert.Equal(
             new[] { ${csString(refundIdempotencyKey('ch-7', 'rf-1'))}, ${csString(refundIdempotencyKey('ch-7', 'rf-2'))}, ${csString(refundIdempotencyKey('ch-7', 'rf-1'))} },
-            fake.Requests.Select(sent => sent.Request.Headers.GetValues(${header}).Single()).ToArray());
+            fake.Requests.Where(sent => sent.Request.Method == HttpMethod.Post).Select(sent => sent.Request.Headers.GetValues(${header}).Single()).ToArray());
     }`);
   }
   if (p.savePaymentMethod) {

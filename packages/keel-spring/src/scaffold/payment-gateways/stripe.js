@@ -10,7 +10,7 @@
 //   * Stripe-Signature: t=…,v1=…[,v1=…]: HMAC-SHA256 de `${t}.${cuerpo crudo}`; solo cuenta v1, puede
 //     haber varias durante la rotación del secreto, y se compara en tiempo constante.
 
-import { gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
+import { gatewayTranslation, refundTranslation, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { javaFile, javaPath, subPackage } from '../render.js';
 import { savedMethodJava } from '../payments.js';
 
@@ -32,6 +32,9 @@ const SUB = 'infrastructure.payment.stripe';
 const TRANSLATION = gatewayTranslation('stripe');
 const SAVED = savedMethodJava(TRANSLATION, 'Stripe');
 const DECLINES = TRANSLATION.declines;
+// Cómo se localiza una devolución en Stripe: por su metadata (keel-core: REFUND_TRANSLATIONS).
+const REFUND = refundTranslation('stripe');
+const javaCases = (values) => values.map((value) => `"${value}"`).join(', ');
 
 function renderAdapter(model, ctx) {
   const p = model.payments;
@@ -92,7 +95,9 @@ function renderAdapter(model, ctx) {
     methods.push(`    @Override
     public GatewayOutcome refund(String reference, ${p.refund.reference ? 'String refundReference, ' : ''}String gatewayPaymentId${amountParam}) {
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
-        form.add("payment_intent", gatewayPaymentId);${amountLine}
+        form.add("payment_intent", gatewayPaymentId);${amountLine}${tracksRefundInFlight(p) ? `
+        // La referencia de ESTA devolución viaja en su metadata: es lo que permite encontrarla si la respuesta se pierde.
+        form.add("metadata[" + REFUND_REFERENCE_KEY + "]", refundReference);` : ''}
         JsonNode refund;
         try {
             refund = json(http.post().uri("/v1/refunds")
@@ -111,11 +116,44 @@ function renderAdapter(model, ctx) {
             throw unavailable("refund", noAnswer);
         }
         return switch (refund.path("status").asString()) {
-            case "succeeded" -> GatewayOutcome.refunded(reference, gatewayPaymentId,
+            case ${javaCases(REFUND.succeeded)} -> GatewayOutcome.refunded(reference, gatewayPaymentId,
                     MoneyAmounts.fromMinorUnits(refund.path("amount").asLong(), refund.path("currency").asString().toUpperCase(Locale.ROOT)));
-            case "pending", "requires_action" -> GatewayOutcome.of(GatewayStatus.PENDING, reference, gatewayPaymentId);
+            case ${javaCases(REFUND.pending)} -> GatewayOutcome.of(GatewayStatus.PENDING, reference, gatewayPaymentId);
             default -> GatewayOutcome.of(GatewayStatus.CAPTURED, reference, gatewayPaymentId);
         };
+    }`);
+  }
+  if (tracksRefundInFlight(p)) {
+    methods.push(`    /**
+     * La devolución en vuelo se busca entre las del cobro por la referencia que lleva en su metadata: la consulta del
+     * cobro solo sabe el acumulado devuelto (latest_charge.amount_refunded), que no es el desenlace de ESTA devolución.
+     * Stripe guarda la referencia, así que alreadyRefunded no hace falta aquí.
+     */
+    @Override
+    public GatewayOutcome refundStatus(String reference, String refundReference, String gatewayPaymentId, BigDecimal alreadyRefunded) {
+        JsonNode refunds;
+        try {
+            refunds = json(http.get()
+                    .uri(uri -> uri.path("/v1/refunds").queryParam("payment_intent", gatewayPaymentId).queryParam("limit", 100).build())
+                    .headers(headers -> credentials(headers, null))
+                    .retrieve()
+                    .body(String.class));
+        } catch (RestClientException noAnswer) {
+            throw unavailable("refundStatus", noAnswer);
+        }
+        for (JsonNode refund : refunds.path("data")) {
+            if (!refundReference.equals(refund.path("metadata").path(REFUND_REFERENCE_KEY).asString(null))) {
+                continue;
+            }
+            return switch (refund.path("status").asString()) {
+                case ${javaCases(REFUND.succeeded)} -> GatewayOutcome.refunded(reference, gatewayPaymentId,
+                        MoneyAmounts.fromMinorUnits(refund.path("amount").asLong(), refund.path("currency").asString().toUpperCase(Locale.ROOT)));
+                case ${javaCases(REFUND.pending)} -> GatewayOutcome.of(GatewayStatus.PENDING, reference, gatewayPaymentId);
+                default -> GatewayOutcome.of(GatewayStatus.CAPTURED, reference, gatewayPaymentId);
+            };
+        }
+        // No está: la devolución no llegó a la pasarela, y el cobro sigue como estaba.
+        return GatewayOutcome.of(GatewayStatus.CAPTURED, reference, gatewayPaymentId);
     }`);
   }
 
@@ -208,7 +246,10 @@ ${SAVED.rejection}
 public class StripePaymentGateway implements PaymentGateway {
 
     /** La clave de metadata con la que viaja la referencia del cobro; es lo que permite buscarlo. */
-    static final String REFERENCE_KEY = "${TRANSLATION.referenceKey}";
+    static final String REFERENCE_KEY = "${TRANSLATION.referenceKey}";${tracksRefundInFlight(p) ? `
+
+    /** La clave de metadata con la que viaja la referencia de UNA devolución; es lo que permite encontrarla. */
+    static final String REFUND_REFERENCE_KEY = "${REFUND.referenceKey}";` : ''}
 
     private final RestClient http;
     private final PaymentGatewayProperties properties;
@@ -286,12 +327,16 @@ ${methods.join('\n\n')}
     private GatewayOutcome outcomeOf(JsonNode intent, String reference) {
         String id = intent.path("id").asString(null);
         String ref = intent.path("metadata").path(REFERENCE_KEY).asString(reference);
-        JsonNode charge = intent.path("latest_charge");
+${tracksRefundInFlight(p)
+  ? `        // Sin deducir la devolución del acumulado (latest_charge.amount_refunded): con varias devoluciones no dice cuál
+        // terminó ni si la que está en vuelo llegó. La devolución en vuelo la contesta refundStatus.
+`
+  : `        JsonNode charge = intent.path("latest_charge");
         if (charge.isObject() && charge.path("amount_refunded").asLong() > 0) {
             return GatewayOutcome.refunded(ref, id, MoneyAmounts.fromMinorUnits(charge.path("amount_refunded").asLong(),
                     charge.path("currency").asString().toUpperCase(Locale.ROOT)));
         }
-        return switch (intent.path("status").asString()) {
+`}        return switch (intent.path("status").asString()) {
             case "requires_capture" -> GatewayOutcome.of(GatewayStatus.AUTHORIZED, ref, id);
             case "succeeded" -> GatewayOutcome.of(GatewayStatus.CAPTURED, ref, id);
             case "requires_action" -> GatewayOutcome.actionRequired(ref, id, customerAction(intent));
@@ -373,7 +418,7 @@ ${p.savePaymentMethod ? SAVED.helpers : ''}
     'org.springframework.web.client.RestClient',
     'org.springframework.web.client.RestClientResponseException'
   ];
-  if (p.capture?.amount || p.refund?.amount) imports.push('java.math.BigDecimal');
+  if (p.capture?.amount || p.refund?.amount || tracksRefundInFlight(p)) imports.push('java.math.BigDecimal');
   if (p.savePaymentMethod) imports.push(...SAVED.imports(ctx.domainPkg));
   return { path: javaPath(model, SUB, 'StripePaymentGateway'), content: javaFile(subPackage(model, SUB), imports, body) };
 }

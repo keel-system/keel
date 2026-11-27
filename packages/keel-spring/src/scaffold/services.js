@@ -48,6 +48,7 @@ import { batchNote } from '@keel-system/keel-core/gen/batch';
 import { stubNote as conditionalUniquenessNote } from './conditional-uniqueness.js';
 import { callerResolution } from './security.js';
 import { followUpRejectionNote, refundReferenceNote, savedMethodNote } from '@keel-system/keel-core/gen/rejection-notes';
+import { refundSweepNote, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { rawJsonAnnotations } from './jackson.js';
 import { readScopeNote, optionalIdentityNote } from '@keel-system/keel-core/gen/read-scope';
@@ -682,6 +683,10 @@ function renderHandler(model, service, operation) {
         'fuera de toda transacción, y aplica lo que devuelva según las reglas. No escribas otro reclamo: un @Modifying en el adaptador hereda su ' +
         '@Transactional(readOnly = true) y el motor lo rechaza.'
     );
+    // La devolución en vuelo (corrida payment-spring): la consulta del cobro solo sabe el acumulado devuelto.
+    if (tracksRefundInFlight(model.payments)) {
+      notes.push(refundSweepNote(model.payments, 'paymentReconciliation.consultRefund(reference, refundReference, gatewayPaymentId, alreadyRefunded)'));
+    }
   }
   for (const code of operation.errors) {
     const error = operationError(model, operation.name, code);

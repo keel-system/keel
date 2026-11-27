@@ -10,7 +10,7 @@
 // Lo marcado VERIFICAR EN SANDBOX es lo que la matriz declara `unverified`: build lo genera con la lectura más
 // probable, avisando.
 
-import { gatewayTranslation, paymentIdempotencyKey, savedMethodIdempotencyKey, SAVED_METHOD_SEPARATOR } from '@keel-system/keel-core/gen/payment-gateways';
+import { gatewayTranslation, paymentIdempotencyKey, refundTranslation, savedMethodIdempotencyKey, SAVED_METHOD_SEPARATOR, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { DIRS, classPath, tsModule, tsString } from '../render.js';
 import { savedMethodTsHelpers } from '../payments.js';
 
@@ -18,6 +18,9 @@ import { savedMethodTsHelpers } from '../payments.js';
 // (`<cobro>:refund:<devolución>`, refundIdempotencyKey de keel-core); sin ella, la del cobro.
 const refundKeyCall = (p) => (p.refund.reference ? "idempotencyKey(reference, 'refund:' + refundReference)" : "idempotencyKey(reference, 'refund')");
 const refundReferenceParam = (p) => (p.refund.reference ? 'refundReference: string, ' : '');
+// MercadoPago no guarda referencia propia en una devolución: se localiza por diferencia (keel-core: REFUND_TRANSLATIONS).
+const REFUND = refundTranslation('mercadopago');
+const tsSet = (values) => `new Set([${values.map((value) => tsString(value)).join(', ')}])`;
 
 
 const TRANSLATION = gatewayTranslation('mercadopago');
@@ -119,10 +122,52 @@ function adapterTs(model) {
       body['transactions'] = [{ id: text(transaction['id']) ?? '', amount: MoneyAmounts.toMajorUnits(amount, requiredCurrency(currency)) }];
     }`
       : '';
-    methods.push(`  async refund(reference: string, ${refundReferenceParam(p)}gatewayPaymentId: string${amountParam}): Promise<GatewayOutcome> {
+    if (tracksRefundInFlight(p)) {
+      methods.push(`  async refund(reference: string, refundReference: string, gatewayPaymentId: string${amountParam}): Promise<GatewayOutcome> {
+    const body: Json = {};
+    // La lectura previa de la order se hace SIEMPRE: nombra la transacción de una parcial y deja las devoluciones que ya
+    // tenía, y la nueva es la que no estaba. Falla igual que la devolución: dentro del mismo tratamiento, o un 5xx aquí
+    // sale como un 500 con el cobro atascado en refunding.
+    const current = await this.send('refund', { method: 'GET', path: \`/v1/orders/\${encodeURIComponent(gatewayPaymentId)}\` });
+    if (current.status >= 400) throw unavailable('refund', current);
+    const before = json(current.text);${p.refund.amount ? `
+    if (amount != null) {
+      const transaction = firstPayment(before);
+      body['transactions'] = [{ id: text(transaction['id']) ?? '', amount: MoneyAmounts.toMajorUnits(amount, requiredCurrency(currency)) }];
+    }` : ''}
+    const known = new Set(refundsOf(before).map((refund) => text(refund['id']) ?? ''));
+    const answer = await this.send('refund', { method: 'POST', path: \`/v1/orders/\${encodeURIComponent(gatewayPaymentId)}/refund\`, body: jsonBody(body), idempotency: this.key(${refundKeyCall(p)}) });
+    if (answer.status >= 500) throw unavailable('refund', answer);
+    // Rechazada: se pregunta el estado real, que con devoluciones es el cobro capturado.
+    if (answer.status >= 400) return this.status(reference, gatewayPaymentId);
+    return refundResponse(json(answer.text), known, reference, gatewayPaymentId);
+  }`);
+      methods.push(`  /**
+   * La devolución en vuelo, por diferencia: MercadoPago no guarda referencia propia en una devolución, así que es lo
+   * procesado por encima de lo que el registro ya cuenta como devuelto (el diseño admite una sola devolución en curso por
+   * cobro). La suma de transactions.refunds es el acumulado, no el desenlace de ESTA devolución.
+   */
+  async refundStatus(reference: string, _refundReference: string, gatewayPaymentId: string, alreadyRefunded: Decimal): Promise<GatewayOutcome> {
+    const answer = await this.send('refundStatus', { method: 'GET', path: \`/v1/orders/\${encodeURIComponent(gatewayPaymentId)}\` });
+    if (answer.status >= 400) throw unavailable('refundStatus', answer);
+    let processed = Decimal.of(0);
+    for (const refund of refundsOf(json(answer.text))) {
+      const status = text(refund['status']) ?? '';
+      if (REFUND_PENDING.has(status)) return GatewayOutcome.of(GatewayStatus.PENDING, reference, gatewayPaymentId);
+      if (REFUND_SUCCEEDED.has(status)) processed = processed.plus(Decimal.parse(text(refund['amount']) ?? '0'));
+    }
+    const refunded = processed.minus(alreadyRefunded);
+    // Nada por encima de lo registrado: la devolución no llegó a la pasarela o la rechazó.
+    return refunded.isZero() || refunded.isNegative()
+      ? GatewayOutcome.of(GatewayStatus.CAPTURED, reference, gatewayPaymentId)
+      : GatewayOutcome.refunded(reference, gatewayPaymentId, refunded);
+  }`);
+    } else {
+      methods.push(`  async refund(reference: string, ${refundReferenceParam(p)}gatewayPaymentId: string${amountParam}): Promise<GatewayOutcome> {
     const body: Json = {};${partial}
     return this.followUp(\`/v1/orders/\${encodeURIComponent(gatewayPaymentId)}/refund\`, body, reference, gatewayPaymentId, 'refund', ${refundKeyCall(p)});
   }`);
+    }
   }
 
   methods.push(`  async status(reference: string | null, gatewayPaymentId: string | null): Promise<GatewayOutcome> {
@@ -251,7 +296,14 @@ ${methods.join('\n\n')}
     const payment = firstPayment(order);
     const detail = text(order['status_detail']) ?? text(payment['status_detail']) ?? '';
     const status = text(order['status']) ?? '';
-    if (status === 'refunded' || detail === 'refunded' || detail === 'partially_refunded') {
+${tracksRefundInFlight(p)
+  ? `    if (status === 'refunded' || detail === 'refunded' || detail === 'partially_refunded') {
+      // Una order con devoluciones sigue cobrada: la suma de transactions.refunds es el acumulado, no el desenlace de una
+      // devolución. La devolución en vuelo la contesta refundStatus.
+      return GatewayOutcome.of(GatewayStatus.CAPTURED, ref, id);
+    }
+`
+  : `    if (status === 'refunded' || detail === 'refunded' || detail === 'partially_refunded') {
       let refunded = Decimal.of(0);
       const transactions = isObject(order['transactions']) ? order['transactions'] : {};
       for (const refund of Array.isArray(transactions['refunds']) ? transactions['refunds'] : []) {
@@ -259,7 +311,7 @@ ${methods.join('\n\n')}
       }
       return GatewayOutcome.refunded(ref, id, refunded);
     }
-    switch (status) {
+`}    switch (status) {
       case 'action_required':
         return GatewayOutcome.actionRequired(ref, id, customerAction(payment));
       case 'processed':
@@ -275,7 +327,35 @@ ${methods.join('\n\n')}
   }
 }
 
-/** VERIFICAR EN SANDBOX (customer-action sin verificar): la acción va opaca. Sin medio de pago, no hay acción que dar. */
+${tracksRefundInFlight(p) ? `// Los estados de una devolución de la order (keel-core: REFUND_TRANSLATIONS); cualquier otro es una rechazada.
+const REFUND_SUCCEEDED = ${tsSet(REFUND.succeeded)};
+const REFUND_PENDING = ${tsSet(REFUND.pending)};
+
+/** Las devoluciones de la order, tal como las lista. */
+function refundsOf(order: Json): Json[] {
+  const transactions = isObject(order['transactions']) ? order['transactions'] : {};
+  return (Array.isArray(transactions['refunds']) ? transactions['refunds'] : []).filter(isObject);
+}
+
+/**
+ * La respuesta a pedir una devolución es la order entera, con TODAS sus devoluciones: la nueva es la que no estaba en la
+ * lectura previa. Sin ninguna nueva, la respuesta no dice nada de ésta y queda en vuelo para el barrido.
+ */
+function refundResponse(order: Json, known: Set<string>, reference: string, gatewayPaymentId: string): GatewayOutcome {
+  let refunded = Decimal.of(0);
+  let fresh = false;
+  for (const refund of refundsOf(order)) {
+    if (known.has(text(refund['id']) ?? '')) continue;
+    fresh = true;
+    const status = text(refund['status']) ?? '';
+    if (REFUND_PENDING.has(status)) return GatewayOutcome.of(GatewayStatus.PENDING, reference, gatewayPaymentId);
+    if (REFUND_SUCCEEDED.has(status)) refunded = refunded.plus(Decimal.parse(text(refund['amount']) ?? '0'));
+  }
+  if (!fresh) return GatewayOutcome.of(GatewayStatus.PENDING, reference, gatewayPaymentId);
+  return refunded.isZero() ? GatewayOutcome.of(GatewayStatus.CAPTURED, reference, gatewayPaymentId) : GatewayOutcome.refunded(reference, gatewayPaymentId, refunded);
+}
+
+` : ''}/** VERIFICAR EN SANDBOX (customer-action sin verificar): la acción va opaca. Sin medio de pago, no hay acción que dar. */
 function customerAction(payment: Json): string | null {
   return payment['payment_method'] === undefined ? null : JSON.stringify(payment['payment_method']);
 }

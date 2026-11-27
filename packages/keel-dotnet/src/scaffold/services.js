@@ -24,6 +24,7 @@ import { finderCall } from './finders.js';
 import { READ_SCOPE_PROPERTY, readScopeHandlerCall } from './read-scope.js';
 import { readScopeNote, optionalIdentityNote } from '@keel-system/keel-core/gen/read-scope';
 import { followUpRejectionNote, refundReferenceNote, savedMethodNote } from '@keel-system/keel-core/gen/rejection-notes';
+import { refundSweepNote, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { storedInNote } from '@keel-system/keel-core/gen/natural-key-guard';
 import { csFile, csMember, declType, fieldUsings, isNullable, located, namespaceOf, typeUsings, xmlDoc } from './render.js';
 import { carriesExpectedVersions, conditionalHandlerNote, expectedVersionsProperty, returnsVersioned, versionedType } from './conditional-writes.js';
@@ -519,6 +520,10 @@ function handlerNotes(model, operation) {
         'Inyecta PaymentReconciliation (Application/Payment) y llama a paymentReconciliation.Consult(reference, gatewayPaymentId, cancellationToken) con cada uno, ' +
         'fuera de toda transacción, y aplica lo que devuelva según las reglas. No escribas otro reclamo: un segundo mecanismo en paralelo al generado no reclama nada, solo reparte peor.'
     );
+    // La devolución en vuelo (corrida payment-spring): la consulta del cobro solo sabe el acumulado devuelto.
+    if (tracksRefundInFlight(model.payments)) {
+      notes.push(refundSweepNote(model.payments, 'paymentReconciliation.ConsultRefund(reference, refundReference, gatewayPaymentId, alreadyRefunded, cancellationToken)'));
+    }
   }
   for (const code of operation.errors ?? []) {
     const error = operationError(model, operation.name, code);

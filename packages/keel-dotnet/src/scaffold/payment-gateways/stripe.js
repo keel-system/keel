@@ -8,7 +8,7 @@
 //   * Stripe-Signature: t=…,v1=…[,v1=…]: HMAC-SHA256 de `${t}.${cuerpo}`; solo cuenta v1, puede haber varias durante la
 //     rotación del secreto, y se compara en tiempo constante.
 
-import { gatewayTranslation, refundIdempotencyKey } from '@keel-system/keel-core/gen/payment-gateways';
+import { REFUND_OUTCOME_CASES, gatewayTranslation, refundIdempotencyKey, refundTranslation, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { csFile, csString, located, namespaceOf } from '../render.js';
 import { PAYMENT_GATEWAY_PORT, NOTICE_VERIFIER_PORT, paymentInfraNamespace, paymentNamespace, reasonMember, savedMethodCs } from '../payments.js';
@@ -23,6 +23,9 @@ const refundKeyOf = (p, reference, value) => refundIdempotencyKey(reference, p.r
 
 
 const TRANSLATION = gatewayTranslation('stripe');
+// Cómo se localiza una devolución en Stripe: por su metadata (keel-core: REFUND_TRANSLATIONS).
+const REFUND = refundTranslation('stripe');
+const csCases = (values) => values.map((value) => csString(value)).join(' or ');
 const PROBES = paymentProbesFor('stripe');
 
 /** Un JSON como literal crudo de C# (las pruebas emitidas lo pasan a la pasarela falsa). */
@@ -119,7 +122,9 @@ function adapterBody(model) {
     methods.push(`    public async Task<GatewayOutcome> Refund(string reference, ${refundReferenceParam(p)}string gatewayPaymentId${amountParam}, ${ct})
     {
         ArgumentNullException.ThrowIfNull(gatewayPaymentId);
-        var form = new List<KeyValuePair<string, string>> { new("payment_intent", gatewayPaymentId) };${amountLine}
+        var form = new List<KeyValuePair<string, string>> { new("payment_intent", gatewayPaymentId) };${amountLine}${tracksRefundInFlight(p) ? `
+        // La referencia de ESTA devolución viaja en su metadata: es lo que permite encontrarla si la respuesta se pierde.
+        form.Add(new($"metadata[{RefundReferenceKey}]", refundReference));` : ''}
         var answer = await Send("refund", new GatewayRequest("POST", "/v1/refunds", GatewayJson.FormBody(form), Key(${refundKeyCall(p)})), cancellationToken);
         if (answer.Status >= 500)
         {
@@ -133,10 +138,42 @@ function adapterBody(model) {
         var refund = GatewayJson.Parse(answer.Text, Gateway);
         return GatewayJson.Text(refund, "status") switch
         {
-            "succeeded" => GatewayOutcome.Refunded(reference, gatewayPaymentId, MoneyAmounts.FromMinorUnits(GatewayJson.Minor(refund, "amount"), Upper(GatewayJson.Text(refund, "currency")))),
-            "pending" or "requires_action" => GatewayOutcome.Of(GatewayStatus.Pending, reference, gatewayPaymentId),
+            ${csCases(REFUND.succeeded)} => GatewayOutcome.Refunded(reference, gatewayPaymentId, MoneyAmounts.FromMinorUnits(GatewayJson.Minor(refund, "amount"), Upper(GatewayJson.Text(refund, "currency")))),
+            ${csCases(REFUND.pending)} => GatewayOutcome.Of(GatewayStatus.Pending, reference, gatewayPaymentId),
             _ => GatewayOutcome.Of(GatewayStatus.Captured, reference, gatewayPaymentId)
         };
+    }`);
+  }
+  if (tracksRefundInFlight(p)) {
+    methods.push(`    /// <summary>
+    /// La devolución en vuelo se busca entre las del cobro por la referencia que lleva en su metadata: la consulta del cobro
+    /// solo sabe el acumulado devuelto (latest_charge.amount_refunded), que no es el desenlace de ESTA devolución. Stripe
+    /// guarda la referencia, así que alreadyRefunded no hace falta aquí.
+    /// </summary>
+    public async Task<GatewayOutcome> RefundStatus(string reference, string refundReference, string gatewayPaymentId, decimal alreadyRefunded, ${ct})
+    {
+        ArgumentNullException.ThrowIfNull(gatewayPaymentId);
+        var query = GatewayJson.Form([new("payment_intent", gatewayPaymentId), new("limit", "100")]);
+        var answer = await Send("refundStatus", new GatewayRequest("GET", "/v1/refunds?" + query), cancellationToken);
+        if (answer.Status >= 400)
+        {
+            throw Unavailable("refundStatus", answer);
+        }
+        foreach (var refund in GatewayJson.Array(GatewayJson.Parse(answer.Text, Gateway), "data"))
+        {
+            if (refund.ValueKind != JsonValueKind.Object || GatewayJson.Text(GatewayJson.Object(refund, "metadata"), RefundReferenceKey) != refundReference)
+            {
+                continue;
+            }
+            return GatewayJson.Text(refund, "status") switch
+            {
+                ${csCases(REFUND.succeeded)} => GatewayOutcome.Refunded(reference, gatewayPaymentId, MoneyAmounts.FromMinorUnits(GatewayJson.Minor(refund, "amount"), Upper(GatewayJson.Text(refund, "currency")))),
+                ${csCases(REFUND.pending)} => GatewayOutcome.Of(GatewayStatus.Pending, reference, gatewayPaymentId),
+                _ => GatewayOutcome.Of(GatewayStatus.Captured, reference, gatewayPaymentId)
+            };
+        }
+        // No está: la devolución no llegó a la pasarela, y el cobro sigue como estaba.
+        return GatewayOutcome.Of(GatewayStatus.Captured, reference, gatewayPaymentId);
     }`);
   }
 
@@ -206,7 +243,10 @@ public sealed class ${adapterClass}(PaymentGatewayHttp http) : ${PAYMENT_GATEWAY
 {
     /// <summary>La clave de metadata con la que viaja la referencia del cobro; es lo que permite buscarlo.</summary>
     public const string ReferenceKey = ${csString(TRANSLATION.referenceKey)};
-
+${tracksRefundInFlight(p) ? `
+    /// <summary>La clave de metadata con la que viaja la referencia de UNA devolución; es lo que permite encontrarla.</summary>
+    public const string RefundReferenceKey = ${csString(REFUND.referenceKey)};
+` : ''}
     private const string Gateway = "Stripe";
 
     /// <summary>decline_code (o code si no hay) → motivo neutro (keel-core/gen/payment-gateways.js); lo que no está es el rechazo genérico.</summary>
@@ -261,7 +301,11 @@ ${methods.join('\n\n')}
     {
         var id = GatewayJson.Text(intent, "id");
         var known = GatewayJson.Text(GatewayJson.Object(intent, "metadata"), ReferenceKey) ?? reference;
-        if (GatewayJson.IsObject(intent, "latest_charge"))
+${tracksRefundInFlight(p)
+  ? `        // Sin deducir la devolución del acumulado (latest_charge.amount_refunded): con varias devoluciones no dice cuál terminó
+        // ni si la que está en vuelo llegó. La devolución en vuelo la contesta RefundStatus.
+`
+  : `        if (GatewayJson.IsObject(intent, "latest_charge"))
         {
             var charge = GatewayJson.Object(intent, "latest_charge");
             var refunded = GatewayJson.Minor(charge, "amount_refunded");
@@ -270,7 +314,7 @@ ${methods.join('\n\n')}
                 return GatewayOutcome.Refunded(known, id, MoneyAmounts.FromMinorUnits(refunded, Upper(GatewayJson.Text(charge, "currency"))));
             }
         }
-        return GatewayJson.Text(intent, "status") switch
+`}        return GatewayJson.Text(intent, "status") switch
         {
             "requires_capture" => GatewayOutcome.Of(GatewayStatus.Authorized, known, id),
             "succeeded" => GatewayOutcome.Of(GatewayStatus.Captured, known, id),
@@ -508,14 +552,24 @@ ${declineRows.join('\n')}
         Assert.Equal(GatewayStatus.NotFound, (await Gateway(FakeGateway.Json(HttpStatusCode.OK, """{"data":[]}""")).Status("ch-4", null, Token)).Status);
     }
 
+${tracksRefundInFlight(p)
+  ? REFUND_OUTCOME_CASES.filter((c) => c.gateway === 'stripe').map((c) => `    // ${c.id} (corrida payment-spring): ${c.what}.
     [Fact]
+    public async Task ${c.id.replace('-', '')}_DevolucionEnVuelo()
+    {
+        var fake = FakeGateway.Json(HttpStatusCode.OK, ${raw({ object: 'list', has_more: false, data: c.refunds.map((r, i) => ({ id: `re_${i}`, object: 'refund', status: r.status, amount: r.amount, currency: 'eur', metadata: { [REFUND.referenceKey]: r.reference } })) })});
+        var outcome = await Gateway(fake).RefundStatus("ch-r", ${csString(c.refundReference)}, "pi_r", ${(c.alreadyRefunded / 100).toFixed(2)}m, Token);
+        Assert.Equal(GatewayStatus.${c.expected.status === 'REFUNDED' ? 'Refunded' : c.expected.status === 'PENDING' ? 'Pending' : 'Captured'}, outcome.Status);${c.expected.status === 'REFUNDED' ? `
+        Assert.Equal("${(c.expected.amount / 100).toFixed(2)}", outcome.RefundedAmount?.ToString(CultureInfo.InvariantCulture));` : ''}
+    }`).join('\n\n')
+  : `    [Fact]
     public async Task UnCobroDevueltoSeLeeDeSuUltimoCargo()
     {
         var fake = FakeGateway.Json(HttpStatusCode.OK, ${raw(intent('pi_r', S.REFUNDED, 'ch-r', { latest_charge: { amount_refunded: 500, currency: 'eur' } }))});
         var outcome = await Gateway(fake).Status("ch-r", "pi_r", Token);
         Assert.Equal(GatewayStatus.Refunded, outcome.Status);
         Assert.Equal("5.00", outcome.RefundedAmount?.ToString(CultureInfo.InvariantCulture));
-    }`);
+    }`}`);
   if (p.capture) {
     const args = p.capture.amount ? 'null, null, ' : '';
     cases.push(`

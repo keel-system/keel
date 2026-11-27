@@ -530,3 +530,29 @@ Arreglado después (2026-11-24): el falso positivo era la punta de un hueco de k
 una HIJA dejaba la nota de orden apuntando a un `<Hija>Repository` que no existe, y no generaba `flushPendingWrites()`
 en el puerto de la raíz (en la corrida lo escribió a mano el agente en `EmailTemplateRepository`). Ahora el flush va en
 la raíz y la ocupante se busca en su colección, como ya hacían keel-nest, keel-dotnet y keel-go.
+
+**payment en keel-registry, las tres generaciones (2026-11-27).** No son corridas de prueba-gelsa sino del mismo diseño
+`payment` en `keel-registry/services`, con Stripe. Están registradas en `docs/corridas/2026-11-27-payment-{dotnet,go,spring}.md`:
+- payment-dotnet: 32/32 y huella 28. Dos huecos del generador arreglados en los cuatro: el umbral del barrido en
+  local/test y `existsBy<Campo>`.
+- payment-go: 32/32 y huella 24. `invalid.Error()` en el log del aviso y `payments.refund.reference`
+  (`OBL-PAYMENTS-REFUND-REFERENCE`).
+- payment-spring: **72/72** y huella 22, todo TODO del agente. Dos huecos del generador:
+  - **G1, el desenlace de la devolución en vuelo era el acumulado**, en los cuatro y en las dos pasarelas. Con una
+    devolución previa, el barrido daba por hecha una que no llegó o que la pasarela rechazó, y con MercadoPago la
+    respuesta síncrona de la segunda parcial ya salía con la suma. Con `refund.reference`, el puerto gana
+    `refundStatus` y la reconciliación `consultRefund`, y la consulta del cobro deja de deducir la devolución.
+    Stripe la localiza por su metadata. MercadoPago no admite referencia propia en una devolución, así que la localiza
+    por lo procesado por encima de lo ya registrado (decisión del usuario, 2026-11-27) y, en la respuesta síncrona, por
+    los ids que no estaban antes. Lo neutral está en `keel-core/src/lib/gen/payment-gateways.js` (`refundOutcome`, los
+    casos RF-1 a RF-9). El arnés gana `gatewayReportsRefund` en los cuatro.
+  - **G2 es el G10 del inc. 5.** Con el corte de conexión de `gatewayDoesNotAnswer`, FL-REC-005 («exactamente una
+    consulta») no se podía cumplir en keel-spring. Se mantiene lo que decidió el usuario: el GET repetido se acepta en
+    producción y no se toca la propiedad global del JDK. Lo que cambia es el arnés: «no contesta» corta la respuesta A
+    MITAD (`stubBrokenResponse`, `MALFORMED_RESPONSE_CHUNK`), y eso el JDK no lo repite. `payment-check` recupera la
+    medida con ese corte, y `--sabotage=transport-retry` (volver al corte antes de responder) da 2 en las dos pasarelas.
+  - Medido: `payment-check` con RF-1 a RF-9 y los sabotajes `rf-not-mine`, `rf-cumulative`, `rf-known`,
+    `transport-retry` y `prefetch`, cada uno en exactamente sus casos. En keel-nest, RF ejecutados contra el adaptador
+    emitido y falsados. En keel-dotnet, RF como pruebas emitidas (sin pasar por `cs-check`). En keel-go, RF emitidos con
+    tidy, gofmt, vet, staticcheck y pruebas sobre payment-checkout con las dos pasarelas, falsados. `stub-check` contra
+    WireMock real en verde en keel-nest, keel-dotnet y keel-go.

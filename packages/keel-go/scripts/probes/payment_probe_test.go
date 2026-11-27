@@ -162,11 +162,8 @@ func TestPaymentProbeLaConsultaPorIdYPorReferenciaDicenLoProgramado(t *testing.T
 	if got, err := gateway.Status(ctx, "ch-g", ""); err != nil || got.Status != domain.GatewayNotFound {
 		t.Errorf("Status por referencia de uno desconocido = %+v, %v; quiero NOT_FOUND", got, err)
 	}
-	s.GatewayReports("ch-h", "REFUNDED")
-	refunded, err := gateway.Status(ctx, "", s.GatewayIDFor("ch-h"))
-	if err != nil || refunded.Status != domain.GatewayRefunded || refunded.RefundedAmount == nil || refunded.RefundedAmount.Cmp(wire.MustDecimal("10.00")) != 0 {
-		t.Errorf("Status de uno devuelto = %+v, %v; quiero devuelto por 10.00", refunded, err)
-	}
+	// payment-checkout sigue cada devolución (refund.reference): la consulta del cobro no dice nada de devoluciones, y
+	// GatewayReports(…, "REFUNDED") lo dice en vez de programar otra cosa.
 }
 
 func TestPaymentProbeCapturaAnulacionYAutorizacionCaducada(t *testing.T) {
@@ -257,13 +254,19 @@ func TestPaymentProbeGuardarConUnaTarjetaConcretaYEl3DSDondeLaPasarelaLoPide(t *
 	}
 }
 
-func TestPaymentProbeDevueltoPorUnTotalYAnulacionQueFallaConSuMotivo(t *testing.T) {
+func TestPaymentProbeLaDevolucionEnVueloLlevaSuImporteYAnulacionQueFallaConSuMotivo(t *testing.T) {
 	s, gateway, _ := paymentProbe(t)
 	ctx := t.Context()
-	s.GatewayReportsRefunded("ch-n", "7.50")
-	refunded, err := gateway.Status(ctx, "ch-n", s.GatewayIDFor("ch-n"))
-	if err != nil || refunded.Status != domain.GatewayRefunded || refunded.RefundedAmount == nil || refunded.RefundedAmount.Cmp(wire.MustDecimal("7.50")) != 0 {
-		t.Errorf("Status de uno devuelto = %+v, %v; quiero devuelto por 7.50", refunded, err)
+	// Corrida payment-spring: el importe es el de ESTA devolución (2.50), no el acumulado (7.50), y una devolución que no
+	// llegó no está hecha aunque hubiera otra antes.
+	s.GatewayReportsRefund("ch-n", "rf-n", "REFUNDED", "2.50", "5.00")
+	refunded, err := gateway.RefundStatus(ctx, "ch-n", "rf-n", s.GatewayIDFor("ch-n"), wire.MustDecimal("5.00"))
+	if err != nil || refunded.Status != domain.GatewayRefunded || refunded.RefundedAmount == nil || refunded.RefundedAmount.Cmp(wire.MustDecimal("2.50")) != 0 {
+		t.Errorf("RefundStatus = %+v, %v; quiero devuelto por 2.50", refunded, err)
+	}
+	s.GatewayReportsRefund("ch-q", "rf-q", "MISSING", "2.50", "5.00")
+	if missing, err := gateway.RefundStatus(ctx, "ch-q", "rf-q", s.GatewayIDFor("ch-q"), wire.MustDecimal("5.00")); err != nil || missing.Status != domain.GatewayCaptured {
+		t.Errorf("RefundStatus de una que no llegó = %+v, %v; quiero GatewayCaptured", missing, err)
 	}
 	s.GatewayCancelFails("ch-o", "authenticationFailed")
 	failed, err := gateway.VoidAuthorization(ctx, "ch-o", s.GatewayIDFor("ch-o"))

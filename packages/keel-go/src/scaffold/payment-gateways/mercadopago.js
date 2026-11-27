@@ -7,7 +7,7 @@
 //   * x-signature: ts=…,v1=…: HMAC-SHA256 del MANIFIESTO `id:<data.id>;request-id:<x-request-id>;ts:<ts>;`, no del cuerpo;
 //     un ts en milisegundos se normaliza a segundos, y se compara en tiempo constante (hmac.Equal).
 
-import { gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
+import { REFUND_OUTCOME_CASES, REFUND_RESPONSE_CASES, gatewayTranslation, refundTranslation, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { alignRows, goString } from '../../lib/go-source.js';
 import { DEFAULT_SAVED_CARD, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { packageFile } from '../render.js';
@@ -20,6 +20,9 @@ const refundReferenceParam = (p) => (p.refund.reference ? ', refundReference' : 
 
 
 const TRANSLATION = gatewayTranslation('mercadopago');
+// MercadoPago no guarda referencia propia en una devolución: se localiza por diferencia (keel-core: REFUND_TRANSLATIONS).
+const REFUND = refundTranslation('mercadopago');
+const goCases = (values) => values.map(goString).join(', ');
 
 export function generate(model, infra) {
   return [
@@ -31,6 +34,87 @@ export function generate(model, infra) {
       })
     }
   ];
+}
+
+
+// Los casos RF-* de keel-core (corrida payment-spring) como prueba emitida: importes de keel-core en unidades menores, la
+// moneda de las pruebas (EUR) tiene dos decimales. gofmt alinea los tipos de los campos del struct de la tabla.
+function refundTable(fields, rows) {
+  const names = fields.join(', ');
+  return { header: `\t\t${names} string\n\t\t${'status'.padEnd(names.length)} domain.GatewayStatus`, rows };
+}
+const goStatus = (expected) => (expected.status === 'REFUNDED' ? 'domain.GatewayRefunded' : expected.status === 'PENDING' ? 'domain.GatewayPending' : 'domain.GatewayCaptured');
+const goMajor = (minor) => (minor / 100).toFixed(2);
+const goRaw = (value) => `\`${JSON.stringify(value)}\``;
+
+function refundTestsGo(partialRefund) {
+  const order = (refunds) => ({ id: 'ORDR', status: 'processed', status_detail: 'accredited', external_reference: 'ch-r', transactions: { payments: [{ id: 'PAYORDR' }], refunds: refunds.map((r, i) => ({ id: r.id ?? `REF-${i}`, status: r.status, amount: goMajor(r.amount) })) } });
+  const amountOf = (expected) => goString(expected.status === 'REFUNDED' ? goMajor(expected.amount) : '');
+  const outcomes = refundTable(['name', 'body', 'already', 'amount'], REFUND_OUTCOME_CASES.filter((c) => c.gateway === 'mercadopago').map(
+    (c) => `\t\t{name: ${goString(c.id)}, body: ${goRaw(order(c.refunds))}, already: ${goString(goMajor(c.alreadyRefunded))}, amount: ${amountOf(c.expected)}, status: ${goStatus(c.expected)}},`
+  ));
+  const responses = refundTable(['name', 'before', 'after', 'amount'], REFUND_RESPONSE_CASES.filter((c) => c.gateway === 'mercadopago').map(
+    (c) => `\t\t{name: ${goString(c.id)}, before: ${goRaw(order(c.refunds.filter((r) => c.knownIds.includes(r.id))))}, after: ${goRaw(order(c.refunds))}, amount: ${amountOf(c.expected)}, status: ${goStatus(c.expected)}},`
+  ));
+  const check = `			if outcome.Status != c.status {
+				t.Fatalf("el desenlace es %s, quiero %s", outcome.Status, c.status)
+			}
+			if c.amount != "" && (outcome.RefundedAmount == nil || outcome.RefundedAmount.String() != c.amount) {
+				t.Errorf("lo devuelto es %v, quiero %s (el de ESTA devolución, no el acumulado)", outcome.RefundedAmount, c.amount)
+			}`;
+  return `// TestTheRefundInFlightIsWhatWasProcessedAboveTheRecord recorre los casos RF-* de keel-core (corrida payment-spring):
+// MercadoPago no guarda referencia propia en una devolución, así que la devolución en vuelo es lo procesado por encima de lo
+// ya registrado.
+func TestTheRefundInFlightIsWhatWasProcessedAboveTheRecord(t *testing.T) {
+	cases := []struct {
+${outcomes.header}
+	}{
+${outcomes.rows.join('\n')}
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			gateway, _, _, _ := fakeMercadopago(t, http.StatusOK, c.body)
+			outcome, err := gateway.RefundStatus(t.Context(), "ch-r", "rf-2", "ORDR", wire.MustDecimal(c.already))
+			if err != nil {
+				t.Fatalf("RefundStatus = %v", err)
+			}
+${check}
+		})
+	}
+}
+
+// TestTheRefundResponseCountsOnlyTheNewRefund: la respuesta a pedir una devolución es la order entera, y la devolución
+// nueva es la que no estaba en la lectura previa.
+func TestTheRefundResponseCountsOnlyTheNewRefund(t *testing.T) {
+	cases := []struct {
+${responses.header}
+	}{
+${responses.rows.join('\n')}
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body := c.after
+				if r.Method == http.MethodGet {
+					body = c.before
+				}
+				_, _ = w.Write([]byte(body))
+			}))
+			t.Cleanup(server.Close)
+			gateway := NewGateway(Settings{BaseURL: server.URL, APIKey: "key", WebhookSecret: "secret", ConnectTimeout: time.Second, ReadTimeout: time.Second, NoticeTolerance: 300 * time.Second}).(*mercadopagoGateway)
+${partialRefund
+  ? `			amount := wire.MustDecimal("2.00")
+			outcome, err := gateway.Refund(t.Context(), "ch-r", "rf-new", "ORDR", &amount, "EUR")`
+  : `			outcome, err := gateway.Refund(t.Context(), "ch-r", "rf-new", "ORDR")`}
+			if err != nil {
+				t.Fatalf("Refund = %v", err)
+			}
+${check}
+		})
+	}
+}
+
+`;
 }
 
 function adapterBody(model) {
@@ -127,10 +211,51 @@ func (g *mercadopagoGateway) VoidAuthorization(ctx context.Context, reference, g
 		body["transactions"] = []any{jsonObject{"id": textOf(mercadopagoPayment(order)["id"]), "amount": major}}
 	}`
       : '';
-    methods.push(`// Refund implementa domain.PaymentGateway.
+    if (tracksRefundInFlight(p)) {
+      methods.push(trackedRefund(p, partialRefund));
+    } else {
+      methods.push(`// Refund implementa domain.PaymentGateway.
 func (g *mercadopagoGateway) Refund(ctx context.Context, reference${refundReferenceParam(p)}, gatewayPaymentID string${partialRefund ? ', amount *wire.Decimal, currency string' : ''}) (domain.GatewayOutcome, error) {
 	body := jsonObject{}${partial}
 	return g.followUp(ctx, "/v1/orders/"+url.PathEscape(gatewayPaymentID)+"/refund", body, reference, gatewayPaymentID, "refund", ${refundKeyCall(p)})
+}`);
+    }
+  }
+  if (tracksRefundInFlight(p)) {
+    methods.push(`// RefundStatus implementa domain.PaymentGateway: la devolución en vuelo, por diferencia. MercadoPago no guarda referencia
+// propia en una devolución, así que es lo procesado por encima de lo que el registro ya cuenta como devuelto (el diseño
+// admite una sola devolución en curso por cobro). La suma de transactions.refunds es el acumulado, no el desenlace de ESTA
+// devolución.
+func (g *mercadopagoGateway) RefundStatus(ctx context.Context, reference, _, gatewayPaymentID string, alreadyRefunded wire.Decimal) (domain.GatewayOutcome, error) {
+	answer, err := g.send(ctx, "refundStatus", http.MethodGet, "/v1/orders/"+url.PathEscape(gatewayPaymentID), nil, "")
+	if err != nil {
+		return domain.GatewayOutcome{}, err
+	}
+	if answer.status >= 400 {
+		return domain.GatewayOutcome{}, unavailableAnswer("MercadoPago", "refundStatus", answer)
+	}
+	order, err := decodeObject(answer.text)
+	if err != nil {
+		return domain.GatewayOutcome{}, err
+	}
+	processed := wire.NewDecimal(0, 0)
+	for _, refund := range mercadopagoRefunds(order) {
+		switch textOf(refund["status"]) {
+		case ${goCases(REFUND.pending)}:
+			return domain.NewGatewayOutcome(domain.GatewayPending, reference, gatewayPaymentID), nil
+		case ${goCases(REFUND.succeeded)}:
+			amount, err := mercadopagoRefundAmount(refund)
+			if err != nil {
+				return domain.GatewayOutcome{}, err
+			}
+			processed = processed.Add(amount)
+		}
+	}
+	if refunded := processed.Sub(alreadyRefunded); refunded.Sign() > 0 {
+		return domain.RefundedOutcome(reference, gatewayPaymentID, refunded), nil
+	}
+	// Nada por encima de lo registrado: la devolución no llegó a la pasarela o la rechazó.
+	return domain.NewGatewayOutcome(domain.GatewayCaptured, reference, gatewayPaymentID), nil
 }`);
   }
   methods.push(`// Status implementa domain.PaymentGateway.
@@ -256,14 +381,73 @@ func (g *mercadopagoGateway) followUp(ctx context.Context, path string, body jso
 	return mercadopagoOutcome(order, reference)
 }
 
-// mercadopagoOutcome traduce una order al desenlace neutro.
+${tracksRefundInFlight(p) ? `// mercadopagoRefunds son las devoluciones de la order, tal como las lista.
+func mercadopagoRefunds(order jsonObject) []jsonObject {
+	items, _ := objectOf(order["transactions"])["refunds"].([]any)
+	refunds := make([]jsonObject, 0, len(items))
+	for _, item := range items {
+		if isObject(item) {
+			refunds = append(refunds, objectOf(item))
+		}
+	}
+	return refunds
+}
+
+// mercadopagoRefundAmount es el importe de una devolución de la order, en unidades mayores.
+func mercadopagoRefundAmount(refund jsonObject) (wire.Decimal, error) {
+	amount, err := wire.ParseDecimal(cmp.Or(textOf(refund["amount"]), "0"))
+	if err != nil {
+		return wire.Decimal{}, fmt.Errorf("MercadoPago devolvió un importe ilegible: %w", err)
+	}
+	return amount, nil
+}
+
+// mercadopagoRefundResponse lee la respuesta a pedir una devolución, que es la order entera con TODAS sus devoluciones: la
+// nueva es la que no estaba en la lectura previa. Sin ninguna nueva, la respuesta no dice nada de ésta y queda en vuelo para
+// el barrido.
+func mercadopagoRefundResponse(order jsonObject, known map[string]bool, reference, gatewayPaymentID string) (domain.GatewayOutcome, error) {
+	refunded := wire.NewDecimal(0, 0)
+	fresh := false
+	for _, refund := range mercadopagoRefunds(order) {
+		if known[textOf(refund["id"])] {
+			continue
+		}
+		fresh = true
+		switch textOf(refund["status"]) {
+		case ${goCases(REFUND.pending)}:
+			return domain.NewGatewayOutcome(domain.GatewayPending, reference, gatewayPaymentID), nil
+		case ${goCases(REFUND.succeeded)}:
+			amount, err := mercadopagoRefundAmount(refund)
+			if err != nil {
+				return domain.GatewayOutcome{}, err
+			}
+			refunded = refunded.Add(amount)
+		}
+	}
+	if !fresh {
+		return domain.NewGatewayOutcome(domain.GatewayPending, reference, gatewayPaymentID), nil
+	}
+	if refunded.Sign() > 0 {
+		return domain.RefundedOutcome(reference, gatewayPaymentID, refunded), nil
+	}
+	return domain.NewGatewayOutcome(domain.GatewayCaptured, reference, gatewayPaymentID), nil
+}
+
+` : ''}// mercadopagoOutcome traduce una order al desenlace neutro.
 func mercadopagoOutcome(order jsonObject, reference string) (domain.GatewayOutcome, error) {
 	id := textOf(order["id"])
 	ref := cmp.Or(textOf(order[${goString(ref)}]), reference)
 	payment := mercadopagoPayment(order)
 	detail := cmp.Or(textOf(order["status_detail"]), textOf(payment["status_detail"]))
 	status := textOf(order["status"])
-	if status == "refunded" || detail == "refunded" || detail == "partially_refunded" {
+${tracksRefundInFlight(p)
+  ? `	if status == "refunded" || detail == "refunded" || detail == "partially_refunded" {
+		// Una order con devoluciones sigue cobrada: la suma de transactions.refunds es el acumulado, no el desenlace de una
+		// devolución. La devolución en vuelo la contesta RefundStatus.
+		return domain.NewGatewayOutcome(domain.GatewayCaptured, ref, id), nil
+	}
+`
+  : `	if status == "refunded" || detail == "refunded" || detail == "partially_refunded" {
 		refunded := wire.NewDecimal(0, 0)
 		refunds, _ := objectOf(order["transactions"])["refunds"].([]any)
 		for _, refund := range refunds {
@@ -275,7 +459,7 @@ func mercadopagoOutcome(order jsonObject, reference string) (domain.GatewayOutco
 		}
 		return domain.RefundedOutcome(ref, id, refunded), nil
 	}
-	switch status {
+`}	switch status {
 	case "action_required":
 		action, err := mercadopagoCustomerAction(payment)
 		if err != nil {
@@ -321,6 +505,58 @@ ${
   p.savePaymentMethod
     ? savedMethodGo(TRANSLATION, 'MercadoPago')
     : ''
+}`;
+}
+
+// La devolución de un diseño que sigue cada una (refund.reference): la lectura previa de la order se hace SIEMPRE, no solo
+// para nombrar la transacción de una parcial, porque deja las devoluciones que ya tenía y la nueva es la que no estaba
+// (corrida payment-spring: sumarlas todas daba el acumulado como importe de la segunda devolución parcial).
+function trackedRefund(p, partialRefund) {
+  const partial = partialRefund
+    ? `
+	if amount != nil {
+		major, err := toMajorUnits(*amount, currency)
+		if err != nil {
+			return domain.GatewayOutcome{}, err
+		}
+		body["transactions"] = []any{jsonObject{"id": textOf(mercadopagoPayment(before)["id"]), "amount": major}}
+	}`
+    : '';
+  return `// Refund implementa domain.PaymentGateway. La lectura previa de la order falla igual que la devolución: dentro del mismo
+// tratamiento, o un 5xx ahí sale como un 500 con el cobro atascado en refunding.
+func (g *mercadopagoGateway) Refund(ctx context.Context, reference, refundReference, gatewayPaymentID string${partialRefund ? ', amount *wire.Decimal, currency string' : ''}) (domain.GatewayOutcome, error) {
+	current, err := g.send(ctx, "refund", http.MethodGet, "/v1/orders/"+url.PathEscape(gatewayPaymentID), nil, "")
+	if err != nil {
+		return domain.GatewayOutcome{}, err
+	}
+	if current.status >= 400 {
+		return domain.GatewayOutcome{}, unavailableAnswer("MercadoPago", "refund", current)
+	}
+	before, err := decodeObject(current.text)
+	if err != nil {
+		return domain.GatewayOutcome{}, err
+	}
+	body := jsonObject{}${partial}
+	known := map[string]bool{}
+	for _, refund := range mercadopagoRefunds(before) {
+		known[textOf(refund["id"])] = true
+	}
+	answer, err := g.send(ctx, "refund", http.MethodPost, "/v1/orders/"+url.PathEscape(gatewayPaymentID)+"/refund", body, ${refundKeyCall(p)})
+	if err != nil {
+		return domain.GatewayOutcome{}, err
+	}
+	if answer.status >= 500 {
+		return domain.GatewayOutcome{}, unavailableAnswer("MercadoPago", "refund", answer)
+	}
+	if answer.status >= 400 {
+		// Rechazada: se pregunta el estado real, que con devoluciones es el cobro capturado.
+		return g.Status(ctx, reference, gatewayPaymentID)
+	}
+	order, err := decodeObject(answer.text)
+	if err != nil {
+		return domain.GatewayOutcome{}, err
+	}
+	return mercadopagoRefundResponse(order, known, reference, gatewayPaymentID)
 }`;
 }
 
@@ -460,7 +696,7 @@ func TestAuthorizeSendsTheKeyOfTheReferenceAndTheMajorUnits(t *testing.T) {
 	}
 }
 
-func TestAServerErrorLeavesTheChargeInDoubtAndIsNotRetried(t *testing.T) {
+${tracksRefundInFlight(model.payments) ? refundTestsGo(Boolean(model.payments.refund.amount)) : ''}func TestAServerErrorLeavesTheChargeInDoubtAndIsNotRetried(t *testing.T) {
 	gateway, calls, _, _ := fakeMercadopago(t, http.StatusBadGateway, \`{}\`)
 	_, err := gateway.Authorize(t.Context(), charge(t, "12.50"))
 	var unavailable *domain.PaymentGatewayUnavailableError

@@ -21,7 +21,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { pascalCase } from '../lib/naming.js';
-import { PAYMENT_NOTICE_PATH } from '@keel-system/keel-core/gen/payment-gateways';
+import { PAYMENT_NOTICE_PATH, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { PAYMENT_SWEEP_PARAMETERS } from '@keel-system/keel-core/gen/payments-model';
 import { scheduledByTimer } from '@keel-system/keel-core/gen/timer-plan';
 import { OUTBOUND_POLICY_CLASS, outboundPolicyImport } from './outbound-address.js';
@@ -121,7 +121,8 @@ function renderGatewayOutcome(model) {
  * @param failureReason    con FAILED, el motivo en el vocabulario neutro; null en otro caso
  * @param customerAction   con ACTION_REQUIRED, la acción del cliente, opaca (la consume el
  *                         componente de la pasarela en el navegador); null en otro caso
- * @param refundedAmount   con REFUNDED, lo devuelto en unidades mayores; null en otro caso
+ * @param refundedAmount   con REFUNDED, lo devuelto en ESTA devolución en unidades mayores, nunca el acumulado devuelto
+ *                         sobre el cobro; null en otro caso
  */
 public record GatewayOutcome(GatewayStatus status, String reference, String gatewayPaymentId,
         ${failureReasonType} failureReason, String customerAction, BigDecimal refundedAmount) {
@@ -317,6 +318,18 @@ function renderPort(model) {
      * contestar— se busca por la referencia, que el adaptador le mandó al pedirlo.
      */
     GatewayOutcome status(String reference, String gatewayPaymentId);`);
+  if (tracksRefundInFlight(payments)) {
+    methods.push(`    /**
+     * El desenlace de UNA devolución en vuelo, la de refundReference (corrida payment-spring): REFUNDED con el importe de
+     * ESA devolución, PENDING si la pasarela aún la procesa, o CAPTURED si no le llegó o la rechazó (el estado del que
+     * salió). La consulta del cobro solo sabe el acumulado devuelto, y con una devolución anterior daría por hecha una
+     * que no llegó. alreadyRefunded es lo que el registro ya cuenta como devuelto, sin esta devolución: lo usa la
+     * pasarela que no guarda referencia propia en sus devoluciones (keel-core: REFUND_TRANSLATIONS).
+     *
+     * @throws PaymentGatewayUnavailableException si no contestó
+     */
+    GatewayOutcome refundStatus(String reference, String refundReference, String gatewayPaymentId, BigDecimal alreadyRefunded);`);
+  }
   if (payments.savePaymentMethod) {
     methods.push(`    /**
      * Guarda un medio de pago para cobrarlo sin el cliente delante.
@@ -341,7 +354,7 @@ ${methods.join('\n\n')}
   if (payments.savePaymentMethod) {
     imports.push(`${domain}.SavedPaymentMethod`, `${domain}.PaymentMethodRejectedException`, `${domain}.PaymentMethodAuthenticationRequiredException`);
   }
-  if (payments.capture?.amount || payments.refund?.amount) imports.push('java.math.BigDecimal');
+  if (payments.capture?.amount || payments.refund?.amount || tracksRefundInFlight(payments)) imports.push('java.math.BigDecimal');
   return file(model, PORT_PKG, 'PaymentGateway', imports, body);
 }
 
@@ -533,7 +546,24 @@ public class PaymentReconciliation {
             applier.apply(outcome);
         }
         return outcome.status();
-    }
+    }${tracksRefundInFlight(payments) ? `
+
+    /**
+     * La consulta de un cobro en ${payments.refund.inFlight}: el desenlace de SU devolución en vuelo, no el del cobro, que solo
+     * sabe el acumulado devuelto (corrida payment-spring).
+     *
+     * @param refundReference la referencia de la devolución pendiente del cobro (${payments.refund.reference})
+     * @param alreadyRefunded lo que el registro ya cuenta como devuelto, sin esa devolución
+     * @return REFUNDED (ya aplicado, con el importe de ESA devolución), PENDING (sigue en ${payments.refund.inFlight}) o
+     *         CAPTURED: la devolución no llegó a la pasarela o la rechazó, y el handler devuelve el cobro a ese estado
+     */
+    public GatewayStatus consultRefund(String reference, String refundReference, String gatewayPaymentId, BigDecimal alreadyRefunded) {
+        GatewayOutcome outcome = gateway.refundStatus(reference, refundReference, gatewayPaymentId, alreadyRefunded);
+        if (outcome.status() == GatewayStatus.REFUNDED) {
+            applier.apply(outcome);
+        }
+        return outcome.status();
+    }` : ''}
 }`;
   return file(
     model,
@@ -544,6 +574,7 @@ public class PaymentReconciliation {
       `${base}.${DOMAIN_PKG}.GatewayStatus`,
       `${base}.${ENUMS_PKG}.${payments.record.failureReasonType}`,
       `${base}.${PORT_PKG}.PaymentGateway`,
+      ...(tracksRefundInFlight(payments) ? ['java.math.BigDecimal'] : []),
       'java.time.Instant',
       'org.springframework.beans.factory.annotation.Value',
       'org.springframework.stereotype.Component'

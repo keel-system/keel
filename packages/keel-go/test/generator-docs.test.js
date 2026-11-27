@@ -515,7 +515,11 @@ test('lo que enseñan las skills de pagos es lo emitido: el arnés, los puertos,
   // Cada método del escenario que enseña existe, y también cada constante de llamada.
   const taught = [...new Set([...skill.matchAll(/\bs\.([A-Z]\w*)\(/g)].map((match) => match[1]))];
   assert.ok(taught.length >= 15, taught.join(', '));
-  for (const name of taught) assert.match(harness, new RegExp(`func \\(s \\*Scenario\\) ${name}\\(`), name);
+  // GatewayReportsRefunded es el helper de un diseño SIN refund.reference (una sola devolución por cobro): payment-checkout
+  // sigue cada devolución y tiene GatewayReportsRefund en su lugar (corrida payment-spring).
+  const withoutRefundReference = new Set(['GatewayReportsRefunded']);
+  assert.ok(taught.includes('GatewayReportsRefund'), 'la skill enseña GatewayReportsRefund');
+  for (const name of taught.filter((entry) => !withoutRefundReference.has(entry))) assert.match(harness, new RegExp(`func \\(s \\*Scenario\\) ${name}\\(`), name);
   const calls = [...new Set([...skill.matchAll(/\bCall[A-Z]\w*/g)].map((match) => match[0]))];
   assert.ok(calls.length >= 8, calls.join(', '));
   for (const call of calls) assert.match(harness, new RegExp(`^\\t${call} +GatewayCall = `, 'm'), call);
@@ -529,7 +533,8 @@ test('lo que enseñan las skills de pagos es lo emitido: el arnés, los puertos,
     'func (a *PaymentOutcomeApplier) Apply(ctx context.Context, outcome domain.GatewayOutcome) error',
     'func (r *PaymentReconciliation) StaleBefore(now time.Time) time.Time',
     'func (r *PaymentReconciliation) BatchSize() int',
-    'func (r *PaymentReconciliation) Consult(ctx context.Context, reference, gatewayPaymentID string) (domain.GatewayStatus, error)'
+    'func (r *PaymentReconciliation) Consult(ctx context.Context, reference, gatewayPaymentID string) (domain.GatewayStatus, error)',
+    'func (r *PaymentReconciliation) ConsultRefund(ctx context.Context, reference, refundReference, gatewayPaymentID string, alreadyRefunded wire.Decimal) (domain.GatewayStatus, error)'
   ]) {
     assert.ok(outcomes.includes(member), member);
   }

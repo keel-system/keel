@@ -38,8 +38,24 @@ estado para lo que no es un desenlace:
 | `Pending` | Nada: se queda para la siguiente pasada |
 | `NotFound` | Ya aplicado: fallido con `notReceived` |
 | `Authorized` con el cobro en `capturing`/`canceling` | La acción no llegó a hacerse: el cobro vuelve a `authorized` |
-| `Captured` con el cobro en `refunding` | La devolución no llegó a hacerse: vuelve a `captured` |
+| `Captured` con el cobro en `refunding` | La devolución no llegó a hacerse: vuelve a `captured` (sin `refund.reference`; con ella, ver abajo) |
 | cualquier otro | Ya aplicado por el aplicador |
 
 Un fallo con UN cobro (la pasarela no contesta: `PaymentGatewayUnavailableException`) no para la pasada: anótalo y sigue
 con el siguiente; la marca re-estampada lo devolverá a la cola pasado el umbral.
+
+## La devolución en vuelo (con `refund.reference`)
+
+Con `partial-refund` un cobro admite varias devoluciones, y la consulta del cobro solo sabe el **acumulado** devuelto: leída
+como el desenlace de la devolución en curso, registraría el acumulado como su importe y, si hubo otra devolución antes,
+daría por hecha una que nunca llegó a la pasarela (corrida payment-spring). Por eso un candidato en el estado en vuelo de
+la devolución NO se consulta con la llamada de arriba sino con
+
+```
+paymentReconciliation.ConsultRefund(reference, refundReference, gatewayPaymentId, alreadyRefunded, cancellationToken)
+```
+
+`refundReference` es la referencia de la devolución pendiente del cobro (el campo de `payments.refund.reference`) y
+`alreadyRefunded` lo que el registro ya cuenta como devuelto, sin esa devolución. Devuelve `Refunded` (ya aplicado, con
+el importe de ESA devolución), `Pending` (no hagas nada: sigue en vuelo) o `Captured`: la devolución no llegó a la
+pasarela o la rechazó, y el cobro vuelve a `captured` con la devolución en `failed`, como manda el diseño.

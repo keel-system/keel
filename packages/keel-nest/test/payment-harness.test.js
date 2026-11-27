@@ -19,7 +19,7 @@ import { PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS } from '@keel-system/keel-cor
 import { planFixture, transpileTree } from './helpers/emitted.js';
 import { tmpDir } from './helpers/tmp.js';
 import { HTTP_STUB_TS } from '../src/scaffold/http-stub-harness.js';
-import { PAYMENT_HARNESS_EXPORTS, PAYMENT_HARNESS_TS } from '../src/scaffold/payment-harness.js';
+import { paymentHarnessExports, PAYMENT_HARNESS_TS } from '../src/scaffold/payment-harness.js';
 
 const SUBJECT = 'payment-checkout';
 const NEST_STUB = `
@@ -34,9 +34,10 @@ async function miniWireMock() {
   const requests = [];
   const matches = (criterion, method, url, body) => {
     if (criterion.method !== method) return false;
-    if (!new RegExp(`^${criterion.urlPathPattern}$`).test(url.pathname)) return false;
+    if (criterion.urlPath != null ? criterion.urlPath !== url.pathname : !new RegExp(`^${criterion.urlPathPattern}$`).test(url.pathname)) return false;
     for (const [name, rule] of Object.entries(criterion.queryParameters ?? {})) {
-      if (!(url.searchParams.get(name) ?? '').includes(rule.contains)) return false;
+      const value = url.searchParams.get(name) ?? '';
+      if (rule.equalTo != null ? value !== rule.equalTo : !value.includes(rule.contains)) return false;
     }
     return (criterion.bodyPatterns ?? []).every((pattern) => body.includes(pattern.contains));
   };
@@ -96,7 +97,8 @@ async function loadHarness(byPath, adminUrl) {
 }
 
 for (const gateway of ['stripe', 'mercadopago']) {
-  const { files } = planFixture(SUBJECT, { stack: { paymentGateway: gateway, broker: 'rabbitmq' } });
+  const { files, model } = planFixture(SUBJECT, { stack: { paymentGateway: gateway, broker: 'rabbitmq' } });
+  const exportsOf = paymentHarnessExports(model);
   const byPath = Object.fromEntries(files.map((file) => [file.path, file.content]));
   const tree = transpileTree(files, { stubs: { '@nestjs/common': NEST_STUB } });
   const Adapter = gateway === 'stripe' ? 'StripePaymentGateway' : 'MercadopagoPaymentGateway';
@@ -125,8 +127,10 @@ for (const gateway of ['stripe', 'mercadopago']) {
   };
 
   test(`${gateway}: el arnés exporta la misma API que flow.ts reexporta`, () => {
-    for (const name of PAYMENT_HARNESS_EXPORTS) assert.ok(name in harness, `falta ${name}`);
-    assert.match(byPath['test/integration/support/flow.ts'], new RegExp(`export \\{ ${PAYMENT_HARNESS_EXPORTS.join(', ')} \\} from './payment-gateway\\.js';`));
+    for (const name of exportsOf) assert.ok(name in harness, `falta ${name}`);
+    assert.match(byPath['test/integration/support/flow.ts'], new RegExp(`export \\{ ${exportsOf.join(', ')} \\} from './payment-gateway\\.js';`));
+    // payment-checkout sigue cada devolución (refund.reference): el total devuelto no es un desenlace que programar.
+    assert.ok(exportsOf.includes('gatewayReportsRefund') && !exportsOf.includes('gatewayReportsRefunded'));
   });
 
   test(`${gateway}: lo que programa cada helper de cobro es el desenlace que lee el adaptador`, async () => {
@@ -161,10 +165,8 @@ for (const gateway of ['stripe', 'mercadopago']) {
       // El aviso pregunta SOLO por el id (status(null, id)): la referencia del cobro tiene que salir del objeto.
       assert.equal((await adapter.status(null, harness.gatewayIdFor(reference))).reference, reference, `${status}: la referencia viaja en el objeto`);
     }
-    await harness.gatewayReports('rep-refunded', 'REFUNDED');
-    const refunded = await adapter.status('rep-refunded', harness.gatewayIdFor('rep-refunded'));
-    assert.equal(refunded.status, GatewayStatus.REFUNDED);
-    assert.equal(refunded.refundedAmount.toString(), '10.00');
+    // payment-checkout sigue cada devolución: la consulta del cobro no dice nada de devoluciones (corrida payment-spring).
+    await assert.rejects(harness.gatewayReports('rep-refunded', 'REFUNDED'), /gatewayReportsRefund/);
     await harness.gatewayReports('rep-missing', 'NOT_FOUND');
     assert.equal((await adapter.status('rep-missing', null)).status, GatewayStatus.NOT_FOUND);
     assert.equal((await adapter.status('rep-missing', harness.gatewayIdFor('rep-missing'))).status, GatewayStatus.NOT_FOUND);
@@ -214,12 +216,17 @@ for (const gateway of ['stripe', 'mercadopago']) {
     }
   });
 
-  test(`${gateway}: devuelto por un total concreto, anulación que falla con su motivo y respuesta retenida`, async () => {
+  test(`${gateway}: la devolución en vuelo con su importe y lo devuelto antes, anulación que falla con su motivo y respuesta retenida`, async () => {
     await fresh();
-    await harness.gatewayReportsRefunded('ch-20', '7.50');
-    const refunded = await adapter.status('ch-20', harness.gatewayIdFor('ch-20'));
+    // Corrida payment-spring: el importe es el de ESTA devolución, no el acumulado (2.00, no 7.00).
+    await harness.gatewayReportsRefund('ch-20', 'rf-2', 'REFUNDED', '2.00', '5.00');
+    const refunded = await adapter.refundStatus('ch-20', 'rf-2', harness.gatewayIdFor('ch-20'), Decimal.parse('5.00'));
     assert.equal(refunded.status, GatewayStatus.REFUNDED);
-    assert.equal(refunded.refundedAmount.toString(), '7.50');
+    assert.equal(refunded.refundedAmount.toString(), '2.00');
+    // Y una que no llegó, con otra anterior: no es una devolución hecha.
+    await harness.gatewayReportsRefund('ch-23', 'rf-3', 'MISSING', '2.00', '5.00');
+    assert.equal((await adapter.refundStatus('ch-23', 'rf-3', harness.gatewayIdFor('ch-23'), Decimal.parse('5.00'))).status, GatewayStatus.CAPTURED);
+    await assert.rejects(harness.gatewayReports('ch-24', 'REFUNDED'), /gatewayReportsRefund/);
     await harness.gatewayCancelFails('ch-21', 'authenticationFailed');
     const failed = await adapter.voidAuthorization('ch-21', harness.gatewayIdFor('ch-21'));
     assert.equal(failed.status, GatewayStatus.FAILED);

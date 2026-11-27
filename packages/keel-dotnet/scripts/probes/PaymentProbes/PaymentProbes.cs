@@ -103,10 +103,8 @@ public sealed class PaymentProbes : FlowTest, IAsyncLifetime
         await GatewayReports("ch-g", "NOT_FOUND");
         Assert.Equal(GatewayStatus.NotFound, (await Gateway.Status(null, GatewayIdFor("ch-g"), Cancel)).Status);
         Assert.Equal(GatewayStatus.NotFound, (await Gateway.Status("ch-g", null, Cancel)).Status);
-        await GatewayReports("ch-h", "REFUNDED");
-        var refunded = await Gateway.Status(null, GatewayIdFor("ch-h"), Cancel);
-        Assert.Equal(GatewayStatus.Refunded, refunded.Status);
-        Assert.Equal(10.00m, refunded.RefundedAmount);
+        // payment-checkout sigue cada devolución (refund.reference): la consulta del cobro no dice nada de devoluciones.
+        await Assert.ThrowsAsync<ArgumentException>(() => GatewayReports("ch-h", "REFUNDED"));
     }
 
     [Fact]
@@ -159,12 +157,16 @@ public sealed class PaymentProbes : FlowTest, IAsyncLifetime
     }
 
     [Fact]
-    public async Task DevueltoPorUnTotalYAnulacionQueFallaConSuMotivo()
+    public async Task LaDevolucionEnVueloLlevaSuImporteYAnulacionQueFallaConSuMotivo()
     {
-        await GatewayReportsRefunded("ch-n", "7.50");
-        var refunded = await Gateway.Status("ch-n", GatewayIdFor("ch-n"), Cancel);
+        // Corrida payment-spring: el importe es el de ESTA devolución (2.50), no el acumulado (7.50), y una devolución que no
+        // llegó no está hecha aunque hubiera otra antes.
+        await GatewayReportsRefund("ch-n", "rf-n", "REFUNDED", "2.50", "5.00");
+        var refunded = await Gateway.RefundStatus("ch-n", "rf-n", GatewayIdFor("ch-n"), 5.00m, Cancel);
         Assert.Equal(GatewayStatus.Refunded, refunded.Status);
-        Assert.Equal(7.50m, refunded.RefundedAmount);
+        Assert.Equal(2.50m, refunded.RefundedAmount);
+        await GatewayReportsRefund("ch-p", "rf-p", "MISSING", "2.50", "5.00");
+        Assert.Equal(GatewayStatus.Captured, (await Gateway.RefundStatus("ch-p", "rf-p", GatewayIdFor("ch-p"), 5.00m, Cancel)).Status);
         await GatewayCancelFails("ch-o", "authenticationFailed");
         var failed = await Gateway.VoidAuthorization("ch-o", GatewayIdFor("ch-o"), Cancel);
         Assert.Equal(GatewayStatus.Failed, failed.Status);

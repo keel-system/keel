@@ -16,7 +16,7 @@
 // Lo que NO genera: la lógica de los casos de uso (cuándo se llama al puerto y qué transición aplica cada
 // handler), que es del diseño y la escribe el agente con la skill de la pasarela.
 
-import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH } from '@keel-system/keel-core/gen/payment-gateways';
+import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { paymentsYaml } from '@keel-system/keel-core/gen/payments-config';
 import { PAYMENT_SWEEP_PARAMETERS } from '@keel-system/keel-core/gen/payments-model';
 import { DIRS, classPath, declType, tsModule, tsString } from './render.js';
@@ -382,6 +382,18 @@ function portTs(model) {
    * busca por la referencia, que el adaptador le mandó al pedirlo.
    */
   abstract status(reference: string | null, gatewayPaymentId: string | null): Promise<GatewayOutcome>;`);
+  if (tracksRefundInFlight(p)) {
+    methods.push(`  /**
+   * El desenlace de UNA devolución en vuelo, la de refundReference (corrida payment-spring): REFUNDED con el importe de
+   * ESA devolución, PENDING si la pasarela aún la procesa, o CAPTURED si no le llegó o la rechazó (el estado del que
+   * salió). La consulta del cobro solo sabe el acumulado devuelto, y con una devolución anterior daría por hecha una que
+   * no llegó. alreadyRefunded es lo que el registro ya cuenta como devuelto, sin esta devolución: lo usa la pasarela que
+   * no guarda referencia propia en sus devoluciones (keel-core: REFUND_TRANSLATIONS).
+   *
+   * @throws PaymentGatewayUnavailableException si no contestó
+   */
+  abstract refundStatus(reference: string, refundReference: string, gatewayPaymentId: string, alreadyRefunded: Decimal): Promise<GatewayOutcome>;`);
+  }
   if (p.savePaymentMethod) {
     methods.push(`  /**
    * Guarda un medio de pago para cobrarlo sin el cliente delante.
@@ -397,7 +409,7 @@ function portTs(model) {
     { symbol: 'ChargeRequest', from: CHARGE_REQUEST_TS, type: true },
     { symbol: 'GatewayOutcome', from: GATEWAY_OUTCOME_TS, type: true }
   ];
-  if (p.capture?.amount || p.refund?.amount) imports.push({ symbol: 'Decimal', from: DECIMAL_TS, type: true });
+  if (p.capture?.amount || p.refund?.amount || tracksRefundInFlight(p)) imports.push({ symbol: 'Decimal', from: DECIMAL_TS, type: true });
   if (p.savePaymentMethod) imports.push({ symbol: 'SavedPaymentMethod', from: SAVED_METHOD_TS, type: true });
   return tsModule(
     PAYMENT_GATEWAY_TS,
@@ -581,7 +593,8 @@ function reconciliationTs(model) {
       { symbol: 'PaymentGateway', from: PAYMENT_GATEWAY_TS },
       { symbol: 'PaymentOutcomeApplier', from: OUTCOME_APPLIER_TS },
       { symbol: 'PAYMENT_RECONCILIATION_SETTINGS', from: RECONCILIATION_SETTINGS_TS },
-      { symbol: 'PaymentReconciliationSettings', from: RECONCILIATION_SETTINGS_TS, type: true }
+      { symbol: 'PaymentReconciliationSettings', from: RECONCILIATION_SETTINGS_TS, type: true },
+      ...(tracksRefundInFlight(p) ? [{ symbol: 'Decimal', from: DECIMAL_TS, type: true }] : [])
     ],
     `/**
  * La consulta del barrido de reconciliación (${p.reconciliation.sweep}) para UN cobro que espera desenlace: le
@@ -637,7 +650,22 @@ export class PaymentReconciliation {
     }
     if (outcome.status !== GatewayStatus.PENDING) await this.applier.apply(outcome);
     return outcome.status;
-  }
+  }${tracksRefundInFlight(p) ? `
+
+  /**
+   * La consulta de un cobro en ${p.refund.inFlight}: el desenlace de SU devolución en vuelo, no el del cobro, que solo sabe
+   * el acumulado devuelto (corrida payment-spring).
+   *
+   * @param refundReference la referencia de la devolución pendiente del cobro (${p.refund.reference})
+   * @param alreadyRefunded lo que el registro ya cuenta como devuelto, sin esa devolución
+   * @return REFUNDED (ya aplicado, con el importe de ESA devolución), PENDING (sigue en ${p.refund.inFlight}) o CAPTURED:
+   *         la devolución no llegó a la pasarela o la rechazó, y el handler devuelve el cobro a ese estado
+   */
+  async consultRefund(reference: string, refundReference: string, gatewayPaymentId: string, alreadyRefunded: Decimal): Promise<GatewayStatus> {
+    const outcome = await this.gateway.refundStatus(reference, refundReference, gatewayPaymentId, alreadyRefunded);
+    if (outcome.status === GatewayStatus.REFUNDED) await this.applier.apply(outcome);
+    return outcome.status;
+  }` : ''}
 }`
   );
 }

@@ -137,3 +137,57 @@ test('mercadopago: gatewayRefunds programa también la consulta de la order que 
   const harness = project('mercadopago').file('AbstractFlowIT.java');
   assert.match(harness, /gatewayStubPath\(GatewayCall\.STATUS, gatewayIdFor\(reference\), null, 200, gatewayObject\(reference, "CAPTURED", null, null\)\);\s+gatewayStubPath\(GatewayCall\.REFUND/);
 });
+
+// ─── La devolución en vuelo (corrida payment-spring, 2026-11-27) ─────────────
+//
+// payment-checkout declara partial-refund con refund.reference: cada devolución se sigue por separado. La consulta del
+// cobro solo sabe el acumulado devuelto, y leerla como el desenlace de la devolución en curso daba el acumulado como
+// importe y daba por hecha una devolución que no llegó (había otra antes). Que el adaptador acierte lo ejecuta
+// payment-check (RF-1 a RF-9); aquí se fija la forma que lo hace posible.
+
+for (const gateway of Object.keys(PAYMENT_GATEWAYS)) {
+  const { file } = project(gateway);
+  const adapterName = `${gateway.charAt(0).toUpperCase()}${gateway.slice(1)}PaymentGateway.java`;
+
+  test(`${gateway}: el puerto y el barrido consultan la devolución en vuelo por su referencia`, () => {
+    assert.match(file('application/port/out/PaymentGateway.java'),
+      /GatewayOutcome refundStatus\(String reference, String refundReference, String gatewayPaymentId, BigDecimal alreadyRefunded\);/);
+    const reconciliation = file('PaymentReconciliation.java');
+    assert.match(reconciliation, /public GatewayStatus consultRefund\(String reference, String refundReference, String gatewayPaymentId, BigDecimal alreadyRefunded\)/);
+    assert.match(reconciliation, /gateway\.refundStatus\(reference, refundReference, gatewayPaymentId, alreadyRefunded\)/);
+  });
+
+  test(`${gateway}: la consulta del cobro deja de deducir la devolución del acumulado`, () => {
+    const adapter = file(adapterName);
+    assert.doesNotMatch(adapter, /path\("amount_refunded"\)/);
+    assert.doesNotMatch(adapter, /return GatewayOutcome\.refunded\(ref, id/);
+    assert.match(adapter, /public GatewayOutcome refundStatus\(/);
+  });
+
+  test(`${gateway}: la nota del barrido manda consultar la devolución con consultRefund`, () => {
+    const sweep = file('SweepPendingPaymentsCommandHandler.java');
+    assert.match(sweep, /paymentReconciliation\.consultRefund\(reference, refundReference, gatewayPaymentId, alreadyRefunded\)/);
+  });
+
+  test(`${gateway}: la pasarela de prueba programa la devolución con su referencia y lo devuelto antes`, () => {
+    const harness = file('AbstractFlowIT.java');
+    assert.match(harness, /protected static void gatewayReportsRefund\(String reference, String refundReference, String outcome, BigDecimal amount,/);
+    assert.doesNotMatch(harness, /protected static void gatewayReportsRefunded\(/);
+    // G2: «no contesta» corta la respuesta a mitad; un corte antes de responder el JDK lo repite en un GET.
+    assert.match(harness, /protected static void gatewayDoesNotAnswer\(GatewayCall call\) \{\s+String\[\] route = GATEWAY_ROUTES\.get\(call\);\s+stubBrokenResponse\(/);
+  });
+}
+
+test('stripe: la referencia de la devolución viaja en su metadata y se busca por ella', () => {
+  const adapter = project('stripe').file('StripePaymentGateway.java');
+  assert.match(adapter, /form\.add\("metadata\[" \+ REFUND_REFERENCE_KEY \+ "\]", refundReference\);/);
+  assert.match(adapter, /static final String REFUND_REFERENCE_KEY = "keel_refund_reference";/);
+  assert.match(adapter, /queryParam\("payment_intent", gatewayPaymentId\)/);
+});
+
+test('mercadopago: la devolución en vuelo es lo procesado por encima de lo registrado, y la nueva la que no estaba', () => {
+  const adapter = project('mercadopago').file('MercadopagoPaymentGateway.java');
+  assert.match(adapter, /processed\.subtract\(alreadyRefunded == null \? BigDecimal\.ZERO : alreadyRefunded\)/);
+  assert.match(adapter, /Set<String> known = refundIds\(current\);/);
+  assert.match(adapter, /return refundResponse\(order, known, reference, gatewayPaymentId\);/);
+});

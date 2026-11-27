@@ -7,7 +7,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
-import { CURRENCY_MINOR_UNITS, refundIdempotencyKey } from '@keel-system/keel-core/gen/payment-gateways';
+import {
+  CURRENCY_MINOR_UNITS,
+  REFUND_OUTCOME_CASES,
+  REFUND_RESPONSE_CASES,
+  REFUND_TRANSLATIONS,
+  refundIdempotencyKey,
+  tracksRefundInFlight
+} from '@keel-system/keel-core/gen/payment-gateways';
 import { PAYMENT_TEST_SECRETS } from '../scaffold/config.js';
 import { isRawJsonField } from '../scaffold/jackson.js';
 import { OUTBOUND_POLICY_CLASS } from '../scaffold/outbound-address.js';
@@ -109,7 +116,7 @@ function gatewayShapes(gateway) {
       to: '            throw unavailable(action, error);\n        } catch (RestClientException noAnswer) {\n            throw unavailable(action, noAnswer);'
     },
     // Vuelve el defecto de la corrida: la lectura de la order fuera del tratamiento de «sin respuesta».
-    prefetchSabotage: { from: '} catch (RestClientException noAnswer) {\n                throw unavailable("refund"', to: '} catch (IllegalStateException noAnswer) {\n                throw unavailable("refund"' },
+    prefetchSabotage: { from: '} catch (RestClientException noAnswer) {\n            throw unavailable("refund"', to: '} catch (IllegalStateException noAnswer) {\n            throw unavailable("refund"' },
     amountOnWire: '"total_amount":"25.90"',
     referenceOnWire: '"external_reference":"ch-1"',
     searchMarker: 'ch-9',
@@ -147,6 +154,8 @@ const SABOTAGES = {
   expired: { file: (s) => `${s.adapter}.java`, from: (s) => s.expiredSabotage.from, to: (s) => s.expiredSabotage.to },
   // Una lectura previa a la devolución escapa del tratamiento de «sin respuesta».
   prefetch: { file: (s) => `${s.adapter}.java`, from: (s) => s.prefetchSabotage.from, to: (s) => s.prefetchSabotage.to },
+  // La pasarela de prueba vuelve a cortar ANTES de responder: el JDK repite el GET y la consulta llega dos veces (G2).
+  'transport-retry': { test: true },
   // El cliente de la pasarela se construye sin el filtro anti-SSRF: sale a cualquier dirección.
   filter: {
     file: () => `${OUTBOUND_POLICY_CLASS}.java`,
@@ -160,7 +169,29 @@ const SABOTAGES = {
     to: 'private static SavedCard savedCardOf(JsonNode saved) {\n        if (true) return null;\n        return '
   },
   // La acción del cliente vuelve a salir como cadena con el JSON escapado dentro.
-  'raw-json': { file: (s) => `${s.rawJson.eventClass}.java`, from: '@JsonRawValue ', to: '' }
+  'raw-json': { file: (s) => `${s.rawJson.eventClass}.java`, from: '@JsonRawValue ', to: '' },
+  // La devolución en vuelo (corrida payment-spring). Stripe: deja de buscarla por su referencia y toma la primera que
+  // liste la pasarela (cae RF-1 a RF-4).
+  'rf-not-mine': {
+    gateway: 'stripe',
+    file: (s) => `${s.adapter}.java`,
+    from: 'if (!refundReference.equals(refund.path("metadata").path(REFUND_REFERENCE_KEY).asString(null))) {',
+    to: 'if (false && !refundReference.equals(refund.path("metadata").path(REFUND_REFERENCE_KEY).asString(null))) {'
+  },
+  // MercadoPago: vuelve al acumulado, sin restar lo ya registrado (caen RF-5 y RF-6).
+  'rf-cumulative': {
+    gateway: 'mercadopago',
+    file: (s) => `${s.adapter}.java`,
+    from: 'processed.subtract(alreadyRefunded == null ? BigDecimal.ZERO : alreadyRefunded)',
+    to: 'processed'
+  },
+  // MercadoPago: la respuesta síncrona cuenta también las devoluciones que ya tenía la order (caen RF-8 y RF-9).
+  'rf-known': {
+    gateway: 'mercadopago',
+    file: (s) => `${s.adapter}.java`,
+    from: 'if (known.contains(refund.path("id").asString(""))) {',
+    to: 'if (false && known.contains(refund.path("id").asString(""))) {'
+  }
 };
 
 export function paymentCheckTest(model, gateway) {
@@ -226,7 +257,13 @@ class PaymentCheckTest {
 
     record Recorded(String method, String path, String query, String idempotencyKey, String body) {}
 
-    record Route(String method, String pathRegex, int status, String body, boolean drop) {}
+    // truncated: la cabecera sale con un Content-Length que el cuerpo no cumple, y se cierra (la respuesta se corta a
+    // mitad, el MALFORMED_RESPONSE_CHUNK con el que el arnés imita a la pasarela que no contesta).
+    record Route(String method, String pathRegex, int status, String body, boolean drop, boolean truncated) {
+        Route(String method, String pathRegex, int status, String body, boolean drop) {
+            this(method, pathRegex, status, body, drop, false);
+        }
+    }
 
     record Notice(byte[] body, HttpHeaders headers, Map<String, String> query, String id) {}
 
@@ -248,6 +285,14 @@ class PaymentCheckTest {
                     .orElse(new Route("", "", 404, "{}", false));
             if (route.drop()) {
                 exchange.close(); // sin respuesta: la conexión se corta
+                return;
+            }
+            if (route.truncated()) {
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, 1000);
+                exchange.getResponseBody().write("{\\"basura".getBytes(StandardCharsets.UTF_8));
+                exchange.getResponseBody().flush();
+                exchange.close();
                 return;
             }
             byte[] out = route.body().getBytes(StandardCharsets.UTF_8);
@@ -352,6 +397,22 @@ class PaymentCheckTest {
         assertEquals(0, RECORDED.size(), "la petición no puede llegar a la pasarela");
     }
 
+    // G2 de la corrida payment-spring: el HttpClient del JDK reintenta un GET cuando la conexión del pool aparece
+    // cerrada ANTES de recibir nada, y con un corte así la pasarela contaba dos consultas donde el barrido hizo una
+    // (FL-REC-005 las cuenta). Por eso gatewayDoesNotAnswer corta la respuesta A MITAD: esto mide que entonces llega
+    // una sola, sobre una conexión reutilizada, y que la consulta queda en duda.
+    @Test
+    void unaConsultaQueSeCortaAMitadLlegaUnaSolaVezYQuedaEnDuda() {
+        PaymentGateway gateway = gateway();
+        route(${q(calls.STATUS.method)}, ${q(calls.STATUS.path)}, 200, ${q(shapes.captured)});
+        gateway.status("ch-9", "${probes.idPrefix}ch9");
+        ROUTES.clear();
+        RECORDED.clear();
+        ROUTES.add(new Route(${q(calls.STATUS.method)}, ${q(calls.STATUS.path)}, 200, "", false, true));
+        assertThrows(PaymentGatewayUnavailableException.class, () -> gateway.status("ch-9", "${probes.idPrefix}ch9"));
+        assertEquals(1, RECORDED.size(), "la consulta cortada llegó " + RECORDED.size() + " veces");
+    }
+
     @Test
     void sinIdSeBuscaPorLaReferencia() {
         route(${q(calls.SEARCH.method)}, ${q(calls.SEARCH.path)}, 200, ${q(`{"data": [${shapes.captured}]}`)});
@@ -398,16 +459,19 @@ ${model.payments.refund?.amount ? `    @Test
     void dosDevolucionesDelMismoCobroLlevanCadaUnaSuClave() {
         // Corrida payment-go: con la clave del cobro, la segunda devolución parcial reutilizaba la de la primera y la
         // pasarela la rechazaba (otro importe) o devolvía la respuesta de la primera sin devolver nada (el mismo).
+        // La lectura previa de la order (MercadoPago) contesta; solo cuentan las peticiones de devolución.
+        ROUTES.add(new Route("GET", ".*", 200, "{}", false));
         ROUTES.add(new Route("POST", ".*", 503, "{}", false));
         assertThrows(PaymentGatewayUnavailableException.class, () -> gateway().refund("ch-7", "rf-1", "pay7", null, "BRL"));
         assertThrows(PaymentGatewayUnavailableException.class, () -> gateway().refund("ch-7", "rf-2", "pay7", null, "BRL"));
         assertThrows(PaymentGatewayUnavailableException.class, () -> gateway().refund("ch-7", "rf-1", "pay7", null, "BRL"));
-        assertEquals(${q(refundIdempotencyKey('ch-7', 'rf-1'))}, RECORDED.get(0).idempotencyKey());
-        assertEquals(${q(refundIdempotencyKey('ch-7', 'rf-2'))}, RECORDED.get(1).idempotencyKey());
-        assertEquals(RECORDED.get(0).idempotencyKey(), RECORDED.get(2).idempotencyKey());
+        List<Recorded> refunds = RECORDED.stream().filter(recorded -> recorded.method().equals("POST")).toList();
+        assertEquals(${q(refundIdempotencyKey('ch-7', 'rf-1'))}, refunds.get(0).idempotencyKey());
+        assertEquals(${q(refundIdempotencyKey('ch-7', 'rf-2'))}, refunds.get(1).idempotencyKey());
+        assertEquals(refunds.get(0).idempotencyKey(), refunds.get(2).idempotencyKey());
     }
 
-` : ''}${model.payments.capture ? `    @Test
+` : ''}${refundTests(model, gateway, calls)}${model.payments.capture ? `    @Test
     void capturarUnaAutorizacionCaducadaEsUnCobroAnulado() {
         route(${q(calls.CAPTURE.method)}, ${q(calls.CAPTURE.path)}, 400, ${q(shapes.expiredCapture)});
         route(${q(calls.STATUS.method)}, ${q(calls.STATUS.path)}, 200, ${q(shapes.canceled)});
@@ -466,6 +530,16 @@ ${savedMethodTests(model, gateway, calls)}${rawJsonTest(shapes.rawJson)}    @Tes
   const saboteur = (projectDir, kind) => {
     const sabotage = SABOTAGES[kind];
     if (!sabotage) throw new Error(`sabotaje desconocido: ${kind} (${Object.keys(SABOTAGES).join(', ')})`);
+    if (sabotage.gateway && sabotage.gateway !== gateway) throw new Error(`el sabotaje '${kind}' es de ${sabotage.gateway}, no de ${gateway}`);
+    if (sabotage.test) {
+      // Sabotea la pasarela de prueba, no el Java generado: es lo que mide que el corte a mitad es portante.
+      const target = path.join(projectDir, relativePath);
+      const text = fs.readFileSync(target, 'utf8');
+      const truncated = 'false, true));';
+      if (!text.includes(truncated)) throw new Error(`el sabotaje '${kind}' ya no se aplica a PaymentCheckTest`);
+      fs.writeFileSync(target, text.replace(truncated, 'true, false));'));
+      return;
+    }
     const target = findFile(path.join(projectDir, 'src', 'main', 'java'), sabotage.file(shapes));
     const text = fs.readFileSync(target, 'utf8');
     const from = typeof sabotage.from === 'function' ? sabotage.from(shapes) : sabotage.from;
@@ -477,6 +551,11 @@ ${savedMethodTests(model, gateway, calls)}${rawJsonTest(shapes.rawJson)}    @Tes
 }
 
 export const PAYMENT_CHECK_SABOTAGES = Object.keys(SABOTAGES);
+
+/** Los sabotajes que solo existen con una pasarela (la devolución en vuelo se localiza distinto en cada una). */
+export const PAYMENT_CHECK_SABOTAGE_GATEWAY = Object.fromEntries(
+  Object.entries(SABOTAGES).filter(([, sabotage]) => sabotage.gateway).map(([kind, sabotage]) => [kind, sabotage.gateway])
+);
 
 // El evento publicado que lleva la acción del cliente (u otro campo `json`): con él se mide que el
 // documento sale EMBEBIDO del servicio y se lee como objeto, que es lo que javac no puede ver —
@@ -501,6 +580,70 @@ function rawJsonTest({ eventClass, field }) {
     }
 
 `;
+}
+
+/**
+ * La devolución en vuelo (corrida payment-spring): los casos RF-* de keel-core contra el adaptador generado. Las
+ * devoluciones del caso se sirven con la forma de la pasarela; los importes del caso van en unidades menores y la
+ * moneda de prueba (BRL) tiene dos decimales.
+ */
+function refundTests(model, gateway, calls) {
+  if (!tracksRefundInFlight(model.payments)) return '';
+  const t = REFUND_TRANSLATIONS[gateway];
+  const major = (minor) => (minor / 100).toFixed(2);
+  const id = gateway === 'stripe' ? 'pi_chr' : 'ORDchr';
+  const listOf = (refunds) =>
+    gateway === 'stripe'
+      ? JSON.stringify({
+          object: 'list',
+          has_more: false,
+          data: refunds.map((r, i) => ({ id: `re_${i}`, object: 'refund', status: r.status, amount: r.amount, currency: 'brl', metadata: r.reference ? { [t.referenceKey]: r.reference } : {} }))
+        })
+      : JSON.stringify({
+          id,
+          status: 'processed',
+          status_detail: 'partially_refunded',
+          external_reference: 'ch-r',
+          transactions: { payments: [{ id: `PAY${id}` }], refunds: refunds.map((r, i) => ({ id: r.id ?? `REF-${i}`, status: r.status, amount: major(r.amount) })) }
+        });
+  const route = gateway === 'stripe' ? { method: 'GET', path: '/v1/refunds' } : { method: calls.STATUS.method, path: calls.STATUS.path };
+  const assertion = (expected) =>
+    expected.status === 'REFUNDED'
+      ? `assertEquals(GatewayStatus.REFUNDED, outcome.status());
+        assertEquals(0, new BigDecimal("${major(expected.amount)}").compareTo(outcome.refundedAmount()), "importe: " + outcome.refundedAmount());`
+      : `assertEquals(GatewayStatus.${expected.status}, outcome.status());`;
+  const outcomeTests = REFUND_OUTCOME_CASES.filter((c) => c.gateway === gateway).map(
+    (c) => `    @Test
+    void ${c.id.replace('-', '')}_${camel(c.what)}() {
+        route(${q(route.method)}, ${q(route.path)}, 200, ${q(listOf(c.refunds))});
+        GatewayOutcome outcome = gateway().refundStatus("ch-r", ${q(c.refundReference)}, "${id}", new BigDecimal("${major(c.alreadyRefunded)}"));
+        ${assertion(c.expected)}
+    }
+
+`
+  );
+  const responseTests = REFUND_RESPONSE_CASES.filter((c) => c.gateway === gateway).map(
+    (c) => `    @Test
+    void ${c.id.replace('-', '')}_${camel(c.what)}() {
+        route(${q(calls.STATUS.method)}, ${q(calls.STATUS.path)}, 200, ${q(listOf(c.refunds.filter((r) => c.knownIds.includes(r.id))))});
+        route(${q(calls.REFUND.method)}, ${q(calls.REFUND.path)}, 200, ${q(listOf(c.refunds))});
+        GatewayOutcome outcome = gateway().refund("ch-r", "rf-new", "${id}", new BigDecimal("2.00"), "BRL");
+        ${assertion(c.expected)}
+    }
+
+`
+  );
+  return [...outcomeTests, ...responseTests].join('');
+}
+
+function camel(text) {
+  const words = text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9 ]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  return words.map((w, i) => (i === 0 ? w.toLowerCase() : w[0].toUpperCase() + w.slice(1).toLowerCase())).join('');
 }
 
 function findFile(dir, name) {

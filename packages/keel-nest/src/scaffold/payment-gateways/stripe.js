@@ -8,7 +8,7 @@
 //   * Stripe-Signature: t=…,v1=…[,v1=…]: HMAC-SHA256 de `${t}.${cuerpo}`; solo cuenta v1, puede haber varias
 //     durante la rotación del secreto, y se compara en tiempo constante.
 
-import { gatewayTranslation, paymentIdempotencyKey, savedMethodIdempotencyKey, SAVED_METHOD_SEPARATOR } from '@keel-system/keel-core/gen/payment-gateways';
+import { gatewayTranslation, paymentIdempotencyKey, refundTranslation, savedMethodIdempotencyKey, SAVED_METHOD_SEPARATOR, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { DIRS, classPath, tsModule, tsString } from '../render.js';
 import { savedMethodTsHelpers } from '../payments.js';
 
@@ -16,6 +16,9 @@ import { savedMethodTsHelpers } from '../payments.js';
 // (`<cobro>:refund:<devolución>`, refundIdempotencyKey de keel-core); sin ella, la del cobro.
 const refundKeyCall = (p) => (p.refund.reference ? "idempotencyKey(reference, 'refund:' + refundReference)" : "idempotencyKey(reference, 'refund')");
 const refundReferenceParam = (p) => (p.refund.reference ? 'refundReference: string, ' : '');
+// Cómo se localiza una devolución en Stripe: por su metadata (keel-core: REFUND_TRANSLATIONS).
+const REFUND = refundTranslation('stripe');
+const tsCases = (values, indent) => values.map((value) => `${indent}case ${tsString(value)}:`).join('\n');
 
 
 const TRANSLATION = gatewayTranslation('stripe');
@@ -107,21 +110,52 @@ function adapterTs(model) {
       : '';
     methods.push(`  async refund(reference: string, ${refundReferenceParam(p)}gatewayPaymentId: string${amountParam}): Promise<GatewayOutcome> {
     const form = new URLSearchParams();
-    form.append('payment_intent', gatewayPaymentId);${amountLine}
+    form.append('payment_intent', gatewayPaymentId);${amountLine}${tracksRefundInFlight(p) ? `
+    // La referencia de ESTA devolución viaja en su metadata: es lo que permite encontrarla si la respuesta se pierde.
+    form.append(\`metadata[\${REFUND_REFERENCE_KEY}]\`, refundReference);` : ''}
     const answer = await this.send('refund', { method: 'POST', path: '/v1/refunds', body: formBody(form), idempotency: this.key(${refundKeyCall(p)}) });
     if (answer.status >= 500) throw unavailable('refund', answer);
     // Rechazada: el cobro sigue capturado.
     if (answer.status >= 400) return GatewayOutcome.of(GatewayStatus.CAPTURED, reference, gatewayPaymentId);
     const refund = json(answer.text);
     switch (text(refund['status'])) {
-      case 'succeeded':
+${tsCases(REFUND.succeeded, '      ')}
         return GatewayOutcome.refunded(reference, gatewayPaymentId, MoneyAmounts.fromMinorUnits(minor(refund['amount']), upper(refund['currency'])));
-      case 'pending':
-      case 'requires_action':
+${tsCases(REFUND.pending, '      ')}
         return GatewayOutcome.of(GatewayStatus.PENDING, reference, gatewayPaymentId);
       default:
         return GatewayOutcome.of(GatewayStatus.CAPTURED, reference, gatewayPaymentId);
     }
+  }`);
+  }
+  if (tracksRefundInFlight(p)) {
+    methods.push(`  /**
+   * La devolución en vuelo se busca entre las del cobro por la referencia que lleva en su metadata: la consulta del cobro
+   * solo sabe el acumulado devuelto (latest_charge.amount_refunded), que no es el desenlace de ESTA devolución. Stripe
+   * guarda la referencia, así que alreadyRefunded no hace falta aquí.
+   */
+  async refundStatus(reference: string, refundReference: string, gatewayPaymentId: string, _alreadyRefunded: Decimal): Promise<GatewayOutcome> {
+    const query = new URLSearchParams();
+    query.append('payment_intent', gatewayPaymentId);
+    query.append('limit', '100');
+    const answer = await this.send('refundStatus', { method: 'GET', path: \`/v1/refunds?\${query.toString()}\` });
+    if (answer.status >= 400) throw unavailable('refundStatus', answer);
+    const body = json(answer.text);
+    for (const refund of Array.isArray(body['data']) ? body['data'] : []) {
+      if (!isObject(refund)) continue;
+      const metadata = isObject(refund['metadata']) ? refund['metadata'] : {};
+      if (text(metadata[REFUND_REFERENCE_KEY]) !== refundReference) continue;
+      switch (text(refund['status'])) {
+${tsCases(REFUND.succeeded, '        ')}
+          return GatewayOutcome.refunded(reference, gatewayPaymentId, MoneyAmounts.fromMinorUnits(minor(refund['amount']), upper(refund['currency'])));
+${tsCases(REFUND.pending, '        ')}
+          return GatewayOutcome.of(GatewayStatus.PENDING, reference, gatewayPaymentId);
+        default:
+          return GatewayOutcome.of(GatewayStatus.CAPTURED, reference, gatewayPaymentId);
+      }
+    }
+    // No está: la devolución no llegó a la pasarela, y el cobro sigue como estaba.
+    return GatewayOutcome.of(GatewayStatus.CAPTURED, reference, gatewayPaymentId);
   }`);
   }
 
@@ -190,11 +224,14 @@ function adapterTs(model) {
     { symbol: 'GatewayAnswer', from: NEUTRAL.http, type: true },
     { symbol: 'GatewayRequest', from: NEUTRAL.http, type: true }
   ];
-  if (p.capture?.amount || p.refund?.amount) imports.push({ symbol: 'Decimal', from: NEUTRAL.decimal, type: true });
+  if (p.capture?.amount || p.refund?.amount || tracksRefundInFlight(p)) imports.push({ symbol: 'Decimal', from: NEUTRAL.decimal, type: true });
 
   const body = `/** La clave de metadata con la que viaja la referencia del cobro; es lo que permite buscarlo. */
 export const REFERENCE_KEY = ${tsString(TRANSLATION.referenceKey)};
-
+${tracksRefundInFlight(p) ? `
+/** La clave de metadata con la que viaja la referencia de UNA devolución; es lo que permite encontrarla. */
+export const REFUND_REFERENCE_KEY = ${tsString(REFUND.referenceKey)};
+` : ''}
 type Json = Record<string, unknown>;
 
 // decline_code (o code si no hay) → motivo neutro (keel-core/gen/payment-gateways.js); lo que no está es DECLINED.
@@ -272,11 +309,15 @@ ${methods.join('\n\n')}
     const id = text(intent['id']);
     const metadata = isObject(intent['metadata']) ? intent['metadata'] : {};
     const ref = text(metadata[REFERENCE_KEY]) ?? reference;
-    const charge = intent['latest_charge'];
+${tracksRefundInFlight(p)
+  ? `    // Sin deducir la devolución del acumulado (latest_charge.amount_refunded): con varias devoluciones no dice cuál terminó
+    // ni si la que está en vuelo llegó. La devolución en vuelo la contesta refundStatus.
+`
+  : `    const charge = intent['latest_charge'];
     if (isObject(charge) && minor(charge['amount_refunded']) > 0n) {
       return GatewayOutcome.refunded(ref, id, MoneyAmounts.fromMinorUnits(minor(charge['amount_refunded']), upper(charge['currency'])));
     }
-    switch (text(intent['status'])) {
+`}    switch (text(intent['status'])) {
       case 'requires_capture':
         return GatewayOutcome.of(GatewayStatus.AUTHORIZED, ref, id);
       case 'succeeded':
