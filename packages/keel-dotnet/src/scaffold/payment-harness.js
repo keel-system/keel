@@ -11,7 +11,7 @@
 // Support/HttpStub.cs, y lo ejecuta contra un WireMock real con el adaptador emitido. Los dos helpers que MANDAN el aviso
 // necesitan el Post del flujo, así que van en FlowTest.cs (`paymentNoticeMembers`).
 
-import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
+import { DEFAULT_SAVED_CARD, incompleteSavedCardResponses, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, gatewayTranslation, refundTranslation, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { paymentTestCurrency } from '@keel-system/keel-core/gen/payments-config';
 import { csFile, csString, solution } from './render.js';
@@ -161,6 +161,13 @@ public abstract partial class FlowTest
     /// medio guardado (savePaymentMethod.cardDetails).
     /// </summary>
     protected static Task GatewaySavesCard(string brand, string last4, int expMonth, int expYear) => PaymentGatewayHarness.SavesCard(brand, last4, expMonth, expYear);
+
+    /// <summary>
+    /// La pasarela ACEPTA el medio, pero su resumen de tarjeta no trae ese campo ("brand", "last4", "expMonth" o "expYear"):
+    /// la tarjeta ${card.brand} terminada en ${card.last4} (${card.expMonth}/${card.expYear}) sin él. Es el escenario «la pasarela acepta pero el resumen
+    /// viene incompleto»: no escribas ese stub a mano.
+    /// </summary>
+    protected static Task GatewaySavesCardWithout(string field) => PaymentGatewayHarness.SavesCardWithout(field);
 
     /// <summary>
     /// La pasarela exige autenticar al cliente (3DS) para guardar la tarjeta.${authentication ? '' : ` ${gateway.label} no lo pide al guardar (la
@@ -322,6 +329,21 @@ ${tracks
         var (attachMethod, attachPath) = Routes[GatewayCall.AttachMethod];
         await HttpStubHarness.MappingAsync(saveMethod, savePath, StubResponse.Ok(200, new JsonObject { ["id"] = "cus_keel_test" }.ToJsonString()));
         await HttpStubHarness.MappingAsync(attachMethod, attachPath, StubResponse.Ok(200, ${cardObject}.ToJsonString()));
+    }
+
+    // El resumen de la tarjeta sin cada campo (keel-core: incompleteSavedCardResponses), en la forma de la pasarela.
+    private static readonly Dictionary<string, string> IncompleteCards = new()
+    {
+${Object.entries(incompleteSavedCardResponses(gateway.id)).map(([field, body]) => `        [${csString(field)}] = ${csString(JSON.stringify(body))},`).join('\n')}
+    };
+
+    public static async Task SavesCardWithout(string field)
+    {
+        var body = Known(IncompleteCards, field, "Campo del resumen de la tarjeta");
+        var (saveMethod, savePath) = Routes[GatewayCall.SaveMethod];
+        var (attachMethod, attachPath) = Routes[GatewayCall.AttachMethod];
+        await HttpStubHarness.MappingAsync(saveMethod, savePath, StubResponse.Ok(200, new JsonObject { ["id"] = "cus_keel_test" }.ToJsonString()));
+        await HttpStubHarness.MappingAsync(attachMethod, attachPath, StubResponse.Ok(200, body));
     }
 
     public static ${authentication ? 'async ' : ''}Task RequiresAuthenticationToSave()

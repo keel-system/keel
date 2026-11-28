@@ -144,6 +144,10 @@ public sealed class PaymentProbes : FlowTest, IAsyncLifetime
         await GatewaySavesCard("amex", "0005", 3, 2029);
         var saved = await Gateway.SavePaymentMethod("tok_keel", "payer-2", Cancel);
         Assert.Equal(new SavedCard("amex", "0005", 3, 2029), saved.Card);
+        // Corrida payment-spring (2026-11-28, FL-MTH-004): la pasarela acepta, pero el resumen no trae last4.
+        await GatewaySavesCardWithout("last4");
+        var incomplete = await Gateway.SavePaymentMethod("tok_keel", "payer-4", Cancel);
+        Assert.Equal(new SavedCard("visa", null, 12, 2030), incomplete.Card);
         try
         {
             await GatewayRequiresAuthenticationToSave();

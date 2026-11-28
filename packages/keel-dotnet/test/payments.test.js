@@ -183,3 +183,18 @@ test('el registro cablea la pasarela elegida y el cliente HTTP sin reintentos po
   assert.match(http, /message\.Headers\.ConnectionClose = true;/);
   assert.match(http, /Interlocked\.Increment\(ref opened\.Value\) > 1/);
 });
+
+// Corrida payment-spring (2026-11-28, FL-MTH-004): el arnés guarda un medio con el resumen sin un campo, con los cuerpos
+// de keel-core, igual que el AbstractFlowIT de keel-spring y el payment-gateway.ts de keel-nest.
+import { incompleteSavedCardResponses } from '@keel-system/keel-core/gen/payment-probes';
+
+for (const gateway of GATEWAYS) {
+  test(`${gateway}: el arnés guarda el medio con el resumen incompleto que da keel-core`, () => {
+    const harness = content(plans.get(gateway).files, '/Support/PaymentGateway.cs');
+    assert.match(harness, /protected static Task GatewaySavesCardWithout\(string field\)/);
+    for (const [field, body] of Object.entries(incompleteSavedCardResponses(gateway))) {
+      const literal = JSON.stringify(JSON.stringify(body));
+      assert.ok(harness.includes(`[${JSON.stringify(field)}] = ${literal},`), `${gateway}: ${field}`);
+    }
+  });
+}

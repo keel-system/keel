@@ -87,7 +87,8 @@ tiene registrados). Siempre en este orden, y el orden es la defensa:
    cancellationToken)` con cada uno. No escribas otro reclamo. Ver `references/reconciliation.md`.
 
 En los escenarios, sin stubs a mano (la forma de la pasarela la pone el arnés, desde `FlowTest`):
-`GatewaySavesCard(marca, últimos4, mes, año)` y `GatewayRequiresAuthenticationToSave()` al guardar un medio;
+`GatewaySavesCard(marca, últimos4, mes, año)` y `GatewayRequiresAuthenticationToSave()` al guardar un medio,
+y `GatewaySavesCardWithout("last4")` (o `"brand"`, `"expMonth"`, `"expYear"`) cuando la pasarela acepta el medio pero su resumen de tarjeta viene sin ese campo;
 `GatewayReportsRefunded(referencia, total)` para una consulta que da el cobro devuelto por ese total (solo sin `refund.reference`; con ella, `GatewayReportsRefund(referencia, devolución, desenlace, importe, devueltoAntes)` para lo que la pasarela dice de UNA devolución: `"REFUNDED"`, `"PENDING"`, `"FAILED"` o `"MISSING"`, con lo que ya había devuelto antes);
 `GatewayCancelFails(referencia, "authenticationFailed")` para una anulación que vuelve como cobro fallido;
 `GatewayAnswersLate(GatewayCall.Capture, referencia, "CAPTURED", ms)` para la pasarela que retiene su respuesta
