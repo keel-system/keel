@@ -75,7 +75,8 @@ defensa:
    vale). Sin respuesta, `PaymentGatewayUnavailableException`: aquí no se guardó nada.
 
 En los escenarios, sin stubs a mano (la forma de la pasarela la pone el arnés):
-`gatewaySavesCard(marca, últimos4, mes, año)` y `gatewayRequiresAuthenticationToSave()` al guardar un medio;
+`gatewaySavesCard(marca, últimos4, mes, año)` y `gatewayRequiresAuthenticationToSave()` al guardar un medio,
+y `gatewaySavesCardWithout("last4")` (o `"brand"`, `"expMonth"`, `"expYear"`) cuando la pasarela acepta el medio pero su resumen de tarjeta viene sin ese campo;
 `gatewayReportsRefunded(referencia, total)` para una consulta que da el cobro devuelto por ese total (solo sin `refund.reference`; con ella, `gatewayReportsRefund(referencia, devolución, desenlace, importe, devueltoAntes)` para lo que la pasarela dice de UNA devolución: `"REFUNDED"`, `"PENDING"`, `"FAILED"` o `"MISSING"`, con lo que ya había devuelto antes);
 `gatewayCancelFails(referencia, "authenticationFailed")` para una anulación que vuelve como cobro fallido;
 `gatewayAnswersLate(GatewayCall.CAPTURE, referencia, "CAPTURED", ms)` para la pasarela que retiene su respuesta

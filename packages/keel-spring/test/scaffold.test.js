@@ -1793,13 +1793,15 @@ test('capa security (api-key): filtro propio sin resource server ni fragmento oa
   assert.ok(!exists(workspace, `${securityDir}/CorsConfig.java`));
   assert.ok(!read(workspace, 'src/main/resources/parameters/local/security.yaml').includes('allowed-origins'));
 
-  // Y el arnés tampoco trae con qué probarla: los dos únicos helpers que mandan
-  // cabeceras de petición propias se gatean por el bloque `cors` declarado, igual que
-  // `exchangeWithKey` se gatea por `idempotency`. Sin esta aserción el gate no lo ata
-  // nada y el arnés acabaría ofreciendo un preflight contra una política inexistente.
+  // Y el arnés tampoco trae con qué probarla: el preflight se gatea por el bloque `cors`
+  // declarado, igual que `exchangeWithKey` se gatea por `idempotency`. Sin esta aserción el
+  // gate no lo ata nada y el arnés acabaría ofreciendo un preflight contra una política
+  // inexistente. `exchangeWithHeaders`, en cambio, va siempre: un escenario puede mandar
+  // cabeceras propias sin CORS (X-Correlation-Id, corrida payment-spring, 2026-11-28; If-Match,
+  // corrida catalog-spring, 2026-11-07).
   const harness = read(workspace, 'src/integrationTest/java/com/commerce/productcatalog/flows/AbstractFlowIT.java');
   assert.ok(!harness.includes('protected Response preflight('));
-  assert.ok(!harness.includes('protected Response exchangeWithHeaders('));
+  assert.ok(harness.includes('protected Response exchangeWithHeaders('));
   // Ni el interruptor de la JVM que hace viajar `Origin`: sin política CORS no hay
   // cabecera restringida que levantar, y dejarlo puesto haría creer que el arnés
   // prueba algo que aquí no existe.

@@ -1632,16 +1632,18 @@ ${hasIdempotency(model) ? `
     protected Response exchangeWithoutIdempotencyKey(HttpMethod method, String path, String jsonBody, String token) {
         return exchange(method, path, jsonBody, token, null);
     }
-` : ''}${hasCors(model) || usesConditionalWrites(model) ? `
+` : ''}
     /**
-     * Variante con cabeceras de petición propias del escenario. Existe por la política
-     * CORS, que solo se observa si la petición dice de qué origen viene (sin \`Origin\`
-     * el servidor contesta lo mismo con política y sin ella), y por la escritura
-     * condicional (api.concurrency): \`If-Match\` con el \`ETag\` de una lectura anterior,
-     * tal cual lo devolvió el servidor.
+     * Variante con cabeceras de petición propias del escenario: un \`X-Correlation-Id\`
+     * que el escenario elige para seguirlo hasta el evento, el \`Origin\` de la política
+     * CORS (sin él el servidor contesta lo mismo con política y sin ella), el \`If-Match\`
+     * de la escritura condicional con el \`ETag\` de una lectura anterior... Se emite
+     * siempre: keel-nest, keel-dotnet y keel-go aceptan cabeceras en toda petición, y
+     * sin ella el agente de pruebas no tenía forma de mandarlas (corrida payment-spring,
+     * 2026-11-28, FL-OBX-001).
      *
      * <p><b>No es la vía para \`Authorization\` ni para \`Idempotency-Key\`.</b> Los dos
-     * tienen su propio parámetro y su propia semántica (\`tokenFor(...)\` cachea por rol,
+     * tienen su propio parámetro y su propia semántica (el token sale del arnés,
      * la clave se repite solo donde se prueba la deduplicación); colarlos por el mapa
      * salta esas garantías y hace que el escenario mida otra cosa.${hasIdempotency(model) ? ` Este método SIEMPRE
      * lleva una clave fresca: para el escenario sin cabecera está
@@ -1651,7 +1653,7 @@ ${hasIdempotency(model) ? `
             Map<String, String> extraHeaders) {
         return exchange(method, path, jsonBody, token, ${hasIdempotency(model) ? 'idempotencyKey()' : 'null'}, extraHeaders);
     }
-
+${hasCors(model) || usesConditionalWrites(model) ? `
     /**
      * Preflight CORS: el \`OPTIONS\` que el navegador manda ANTES de la petición real.
      *

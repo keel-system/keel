@@ -6,7 +6,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
+import { DEFAULT_SAVED_CARD, incompleteSavedCardResponses, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import {
   CURRENCY_MINOR_UNITS,
   REFUND_OUTCOME_CASES,
@@ -246,6 +246,7 @@ import org.springframework.boot.http.client.FilteredHostException;
 import org.springframework.http.HttpHeaders;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -678,6 +679,18 @@ function savedMethodTests(model, gateway, calls) {
         assertEquals(${q(card.last4)}, saved.card().last4());
         assertEquals(${card.expMonth}, saved.card().expMonth());
         assertEquals(${card.expYear}, saved.card().expYear());
+    }
+
+    // Corrida payment-spring (2026-11-28, FL-MTH-004): la pasarela acepta el medio, pero su resumen no trae last4. El
+    // adaptador lo devuelve sin él y sin lanzar: decidir si un medio así se guarda es del handler, no del adaptador.
+    @Test
+    void unResumenSinLast4SeDevuelveSinElYSinRechazo() {
+        route(${q(calls.SAVE_METHOD.method)}, ${q(calls.SAVE_METHOD.path)}, 200, "{\\"id\\": \\"cus_1\\"}");
+        route(${q(calls.ATTACH_METHOD.method)}, ${q(calls.ATTACH_METHOD.path)}, 200, ${q(JSON.stringify(incompleteSavedCardResponses(gateway).last4))});
+        SavedPaymentMethod saved = gateway().savePaymentMethod("tok_save", "payer-1");
+        assertEquals(${q(card.brand)}, saved.card().brand());
+        assertNull(saved.card().last4());
+        assertEquals(${card.expMonth}, saved.card().expMonth());
     }
 
     @Test

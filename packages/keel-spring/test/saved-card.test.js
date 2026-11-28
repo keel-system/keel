@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { loadService } from '@keel-system/keel-core';
 import { gatewayTranslation } from '@keel-system/keel-core/gen/payment-gateways';
+import { incompleteSavedCardResponses } from '@keel-system/keel-core/gen/payment-probes';
 import { planService } from '../src/scaffold/index.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
@@ -59,6 +60,22 @@ test('el arnés guarda con un resumen, deja elegirlo y pide el 3DS donde existe'
   assert.match(stripe, /stubFor\(attach\[0\], attach\[1\], 402, /);
   assert.match(plan('mercadopago').read('AbstractFlowIT.java'), /protected static void gatewayRequiresAuthenticationToSave\(\) \{\n\s+throw new UnsupportedOperationException\(/);
 });
+
+// Corrida payment-spring (2026-11-28, FL-MTH-004): «la pasarela acepta el medio pero su resumen no trae last4» no tenía
+// helper, y el agente escribió el stub a mano con la ruta y el cuerpo de Stripe.
+for (const gateway of ['stripe', 'mercadopago']) {
+  test(`${gateway}: el arnés guarda un medio con el resumen sin un campo, en la forma de keel-core`, () => {
+    const harness = plan(gateway).read('AbstractFlowIT.java');
+    assert.match(harness, /protected static void gatewaySavesCardWithout\(String field\)/);
+    const bodies = incompleteSavedCardResponses(gateway);
+    for (const [field, body] of Object.entries(bodies)) {
+      const literal = JSON.stringify(body).replace(/"/g, '\\"');
+      assert.ok(harness.includes(`Map.entry("${field}", "${literal}")`), `${gateway}: ${field}`);
+    }
+    const last4Route = gatewayTranslation(gateway).savedCard.last4.split('.').at(-1);
+    assert.ok(!JSON.stringify(bodies.last4).includes(`"${last4Route}"`));
+  });
+}
 
 test('con cardDetails el handler sabe dónde va el resumen, y keel-spring lo genera', () => {
   const { manifest, layers, read } = plan('stripe');

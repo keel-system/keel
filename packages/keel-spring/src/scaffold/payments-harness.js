@@ -6,7 +6,7 @@
 // No es un doble dentro de la JVM: el servidor habla HTTP con WireMock por el mismo socket que con la
 // pasarela real, con el mismo adaptador. Lo que se mide es el servidor.
 
-import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
+import { DEFAULT_SAVED_CARD, incompleteSavedCardResponses, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { PAYMENT_TEST_SECRETS } from './config.js';
 import { PAYMENT_NOTICE_PATH } from './payments.js';
 import { paymentTestCurrency as testCurrency } from '@keel-system/keel-core/gen/payments-config';
@@ -45,6 +45,10 @@ export function paymentHarnessSection(model) {
     .replace(/"/g, '\\"');
   const authentication = saveAuthenticationRejection(gateway.id);
   const card = DEFAULT_SAVED_CARD;
+  // El resumen sin cada campo (keel-core: incompleteSavedCardResponses), como literales Java ya escapados.
+  const incompleteCards = Object.entries(incompleteSavedCardResponses(gateway.id))
+    .map(([field, body]) => `            Map.entry("${field}", "${JSON.stringify(body).replace(/"/g, '\\"')}")`)
+    .join(',\n');
   const currency = testCurrency(model);
   const routes = Object.entries(probes.calls)
     .map(([call, route]) => `            Map.entry(GatewayCall.${call}, new String[] {"${route.method}", "${route.path}"})`)
@@ -234,6 +238,25 @@ ${tracks
         String[] attach = GATEWAY_ROUTES.get(GatewayCall.ATTACH_METHOD);
         stubFor(save[0], save[1], 200, "{\\"id\\": \\"cus_keel_test\\"}");
         stubFor(attach[0], attach[1], 200, String.format("${cardTemplate}", brand, last4, expMonth, expYear));
+    }
+
+    private static final Map<String, String> GATEWAY_INCOMPLETE_CARDS = Map.ofEntries(
+${incompleteCards});
+
+    /**
+     * La pasarela ACEPTA el medio, pero su resumen de tarjeta no trae ese campo (brand, last4, expMonth o expYear): la
+     * tarjeta ${card.brand} terminada en ${card.last4} (${card.expMonth}/${card.expYear}) sin él, en la forma de la pasarela. Es el
+     * escenario «la pasarela acepta pero el resumen viene incompleto»: no escribas ese stub a mano.
+     */
+    protected static void gatewaySavesCardWithout(String field) {
+        String body = GATEWAY_INCOMPLETE_CARDS.get(field);
+        if (body == null) {
+            throw new IllegalArgumentException("gatewaySavesCardWithout: campo '" + field + "' desconocido (brand, last4, expMonth o expYear)");
+        }
+        String[] save = GATEWAY_ROUTES.get(GatewayCall.SAVE_METHOD);
+        String[] attach = GATEWAY_ROUTES.get(GatewayCall.ATTACH_METHOD);
+        stubFor(save[0], save[1], 200, "{\\"id\\": \\"cus_keel_test\\"}");
+        stubFor(attach[0], attach[1], 200, body);
     }
 
     /**
