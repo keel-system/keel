@@ -11,6 +11,7 @@
 // que es la implementación de referencia; un arnés de otro lenguaje la renderiza igual.
 
 import { gatewayTranslation } from './payment-gateways.js';
+import { SAVED_CARD_FIELDS } from '../payment-vocabulary.js';
 
 export const PAYMENT_PROBES = {
   stripe: {
@@ -121,6 +122,19 @@ export function savedCardResponse(gatewayId, card = DEFAULT_SAVED_CARD, id = 'ca
     node[keys.at(-1)] = card[field];
   }
   return body;
+}
+
+/**
+ * La respuesta de guardar con el resumen de la tarjeta INCOMPLETO: por cada campo de SAVED_CARD_FIELDS, la tarjeta por
+ * defecto sin ese campo (`{ last4: {...sin last4} }`). Es lo que un escenario necesita para «la pasarela acepta el medio
+ * pero su resumen no trae X», y sin ella el agente escribía el stub a mano con la ruta y la forma de una pasarela
+ * (corrida payment-spring, 2026-11-28, FL-MTH-004). Cada arnés la incrusta tal cual: el helper solo elige el campo.
+ */
+export function incompleteSavedCardResponses(gatewayId) {
+  return Object.fromEntries(SAVED_CARD_FIELDS.map((field) => {
+    const { [field]: _omitted, ...card } = DEFAULT_SAVED_CARD;
+    return [field, savedCardResponse(gatewayId, card)];
+  }));
 }
 
 /**

@@ -175,3 +175,22 @@ test('la nota del barrido nombra la llamada, la referencia y el estado en vuelo'
     assert.ok(note.includes(fragment), fragment);
   }
 });
+
+import { DEFAULT_SAVED_CARD, incompleteSavedCardResponses, savedCardResponse } from '../src/lib/gen/payment-probes.js';
+import { SAVED_CARD_FIELDS } from '../src/lib/payment-vocabulary.js';
+
+test('el resumen incompleto quita exactamente su campo y conserva el resto, en cada pasarela', () => {
+  const at = (body, route) => route.split('.').reduce((node, key) => node?.[key], body);
+  for (const gateway of Object.keys(PAYMENT_GATEWAYS)) {
+    const routes = gatewayTranslation(gateway).savedCard;
+    const bodies = incompleteSavedCardResponses(gateway);
+    assert.deepEqual(Object.keys(bodies), [...SAVED_CARD_FIELDS], gateway);
+    for (const field of SAVED_CARD_FIELDS) {
+      for (const [other, route] of Object.entries(routes)) {
+        if (other === field) assert.equal(at(bodies[field], route), undefined, `${gateway}: ${field} sigue en ${route}`);
+        else assert.equal(at(bodies[field], route), DEFAULT_SAVED_CARD[other], `${gateway}: falta ${other} al quitar ${field}`);
+      }
+      assert.equal(bodies[field].id, savedCardResponse(gateway).id);
+    }
+  }
+});
