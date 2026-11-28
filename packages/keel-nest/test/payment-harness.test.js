@@ -207,6 +207,12 @@ for (const gateway of ['stripe', 'mercadopago']) {
     await fresh();
     await harness.gatewaySavesCard('amex', '0005', 3, 2029);
     assert.deepEqual({ ...(await adapter.savePaymentMethod('tok_y', 'payer-2')).card }, { brand: 'amex', last4: '0005', expMonth: 3, expYear: 2029 });
+    // Corrida payment-spring (2026-11-28, FL-MTH-004): la pasarela acepta, pero el resumen no trae last4.
+    await harness.gatewaySavesCardWithout('last4');
+    const incomplete = (await adapter.savePaymentMethod('tok_w', 'payer-4')).card;
+    assert.equal(incomplete.last4 ?? null, null, 'sin last4');
+    assert.equal(incomplete.brand, DEFAULT_SAVED_CARD.brand, 'el resto del resumen sigue');
+    await assert.rejects(harness.gatewaySavesCardWithout('cvc'), /desconocido/);
     if (gateway === 'stripe') {
       const { PaymentMethodAuthenticationRequiredException } = await tree.load('src/domain/payment/payment-method-authentication-required-exception.ts');
       await harness.gatewayRequiresAuthenticationToSave();

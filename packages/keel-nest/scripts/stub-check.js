@@ -203,6 +203,11 @@ try {
     await harness.gatewaySavesCard('amex', '0005', 3, 2029);
     const saved = await gatewayAdapter.savePaymentMethod('tok_y', 'payer-2');
     step(`${gateway}: guardar un medio devuelve la referencia y el resumen de la tarjeta`, /\|/.test(saved.reference) && JSON.stringify(saved.card) === JSON.stringify({ brand: 'amex', last4: '0005', expMonth: 3, expYear: 2029 }), JSON.stringify(saved));
+    // Corrida payment-spring (2026-11-28, FL-MTH-004): la pasarela acepta, pero el resumen no trae last4.
+    await http.resetStubs();
+    await harness.gatewaySavesCardWithout('last4');
+    const incomplete = await gatewayAdapter.savePaymentMethod('tok_w', 'payer-4');
+    step(`${gateway}: el resumen sin last4 llega sin last4 y con lo demás`, (incomplete.card?.last4 ?? null) === null && incomplete.card?.brand === 'visa', JSON.stringify(incomplete));
     if (gateway === 'stripe') {
       await harness.gatewayRequiresAuthenticationToSave();
       const asked = await gatewayAdapter.savePaymentMethod('tok_z', 'payer-3').then(() => null, (error) => error);

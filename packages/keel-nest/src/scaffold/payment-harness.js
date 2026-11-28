@@ -11,7 +11,7 @@
 // stub): por eso se puede EJECUTAR en las pruebas de keel-nest contra un admin falso. `flow.ts` lo reexporta, y los
 // flujos siguen importando solo de `flow.ts`.
 
-import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
+import { DEFAULT_SAVED_CARD, incompleteSavedCardResponses, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, gatewayTranslation, refundTranslation, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { tsString } from './render.js';
 import { paymentTestCurrency } from '@keel-system/keel-core/gen/payments-config';
@@ -49,6 +49,7 @@ const PAYMENT_HARNESS_EXPORTS = [
   'gatewayRejects',
   'gatewaySavesPaymentMethod',
   'gatewaySavesCard',
+  'gatewaySavesCardWithout',
   'gatewayRequiresAuthenticationToSave',
   'gatewayRefunds',
   'gatewayCallCount',
@@ -266,6 +267,25 @@ export async function gatewaySavesCard(brand: string, last4: string, expMonth: n
   const attach = GATEWAY_ROUTES.ATTACH_METHOD;
   await stubFor(save.method, save.path, 200, { id: 'cus_keel_test' });
   await stubFor(attach.method, attach.path, 200, ${cardTemplate});
+}
+
+/** El resumen de la tarjeta sin cada campo (keel-core: incompleteSavedCardResponses), en la forma de la pasarela. */
+const GATEWAY_INCOMPLETE_CARDS: Record<string, unknown> = ${JSON.stringify(incompleteSavedCardResponses(gateway.id))};
+
+/**
+ * La pasarela ACEPTA el medio, pero su resumen de tarjeta no trae ese campo (brand, last4, expMonth o expYear): la
+ * tarjeta ${card.brand} terminada en ${card.last4} (${card.expMonth}/${card.expYear}) sin él. Es el escenario «la pasarela acepta pero el
+ * resumen viene incompleto»: no escribas ese stub a mano.
+ */
+export async function gatewaySavesCardWithout(field: string): Promise<void> {
+  const body = GATEWAY_INCOMPLETE_CARDS[field];
+  if (body === undefined) {
+    throw new Error("gatewaySavesCardWithout: campo '" + field + "' desconocido (brand, last4, expMonth o expYear)");
+  }
+  const save = GATEWAY_ROUTES.SAVE_METHOD;
+  const attach = GATEWAY_ROUTES.ATTACH_METHOD;
+  await stubFor(save.method, save.path, 200, { id: 'cus_keel_test' });
+  await stubFor(attach.method, attach.path, 200, body);
 }
 
 /**
