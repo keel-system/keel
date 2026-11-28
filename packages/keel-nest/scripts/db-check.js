@@ -32,6 +32,7 @@
 
 import fs from 'node:fs';
 import { CONDITIONAL_WRITE_DESIGNS } from '../../keel-core/test/helpers/conditional-write-designs.js';
+import { CHILD_CONDITIONAL_DESIGNS } from '../../keel-core/test/helpers/child-conditional-designs.js';
 import { conditionalWriteBlock } from './lib/conditional-probes.js';
 import { READ_SCOPE_SABOTAGE_SPECS, isReadScopeSabotage, readScopeBlock, readScopeCases, readScopeSabotageVerdict } from './lib/read-scope-probes.js';
 import { READ_SCOPE_DESIGNS } from '../../keel-core/test/helpers/read-scope-designs.js';
@@ -80,7 +81,7 @@ import { usesSchemaBaseline, BASELINE_FILE, MIGRATIONS_DIR, generatorTables, sch
 import { AMQPLIB_VERSION, JOSE_VERSION, NODEMAILER_VERSION, HANDLEBARS_VERSION, REDIS_CLIENT_VERSION, AWS_SDK_VERSION, FASTIFY_MULTIPART_VERSION } from '../src/lib/assets.js';
 import { domainMembers } from '../src/scaffold/entities.js';
 import { classPath, entityDir, DIRS } from '../src/scaffold/render.js';
-import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantFinders, credentialFinders, emitsDomainEvents } from '../src/scaffold/repositories.js';
+import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantFinders, credentialFinders, emitsDomainEvents, childReliefs } from '../src/scaffold/repositories.js';
 import { guardClaimsFor } from '../src/scaffold/claim.js';
 import { claimsForEntity, sweepClaims, claimOrderField, screamingSnake, rescueProbes, stallSql, missingClockCountSql } from '@keel-system/keel-core/gen';
 import { ormPath, ormClass, unidirectionalParents, orderCollations } from '../src/scaffold/persistence-entities.js';
@@ -166,6 +167,12 @@ const SABOTAGES = {
   ...Object.fromEntries(Object.entries(SEARCH_SABOTAGE_SPECS).filter(([, specs]) => specs.relational).map(([id, specs]) => [id, specs.relational])),
   // El reclamo del barrido de pagos (G11 de PLAN-CORRIDAS-GELSA.md): con --subject=payment-checkout, cada uno cae en
   // exactamente sus casos PS (PAYMENT_SWEEP_SABOTAGE_CASES).
+  // El relevo de un índice condicionado sobre una HIJA (corrida payment-nest): con --subject=mailer-child-conditional caen
+  // los cuatro casos de su bloque.
+  'child-relief': ['-repository-impl.ts', /\n {6}\/\/ Relevo del índice único condicionado[\s\S]*?\.execute\(\);\n {6}\}/g, ''],
+  // El save que abre su transacción devuelve el error CRUDO del motor: caen los casos que guardan fuera de transacción y
+  // esperan el error del diseño (la clave natural, la versión, el índice condicionado y la clave plegada).
+  'raw-own-tx': ['-repository-impl.ts', /\}, \{ translate: asContractError \}\);/g, '});'],
   'payment-sweep-no-lease': ['payment-repository-impl.ts', '.set({ awaitingSince: leasedAt })', '.set({ awaitingSince: new Date(staleBefore.getTime() - 1000) })'],
   'payment-sweep-cutoff': ['payment-repository-impl.ts', 'awaitingSince: LessThan(staleBefore)', 'awaitingSince: LessThan(new Date(Date.now() + 86_400_000))']
 };
@@ -198,7 +205,7 @@ const only = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ??
 const onlySubject = args.find((arg) => arg.startsWith('--subject='))?.split('=')[1] ?? null;
 const ENGINES = (only ? [only] : ['postgresql', 'mysql']).filter((engine) => DATABASES[engine]);
 // Las formas del esquema que cubre cada sujeto (ver la cabecera).
-const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional', 'verification-codes', 'vault-scoped', 'shop-scoped', 'cards-logical', 'codes-anonymize', 'codes-delete', 'vault-logical-scoped', 'cards-history', 'cards-history-anonymize', 'vault-history-scoped', 'catalog-batch', 'catalog-batch-atomic', 'catalog-batch-async', 'catalog-batch-keyed', 'catalog-batch-atomic-keyed', 'catalog-invariants', 'catalog-search', 'payment-checkout'];
+const SUBJECTS = ['product-catalog', 'job-dispatch', 'job-dispatch-cycles', 'payout-runs', 'notification-mailer', 'catalog-extended', 'stock-reservation', 'product-catalog-finder', 'product-catalog-authorship', 'mailer-author', 'shop-api', 'catalog-conditional', 'verification-codes', 'vault-scoped', 'shop-scoped', 'cards-logical', 'codes-anonymize', 'codes-delete', 'vault-logical-scoped', 'cards-history', 'cards-history-anonymize', 'vault-history-scoped', 'catalog-batch', 'catalog-batch-atomic', 'catalog-batch-async', 'catalog-batch-keyed', 'catalog-batch-atomic-keyed', 'catalog-invariants', 'catalog-search', 'payment-checkout', 'mailer-child-conditional'];
 // Los sujetos DERIVADOS, por nombre: los finders de las búsquedas (DSL 2.22) en la forma de lista con un subcampo de value
 // object, el MISMO diseño que mide keel-dotnet (keel-core/test/helpers/finder-designs.js); y la autoría, que ninguna
 // fixture relacional declara: por política sobre product-catalog y DECLARADA sobre notification-mailer (raíz e hija),
@@ -229,7 +236,9 @@ const DERIVED = {
   // La guarda del agregado (DSL 2.31, IC-1 a IC-11 y CP-1 a CP-5): el MISMO diseño relacional que mide keel-spring.
   ...Object.fromEntries(ENTITY_CHECK_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design])),
   // La búsqueda de 2.32 (FS-* y SO-*): el MISMO diseño relacional que mide keel-spring.
-  ...Object.fromEntries(SEARCH_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design]))
+  ...Object.fromEntries(SEARCH_DESIGNS.filter((design) => !design.name.endsWith('-mongo')).map((design) => [design.name, design])),
+  // El relevo de un índice condicionado sobre una HIJA (corrida payment-nest, 2026-11-27).
+  ...Object.fromEntries(CHILD_CONDITIONAL_DESIGNS.map((design) => [design.name, design]))
 };
 const results = [];
 
@@ -412,6 +421,11 @@ import { DataSource } from 'typeorm';
 import { databaseSettings } from './dist/infrastructure/persistence/data-source-options.js';
 import { TransactionContext } from './dist/infrastructure/persistence/transaction-context.js';
 import { translatePersistenceError, OptimisticLockConflict, isTransientWriteConflict } from './dist/infrastructure/persistence/persistence-errors.js';
+import { DomainException } from './dist/domain/errors/domain-exception.js';
+// El save de una raíz que ABRE su transacción (aquí, todos: el adaptador se llama sin la del mediator) lanza ya el
+// error del diseño (\`translate: asContractError\` en su save, corrida payment-nest). Lo que miden los casos que guardan fuera de transacción es
+// ESO: el error que recibe un handler despachado sin transacción, y no una traducción hecha aquí.
+const designError = (error) => (error instanceof DomainException ? error : null);
 ${adapters.join('\n')}
 ${imports.join('\n')}
 
@@ -582,8 +596,8 @@ ${root.usesOptimisticLocking ? `  check('${name}: nace con la versión 0', loade
     await repository.save(loaded);
     check('${name}: guardar una lectura obsoleta es un conflicto de concurrencia', false, 'se guardó');
   } catch (error) {
-    const translated = translatePersistenceError(error);
-    check('${name}: guardar una lectura obsoleta es un conflicto de concurrencia', error instanceof OptimisticLockConflict && translated?.httpStatus === 409, translated?.code ?? error?.message);
+    const translated = designError(error);
+    check('${name}: guardar una lectura obsoleta es un conflicto de concurrencia, y el save lo lanza ya como el del diseño', translated?.httpStatus === 409, translated?.code ?? error?.message);
   }` : ''}
 ${conditionalWriteBlock(model, root, ctx, sampleEntity(model, root, ctx, `${index}cw`))}
 ${finder ? `  const found = await repository.${finder.name}(${finder.params.map((param) => `original.${param.name}`).join(', ')});
@@ -594,8 +608,8 @@ ${finder ? `  const found = await repository.${finder.name}(${finder.params.map(
     await repository.save(clash);
     check('${name}: la clave natural duplicada la rechaza el motor', false, 'se guardó');
   } catch (error) {
-    const translated = translatePersistenceError(error);
-    check('${name}: la clave natural duplicada sale como el error del diseño', translated && translated !== 'integrity' && translated !== 'timeout' && translated.httpStatus === 409, translated?.code ?? translated ?? error?.message);
+    const translated = designError(error);
+    check('${name}: la clave natural duplicada sale como el error del diseño, ya desde el save', translated?.httpStatus === 409, translated?.code ?? error?.message);
   }` : ''}
 ${foldedBlock(model, root, index, ctx, finder)}
 ${filterFoldBlock(model, root, index, ctx)}
@@ -611,6 +625,7 @@ ${idBatchReason(model, root) ? `  {
     check('${name}: findAllById con la lista vacía no consulta y devuelve vacío', (await repository.findAllById([])).length === 0);
   }` : ''}
 ${conditionalBlock(model, root, index, ctx)}
+${childReliefBlock(model, root, index, ctx)}
 ${authorshipBlock(model, root, index, ctx)}
 ${paginated ? `  const page = await repository.list({ page: 0, size: 5, sort: [] });
   check('${name}: list devuelve la página con su total', page.totalElements >= 1 && page.items.length >= 1 && page.totalPages >= 1, JSON.stringify({ total: page.totalElements, n: page.items.length }));
@@ -1480,7 +1495,7 @@ function foldedBlock(model, root, index, ctx, finder) {
   return `  {
     const shouted = new ${root.name}({ ...stateOf(${sampleEntity(model, root, ctx, `${index}f`)}), ${keys.join(', ')}, ${shout.join(', ')} });
     const rejected = await repository.save(shouted).then(() => null, (error) => error);
-    check('${root.name}: ${folded.map((field) => field.name).join(', ')} en mayúsculas es la MISMA clave (compare)', rejected != null && translatePersistenceError(rejected)?.httpStatus === 409, rejected?.message ?? 'se guardó');
+    check('${root.name}: ${folded.map((field) => field.name).join(', ')} en mayúsculas es la MISMA clave (compare)', designError(rejected)?.httpStatus === 409, rejected?.message ?? 'se guardó');
   }`;
 }
 
@@ -1548,8 +1563,8 @@ function conditionalBlock(model, root, index, ctx) {
       await repository.save(second);
       check('${root.name}: dos con la misma clave en ${occupant.state} no conviven', false, 'el motor aceptó la segunda');
     } catch (error) {
-      const translated = translatePersistenceError(error);
-      check('${root.name}: dos con la misma clave en ${occupant.state} no conviven, y sale el error del diseño', translated && translated !== 'integrity' && translated.httpStatus === 409, translated?.code ?? translated ?? error?.message);
+      const translated = designError(error);
+      check('${root.name}: dos con la misma clave en ${occupant.state} no conviven, y sale el error del diseño', translated?.httpStatus === 409, translated?.code ?? error?.message);
     }
     const third = new ${root.name}({ ...stateOf(${sampleEntity(model, root, ctx, `${index}e`)}), ${sameKeys}, ${state(outside.constant)} });
     // Sin la condición (la unicidad normal, el invariante CONTRARIO) es esta la que el motor rechaza.
@@ -1560,6 +1575,56 @@ function conditionalBlock(model, root, index, ctx) {
   }`);
   }
   return blocks.join('\n');
+}
+
+/**
+ * El RELEVO de un índice único condicionado sobre una HIJA (corrida payment-nest, FL-MTH-003): el agregado se guarda con
+ * UN save en cascada, y TypeORM inserta la hija nueva antes de actualizar las demás. Dos casos, los dos de un solo save:
+ * la condición pasa de una hija que ya existía a otra, y entra una hija NUEVA mientras la anterior sale. Sin el relevo
+ * del adaptador, los dos mueren con la unicidad del diseño (sabotaje child-relief).
+ */
+function childReliefBlock(model, root, index, ctx) {
+  const idName = root.idField?.name ?? 'id';
+  return childReliefs(model, root).map(({ collection, child, idName: childId, field, stored }) => {
+    const member = child.fields.find((candidate) => candidate.name === field);
+    let inside;
+    let outside;
+    if (member?.kind === 'enum') {
+      const enumDef = model.enums.find((candidate) => candidate.name === member.namedType);
+      const other = enumDef?.values.find((value) => value.constant !== stored);
+      if (!other) return '';
+      ctx.imports.add(`${enumDef.name}|${classPath(DIRS.enums, enumDef.name)}`);
+      inside = `${enumDef.name}.${stored}`;
+      outside = `${enumDef.name}.${other.constant}`;
+    } else if (typeof stored === 'boolean') {
+      inside = String(stored);
+      outside = String(!stored);
+    } else {
+      return '';
+    }
+    ctx.imports.add(`${child.name}|${classPath(entityDir(child), child.name)}`);
+    const label = `${root.name}: relevo de ${child.name}.${field}`;
+    return `  {
+    const base = ${sampleEntity(model, root, ctx, `${index}rl`)};
+    await repository.save(base);
+    const holders = (aggregate) => (aggregate?.${collection} ?? []).filter((item) => item.${field} === ${inside}).map((item) => String(item.${childId}));
+    // La condición pasa de la hija que la tenía a la otra, en UN save.
+    const before = await repository.findById(base.${idName});
+    const target = before.${collection}.find((item) => item.${field} !== ${inside});
+    const moved = new ${root.name}({ ...stateOf(before), ${collection}: before.${collection}.map((item) => new ${child.name}({ ...stateOf(item), ${field}: item.${childId} === target.${childId} ? ${inside} : ${outside} })) });
+    const movedError = await repository.save(moved).then(() => null, (error) => error);
+    check('${label}: la condición pasa de una hija a otra en un solo save', movedError == null, movedError?.code ?? movedError?.message);
+    const afterMove = await repository.findById(base.${idName});
+    check('${label}: tras pasarla, solo la tiene la hija nueva', JSON.stringify(holders(afterMove)) === JSON.stringify([String(target.${childId})]), JSON.stringify(holders(afterMove)));
+    // Entra una hija NUEVA con la condición y la que la tenía sale, en UN save.
+    const fresh = new ${child.name}({ ...stateOf(${sampleEntity(model, child, ctx, `${index}rn`)}), ${field}: ${inside} });
+    const grown = new ${root.name}({ ...stateOf(afterMove), ${collection}: [...afterMove.${collection}.map((item) => new ${child.name}({ ...stateOf(item), ${field}: ${outside} })), fresh] });
+    const grownError = await repository.save(grown).then(() => null, (error) => error);
+    check('${label}: entra una hija nueva con la condición mientras sale la anterior', grownError == null, grownError?.code ?? grownError?.message);
+    const afterGrow = await repository.findById(base.${idName});
+    check('${label}: tras entrar, solo la tiene la hija nueva', JSON.stringify(holders(afterGrow)) === JSON.stringify([String(fresh.${childId})]), JSON.stringify(holders(afterGrow)));
+  }`;
+  }).join('\n');
 }
 
 /** Una columna de texto acotada de la raíz y una fila mínima que la desborda. */

@@ -532,7 +532,7 @@ en el puerto de la raíz (en la corrida lo escribió a mano el agente en `EmailT
 la raíz y la ocupante se busca en su colección, como ya hacían keel-nest, keel-dotnet y keel-go.
 
 **payment en keel-registry, las tres generaciones (2026-11-27).** No son corridas de prueba-gelsa sino del mismo diseño
-`payment` en `keel-registry/services`, con Stripe. Están registradas en `docs/corridas/2026-11-27-payment-{dotnet,go,spring}.md`:
+`payment` en `keel-registry/services`, con Stripe. Están registradas en `docs/corridas/2026-11-27-payment-{dotnet,go,spring,nest}.md`:
 - payment-dotnet: 32/32 y huella 28. Dos huecos del generador arreglados en los cuatro: el umbral del barrido en
   local/test y `existsBy<Campo>`.
 - payment-go: 32/32 y huella 24. `invalid.Error()` en el log del aviso y `payments.refund.reference`
@@ -556,3 +556,14 @@ la raíz y la ocupante se busca en su colección, como ya hacían keel-nest, kee
     emitido y falsados. En keel-dotnet, RF como pruebas emitidas (sin pasar por `cs-check`). En keel-go, RF emitidos con
     tidy, gofmt, vet, staticcheck y pruebas sobre payment-checkout con las dos pasarelas, falsados. `stub-check` contra
     WireMock real en verde en keel-nest, keel-dotnet y keel-go.
+- payment-nest: 32/32 y huella 29. El informe del agente daba dos defectos del generador. Uno lo era. El otro, la
+  escala de `refunded_amount`, es del diseño: `refundedAmount` se declara `decimal` sin escala y los cuatro emiten
+  `numeric(38,2)` (pendiente de `/keel-evolve`). El segundo defecto real solo salió comparando con los otros tres.
+  Los dos arreglados en keel-nest:
+  - **El relevo de un índice condicionado sobre una HIJA** (`PaymentMethod.isDefault` en el Wallet): el save en cascada
+    de TypeORM inserta antes de actualizar, y cambiar la preferente era un 409 (FL-MTH-003). Ahora lo hace el adaptador
+    (`childReliefs`).
+  - **El save que abre su transacción devolvía el error crudo**, y el agente añadió `trySave` al puerto para capturar la
+    carrera de la clave natural. Ahora pasa `{ translate: asContractError }`, como ya hacían keel-dotnet y keel-go.
+  - Medido con `test/save-contract.test.js` y `db-check --subject=mailer-child-conditional`
+    (`--sabotage=child-relief|raw-own-tx`), cada sabotaje en exactamente sus casos.

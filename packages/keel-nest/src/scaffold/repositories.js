@@ -14,7 +14,7 @@
 //     guardar el grafo; cero filas es otra escritura que ganó (o un borrado), y sale como conflicto;
 //   · la AUDITORÍA: `created_*`/`updated_*` los estampa el adaptador, como el listener de Spring Data.
 
-import { persistedMembers, collectInternalEntities, orderingFieldOf, orderingTieBreakerOf, partialUniqueIndexes, LOCK_VERSION, keyShadow, naturalKeyBatchReason, uniqueFields, internalUniqueKeys } from '@keel-system/keel-core/gen';
+import { persistedMembers, collectInternalEntities, orderingFieldOf, orderingTieBreakerOf, partialUniqueIndexes, storedWhenValue, LOCK_VERSION, keyShadow, naturalKeyBatchReason, uniqueFields, internalUniqueKeys } from '@keel-system/keel-core/gen';
 import { pluralize } from '@keel-system/keel-core/gen/naming';
 import { idBatchReason, listedIdQueries } from '@keel-system/keel-core/gen/ref-targets';
 import { inverseFindersOf } from '@keel-system/keel-core/gen/inverse-collections';
@@ -766,6 +766,7 @@ function saveMethod(model, entity, imports) {
     const relations = Object.keys(relationsTree(model, entity)).length > 0 ? `, relations: ${literal(relationsTree(model, entity))}` : '';
     lines.push(`      const historyRow = await manager.findOne(${ormClass(entity.name)}, { where: { ${idName}: entity.${idName} }${relations} });`);
   }
+  lines.push(...childReliefLines(model, entity));
   lines.push(`      const saved = await manager.save(${ormClass(entity.name)}, orm);`);
   if (arming) lines.push(arming);
   if (emitsEvents && usesBridge(model)) {
@@ -787,11 +788,55 @@ function saveMethod(model, entity, imports) {
   // a este save se llega también desde la hidratación del lector (onMiss: fetch), que corre dentro de una consulta
   // de solo lectura. Contrapartida deliberada: la copia queda confirmada aunque la lectura falle después.
   const open = entity.replicaOf ? 'inNewTransaction' : 'inTransaction';
+  imports.push({ symbol: 'asContractError', from: PERSISTENCE_ERRORS_TS });
+  // `translate`: si este save ABRE la transacción (un handler despachado sin ella), la carrera perdida sale ya como el
+  // error del diseño —la clave natural, la versión— y el handler la captura sin bajar a la infraestructura (corrida
+  // payment-nest: el agente añadió `trySave` al puerto para poder hacerlo). Unido a la del mediator, no cambia nada.
   return `  async save(entity: ${entity.name}): Promise<${entity.name}> {
     return this.transactions.${open}(async (manager) => {
 ${lines.join('\n')}
-    });
+    }, { translate: asContractError });
   }`;
+}
+
+/**
+ * Las hijas DIRECTAS de la raíz con un índice único condicionado sobre un campo propio (`indexes` con `when`): la
+ * colección del ORM, la clase, el id, el campo y el valor guardado de la condición. Es la forma en la que el agregado
+ * entero se guarda con UN save en cascada, así que el handler no puede ordenar las escrituras de sus hijas.
+ */
+export function childReliefs(model, entity) {
+  const out = [];
+  for (const member of persistedMembers(model, entity)) {
+    if (member.kind !== 'relationMany' || member.relation.backReference || member.relation.cardinality === 'many-to-many') continue;
+    const child = model.entities.find((candidate) => candidate.name === member.relation.entity);
+    if (!child?.persisted) continue;
+    for (const index of partialUniqueIndexes(child)) {
+      if (!index.when?.field || index.when.field.includes('.')) continue;
+      const stored = storedWhenValue(model, child, index.when);
+      out.push({ collection: member.name, child, idName: child.idField?.name ?? 'id', field: index.when.field, stored });
+    }
+  }
+  return out;
+}
+
+/**
+ * El RELEVO de un índice único condicionado sobre una hija: antes del save en cascada, las hijas que SALEN de la
+ * condición la dejan en la base. TypeORM inserta las hijas nuevas antes de actualizar las que ya existían, y un índice
+ * parcial se comprueba por fila y no se puede diferir: sin esto, cambiar el medio preferente o la versión activa
+ * dentro del agregado muere con el error de unicidad del diseño en el camino feliz (corrida payment-nest, FL-MTH-003,
+ * donde el agente lo escribió a mano). Una hija nueva o que sigue dentro de la condición no toca ninguna fila.
+ */
+function childReliefLines(model, entity) {
+  return childReliefs(model, entity).map(({ collection, child, idName, field, stored }) => {
+    // El valor tal como lo guarda el ORM: la CONSTANTE de un enum (storedWhenValue), un booleano o un número a pelo.
+    const inside = typeof stored === 'string' ? tsString(stored) : String(stored);
+    return `      // Relevo del índice único condicionado sobre ${child.name}.${field}: lo que sale de la condición sale ANTES de que
+      // entre lo nuevo (el save en cascada inserta antes de actualizar, y el índice no se puede diferir).
+      for (const child of orm.${collection} ?? []) {
+        if (child.${field} === ${inside}) continue;
+        await manager.createQueryBuilder().update(${ormClass(child.name)}).set({ ${field}: child.${field} }).where({ ${idName}: child.${idName}, ${field}: ${inside} }).execute();
+      }`;
+  });
 }
 
 /** Las líneas que estampan la auditoría en la raíz y sus hijas al guardar. */

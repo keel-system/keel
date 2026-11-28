@@ -337,6 +337,14 @@ export interface TransactionOptions {
    * de filas nuevas hasta el lock wait timeout.
    */
   readonly isolation?: 'READ COMMITTED';
+  /**
+   * Si ESTA llamada abre la transacción y falla, el fallo pasa por aquí antes de salir. El \`save\` de cada raíz pasa
+   * \`asContractError\` (persistence-errors.ts): la carrera que pierde un handler despachado SIN transacción sale ya como
+   * el error del diseño (la clave natural, el conflicto de versión) y el handler la captura sin bajar a la
+   * infraestructura, como en keel-dotnet y keel-go. Unida a una transacción abierta no se aplica: el error sigue su
+   * camino hasta quien la abrió. Va por parámetro para que este módulo no importe el del motor.
+   */
+  readonly translate?: (error: unknown) => unknown;
 }
 
 /** Lo que sigue a una transacción abierta: su EntityManager y lo que espera a su commit. */
@@ -389,7 +397,7 @@ ${open.replace(/^/gm, '  ')}
         await runner.commitTransaction();
       } catch (error) {
         if (runner.isTransactionActive) await runner.rollbackTransaction();
-        throw error;
+        throw options.translate ? options.translate(error) : error;
       }
     } finally {
       await runner.release();
@@ -600,6 +608,16 @@ export function translatePersistenceError(error: unknown): DomainException | 'in
     return 'integrity';
   }
   return null;
+}
+
+/**
+ * El error del diseño de un fallo de persistencia, si lo tiene (una constraint que el diseño nombra, el conflicto de
+ * versión); si no, el MISMO error, sin tocar: una constraint del generador, el tope o un interbloqueo siguen siendo lo
+ * que eran para quien los distingue.
+ */
+export function asContractError(error: unknown): unknown {
+  const translated = translatePersistenceError(error);
+  return typeof translated === 'object' && translated !== null ? translated : error;
 }`;
   return tsModule(PERSISTENCE_ERRORS_TS, imports, body);
 }

@@ -462,7 +462,9 @@ export function lifecycleBlock(model, ctx, { document, engine, sampleEntity, ada
         "    const sink = (...parts) => captured.push(parts.map((part) => (part instanceof Error ? part.stack : String(part))).join(' '));",
         '    Logger.overrideLogger({ log: sink, error: sink, warn: sink, debug: sink, verbose: sink, fatal: sink });',
         '    let clash = null;',
-        `    try { await ${repo}.save(new ${name}({ ...stateOf(${sample(entity)}), ${idName}: randomUUID(), ${finder.field}: ${value} })); } catch (error) { clash = error; }`,
+        // Dentro de una transacción ABIERTA: así el save no traduce (translate: asContractError) y llega el error del
+        // motor, que es lo que el filtro de la API recibe del mediator y lo que esta sonda necesita para medir su log.
+        `    try { await tx.inTransaction(() => ${repo}.save(new ${name}({ ...stateOf(${sample(entity)}), ${idName}: randomUUID(), ${finder.field}: ${value} }))); } catch (error) { clash = error; }`,
         `    check(${label('PD-2', `la unicidad de ${finder.field} salta`)}, clash != null);`,
         '    // La misma violación sin constraint conocida, por el filtro de la API: la rama que escribe en el log.',
         '    const unknown = unattributed(clash);',

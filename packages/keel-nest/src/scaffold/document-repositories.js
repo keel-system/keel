@@ -392,10 +392,12 @@ function saveMethod(model, entity, use) {
   // a este save se llega también desde la hidratación del lector (onMiss: fetch), que corre dentro de una consulta
   // de solo lectura. Contrapartida deliberada: la copia queda confirmada aunque la lectura falle después.
   const open = entity.replicaOf ? 'inNewTransaction' : 'inTransaction';
+  use.import({ symbol: 'asContractError', from: PERSISTENCE_ERRORS_TS });
+  // `translate`: si este save ABRE la transacción, la carrera perdida sale ya como el error del diseño (la de repositories.js).
   return `  async save(entity: ${entity.name}): Promise<${entity.name}> {
     return this.transactions.${open}(async (session) => {
 ${lines.join('\n')}
-    });
+    }, { translate: asContractError });
   }`;
 }
 

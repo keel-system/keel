@@ -82,6 +82,9 @@ const SABOTAGES = {
   'cw-collapse-409': ['persistence-errors.ts', "{ code: 'CONCURRENT_MODIFICATION', httpStatus: 409, details: [] }", "{ code: 'PRECONDITION_FAILED', httpStatus: 412, details: [] }"],
   // Una página fuera de rango lleva los totales reales, y no la forma de la página vacía del contrato.
   'empty-page': ['repository/page.ts', /^ {2}if \(items\.length === 0\) return .*\n/m, ''],
+  // El save que abre su transacción devuelve el error CRUDO del driver (corrida payment-nest): caen los casos que guardan
+  // fuera de transacción y esperan el error del diseño (la clave natural, la versión, el índice condicionado, la plegada).
+  'raw-own-tx': ['-repository-impl.ts', /\}, \{ translate: asContractError \}\);/g, '});'],
   // Los finders (DSL 2.22): el texto buscado como patrón y no como literal, y el where que no filtra.
   'finder-literal': ['job-repository-impl.ts', String.raw`return value.replace(/[.*+?^${'$'}{}()|[\]\\]/g, '\\$&');`, 'return value;'],
   'finder-where': ['job-repository-impl.ts', /^ {4}conditions\.push\(\{ '[^']+': toEnumName\(.*\) \}\);\n/gm, ''],
@@ -320,6 +323,10 @@ import { databaseSettings } from './dist/infrastructure/persistence/mongo-settin
 import { ensureDocumentIndexes } from './dist/infrastructure/persistence/document-indexes.js';
 import { TransactionContext } from './dist/infrastructure/persistence/transaction-context.js';
 import { translatePersistenceError, OptimisticLockConflict, isTransientWriteConflict } from './dist/infrastructure/persistence/persistence-errors.js';
+import { DomainException } from './dist/domain/errors/domain-exception.js';
+// El save de una raíz que ABRE su transacción lanza ya el error del diseño (\`translate: asContractError\` en su save, corrida payment-nest): lo que
+// miden los casos que guardan fuera de transacción es el error que recibe un handler despachado sin ella.
+const designError = (error) => (error instanceof DomainException ? error : null);
 ${adapters.join('\n')}
 ${imports.join('\n')}
 
@@ -473,8 +480,8 @@ ${root.usesOptimisticLocking ? `  check('${name}: nace con la versión 0', loade
     await repository.save(current);
     check('${name}: guardar una lectura obsoleta es un conflicto de concurrencia', false, 'se guardó');
   } catch (error) {
-    const translated = translatePersistenceError(error);
-    check('${name}: guardar una lectura obsoleta es un conflicto de concurrencia', error instanceof OptimisticLockConflict && translated?.httpStatus === 409, translated?.code ?? error?.message);
+    const translated = designError(error);
+    check('${name}: guardar una lectura obsoleta es un conflicto de concurrencia, y el save lo lanza ya como el del diseño', translated?.httpStatus === 409, translated?.code ?? error?.message);
   }` : ''}
 ${conditionalWriteBlock(model, root, ctx, sampleEntity(model, root, ctx, `${index}cw`))}
 ${finder ? `  const found = await repository.${finder.name}(${finder.params.map((param) => `original.${param.name}`).join(', ')});
@@ -485,8 +492,8 @@ ${finder ? `  const found = await repository.${finder.name}(${finder.params.map(
     await repository.save(clash);
     check('${name}: la clave natural duplicada la rechaza el motor', false, 'se guardó');
   } catch (error) {
-    const translated = translatePersistenceError(error);
-    check('${name}: la clave natural duplicada sale como el error del diseño', translated && translated !== 'integrity' && translated !== 'timeout' && translated.httpStatus === 409, translated?.code ?? translated ?? error?.message);
+    const translated = designError(error);
+    check('${name}: la clave natural duplicada sale como el error del diseño, ya desde el save', translated?.httpStatus === 409, translated?.code ?? error?.message);
   }` : ''}
 ${partial && occupant && otherState ? `  // El índice condicionado (${partial.name}): la misma clave convive fuera del estado, no dentro.
   {
@@ -504,8 +511,8 @@ ${partial && occupant && otherState ? `  // El índice condicionado (${partial.n
       await repository.save(c);
       check('${name}: dentro del estado ${partial.when.equals} la clave repetida la rechaza ${partial.name}', false, 'se guardó');
     } catch (error) {
-      const translated = translatePersistenceError(error);
-      check('${name}: dentro del estado ${partial.when.equals} la clave repetida sale como el error del diseño', translated && translated !== 'integrity' && translated.httpStatus === 409, translated?.code ?? translated ?? error?.message);
+      const translated = designError(error);
+      check('${name}: dentro del estado ${partial.when.equals} la clave repetida sale como el error del diseño', translated?.httpStatus === 409, translated?.code ?? error?.message);
     }
     const occupying = await repository.${occupant.name}(${occupant.params.map((param) => (param.name === partial.when.field ? JSON.stringify(partial.when.equals) : `a.${param.name}`)).join(', ')});
     check('${name}: el finder del índice condicionado encuentra al que lo ocupa', occupying?.${idName} === a.${idName}, occupying?.${idName});
@@ -571,7 +578,7 @@ function foldedBlock(model, root, index, ctx, finder) {
     check('${root.name}.${field.name}: el documento guarda en ${column} el valor plegado por TextFold', raw?.['${column}'] === ${accents ? "'nandu ref '" : "'ñandú ref '"} + suffix, raw?.['${column}']);
     const shouted = ${keyed('f2', accents ? "'NANDU REF ' + suffix.toUpperCase()" : "'ÑANDÚ REF ' + suffix.toUpperCase()")};
     const rejected = await repository.save(shouted).then(() => null, (error) => error);
-    check('${root.name}.${field.name}: en mayúsculas${accents ? ' y sin acentos' : ''} es la MISMA clave (compare)', rejected != null && translatePersistenceError(rejected)?.httpStatus === 409, rejected?.message ?? 'se guardó');
+    check('${root.name}.${field.name}: en mayúsculas${accents ? ' y sin acentos' : ''} es la MISMA clave (compare)', designError(rejected)?.httpStatus === 409, rejected?.message ?? 'se guardó');
     await repository.deleteById(named.id);
   }`;
     })

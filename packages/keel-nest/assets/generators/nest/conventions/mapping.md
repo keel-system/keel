@@ -134,6 +134,8 @@ de @nestjs/schedule, y no cambies el segundo a 0.**
   llama a un proveedor en medio) va **sin transacción abarcadora** (`dispatchWithoutTransaction`): cada
   llamada al adaptador confirma la suya, y el orden es reclamar y confirmar, actuar fuera de toda
   transacción, confirmar el desenlace. Lo demás (un cierre diario) va en la transacción del caso de uso.
+  Sin transacción abarcadora, el `save` de una raíz que pierde una carrera lanza ya el error del diseño (la
+  clave natural, el conflicto de versión): se captura en el handler, sin métodos nuevos en el puerto.
 - Un tick no se solapa con el siguiente: mientras dura, su fila está arrendada. Un tick que falla no se
   aparca: se rearma para el siguiente. Al apagar, el sondeador espera a la pasada en vuelo antes de cerrar el pool.
 - El perfil `test` no tiene base de datos y el cronómetro no sondea (`scheduling.enabled: false`); en los

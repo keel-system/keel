@@ -18,7 +18,7 @@ export function freshIdLiteral(field) {
   if (field?.base === 'int') return String(randomInt(1, 2 ** 31 - 1));
   return `'${randomUUID()}'`;
 }
-import { LOCK_VERSION } from '@keel-system/keel-core/gen';
+import { LOCK_VERSION, partialUniqueIndexes, storedWhenValue } from '@keel-system/keel-core/gen';
 import { sampleBlanks } from '@keel-system/keel-core/gen/entity-checks';
 import { domainMembers } from '../../src/scaffold/entities.js';
 import { classPath, entityDir, DIRS } from '../../src/scaffold/render.js';
@@ -164,7 +164,13 @@ export function sampleValue(model, field, ctx, salt) {
       return `'${randomUUID()}'`;
     case 'int':
       // Distintos entre elementos: una posición repetida es un empate, y entonces el orden es del motor.
-      return String((numeric.min != null ? Number(numeric.min) : 7) + nextInt++);
+      // Dentro de la cota: el contador es del módulo y crece en TODA la corrida, así que en la red completa un campo con
+      // `max` (el mes de una tarjeta, en payment-checkout) se salía y la muestra no se podía construir.
+      {
+        const min = numeric.min != null ? Number(numeric.min) : 7;
+        const span = numeric.max != null ? Number(numeric.max) - min + 1 : Infinity;
+        return String(min + (Number.isFinite(span) && span > 0 ? nextInt++ % span : nextInt++));
+      }
     case 'long':
       return '9007199254740993n';
     case 'decimal': {
@@ -202,8 +208,29 @@ export function sampleValue(model, field, ctx, salt) {
   }
 }
 
-/** La expresión JS de un agregado (o entidad interna) de muestra, con su estado completo. */
-export function sampleEntity(model, entity, ctx, salt, depth = 0) {
+/**
+ * El valor que deja FUERA de la condición de un índice único condicionado al campo `field` de la entidad, o null si
+ * el campo no condiciona ninguno: el contrario de un booleano, otra constante de un enum.
+ */
+function outsideCondition(model, entity, member, ctx) {
+  const index = partialUniqueIndexes(entity).find((candidate) => candidate.when?.field === member.name);
+  if (!index) return null;
+  if (member.field?.kind === 'enum') {
+    const enumDef = (model.enums ?? []).find((candidate) => candidate.name === member.field.namedType);
+    const other = enumDef?.values?.find((value) => value.constant !== storedWhenValue(model, entity, index.when));
+    if (!other) return null;
+    ctx.imports.add(`${enumDef.name}|${classPath(DIRS.enums, enumDef.name)}`);
+    return `${enumDef.name}.${other.constant}`;
+  }
+  return typeof index.when.equals === 'boolean' ? String(!index.when.equals) : null;
+}
+
+/**
+ * La expresión JS de un agregado (o entidad interna) de muestra, con su estado completo. Las hijas de una colección
+ * salen de dos en dos, y la SEGUNDA queda fuera de la condición de un índice único condicionado de la hija (como mucho
+ * una preferente por agregado): con las dos dentro, la muestra no se podría guardar.
+ */
+export function sampleEntity(model, entity, ctx, salt, depth = 0, { outside = false } = {}) {
   ctx.imports.add(`${entity.name}|${classPath(entityDir(entity), entity.name)}`);
   const state = [];
   // Lo que la guarda rechazaría con todo relleno (un exactlyOne, un forbids): a nulo.
@@ -214,7 +241,7 @@ export function sampleEntity(model, entity, ctx, salt, depth = 0) {
     else if (member.kind === 'externalRef') value = freshIdLiteral(idFieldOf(model, member.relation.entity));
     else if (member.kind === 'relationMany') {
       const child = model.entities.find((candidate) => candidate.name === member.relation.entity);
-      value = depth > 2 || !child ? '[]' : `[${[1, 2].map((n) => sampleEntity(model, child, ctx, `${salt}${n}`, depth + 1)).join(', ')}]`;
+      value = depth > 2 || !child ? '[]' : `[${[1, 2].map((n) => sampleEntity(model, child, ctx, `${salt}${n}`, depth + 1, { outside: n > 1 })).join(', ')}]`;
     } else if (member.kind === 'relationOne') {
       const child = model.entities.find((candidate) => candidate.name === member.relation.entity);
       value = depth > 2 || !child ? 'null' : sampleEntity(model, child, ctx, `${salt}o`, depth + 1);
@@ -226,6 +253,8 @@ export function sampleEntity(model, entity, ctx, salt, depth = 0) {
       value = values.some((v) => v == null) ? '[]' : `[${values.join(', ')}]`;
     } else if (member.field.isId) {
       value = freshIdLiteral(member.field);
+    } else if (outside && outsideCondition(model, entity, member, ctx) != null) {
+      value = outsideCondition(model, entity, member, ctx);
     } else {
       value = sampleValue(model, member.field, ctx, salt);
       if (value == null) value = 'null';

@@ -53,6 +53,11 @@ constructor, en el mismo orden. Siempre en este orden, y el orden es la defensa:
    `this.paymentOutcomeApplier.apply(outcome)` (o directamente la transición, si estás en la misma operación).
    - La operación la despacha el controlador **sin transacción abarcadora** (`dispatchWithoutTransaction`), así
      que ese `save` **confirma** antes de la llamada. No la envuelvas en una transacción tuya.
+   - Como ese `save` abre su propia transacción, la carrera que pierde sale ya como el **error del diseño**: dos
+     cobros con la misma `charge.reference` lanzan el de la clave natural (`ChargeRequestConflictError`, si así lo
+     declara) y una versión que cambió por debajo, el de concurrencia. Captura **ese** en el handler, relee al
+     ganador y aplica la regla que diga el diseño. No añadas métodos al puerto (`trySave`) ni importes nada de
+     `src/infrastructure/` para distinguirla.
    - Si `authorize` lanza `PaymentGatewayUnavailableException`: **no reintentes**. El cobro se queda en `pending`
      y respondes con él; lo resolverá el barrido.
    - La referencia de la `ChargeRequest` es `charge.reference`: de ella sale la clave de idempotencia hacia la

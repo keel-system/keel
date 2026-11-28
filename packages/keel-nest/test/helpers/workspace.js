@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import { CONDITIONAL_WRITE_DESIGNS } from '../../../keel-core/test/helpers/conditional-write-designs.js';
 import { BATCH_DESIGNS, BATCH_JOB_DESIGNS, BATCH_KEY_DESIGNS } from '../../../keel-core/test/helpers/batch-designs.js';
 import { INTERNAL_UNIQUE_DESIGNS } from '../../../keel-core/test/helpers/internal-unique-designs.js';
+import { CHILD_CONDITIONAL_DESIGNS } from '../../../keel-core/test/helpers/child-conditional-designs.js';
 import { DATA_LIFECYCLE_DESIGNS } from '../../../keel-core/test/helpers/data-lifecycle-designs.js';
 import { READ_SCOPE_DESIGNS } from '../../../keel-core/test/helpers/read-scope-designs.js';
 import path from 'node:path';
@@ -167,7 +168,10 @@ export const DERIVED_SILHOUETTES = [
   ...[...BATCH_DESIGNS, ...BATCH_JOB_DESIGNS, ...BATCH_KEY_DESIGNS].map((design) => ({ name: design.name, fixture: design.from, withoutLayers: [], mutate: design.mutate })),
   // Una hija con una clave única GLOBAL (keel-core/gen/internal-unique.js), relacional y documental: `existsBy<Campo>` en
   // el puerto de la raíz (corrida payment-dotnet, 2026-11-27). Los MISMOS diseños que los otros tres.
-  ...INTERNAL_UNIQUE_DESIGNS.map((design) => ({ name: design.name, fixture: design.from, withoutLayers: [], mutate: design.mutate }))
+  ...INTERNAL_UNIQUE_DESIGNS.map((design) => ({ name: design.name, fixture: design.from, withoutLayers: [], mutate: design.mutate })),
+  // Un índice único condicionado sobre una HIJA (keel-core/test/helpers/child-conditional-designs.js): el relevo en el save
+  // en cascada del adaptador (corrida payment-nest, 2026-11-27).
+  ...CHILD_CONDITIONAL_DESIGNS.map((design) => ({ name: design.name, fixture: design.from, withoutLayers: [], mutate: design.mutate }))
 ];
 
 /** La autoría declarada por el dominio de Template y de su hija TemplateVariable (la misma que keel-dotnet). */

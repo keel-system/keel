@@ -118,3 +118,19 @@ El controlador de un lote con clave recibe `(params, query, request, reply)` y l
 `src/scaffold/entity-checks.js` emite en la entidad `ensureInvariants()` (hijas, derivados, cotas y checks: el orden de D23), el derivado como getter que calcula con el `Decimal` del proyecto y las ayudas (`isAbsent`, `exceedsDecimal`, los patrones) FUERA de la clase, al final del módulo. El campo del derivado sigue en el estado y en el constructor, pero el getter no lo lee: el valor que llega se ignora. Los checks leen `this.#campo`, salvo un derivado, que se lee por su getter. Una comparación numérica va siempre por `Decimal.of(...).compareTo(...)`, así que un `number`, un `bigint` y un `Decimal` se comparan igual. `saveGuardLine` es la primera línea DENTRO de la transacción del `save` (relacional y documental), y el mapeo marca la línea del derivado con `DERIVED_MARK`, que es lo que busca el sabotaje `cp-stale`.
 
 Lo miden `test/entity-checks.test.js`, que EJECUTA la entidad transpilada contra los vectores que no necesitan base, y `db-check`/`doc-check` sobre `catalog-invariants`/`-mongo` con `scripts/lib/invariant-probes.js` (`--sabotage=ic-*|cp-*`). Ese sujeto solo ejecuta sus vectores: los demás bloques guardarían una muestra que rompe sus checks. La guarda entra en casi todas las fixtures (por sus cotas), así que una muestra de sonda que no respete el formato de un campo, también el del elemento de una lista, ya no se guarda.
+
+## El save de la raíz (corrida payment-nest, 2026-11-27)
+
+Dos cosas que el agente escribía a mano en el adaptador y en el puerto. **El relevo de un índice único condicionado
+sobre una HIJA** (`childReliefs` en `src/scaffold/repositories.js`): el agregado se guarda con UN save en cascada y
+TypeORM inserta la hija nueva antes de actualizar las demás, así que antes de la cascada el adaptador deja en la base lo
+que sale de la condición (el valor de `storedWhenValue`), después de leer el «antes» del historial. Solo relacional (en
+documental el agregado es una sola escritura), y la condición sobre la RAÍZ la sigue relevando el handler con su nota.
+**El error del diseño desde el save que abre su transacción**: el `save` de cada raíz pasa `{ translate: asContractError }`
+a `TransactionContext.inTransaction`, que lo aplica SOLO si abre ella la transacción (como keel-dotnet). La traducción va
+por parámetro porque `transaction-context.ts` no puede importar `persistence-errors.ts`: arrastra `typeorm`/`mongodb`, y
+las pruebas que ejecutan lo emitido sin ellos se caían. Unida a la transacción del mediator no traduce, así que los
+listeners siguen viendo `OptimisticLockConflict` (su skill) y la telemetría no cambia de desenlace. Las muestras de las
+sondas (`scripts/lib/samples.js`) dejan la SEGUNDA hija fuera de la condición; los casos de db-check y doc-check que
+guardan fuera de transacción esperan el error del diseño del propio `save` (`designError`). Lo miden
+`test/save-contract.test.js` y `db-check --subject=mailer-child-conditional`, con `--sabotage=child-relief|raw-own-tx`.

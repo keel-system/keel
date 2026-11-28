@@ -1,6 +1,6 @@
 // La escritura condicional (DSL 2.25, api.concurrency) contra el adaptador emitido: CW-1 a CW-5 de
 // keel-core/gen/conditional-writes.js, el MISMO texto para las dos ramas (db-check y doc-check), con los ids de los casos
-// que ejecutan los otros generadores. `sample` es el agregado de muestra ya renderizado; `check` y `translatePersistenceError`
+// que ejecutan los otros generadores. `sample` es el agregado de muestra ya renderizado; `check` y `designError`
 // son los del script de cada red.
 
 import { loadsExpecting, PRECONDITION_FAILED_TS } from '../../src/scaffold/conditional-writes.js';
@@ -41,7 +41,7 @@ export function conditionalWriteBlock(model, root, ctx, sample) {
       await repository.save(late);
       check('${name} CW-5: otra escritura entre la carga y el guardado es el 409, no el 412', false, 'se guardó');
     } catch (error) {
-      const translated = translatePersistenceError(error);
+      const translated = designError(error);
       check('${name} CW-5: otra escritura entre la carga y el guardado es el 409, no el 412', translated?.httpStatus === 409, translated?.code ?? error?.message);
     }
   }`;
