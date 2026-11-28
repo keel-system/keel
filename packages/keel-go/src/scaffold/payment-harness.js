@@ -9,7 +9,7 @@
 // el mismo adaptador. Lo que se mide es el servidor. Lo que el stub ENTIENDE de lo que se programa aquí, y que lo que
 // devuelve es lo que lee el adaptador emitido, lo mide `npm run stub-check` (scripts/probes/payment_probe_test.go).
 
-import { DEFAULT_SAVED_CARD, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
+import { DEFAULT_SAVED_CARD, incompleteSavedCardResponses, paymentProbesFor, saveAuthenticationRejection, savedCardResponse } from '@keel-system/keel-core/gen/payment-probes';
 import { CURRENCY_MINOR_UNITS, PAYMENT_NOTICE_PATH, PAYMENT_TEST_SECRETS, gatewayTranslation, refundTranslation, tracksRefundInFlight } from '@keel-system/keel-core/gen/payment-gateways';
 import { paymentTestCurrency } from '@keel-system/keel-core/gen/payments-config';
 import { HTTP_STUB_ENDPOINTS } from '@keel-system/keel-core/gen/http-stub-probes';
@@ -198,6 +198,26 @@ func (s *Scenario) GatewaySavesCard(brand, last4 string, expMonth, expYear int) 
 	save, attach := s.gatewayRoute(CallSaveMethod), s.gatewayRoute(CallAttachMethod)
 	s.StubFor(save.method, save.path, 200, map[string]any{"id": "cus_keel_test"})
 	s.StubFor(attach.method, attach.path, 200, ${cardObject})
+}
+
+// gatewayIncompleteCards es el resumen de la tarjeta sin cada campo (keel-core: incompleteSavedCardResponses), en la forma
+// de la pasarela.
+var gatewayIncompleteCards = map[string]map[string]any{
+${keyedLiteral(Object.entries(incompleteSavedCardResponses(gateway.id)).map(([field, body]) => [goString(field), goLiteral(body, {}).replace(/^map\[string\]any/, '')])).join('\n')}
+}
+
+// GatewaySavesCardWithout hace que la pasarela ACEPTE el medio, pero con un resumen de tarjeta sin ese campo ("brand",
+// "last4", "expMonth" o "expYear"): la tarjeta ${card.brand} terminada en ${card.last4} (${card.expMonth}/${card.expYear}) sin él. Es el escenario «la
+// pasarela acepta pero el resumen viene incompleto»: no escribas ese stub a mano.
+func (s *Scenario) GatewaySavesCardWithout(field string) {
+	s.Helper()
+	body, known := gatewayIncompleteCards[field]
+	if !known {
+		s.Fatalf("GatewaySavesCardWithout: campo %q desconocido (brand, last4, expMonth o expYear)", field)
+	}
+	save, attach := s.gatewayRoute(CallSaveMethod), s.gatewayRoute(CallAttachMethod)
+	s.StubFor(save.method, save.path, 200, map[string]any{"id": "cus_keel_test"})
+	s.StubFor(attach.method, attach.path, 200, body)
 }
 
 // GatewayRequiresAuthenticationToSave hace que la pasarela exija autenticar al cliente (3DS) para guardar la tarjeta.${authentication ? '' : `

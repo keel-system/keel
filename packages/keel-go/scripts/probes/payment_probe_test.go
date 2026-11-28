@@ -242,6 +242,13 @@ func TestPaymentProbeGuardarConUnaTarjetaConcretaYEl3DSDondeLaPasarelaLoPide(t *
 	if err != nil || saved.Card != want {
 		t.Errorf("SavePaymentMethod = %+v, %v; quiero la tarjeta %+v", saved, err, want)
 	}
+	// Corrida payment-spring (2026-11-28, FL-MTH-004): la pasarela acepta, pero el resumen no trae last4.
+	s.GatewaySavesCardWithout("last4")
+	incomplete, err := gateway.SavePaymentMethod(t.Context(), "tok_keel", "payer-4")
+	wantIncomplete := domain.GatewaySavedCard{Brand: "visa", ExpMonth: 12, ExpYear: 2030}
+	if err != nil || incomplete.Card != wantIncomplete {
+		t.Errorf("SavePaymentMethod sin last4 = %+v, %v; quiero la tarjeta %+v", incomplete, err, wantIncomplete)
+	}
 	// Solo Stripe pide 3DS al guardar (la ruta del último paso es la del attach); con MercadoPago el helper para el escenario.
 	if !strings.HasSuffix(gatewayRoutes[CallAttachMethod].path, "/attach") {
 		return

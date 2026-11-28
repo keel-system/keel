@@ -87,7 +87,8 @@ orden, y el orden es la defensa:
    `<raíz>_queries.go`. Ver `references/reconciliation.md`.
 
 En los escenarios, sin stubs a mano (la forma de la pasarela la pone el arnés, como métodos del escenario):
-`s.GatewaySavesCard(marca, últimos4, mes, año)` y `s.GatewayRequiresAuthenticationToSave()` al guardar un medio;
+`s.GatewaySavesCard(marca, últimos4, mes, año)` y `s.GatewayRequiresAuthenticationToSave()` al guardar un medio,
+y `s.GatewaySavesCardWithout("last4")` (o `"brand"`, `"expMonth"`, `"expYear"`) cuando la pasarela acepta el medio pero su resumen de tarjeta viene sin ese campo;
 `s.GatewayReportsRefunded(referencia, total)` para una consulta que da el cobro devuelto por ese total (solo sin `refund.reference`; con ella, `s.GatewayReportsRefund(referencia, devolución, desenlace, importe, devueltoAntes)` para lo que la pasarela dice de UNA devolución: `"REFUNDED"`, `"PENDING"`, `"FAILED"` o `"MISSING"`, con lo que ya había devuelto antes);
 `s.GatewayCancelFails(referencia, "authenticationFailed")` para una anulación que vuelve como cobro fallido;
 `s.GatewayAnswersLate(CallCapture, referencia, "CAPTURED", retardo)` para la pasarela que retiene su respuesta mientras el

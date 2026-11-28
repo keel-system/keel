@@ -182,3 +182,24 @@ test('con MercadoPago, el Go emitido también es sintaxis válida, se usa todo l
   assert.deepEqual(await checkGoTree(files, model.service.goModule), []);
   assert.deepEqual(checkGoIdioms(files.filter((file) => file.path.endsWith('.go'))), []);
 });
+
+// Corrida payment-spring (2026-11-28, FL-MTH-004): el arnés guarda un medio con el resumen sin un campo, el mismo cuerpo
+// de keel-core que escriben los arneses de los otros tres.
+import { DEFAULT_SAVED_CARD, incompleteSavedCardResponses } from '@keel-system/keel-core/gen/payment-probes';
+
+for (const gateway of GATEWAYS) {
+  test(`${gateway}: el arnés guarda el medio con el resumen incompleto que da keel-core`, () => {
+    const harness = content(plan(gateway).files, '/payment_gateway_test.go');
+    assert.match(harness, /func \(s \*Scenario\) GatewaySavesCardWithout\(field string\)/);
+    // Cada fila es «"campo": {cuerpo}»: el cuerpo lleva el valor de los demás campos en su ruta, y no el del que falta.
+    const leafPair = (name) => `"${gatewayTranslation(gateway).savedCard[name].split('.').at(-1)}": ${JSON.stringify(DEFAULT_SAVED_CARD[name])}`;
+    for (const field of Object.keys(incompleteSavedCardResponses(gateway))) {
+      const line = harness.split('\n').find((text) => text.trimStart().startsWith(`"${field}":`));
+      assert.ok(line, `${gateway}: falta la fila de ${field}`);
+      const body = line.slice(line.indexOf('{'));
+      for (const other of Object.keys(DEFAULT_SAVED_CARD)) {
+        assert.equal(body.includes(leafPair(other)), other !== field, `${gateway}: sin ${field}, ${other}`);
+      }
+    }
+  });
+}
